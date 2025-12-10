@@ -81,19 +81,10 @@ type SandboxReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Sandbox object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Fetch the sandbox instance
 	box := &agentsv1alpha1.Sandbox{}
-	err := r.Get(context.TODO(), req.NamespacedName, box)
+	err := r.Get(ctx, req.NamespacedName, box)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Object not found, return.  Created objects are automatically garbage collected.
@@ -113,7 +104,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Add finalizer
 	if box.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(box, utils.SandboxFinalizer) {
-		err = utils.UpdateFinalizer(r.Client, box, utils.AddFinalizerOpType, utils.SandboxFinalizer)
+		err = utils.PatchFinalizer(r.Client, box, utils.AddFinalizerOpType, utils.SandboxFinalizer)
 		if err != nil {
 			logger.Error(err, "update sandbox finalizer failed")
 			return reconcile.Result{}, err

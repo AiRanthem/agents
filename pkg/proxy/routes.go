@@ -70,14 +70,14 @@ func (s *Server) DeleteRoute(id string) {
 	s.routes.Delete(id)
 }
 
-// RequestAdapter is used to register mapping from business-side sandbox requests to internal logic
+// RequestAdapter is used to register the mapping from business-side sandbox requests to internal logic
 type RequestAdapter interface {
-	// Map extracts sandbox id and port information from the request
+	// Map extracts sandbox ID, port and other information from the request
 	Map(scheme, authority, path string, port int, headers map[string]string) (
 		sandboxID string, sandboxPort int, extraHeaders map[string]string, user string, err error)
-	// Authorize determines if the user has permission to access the sandbox
+	// Authorize checks if the user has permission to access the sandbox
 	Authorize(user, owner string) bool
-	// IsSandboxRequest determines whether the request is a sandbox request. If it returns true, it means it's requesting a sandbox, otherwise it's requesting the API Server. Only sandbox requests will be processed by the Adapter.
+	// IsSandboxRequest determines whether the request is a sandbox request. If it returns true, it's a sandbox request, otherwise it's an API Server request. Only sandbox requests are processed by the Adapter.
 	IsSandboxRequest(authority, path string, port int) bool
 	// Entry gets the entry address of the service process, such as "127.0.0.1:8080"
 	Entry() string

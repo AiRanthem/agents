@@ -2,17 +2,15 @@ package e2b
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager"
+	sandbox_manager "github.com/openkruise/agents/pkg/sandbox-manager"
 	innererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"github.com/openkruise/agents/pkg/utils"
@@ -44,14 +42,14 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 		if errLists := validation.IsQualifiedName(k); len(errLists) > 0 {
 			return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
 				Code:    http.StatusBadRequest,
-				Message: fmt.Sprintf("Invalid metadata key [%s]: %s", k, strings.Join(errLists, ", ")),
+				Message: fmt.Sprintf("Unqualified metadata key [%s]: %s", k, strings.Join(errLists, ", ")),
 			}
 		}
 
-		if err := managerutils.ValidatedCustomLabelKey(k); err != nil {
+		if !ValidateMetadataKey(k) {
 			return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
 				Code:    http.StatusBadRequest,
-				Message: fmt.Sprintf("Invalid metadata key [%s]: %s", k, err),
+				Message: fmt.Sprintf("Forbidden metadata key [%s]: cannot contain prefixes: %v", k, BlackListPrefix),
 			}
 		}
 	}
@@ -60,15 +58,25 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 		request.Timeout = 300
 	}
 
-	if request.Timeout < 30 || request.Timeout > 7200 {
+	if request.Timeout < 30 || request.Timeout > sc.maxTimeout {
 		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
 			Code:    http.StatusBadRequest,
-			Message: "timeout should between 30 and 7200",
+			Message: fmt.Sprintf("timeout should between 30 and %d", sc.maxTimeout),
 		}
 	}
 
 	claimStart := time.Now()
-	sbx, err := sc.manager.ClaimSandbox(ctx, user.ID.String(), request.TemplateID, request.Timeout)
+	sbx, err := sc.manager.ClaimSandbox(ctx, user.ID.String(), request.TemplateID, func(sbx infra.Sandbox) {
+		sbx.SetTimeout(time.Duration(request.Timeout) * time.Second)
+		labels := sbx.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		for k, v := range request.Metadata {
+			labels[k] = v
+		}
+		sbx.SetLabels(labels)
+	})
 	if err != nil {
 		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
 			Message: err.Error(),
@@ -84,45 +92,19 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 			Message: "Failed to get sandbox pool",
 		}
 	}
-	var wg sync.WaitGroup
-	var errCh = make(chan error, 3)
 	if pool.GetAnnotations()[AnnotationShouldInitEnvd] == utils.True {
-		wg.Add(1)
-		go func() {
-			start := time.Now()
-			defer wg.Done()
-			if err := sc.initEnvd(ctx, sbx, request.EnvVars); err != nil {
-				klog.ErrorS(err, "Failed to init envd")
-				errCh <- err
+		start = time.Now()
+		if err = sc.initEnvd(ctx, sbx, request.EnvVars); err != nil {
+			log.Error(err, "failed to init envd")
+			return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
+				Message: err.Error(),
 			}
-			log.Info("init envd done", "cost", time.Since(start))
-		}()
-	}
-	wg.Add(1)
-	go func() {
-		start := time.Now()
-		defer wg.Done()
-		if err := sbx.PatchLabels(ctx, request.Metadata); err != nil {
-			klog.ErrorS(err, "Failed to add sandbox metadata to sbx")
-			errCh <- err
-			return
 		}
-		log.Info("patch sandbox done", "cost", time.Since(start))
-	}()
-	wg.Wait()
-	close(errCh)
-	var errList error
-	for err := range errCh {
-		errList = errors.Join(errList, err)
-	}
-	if errList != nil {
-		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
-			Message: errList.Error(),
-		}
+		log.Info("init envd done", "cost", time.Since(start))
 	}
 	initCost := time.Since(initStart)
 
-	log.Info("sandbox allocated", "sbx", klog.KObj(sbx), "totalCost", time.Since(start),
+	log.Info("sandbox allocated", "id", sbx.GetSandboxID(), "sbx", klog.KObj(sbx), "totalCost", time.Since(start),
 		"claimCost", claimCost, "initCost", initCost)
 	return web.ApiResponse[*models.Sandbox]{
 		Code: http.StatusCreated,
@@ -138,71 +120,28 @@ func (sc *Controller) ResumeSandbox(r *http.Request) (web.ApiResponse[struct{}],
 	return sc.pauseAndResumeSandbox(r, false)
 }
 
-// ListSandboxes returns a list of all created sandboxes (allocated pods) This API is not ready now.
-func (sc *Controller) ListSandboxes(r *http.Request) (web.ApiResponse[[]*models.Sandbox], *web.ApiError) {
-	var request models.ListSandboxesRequest
-	request.Metadata = make(map[string]string)
-	for key, values := range r.URL.Query() {
-		if len(values) == 0 {
-			continue
-		}
-		switch key {
-		case "state":
-			state := values[0]
-			if state != models.SandboxStateRunning && state != models.SandboxStatePaused {
-				return web.ApiResponse[[]*models.Sandbox]{}, &web.ApiError{
-					Code:    http.StatusBadRequest,
-					Message: fmt.Sprintf("Invalid state: %v", values[0]),
-				}
-			}
-			request.State = values[0]
-		case "nextToken":
-			request.NextToken = values[0]
-		case "limit":
-			limit, err := strconv.Atoi(values[0])
-			if err != nil || limit <= 0 || limit > 100 {
-				return web.ApiResponse[[]*models.Sandbox]{}, &web.ApiError{
-					Code:    http.StatusBadRequest,
-					Message: fmt.Sprintf("Invalid limit: %v", values[0]),
-				}
-			}
-			request.Limit = int32(limit)
-		default:
-			request.Metadata[key] = values[0]
-		}
-	}
-	pods, err := sc.manager.ListClaimedSandboxes(request.State, request.Metadata)
-	if err != nil {
-		return web.ApiResponse[[]*models.Sandbox]{}, &web.ApiError{
-			Code:    http.StatusNotFound,
-			Message: fmt.Sprintf("Failed to list sandboxes: %v", err),
-		}
-	}
-	sandboxes := make([]*models.Sandbox, 0, len(pods))
-	for _, pod := range pods {
-		sandbox := sc.convertToE2BSandbox(r.Context(), pod)
-		if sandbox.Created() {
-			sandboxes = append(sandboxes, sandbox)
-		}
-	}
-	return web.ApiResponse[[]*models.Sandbox]{
-		Body: sandboxes,
-	}, nil
-}
-
 // DescribeSandbox returns details of a specific sandbox
 // This API is not used by demo, should delay
 func (sc *Controller) DescribeSandbox(r *http.Request) (web.ApiResponse[*models.Sandbox], *web.ApiError) {
 	id := r.PathValue("sandboxID")
-	pod, err := sc.manager.GetClaimedSandbox(id)
+	log := klog.FromContext(r.Context())
+	log.Info("describe sandbox", "id", id)
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
+			Message: "User not found",
+		}
+	}
+	sbx, err := sc.manager.GetClaimedSandbox(r.Context(), user.ID.String(), id)
 	if err != nil {
+		log.Error(err, "failed to get sandbox", "id", id)
 		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
 			Code:    http.StatusNotFound,
 			Message: fmt.Sprintf("Sandbox with id %s not found: %v", id, err),
 		}
 	}
 	return web.ApiResponse[*models.Sandbox]{
-		Body: sc.convertToE2BSandbox(r.Context(), pod),
+		Body: sc.convertToE2BSandbox(r.Context(), sbx),
 	}, nil
 }
 
@@ -210,7 +149,13 @@ func (sc *Controller) DescribeSandbox(r *http.Request) (web.ApiResponse[*models.
 func (sc *Controller) DeleteSandbox(r *http.Request) (web.ApiResponse[struct{}], *web.ApiError) {
 	id := r.PathValue("sandboxID")
 	log := klog.FromContext(r.Context())
-	err := sc.manager.DeleteClaimedSandbox(r.Context(), id)
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		return web.ApiResponse[struct{}]{}, &web.ApiError{
+			Message: "User not found",
+		}
+	}
+	err := sc.manager.DeleteClaimedSandbox(r.Context(), user.ID.String(), id)
 	if err != nil {
 		log.Error(err, "failed to delete sandbox", "id", id)
 		switch innererrors.GetErrCode(err) {
@@ -237,18 +182,24 @@ func (sc *Controller) SetSandboxTimeout(r *http.Request) (web.ApiResponse[struct
 	ctx := r.Context()
 	log := klog.FromContext(ctx)
 	id := r.PathValue("sandboxID")
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		return web.ApiResponse[struct{}]{}, &web.ApiError{
+			Message: "User not found",
+		}
+	}
 	var request models.SetTimeoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		return web.ApiResponse[struct{}]{}, &web.ApiError{
 			Message: err.Error(),
 		}
 	}
-	if request.TimeoutSeconds <= 0 || request.TimeoutSeconds > 3600 {
+	if request.TimeoutSeconds <= 0 || request.TimeoutSeconds > sc.maxTimeout {
 		return web.ApiResponse[struct{}]{}, &web.ApiError{
-			Message: "timeout seconds cannot be smaller than 0 or larger than 3600",
+			Message: fmt.Sprintf("timeout should between 30 and %d", sc.maxTimeout),
 		}
 	}
-	sbx, err := sc.manager.GetClaimedSandbox(id)
+	sbx, err := sc.manager.GetClaimedSandbox(ctx, user.ID.String(), id)
 	if err != nil {
 		return web.ApiResponse[struct{}]{}, &web.ApiError{
 			Code:    http.StatusNotFound,
@@ -292,7 +243,13 @@ type browserHandShake struct {
 //	```
 func (sc *Controller) BrowserUse(r *http.Request) (web.ApiResponse[*browserHandShake], *web.ApiError) {
 	sandboxID := r.PathValue("sandboxID")
-	sbx, err := sc.manager.GetClaimedSandbox(sandboxID)
+	user := GetUserFromContext(r.Context())
+	if user == nil {
+		return web.ApiResponse[*browserHandShake]{}, &web.ApiError{
+			Message: "User not found",
+		}
+	}
+	sbx, err := sc.manager.GetClaimedSandbox(r.Context(), user.ID.String(), sandboxID)
 	if err != nil {
 		return web.ApiResponse[*browserHandShake]{}, &web.ApiError{
 			Code:    http.StatusNotFound,

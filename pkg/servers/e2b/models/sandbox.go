@@ -24,10 +24,6 @@ type Sandbox struct {
 	State           string            `json:"state"`
 }
 
-func (s *Sandbox) Created() bool {
-	return s.State == SandboxStateRunning || s.State == SandboxStatePaused
-}
-
 // NewSandboxRequest represents a request to create a new sandbox
 type NewSandboxRequest struct {
 	TemplateID string            `json:"templateID"`
@@ -46,13 +42,6 @@ type EnvVars map[string]string
 
 type SetTimeoutRequest struct {
 	TimeoutSeconds int `json:"timeout"`
-}
-
-type ListSandboxesRequest struct {
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	State     string            `json:"state,omitempty"`
-	NextToken string            `json:"nextToken,omitempty"`
-	Limit     int32             `json:"limit,omitempty"`
 }
 
 const (

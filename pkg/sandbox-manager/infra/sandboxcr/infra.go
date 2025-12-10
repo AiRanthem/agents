@@ -4,28 +4,30 @@ import (
 	"context"
 	"time"
 
-	k8scache "k8s.io/client-go/tools/cache"
-
 	"github.com/openkruise/agents/api/v1alpha1"
 	sandboxclient "github.com/openkruise/agents/client/clientset/versioned"
 	informers "github.com/openkruise/agents/client/informers/externalversions"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8scache "k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 )
 
 type Infra struct {
 	infra.BaseInfra
 
-	Cache  Cache[*v1alpha1.Sandbox]
+	Cache  *Cache
 	Client sandboxclient.Interface
 	Proxy  *proxy.Server
 }
 
-func NewInfra(namespace string, client sandboxclient.Interface, proxy *proxy.Server) (*Infra, error) {
-	informerFactory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*10, informers.WithNamespace(namespace))
+func NewInfra(client sandboxclient.Interface, proxy *proxy.Server) (*Infra, error) {
+	informerFactory := informers.NewSharedInformerFactory(client, time.Minute*10)
 	sandboxInformer := informerFactory.Api().V1alpha1().Sandboxes().Informer()
 	sandboxSetInformer := informerFactory.Api().V1alpha1().SandboxSets().Informer()
-	cache, err := NewCache[*v1alpha1.Sandbox](namespace, informerFactory, sandboxInformer, sandboxSetInformer)
+	cache, err := NewCache(informerFactory, sandboxInformer, sandboxSetInformer)
 	if err != nil {
 		return nil, err
 	}
@@ -72,49 +74,38 @@ func (i *Infra) NewPool(name, namespace string, annotations map[string]string) i
 	}
 }
 
-func (i *Infra) SelectSandboxes(options infra.SandboxSelectorOptions) ([]infra.Sandbox, error) {
-	var expectedStates []string
-	if options.WantPaused {
-		expectedStates = append(expectedStates, v1alpha1.SandboxStatePaused)
-	}
-	if options.WantAvailable {
-		expectedStates = append(expectedStates, v1alpha1.SandboxStateAvailable)
-	}
-	if options.WantRunning {
-		expectedStates = append(expectedStates, v1alpha1.SandboxStateRunning)
-	}
-	var sandboxes []infra.Sandbox
-	for _, state := range expectedStates {
-		got, err := i.listSandboxWithState(state, options.Labels)
-		if err != nil {
-			return nil, err
-		}
-		sandboxes = append(sandboxes, got...)
-	}
-	return sandboxes, nil
-}
-
-func (i *Infra) listSandboxWithState(state string, labels map[string]string) ([]infra.Sandbox, error) {
-	selectors := make([]string, 0, len(labels)+2)
-	selectors = append(selectors, v1alpha1.LabelSandboxState, state)
-	for k, v := range labels {
-		selectors = append(selectors, k, v)
-	}
-	selected, err := i.Cache.SelectSandboxes(selectors...)
+func (i *Infra) SelectSandboxes(user string, limit int, filter func(sandbox infra.Sandbox) bool) ([]infra.Sandbox, error) {
+	objects, err := i.Cache.ListSandboxWithUser(user)
 	if err != nil {
 		return nil, err
 	}
-	sandboxes := make([]infra.Sandbox, 0, len(selected))
-	for _, s := range selected {
-		sandboxes = append(sandboxes, i.AsSandbox(s))
+	var sandboxes []infra.Sandbox
+	for _, obj := range objects {
+		if !utils.ResourceVersionExpectationSatisfied(obj) {
+			continue
+		}
+		sbx := i.AsSandbox(obj)
+		if filter == nil || filter(sbx) {
+			sandboxes = append(sandboxes, sbx)
+		}
+		if len(sandboxes) >= limit {
+			break
+		}
 	}
 	return sandboxes, nil
 }
 
-func (i *Infra) GetSandbox(sandboxID string) (infra.Sandbox, error) {
+func (i *Infra) GetSandbox(ctx context.Context, sandboxID string) (infra.Sandbox, error) {
 	sandbox, err := i.Cache.GetSandbox(sandboxID)
 	if err != nil {
 		return nil, err
+	}
+	if !utils.ResourceVersionExpectationSatisfied(sandbox) {
+		klog.FromContext(ctx).Info("resource version expectation not satisfied, will request APIServer directly")
+		sandbox, err = i.Client.ApiV1alpha1().Sandboxes(sandbox.Namespace).Get(ctx, sandbox.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
 	}
 	return i.AsSandbox(sandbox), nil
 }
@@ -141,8 +132,13 @@ func (i *Infra) onSandboxAdd(obj any) {
 	if !ok {
 		return
 	}
+	_, ok = i.GetPoolByObject(sbx)
+	if !ok {
+		return
+	}
 	route := i.AsSandbox(sbx).GetRoute()
 	i.Proxy.SetRoute(route)
+	utils.ResourceVersionExpectationObserve(sbx)
 }
 
 func (i *Infra) onSandboxDelete(obj any) {
@@ -151,6 +147,7 @@ func (i *Infra) onSandboxDelete(obj any) {
 		return
 	}
 	i.Proxy.DeleteRoute(sbx.Name)
+	utils.ResourceVersionExpectationDelete(sbx)
 }
 
 func (i *Infra) onSandboxUpdate(_, newObj any) {

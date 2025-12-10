@@ -36,7 +36,7 @@ func TestFakeSandbox_AllMethods(t *testing.T) {
 		{"GetFinalizers", func() { _ = fs.GetFinalizers() }},
 		{"GetOwnerReferences", func() { _ = fs.GetOwnerReferences() }},
 		{"GetManagedFields", func() { _ = fs.GetManagedFields() }},
-		{"GetState", func() { _ = fs.GetState() }},
+		{"GetState", func() { _, _ = fs.GetState() }},
 		{"GetIP", func() { _ = fs.GetIP() }},
 		{"GetTemplate", func() { _ = fs.GetTemplate() }},
 		{"GetResource", func() { _ = fs.GetResource() }},
@@ -107,7 +107,6 @@ func TestFakeSandbox_AllOtherMethods(t *testing.T) {
 	}{
 		{"Pause", func() interface{} { return fs.Pause(context.Background()) }},
 		{"Resume", func() interface{} { return fs.Resume(context.Background()) }},
-		{"PatchLabels", func() interface{} { return fs.PatchLabels(context.Background(), map[string]string{}) }},
 		{"SaveTimer", func() interface{} {
 			return fs.SaveTimer(context.Background(), 1, "", false, "")
 		}},

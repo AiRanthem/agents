@@ -2,285 +2,473 @@ package sandboxcr
 
 import (
 	"context"
-	"sort"
 	"testing"
 	"time"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/client/clientset/versioned/fake"
-	informers "github.com/openkruise/agents/client/informers/externalversions"
+	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
 	"github.com/stretchr/testify/assert"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func createTestSandbox(name, user string, phase v1alpha1.SandboxPhase, ready bool) *v1alpha1.Sandbox {
+	sbx := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Annotations: map[string]string{
+				v1alpha1.AnnotationOwner: user,
+			},
+		},
+		Status: v1alpha1.SandboxStatus{
+			Phase: phase,
+		},
+	}
+
+	if ready {
+		sbx.Status.Conditions = []metav1.Condition{
+			{
+				Type:   string(v1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+			},
+		}
+	}
+
+	return sbx
+}
+
 //goland:noinspection GoDeprecation
+func NewTestInfra(t *testing.T) (*Infra, *fake.Clientset) {
+	client := fake.NewSimpleClientset()
+	infraInstance, err := NewInfra(client, proxy.NewServer(nil))
+	assert.NoError(t, err)
+	assert.NoError(t, infraInstance.Run(context.Background()))
+	return infraInstance, client
+}
+
 func TestInfra_SelectSandboxes(t *testing.T) {
+	utils.InitLogOutput()
 	tests := []struct {
-		name           string
-		pods           []*corev1.Pod
-		options        infra.SandboxSelectorOptions
-		expectedCount  int
-		expectedStates []string
+		name        string
+		sandboxes   []*v1alpha1.Sandbox
+		user        string
+		limit       int
+		filter      func(sandbox infra.Sandbox) bool
+		expectNames []string
+		expectCount int
 	}{
 		{
-			name: "select running sandboxes",
-			pods: []*corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod1",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod2",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStatePaused,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
+			name: "select all sandboxes for user",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-1", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-2", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-3", "user2", v1alpha1.SandboxRunning, true),
 			},
-			options: infra.SandboxSelectorOptions{
-				WantRunning:   true,
-				WantPaused:    false,
-				WantAvailable: false,
-			},
-			expectedCount:  1,
-			expectedStates: []string{v1alpha1.SandboxStateRunning},
+			user:        "user1",
+			limit:       10,
+			expectNames: []string{"sandbox-1", "sandbox-2"},
 		},
 		{
-			name: "select paused sandboxes",
-			pods: []*corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod1",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod2",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStatePaused,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
+			name: "select with limit",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-1", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-2", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-3", "user1", v1alpha1.SandboxRunning, true),
 			},
-			options: infra.SandboxSelectorOptions{
-				WantRunning:   false,
-				WantPaused:    true,
-				WantAvailable: false,
-			},
-			expectedCount:  1,
-			expectedStates: []string{v1alpha1.SandboxStatePaused},
+			user:        "user1",
+			limit:       2,
+			expectCount: 2,
 		},
 		{
-			name: "select multiple states",
-			pods: []*corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod1",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod2",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStatePaused,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod3",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateAvailable,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
+			name: "select with filter",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-running-1", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-running-2", "user1", v1alpha1.SandboxRunning, true),
 			},
-			options: infra.SandboxSelectorOptions{
-				WantRunning:   true,
-				WantPaused:    true,
-				WantAvailable: false,
+			user:  "user1",
+			limit: 10,
+			filter: func(sandbox infra.Sandbox) bool {
+				return sandbox.GetName() == "sandbox-running-2"
 			},
-			expectedCount:  2,
-			expectedStates: []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused},
+			expectNames: []string{"sandbox-running-2"},
 		},
 		{
-			name: "select with labels",
-			pods: []*corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod1",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-							"custom-label":             "value1",
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod2",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-							"custom-label":             "value2",
-						},
-					},
-				},
+			name: "select with no matching user",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-1", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-2", "user1", v1alpha1.SandboxRunning, true),
 			},
-			options: infra.SandboxSelectorOptions{
-				WantRunning:   true,
-				WantPaused:    false,
-				WantAvailable: false,
-				Labels: map[string]string{
-					"custom-label": "value1",
-				},
-			},
-			expectedCount:  1,
-			expectedStates: []string{v1alpha1.SandboxStateRunning},
-		},
-		{
-			name: "no matching sandboxes",
-			pods: []*corev1.Pod{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "pod1",
-						Namespace: "default",
-						Labels: map[string]string{
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-							v1alpha1.LabelSandboxPool:  "test-template",
-						},
-					},
-				},
-			},
-			options: infra.SandboxSelectorOptions{
-				WantRunning:   false,
-				WantPaused:    true,
-				WantAvailable: false,
-			},
-			expectedCount:  0,
-			expectedStates: []string{},
+			user:        "user2",
+			limit:       10,
+			expectNames: []string{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create fake client
-			client := fake.NewSimpleClientset()
-
-			// Create Pod
-			for _, pod := range tt.pods {
-				sbx := ConvertPodToSandboxCR(pod)
-				_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sbx, metav1.CreateOptions{})
-				assert.NoError(t, err)
+			if tt.expectCount == 0 {
+				tt.expectCount = len(tt.expectNames)
 			}
 
-			// Create cache
-			informerFactory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*10, informers.WithNamespace("default"))
-			sandboxInformer := informerFactory.Api().V1alpha1().Sandboxes().Informer()
-			cache, err := NewCache[*v1alpha1.Sandbox]("default", informerFactory, sandboxInformer)
+			infraInstance, client := NewTestInfra(t)
+
+			for _, sbx := range tt.sandboxes {
+				CreateSandboxWithStatus(t, client, sbx)
+			}
+			time.Sleep(50 * time.Millisecond)
+
+			// Test SelectSandboxes
+			result, err := infraInstance.SelectSandboxes(tt.user, tt.limit, tt.filter)
 			assert.NoError(t, err)
-
-			// Start cache and wait for sync
-			done := make(chan struct{})
-			go cache.Run(done)
-			select {
-			case <-done:
-				// Cache synced
-			case <-time.After(1 * time.Second):
-				// Timeout
-				t.Fatal("Cache sync timeout")
+			assert.Len(t, result, tt.expectCount)
+			if len(tt.expectNames) > 0 {
+				var gotNames []string
+				for _, sandbox := range result {
+					gotNames = append(gotNames, sandbox.GetName())
+				}
+				assert.ElementsMatch(t, tt.expectNames, gotNames)
 			}
-
-			// Create Infra instance
-			infraInstance := &Infra{
-				BaseInfra: infra.BaseInfra{
-					Namespace: "default",
-				},
-				Cache:  cache,
-				Client: client,
-			}
-
-			// Call SelectSandboxes method
-			sandboxes, err := infraInstance.SelectSandboxes(tt.options)
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedCount, len(sandboxes))
-
-			// Verify returned sandbox states
-			actualStates := make([]string, len(sandboxes))
-			for i, sandbox := range sandboxes {
-				actualStates[i] = sandbox.GetState()
-			}
-
-			// Sort to ensure comparison consistency
-			sort.Strings(actualStates)
-			sort.Strings(tt.expectedStates)
-			assert.Equal(t, tt.expectedStates, actualStates)
-
-			// Stop cache
-			cache.Stop()
 		})
 	}
 }
 
-//goland:noinspection GoDeprecation
 func TestInfra_GetSandbox(t *testing.T) {
-	sbx := &v1alpha1.Sandbox{
+	tests := []struct {
+		name        string
+		sandboxes   []*v1alpha1.Sandbox
+		sandboxID   string
+		expectError bool
+		expectFound bool
+	}{
+		{
+			name: "get existing sandbox",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-1", "user1", v1alpha1.SandboxRunning, true),
+				createTestSandbox("sandbox-2", "user2", v1alpha1.SandboxRunning, true),
+			},
+			sandboxID:   "default--sandbox-1",
+			expectError: false,
+			expectFound: true,
+		},
+		{
+			name: "get non-existing sandbox",
+			sandboxes: []*v1alpha1.Sandbox{
+				createTestSandbox("sandbox-1", "user1", v1alpha1.SandboxRunning, true),
+			},
+			sandboxID:   "non-existent",
+			expectError: true,
+			expectFound: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Create sandboxes
+			for _, sbx := range tt.sandboxes {
+				CreateSandboxWithStatus(t, client, sbx)
+			}
+			time.Sleep(100 * time.Millisecond)
+
+			// Test GetSandbox
+			result, err := infraInstance.GetSandbox(context.Background(), tt.sandboxID)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+			}
+		})
+	}
+}
+
+func TestInfra_onSandboxSetCreate(t *testing.T) {
+	tests := []struct {
+		name            string
+		sandboxSetName  string
+		existingPools   []string
+		expectPoolCount int
+	}{
+		{
+			name:            "create new pool",
+			sandboxSetName:  "new-sandboxset",
+			existingPools:   []string{},
+			expectPoolCount: 1,
+		},
+		{
+			name:            "create existing pool",
+			sandboxSetName:  "existing-sandboxset",
+			existingPools:   []string{"existing-sandboxset"},
+			expectPoolCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Add existing pools if any
+			for _, poolName := range tt.existingPools {
+				pool := infraInstance.NewPool(poolName, "default", nil)
+				infraInstance.AddPool(poolName, pool)
+			}
+
+			// Create SandboxSet object
+			sbs := &v1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tt.sandboxSetName,
+					Namespace: "default",
+				},
+			}
+
+			_, err := client.ApiV1alpha1().SandboxSets("default").Create(context.Background(), sbs, metav1.CreateOptions{})
+			assert.NoError(t, err)
+			time.Sleep(10 * time.Millisecond)
+
+			// Verify pool exists and has correct properties
+			pool, ok := infraInstance.GetPoolByTemplate(tt.sandboxSetName)
+			assert.True(t, ok, "Pool should exist after creation")
+			assert.NotNil(t, pool, "Pool should not be nil")
+			assert.Equal(t, tt.sandboxSetName, pool.GetName(), "Pool name should match SandboxSet name")
+		})
+	}
+}
+
+func TestInfra_onSandboxSetDelete(t *testing.T) {
+	tests := []struct {
+		name            string
+		sandboxSetName  string
+		existingPools   []string
+		expectPoolExist bool
+	}{
+		{
+			name:            "delete existing pool",
+			sandboxSetName:  "existing-sandboxset",
+			existingPools:   []string{"existing-sandboxset", "other-sandboxset"},
+			expectPoolExist: false,
+		},
+		{
+			name:            "delete non-existing pool",
+			sandboxSetName:  "non-existing-sandboxset",
+			existingPools:   []string{"other-sandboxset"},
+			expectPoolExist: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Add existing pools if any
+			for _, poolName := range tt.existingPools {
+				_, err := client.ApiV1alpha1().SandboxSets("default").Create(context.Background(), &v1alpha1.SandboxSet{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      poolName,
+						Namespace: "default",
+					},
+				}, metav1.CreateOptions{})
+				assert.NoError(t, err)
+			}
+
+			// Create SandboxSet object
+			sbs := &v1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tt.sandboxSetName,
+					Namespace: "default",
+				},
+			}
+
+			// Call onSandboxSetDelete
+			infraInstance.onSandboxSetDelete(sbs)
+
+			// Verify pool state
+			_, ok := infraInstance.GetPoolByTemplate(tt.sandboxSetName)
+			assert.Equal(t, tt.expectPoolExist, ok, "Pool existence should match expectation")
+		})
+	}
+}
+
+func createTestSandboxWithDefaults(name string, namespace string) *v1alpha1.Sandbox {
+	return &v1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pod",
-			Namespace: "default",
-			Labels: map[string]string{
-				v1alpha1.LabelSandboxID:    "test-pod",
-				v1alpha1.LabelSandboxPool:  "test-pool",
-				v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
+			Name:      name,
+			Namespace: namespace,
+		},
+		Status: v1alpha1.SandboxStatus{
+			Phase: v1alpha1.SandboxRunning,
+			Conditions: []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				},
+			},
+			PodInfo: v1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
 			},
 		},
 	}
-	client := fake.NewSimpleClientset()
-	_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sbx, metav1.CreateOptions{})
-	assert.NoError(t, err)
-	infraInstance, err := NewInfra("default", client, nil)
-	assert.NoError(t, err)
-	err = infraInstance.Run(context.Background())
-	assert.NoError(t, err)
-	sandbox, err := infraInstance.GetSandbox("test-pod")
-	assert.NoError(t, err)
-	_, ok := sandbox.(*Sandbox)
-	assert.True(t, ok)
-	sandboxes, err := infraInstance.SelectSandboxes(infra.SandboxSelectorOptions{WantRunning: true})
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(sandboxes))
-	_, ok = sandboxes[0].(*Sandbox)
-	assert.True(t, ok)
-	noSandboxes, err := infraInstance.SelectSandboxes(infra.SandboxSelectorOptions{WantPaused: true})
-	assert.NoError(t, err)
-	assert.Equal(t, 0, len(noSandboxes))
+}
+
+func TestInfra_onSandboxAdd(t *testing.T) {
+	tests := []struct {
+		name             string
+		sandbox          *v1alpha1.Sandbox
+		expectRouteExist bool
+	}{
+		{
+			name:             "add sandbox with route",
+			sandbox:          createTestSandboxWithDefaults("test-sandbox", "default"),
+			expectRouteExist: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Create SandboxSet object
+			sbs := &v1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pool",
+					Namespace: "default",
+				},
+			}
+
+			_, err := client.ApiV1alpha1().SandboxSets("default").Create(context.Background(), sbs, metav1.CreateOptions{})
+			assert.NoError(t, err)
+			time.Sleep(50 * time.Millisecond)
+
+			// Create sandbox
+			tt.sandbox.Labels = map[string]string{
+				v1alpha1.LabelSandboxPool: "test-pool",
+			}
+			CreateSandboxWithStatus(t, client, tt.sandbox)
+			time.Sleep(50 * time.Millisecond)
+
+			// Check route
+			id := stateutils.GetSandboxID(tt.sandbox)
+			route, ok := infraInstance.Proxy.LoadRoute(id)
+			assert.Equal(t, tt.expectRouteExist, ok)
+			if tt.expectRouteExist {
+				assert.Equal(t, id, route.ID)
+				assert.Equal(t, tt.sandbox.Status.PodInfo.PodIP, route.IP)
+				assert.Equal(t, v1alpha1.SandboxStateRunning, route.State)
+			}
+		})
+	}
+}
+
+func TestInfra_onSandboxDelete(t *testing.T) {
+	tests := []struct {
+		name             string
+		sandbox          *v1alpha1.Sandbox
+		addRouteFirst    bool
+		expectRouteExist bool
+	}{
+		{
+			name:             "delete sandbox with existing route",
+			sandbox:          createTestSandboxWithDefaults("test-sandbox", "default"),
+			expectRouteExist: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Create sandbox
+			CreateSandboxWithStatus(t, client, tt.sandbox)
+			time.Sleep(50 * time.Millisecond)
+			id := stateutils.GetSandboxID(tt.sandbox)
+
+			assert.NoError(t, client.ApiV1alpha1().Sandboxes("default").Delete(context.Background(), tt.sandbox.Name, metav1.DeleteOptions{}))
+			time.Sleep(10 * time.Millisecond)
+
+			// Check route no longer exists
+			_, ok := infraInstance.Proxy.LoadRoute(id)
+			assert.Equal(t, tt.expectRouteExist, ok)
+		})
+	}
+}
+
+func TestInfra_onSandboxUpdate(t *testing.T) {
+	tests := []struct {
+		name              string
+		oldSandbox        *v1alpha1.Sandbox
+		newSandbox        *v1alpha1.Sandbox
+		addToPool         bool
+		expectRouteUpdate bool
+	}{
+		{
+			name:       "update sandbox with changed state",
+			oldSandbox: createTestSandboxWithDefaults("test-sandbox", "default"),
+			newSandbox: func() *v1alpha1.Sandbox {
+				sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+				sbx.Status.Phase = v1alpha1.SandboxPaused
+				return sbx
+			}(),
+			addToPool:         true,
+			expectRouteUpdate: true,
+		},
+		{
+			name:              "update sandbox with unchanged state",
+			oldSandbox:        createTestSandboxWithDefaults("test-sandbox", "default"),
+			newSandbox:        createTestSandboxWithDefaults("test-sandbox", "default"),
+			addToPool:         true,
+			expectRouteUpdate: false,
+		},
+		{
+			name:       "update sandbox not in pool",
+			oldSandbox: createTestSandboxWithDefaults("test-sandbox", "default"),
+			newSandbox: func() *v1alpha1.Sandbox {
+				sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+				sbx.Status.Phase = v1alpha1.SandboxPaused
+				return sbx
+			}(),
+			addToPool:         false,
+			expectRouteUpdate: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, client := NewTestInfra(t)
+
+			// Setup pool if needed
+			if tt.addToPool {
+				pool := infraInstance.NewPool("test-pool", "default", nil)
+				infraInstance.AddPool("test-pool", pool)
+
+				// Associate sandbox with pool
+				tt.newSandbox.Labels = map[string]string{
+					v1alpha1.LabelSandboxPool: "test-pool",
+				}
+			}
+
+			// Create sandbox
+			CreateSandboxWithStatus(t, client, tt.oldSandbox)
+			time.Sleep(10 * time.Millisecond)
+
+			_, err := client.ApiV1alpha1().Sandboxes("default").Update(context.Background(), tt.newSandbox, metav1.UpdateOptions{})
+			assert.NoError(t, err)
+			time.Sleep(10 * time.Millisecond)
+
+			// Check if route was updated
+			if tt.addToPool {
+				route, ok := infraInstance.Proxy.LoadRoute(stateutils.GetSandboxID(tt.newSandbox))
+				if tt.expectRouteUpdate {
+					assert.True(t, ok)
+					newSbx := infraInstance.AsSandbox(tt.newSandbox)
+					expectedRoute := newSbx.GetRoute()
+					assert.Equal(t, expectedRoute.State, route.State)
+				}
+			}
+		})
+	}
 }

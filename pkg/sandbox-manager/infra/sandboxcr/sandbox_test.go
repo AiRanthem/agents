@@ -2,22 +2,22 @@ package sandboxcr
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/client/clientset/versioned/fake"
-	informers "github.com/openkruise/agents/client/informers/externalversions"
+	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	utils2 "github.com/openkruise/agents/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	client2 "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func AsSandbox(sbx *v1alpha1.Sandbox, client *fake.Clientset, cache Cache[*v1alpha1.Sandbox]) *Sandbox {
+func AsSandbox(sbx *v1alpha1.Sandbox, client *fake.Clientset, cache *Cache) *Sandbox {
 	s := &Sandbox{
 		BaseSandbox: BaseSandbox[*v1alpha1.Sandbox]{
 			Sandbox:       sbx,
@@ -30,14 +30,14 @@ func AsSandbox(sbx *v1alpha1.Sandbox, client *fake.Clientset, cache Cache[*v1alp
 	}
 	if client != nil {
 		s.PatchSandbox = client.ApiV1alpha1().Sandboxes("default").Patch
-		s.UpdateStatus = client.ApiV1alpha1().Sandboxes("default").UpdateStatus
+		s.Update = client.ApiV1alpha1().Sandboxes("default").Update
 		s.DeleteFunc = client.ApiV1alpha1().Sandboxes("default").Delete
 	}
 	return s
 }
 
 func ConvertPodToSandboxCR(pod *corev1.Pod) *v1alpha1.Sandbox {
-	return &v1alpha1.Sandbox{
+	sbx := &v1alpha1.Sandbox{
 		ObjectMeta: pod.ObjectMeta,
 		Spec: v1alpha1.SandboxSpec{
 			Template: &corev1.PodTemplateSpec{
@@ -51,55 +51,17 @@ func ConvertPodToSandboxCR(pod *corev1.Pod) *v1alpha1.Sandbox {
 			},
 		},
 	}
-}
-
-func TestSandbox_GetState(t *testing.T) {
-	tests := []struct {
-		name string
-		pod  *corev1.Pod
-		want string
-	}{
-		{
-			name: "returns sandbox state label",
-			pod: &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-					},
-				},
-			},
-			want: v1alpha1.SandboxStateRunning,
-		},
-		{
-			name: "empty state",
-			pod: &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						v1alpha1.LabelSandboxState: "",
-					},
-				},
-			},
-			want: "",
-		},
-		{
-			name: "no state label",
-			pod: &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{},
-				},
-			},
-			want: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := AsSandbox(ConvertPodToSandboxCR(tt.pod), nil, nil)
-			if got := s.GetState(); got != tt.want {
-				t.Errorf("GetState() = %v, want %v", got, tt.want)
-			}
+	cond := utils2.GetPodCondition(&pod.Status, corev1.PodReady)
+	if cond != nil {
+		sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
+			Type:   string(v1alpha1.SandboxConditionReady),
+			Status: metav1.ConditionStatus(cond.Status),
 		})
 	}
+	if strings.HasPrefix(pod.Name, "paused") {
+		sbx.Spec.Paused = true
+	}
+	return sbx
 }
 
 func TestSandbox_GetTemplate(t *testing.T) {
@@ -258,516 +220,358 @@ func TestSandbox_GetResource(t *testing.T) {
 	}
 }
 
-func TestSandbox_SetState(t *testing.T) {
-	tests := []struct {
-		name          string
-		initialLabels map[string]string
-		setState      string
-		expectedState string
-	}{
-		{
-			name:          "set state on sandbox without labels",
-			initialLabels: map[string]string{},
-			setState:      v1alpha1.SandboxStateRunning,
-			expectedState: v1alpha1.SandboxStateRunning,
-		},
-		{
-			name: "set state on sandbox with existing state",
-			initialLabels: map[string]string{
-				v1alpha1.LabelSandboxState: v1alpha1.SandboxStatePaused,
-			},
-			setState:      v1alpha1.SandboxStateKilling,
-			expectedState: v1alpha1.SandboxStateKilling,
-		},
-		{
-			name: "set empty state",
-			initialLabels: map[string]string{
-				v1alpha1.LabelSandboxState: v1alpha1.SandboxStateRunning,
-			},
-			setState:      "",
-			expectedState: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create Pod with initial labels
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels:    tt.initialLabels,
-				},
-			}
-			sandbox := ConvertPodToSandboxCR(pod)
-
-			// Using fake client
-			//goland:noinspection GoDeprecation
-			client := fake.NewSimpleClientset()
-			_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-			assert.NoError(t, err)
-			// Create Sandbox instance
-			s := AsSandbox(ConvertPodToSandboxCR(pod), client, nil)
-
-			// Call SetState method
-			err = s.SetState(context.Background(), tt.setState)
-			assert.NoError(t, err)
-
-			// Verify that the state is set correctly
-			updatedSbx, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedState, updatedSbx.Labels[v1alpha1.LabelSandboxState])
-		})
-	}
-}
-
-func TestSandbox_PatchLabels(t *testing.T) {
-	tests := []struct {
-		name   string
-		labels map[string]string
-		expect map[string]string
-	}{
-		{
-			name: "patch labels",
-			labels: map[string]string{
-				"foo":     "baz",
-				"another": "value",
-			},
-			expect: map[string]string{
-				"foo":     "baz",
-				"another": "value",
-			},
-		},
-		{
-			name: "without foo",
-			labels: map[string]string{
-				"another": "value",
-			},
-			expect: map[string]string{
-				"foo":     "bar",
-				"another": "value",
-			},
-		},
-		{
-			name: "nil labels",
-			expect: map[string]string{
-				"foo": "bar",
-			},
-		},
-		{
-			name:   "empty labels",
-			labels: nil,
-			expect: map[string]string{
-				"foo": "bar",
+func TestSandbox_InplaceRefresh(t *testing.T) {
+	initialSandbox := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-sandbox",
+			Namespace: "default",
+			Labels: map[string]string{
+				"initial": "value",
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						"foo": "bar",
-					},
-				},
-			}
-			sandbox := ConvertPodToSandboxCR(pod)
-			//goland:noinspection GoDeprecation
-			client := fake.NewSimpleClientset()
-			_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-			assert.NoError(t, err)
-			s := AsSandbox(sandbox, client, nil)
-			err = s.PatchLabels(context.Background(), map[string]string{
-				"foo":     "baz",
-				"another": "value",
-			})
-			assert.NoError(t, err)
-			got, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
-			assert.NoError(t, err)
-			assert.Equal(t, "baz", got.Labels["foo"])
-			assert.Equal(t, "value", got.Labels["another"])
-		})
-	}
 
+	cache, client := NewTestCache()
+	_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), initialSandbox, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+
+	updatedSandbox := initialSandbox.DeepCopy()
+	updatedSandbox.Labels["updated"] = "new-value"
+	_, err = client.ApiV1alpha1().Sandboxes("default").Update(context.Background(), updatedSandbox, metav1.UpdateOptions{})
+	assert.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+
+	s := AsSandbox(initialSandbox, client, cache)
+
+	assert.Equal(t, "value", s.Sandbox.Labels["initial"])
+	assert.Empty(t, s.Sandbox.Labels["updated"])
+
+	err = s.InplaceRefresh(false)
+	assert.NoError(t, err)
+
+	assert.Equal(t, "value", s.Sandbox.Labels["initial"])
+	assert.Equal(t, "new-value", s.Sandbox.Labels["updated"])
+
+	err = s.InplaceRefresh(true)
+	assert.NoError(t, err)
+	assert.Equal(t, "value", s.Sandbox.Labels["initial"])
+	assert.Equal(t, "new-value", s.Sandbox.Labels["updated"])
 }
 
 func TestSandbox_Kill(t *testing.T) {
 	tests := []struct {
 		name              string
-		initialState      string
-		deletionTimestamp *metav1.Time
-		expectError       bool
+		hasDeletionTime   bool
+		expectDeleteError bool
 	}{
 		{
-			name:         "kill running sandbox",
-			initialState: v1alpha1.SandboxStateRunning,
-			expectError:  false,
+			name:              "normal deletion",
+			hasDeletionTime:   false,
+			expectDeleteError: false,
 		},
 		{
-			name:         "kill paused sandbox",
-			initialState: v1alpha1.SandboxStatePaused,
-			expectError:  false,
-		},
-		{
-			name:              "kill already deleted sandbox",
-			initialState:      v1alpha1.SandboxStateRunning,
-			deletionTimestamp: &metav1.Time{},
-			expectError:       false,
+			name:              "already marked for deletion",
+			hasDeletionTime:   true,
+			expectDeleteError: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create Pod with initial state
-			pod := &corev1.Pod{
+			sandbox := &v1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sandbox",
 					Namespace: "default",
-					Labels: map[string]string{
-						v1alpha1.LabelSandboxState: tt.initialState,
-					},
-					DeletionTimestamp: tt.deletionTimestamp,
 				},
 			}
-			sandbox := ConvertPodToSandboxCR(pod)
 
-			// Using fake client
-			//goland:noinspection GoDeprecation
+			if tt.hasDeletionTime {
+				now := metav1.Now()
+				sandbox.DeletionTimestamp = &now
+			}
+
 			client := fake.NewSimpleClientset()
 			_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
 			assert.NoError(t, err)
 
-			// Create Sandbox instance
 			s := AsSandbox(sandbox, client, nil)
 
-			// Call Kill method
-			err = s.Kill(context.Background())
+			_, err = client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
+			assert.NoError(t, err)
 
-			if tt.expectError {
+			err = s.Kill(context.Background())
+			if tt.expectDeleteError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
+			}
 
-				if tt.deletionTimestamp == nil {
-					// Verify that the state is set to killing before deletion
-					// Since the Pod has been deleted, we need to check if the status update operation was called
-					// In fake client, we can verify by checking if any patch operations occurred
-					// But here we can only verify that the method did not return an error
-				}
+			if !tt.hasDeletionTime {
+				_, err = client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
+				assert.Error(t, err)
+				assert.True(t, strings.Contains(err.Error(), "not found"))
 			}
 		})
 	}
 }
 
-func TestSandbox_Patch(t *testing.T) {
+func TestSandbox_GetTimeout(t *testing.T) {
+	now := metav1.Now()
+	future := metav1.NewTime(now.Add(time.Hour))
+
 	tests := []struct {
-		name                string
-		initialLabels       map[string]string
-		initialAnnotations  map[string]string
-		patchStr            string
-		expectedLabels      map[string]string
-		expectedAnnotations map[string]string
+		name     string
+		sandbox  *v1alpha1.Sandbox
+		expected time.Time
 	}{
 		{
-			name: "add new labels",
-			initialLabels: map[string]string{
-				"existing": "label",
-			},
-			initialAnnotations: map[string]string{
-				"existing": "annotation",
-			},
-			patchStr: `{"metadata":{"labels":{"new":"label"},"annotations":{"new":"annotation"}}}`,
-			expectedLabels: map[string]string{
-				"existing": "label",
-				"new":      "label",
-			},
-			expectedAnnotations: map[string]string{
-				"existing": "annotation",
-				"new":      "annotation",
-			},
-		},
-		{
-			name: "update existing labels",
-			initialLabels: map[string]string{
-				"existing": "old-value",
-			},
-			initialAnnotations: map[string]string{},
-			patchStr:           `{"metadata":{"labels":{"existing":"new-value"}}}`,
-			expectedLabels: map[string]string{
-				"existing": "new-value",
-			},
-			expectedAnnotations: map[string]string{},
-		},
-		{
-			name: "empty patch",
-			initialLabels: map[string]string{
-				"existing": "label",
-			},
-			initialAnnotations: map[string]string{
-				"existing": "annotation",
-			},
-			patchStr: `{"metadata":{}}`,
-			expectedLabels: map[string]string{
-				"existing": "label",
-			},
-			expectedAnnotations: map[string]string{
-				"existing": "annotation",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create Pod with initial labels and annotations
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:        "test-sandbox",
-					Namespace:   "default",
-					Labels:      tt.initialLabels,
-					Annotations: tt.initialAnnotations,
+			name: "with shutdown time set",
+			sandbox: &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{
+					ShutdownTime: &future,
 				},
-			}
-			sandbox := ConvertPodToSandboxCR(pod)
-
-			// Using fake client
-			//goland:noinspection GoDeprecation
-			client := fake.NewSimpleClientset()
-			_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-			assert.NoError(t, err)
-
-			// Create Sandbox instance
-			s := AsSandbox(sandbox, client, nil)
-
-			// Call Patch method
-			err = s.Patch(context.Background(), tt.patchStr)
-			assert.NoError(t, err)
-
-			// Verify that the patch is applied correctly
-			updatedPod, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
-			assert.NoError(t, err)
-
-			// For empty maps, we need special handling
-			if len(tt.expectedLabels) == 0 {
-				if updatedPod.Labels == nil {
-					// If the expectation is an empty map but the actual is nil, this is acceptable
-					assert.True(t, len(updatedPod.Labels) == 0)
-				} else {
-					assert.Equal(t, tt.expectedLabels, updatedPod.Labels)
-				}
-			} else {
-				assert.Equal(t, tt.expectedLabels, updatedPod.Labels)
-			}
-
-			if len(tt.expectedAnnotations) == 0 {
-				if updatedPod.Annotations == nil {
-					// If the expectation is an empty map but the actual is nil, this is acceptable
-					assert.True(t, len(updatedPod.Annotations) == 0)
-				} else {
-					assert.Equal(t, tt.expectedAnnotations, updatedPod.Annotations)
-				}
-			} else {
-				assert.Equal(t, tt.expectedAnnotations, updatedPod.Annotations)
-			}
-		})
-	}
-}
-
-//goland:noinspection GoDeprecation
-func TestSandbox_SetPause(t *testing.T) {
-	tests := []struct {
-		name          string
-		phase         v1alpha1.SandboxPhase
-		initialState  string
-		pauseFinished bool
-		originalPause bool
-		operatePause  bool
-		expectPaused  bool
-		expectedState string
-		expectError   bool
-	}{
-		{
-			name:          "pause running / running sandbox",
-			phase:         v1alpha1.SandboxRunning,
-			initialState:  v1alpha1.SandboxStateRunning,
-			originalPause: false,
-			operatePause:  true,
-			expectPaused:  true,
-			expectedState: v1alpha1.SandboxStatePaused,
-			expectError:   false,
+			},
+			expected: future.Time,
 		},
 		{
-			name:          "pause running / available sandbox",
-			phase:         v1alpha1.SandboxRunning,
-			initialState:  v1alpha1.SandboxStateAvailable,
-			originalPause: false,
-			operatePause:  true,
-			expectPaused:  true,
-			expectedState: v1alpha1.SandboxStateAvailable,
-			expectError:   false,
-		},
-		{
-			name:          "resume paused / paused sandbox",
-			phase:         v1alpha1.SandboxPaused,
-			initialState:  v1alpha1.SandboxStatePaused,
-			originalPause: true,
-			pauseFinished: true,
-			operatePause:  false,
-			expectPaused:  false,
-			expectedState: v1alpha1.SandboxStateRunning,
-			expectError:   false,
-		},
-		{
-			name:          "resume paused / pausing sandbox",
-			phase:         v1alpha1.SandboxPaused,
-			initialState:  v1alpha1.SandboxStatePaused,
-			originalPause: true,
-			pauseFinished: false,
-			operatePause:  false,
-			expectPaused:  false,
-			expectedState: v1alpha1.SandboxStateRunning,
-			expectError:   true,
-		},
-		{
-			name:          "resume paused / available sandbox",
-			phase:         v1alpha1.SandboxPaused,
-			initialState:  v1alpha1.SandboxStateAvailable,
-			originalPause: true,
-			pauseFinished: true,
-			operatePause:  false,
-			expectPaused:  false,
-			expectedState: v1alpha1.SandboxStateAvailable,
-			expectError:   false,
-		},
-		{
-			name:          "pause already paused sandbox",
-			phase:         v1alpha1.SandboxPaused,
-			initialState:  v1alpha1.SandboxStatePaused,
-			originalPause: true,
-			operatePause:  true,
-			expectPaused:  true,
-			expectedState: v1alpha1.SandboxStatePaused,
-			expectError:   true,
-		},
-		{
-			name:          "resume already running sandbox",
-			phase:         v1alpha1.SandboxRunning,
-			initialState:  v1alpha1.SandboxStateRunning,
-			originalPause: false,
-			operatePause:  false,
-			expectPaused:  false,
-			expectedState: v1alpha1.SandboxStateRunning,
-			expectError:   true,
-		},
-		{
-			name:          "resume killing sandbox",
-			phase:         v1alpha1.SandboxPaused,
-			initialState:  v1alpha1.SandboxStateKilling,
-			originalPause: true,
-			operatePause:  false,
-			expectPaused:  true,
-			expectedState: v1alpha1.SandboxStateKilling,
-			expectError:   true,
-		},
-		{
-			name:          "pause killing sandbox",
-			phase:         v1alpha1.SandboxRunning,
-			initialState:  v1alpha1.SandboxStateKilling,
-			originalPause: false,
-			operatePause:  true,
-			expectPaused:  true,
-			expectedState: v1alpha1.SandboxStateKilling,
-			expectError:   true,
+			name: "without shutdown time",
+			sandbox: &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{
+					ShutdownTime: nil,
+				},
+			},
+			expected: time.Time{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create Pod with initial state
-			pod := &corev1.Pod{
+			s := &Sandbox{
+				Sandbox: tt.sandbox,
+			}
+			result := s.GetTimeout()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSandbox_SaveTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialTime *metav1.Time
+		ttl         time.Duration
+	}{
+		{
+			name:        "set timeout on sandbox without existing timeout",
+			initialTime: nil,
+			ttl:         30 * time.Minute,
+		},
+		{
+			name:        "update timeout on sandbox with existing timeout",
+			initialTime: &metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+			ttl:         45 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := &v1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sandbox",
 					Namespace: "default",
-					Labels: map[string]string{
-						v1alpha1.LabelSandboxState: tt.initialState,
-					},
-					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					ShutdownTime: tt.initialTime,
 				},
 			}
 
-			sandbox := ConvertPodToSandboxCR(pod)
-			sandbox.Status.Phase = tt.phase
-			if tt.originalPause {
-				sandbox.Spec.Paused = true
-				var condStatus metav1.ConditionStatus
-				if tt.pauseFinished {
-					condStatus = metav1.ConditionTrue
-				} else {
-					condStatus = metav1.ConditionFalse
-				}
-				sandbox.Status.Conditions = append(sandbox.Status.Conditions, metav1.Condition{
-					Type:   string(v1alpha1.SandboxConditionPaused),
-					Status: condStatus,
-				})
-			}
-			// Using fake client
-			client := fake.NewSimpleClientset()
-			CreateSandboxWithStatus(t, client, sandbox)
-
-			// Create cache
-			informerFactory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*10, informers.WithNamespace("default"))
-			sandboxInformer := informerFactory.Api().V1alpha1().Sandboxes().Informer()
-			cache, err := NewCache[*v1alpha1.Sandbox]("default", informerFactory, sandboxInformer)
+			cache, client := NewTestCache()
+			_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
 			assert.NoError(t, err)
+			time.Sleep(10 * time.Millisecond)
 
-			// Start cache and wait for sync
-			done := make(chan struct{})
-			go cache.Run(done)
-			select {
-			case <-done:
-				// Cache synced
-			case <-time.After(1 * time.Second):
-				// Timeout
-				t.Fatal("Cache sync timeout")
-			}
-
-			// Create Sandbox instance
 			s := AsSandbox(sandbox, client, cache)
 
-			// Call SetPause method
-			if tt.operatePause {
-				err = s.Pause(context.Background())
-			} else {
-				if !tt.expectError {
-					time.AfterFunc(20*time.Millisecond, func() {
-						patch := client2.MergeFrom(s.Sandbox.DeepCopy())
-						s.Status.Phase = v1alpha1.SandboxRunning
-						SetSandboxCondition(s.Sandbox, string(v1alpha1.SandboxConditionReady), metav1.ConditionTrue, "Resume", "")
-						data, err := patch.Data(s.Sandbox)
-						assert.NoError(t, err)
-						_, err = client.ApiV1alpha1().Sandboxes("default").Patch(
-							context.Background(), s.Name, types.MergePatchType, data, metav1.PatchOptions{})
-						assert.NoError(t, err)
-					})
-				}
-				err = s.Resume(context.Background())
-			}
-			if tt.expectError {
-				assert.Error(t, err)
-				return
-			} else {
-				assert.NoError(t, err)
-			}
-
-			// Get updated Pod
-			updatedSbx, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
+			err = s.SaveTimeout(context.Background(), tt.ttl)
 			assert.NoError(t, err)
 
-			// Verify that the Pod state is updated correctly
-			// Should have performed patch operation
-			assert.Equal(t, tt.expectedState, updatedSbx.Labels[v1alpha1.LabelSandboxState])
-			assert.Equal(t, tt.operatePause, updatedSbx.Spec.Paused)
+			updatedSandbox, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.NotNil(t, updatedSandbox.Spec.ShutdownTime)
+			assert.WithinDuration(t, time.Now().Add(tt.ttl), updatedSandbox.Spec.ShutdownTime.Time, time.Second)
+		})
+	}
+}
+
+func TestSandbox_SetTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialTime *metav1.Time
+		ttl         time.Duration
+	}{
+		{
+			name:        "set timeout on sandbox without existing timeout",
+			initialTime: nil,
+			ttl:         1 * time.Hour,
+		},
+		{
+			name:        "update timeout on sandbox with existing timeout",
+			initialTime: &metav1.Time{Time: time.Now().Add(1 * time.Hour)},
+			ttl:         2 * time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := &v1alpha1.Sandbox{
+				Spec: v1alpha1.SandboxSpec{
+					ShutdownTime: tt.initialTime,
+				},
+			}
+			s := &Sandbox{
+				Sandbox: sandbox,
+			}
+
+			s.SetTimeout(tt.ttl)
+
+			assert.NotNil(t, s.Sandbox.Spec.ShutdownTime)
+			assert.WithinDuration(t, time.Now().Add(tt.ttl), s.Sandbox.Spec.ShutdownTime.Time, time.Second)
+		})
+	}
+}
+
+func TestSandbox_GetClaimTime(t *testing.T) {
+	now := time.Now()
+	claimTimeString := now.Format(time.RFC3339)
+
+	tests := []struct {
+		name     string
+		sandbox  *v1alpha1.Sandbox
+		expected time.Time
+	}{
+		{
+			name: "with claim time annotation",
+			sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						v1alpha1.AnnotationClaimTime: claimTimeString,
+					},
+				},
+			},
+			expected: now,
+		},
+		{
+			name: "without claim time annotation",
+			sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{},
+				},
+			},
+			expected: time.Time{},
+		},
+		{
+			name: "with invalid claim time annotation",
+			sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						v1alpha1.AnnotationClaimTime: "invalid-time-format",
+					},
+				},
+			},
+			expected: time.Time{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Sandbox{
+				Sandbox: tt.sandbox,
+			}
+			result, _ := s.GetClaimTime()
+			if tt.name == "with claim time annotation" {
+				assert.WithinDuration(t, tt.expected, result, time.Second)
+			} else {
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestSandbox_GetRoute(t *testing.T) {
+	tests := []struct {
+		name          string
+		sandbox       *v1alpha1.Sandbox
+		expectedRoute proxy.Route
+	}{
+		{
+			name: "available sandbox with owner",
+			sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "available-sandbox",
+					Namespace: "default",
+					Annotations: map[string]string{
+						v1alpha1.AnnotationOwner: "test-owner",
+					},
+					OwnerReferences: GetSbsOwnerReference(),
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					},
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+				},
+			},
+			expectedRoute: proxy.Route{
+				IP:    "10.0.0.1",
+				ID:    "default--available-sandbox",
+				Owner: "test-owner",
+				State: v1alpha1.SandboxStateAvailable,
+			},
+		},
+		{
+			name: "running sandbox without owner",
+			sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "running-sandbox",
+					Namespace: "default",
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					},
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.2",
+					},
+				},
+			},
+			expectedRoute: proxy.Route{
+				IP:    "10.0.0.2",
+				ID:    "default--running-sandbox",
+				Owner: "",
+				State: v1alpha1.SandboxStateRunning,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Sandbox{
+				Sandbox: tt.sandbox,
+			}
+
+			route := s.GetRoute()
+			assert.Equal(t, tt.expectedRoute, route)
 		})
 	}
 }

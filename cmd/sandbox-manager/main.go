@@ -37,9 +37,12 @@ func main() {
 		domain = domainEnv
 	}
 
-	// Get namespace from environment variable or use "default"
-	if ns := os.Getenv("NAMESPACE"); ns != "" {
-		e2b.Namespace = ns
+	e2bMaxTimeout := e2b.DefaultMaxTimeout
+	if value, err := strconv.Atoi(os.Getenv("E2B_MAX_TIMEOUT")); err == nil {
+		if value <= 0 {
+			klog.Fatalf("E2B_MAX_TIMEOUT must be greater than 0")
+		}
+		e2bMaxTimeout = value
 	}
 
 	sysNs := os.Getenv("SYSTEM_NAMESPACE")
@@ -62,7 +65,7 @@ func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	sandboxController := e2b.NewController(domain, e2bAdminKey, sysNs, port, e2bEnableAuth, clientSet)
+	sandboxController := e2b.NewController(domain, e2bAdminKey, sysNs, e2bMaxTimeout, port, e2bEnableAuth, clientSet)
 	if err := sandboxController.Init(infra); err != nil {
 		klog.Fatalf("Failed to initialize sandbox controller: %v", err)
 	}

@@ -1,18 +1,23 @@
 package sandboxset
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	apps "k8s.io/api/apps/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-var scaleExpectation = expectations.NewScaleExpectations()
+var (
+	scaleUpExpectation               = expectations.NewScaleExpectations()
+	scaleDownExpectation             = expectations.NewScaleExpectations()
+	retryAfterForceDeleteExpectation = 3 * time.Second
+)
 
 // GetControllerKey return key of CloneSet.
 func GetControllerKey(sbs *agentsv1alpha1.SandboxSet) string {
@@ -23,16 +28,8 @@ type GroupedSandboxes struct {
 	Creating  []*agentsv1alpha1.Sandbox // Sandboxes being created or initialized
 	Available []*agentsv1alpha1.Sandbox // Initialized but not yet claimed Sandboxes
 	Used      []*agentsv1alpha1.Sandbox // Sandboxes claimed by client agents
-	Failed    []*agentsv1alpha1.Sandbox // Sandboxes should be deleted
+	Dead      []*agentsv1alpha1.Sandbox // Sandboxes should be deleted
 }
-
-var (
-	GroupCreating  = "creating"
-	GroupFailed    = "failed"
-	GroupAvailable = "available"
-	GroupUsed      = "used"
-	GroupUnknown   = "unknown"
-)
 
 func (r *Reconciler) initNewStatus(ss *agentsv1alpha1.SandboxSet) (*agentsv1alpha1.SandboxSetStatus, error) {
 	newStatus := ss.Status.DeepCopy()
@@ -49,39 +46,6 @@ func saveStatusFromGroup(newStatus *agentsv1alpha1.SandboxSetStatus, groups Grou
 	newStatus.AvailableReplicas = int32(len(groups.Available))
 	newStatus.Replicas = int32(len(groups.Creating)) + int32(len(groups.Available))
 	return newStatus.Replicas
-}
-
-func findSandboxGroup(sbx *agentsv1alpha1.Sandbox) (group, reason string) {
-	if sbx.DeletionTimestamp != nil {
-		return GroupFailed, "ResourceDeleted"
-	}
-	switch sbx.Status.Phase {
-	case "":
-		return GroupCreating, "ResourcePhaseEmpty"
-	case agentsv1alpha1.SandboxPending:
-		return GroupCreating, "ResourcePending"
-	case agentsv1alpha1.SandboxFailed:
-		return GroupFailed, "ResourceFailed"
-	case agentsv1alpha1.SandboxSucceeded:
-		return GroupFailed, "ResourceSucceeded"
-	case agentsv1alpha1.SandboxTerminating:
-		return GroupFailed, "ResourceTerminating"
-	default: // Running, Paused
-		switch sbx.Labels[agentsv1alpha1.LabelSandboxState] {
-		case agentsv1alpha1.SandboxStateRunning:
-			return GroupUsed, "SandboxStateRunning"
-		case agentsv1alpha1.SandboxStatePaused:
-			return GroupUsed, "SandboxStatePaused"
-		case agentsv1alpha1.SandboxStateAvailable:
-			return GroupAvailable, "SandboxStateAvailable"
-		case agentsv1alpha1.SandboxStateKilling:
-			return GroupFailed, "SandboxStateKilling"
-		case "":
-			return GroupCreating, "SandboxStateNotPatched"
-		default: // impossible, just in case
-			return GroupUnknown, "SandboxStateUnknown"
-		}
-	}
 }
 
 /* Just Reserved for SandboxAutoScaler
@@ -137,11 +101,6 @@ func clearAndInitInnerKeys(m map[string]string) map[string]string {
 	return m
 }
 
-func checkSandboxReady(sbx *agentsv1alpha1.Sandbox) bool {
-	cond := utils.GetSandboxCondition(&sbx.Status, string(agentsv1alpha1.SandboxConditionReady))
-	return cond != nil && cond.Status == metav1.ConditionTrue
-}
-
 // newRevision creates a new ControllerRevision containing a patch that reapplies the target state of set.
 // The Revision of the returned ControllerRevision is set to revision. If the returned error is nil, the returned
 // ControllerRevision is valid. StatefulSet revisions are stored as patches that re-apply the current state of set
@@ -152,7 +111,7 @@ func (r *Reconciler) newRevision(set *agentsv1alpha1.SandboxSet, revision int64,
 		return nil, err
 	}
 	cr, err := NewControllerRevision(set,
-		sandboxSetControllerKind,
+		agentsv1alpha1.SandboxSetControllerKind,
 		set.Spec.Template.Labels,
 		runtime.RawExtension{Raw: patch},
 		revision,
@@ -167,4 +126,25 @@ func (r *Reconciler) newRevision(set *agentsv1alpha1.SandboxSet, revision int64,
 		cr.ObjectMeta.Annotations[key] = value
 	}
 	return cr, nil
+}
+
+// scaleExpectationSatisfied logic:
+// 1. if scaleUpExpectation is not satisfied, both scaling up and scaling down are forbidden
+// 2. if scaleDownExpectation is not satisfied, scaling up is allowed and scaling down is forbidden
+func scaleExpectationSatisfied(ctx context.Context, scaleExpectation expectations.ScaleExpectations, key string) (ok bool, requeueAfter time.Duration) {
+	log := logf.FromContext(ctx)
+	satisfied, unsatisfiedDuration, dirty := scaleExpectation.SatisfiedExpectations(key)
+	if satisfied {
+		return true, 0
+	}
+
+	if unsatisfiedDuration > expectations.ExpectationTimeout {
+		scaleExpectation.DeleteExpectations(key)
+		log.Error(nil, "expectation unsatisfied overtime, force delete the timeout expectation", "requeueAfter", retryAfterForceDeleteExpectation)
+		return false, retryAfterForceDeleteExpectation
+	}
+
+	requeueAfter = expectations.ExpectationTimeout - unsatisfiedDuration
+	log.Info("expectations not satisfied", "dirty", dirty, "requeueAfter", requeueAfter)
+	return false, requeueAfter
 }

@@ -12,6 +12,7 @@ import (
 
 type SandboxSelectorOptions struct {
 	TemplateName  string
+	Owner         string
 	WantPaused    bool
 	WantRunning   bool
 	WantAvailable bool
@@ -32,8 +33,8 @@ type Infrastructure interface {
 	NewPool(name, namespace string, annotations map[string]string) SandboxPool // Create a new SandboxPool from a SandboxSet
 	AddPool(name string, pool SandboxPool)                                     // Add a SandboxPool to the pool
 	LoadDebugInfo() map[string]any
-	SelectSandboxes(options SandboxSelectorOptions) ([]Sandbox, error) // Select Sandboxes based on the options provided
-	GetSandbox(sandboxID string) (Sandbox, error)                      // Get a Sandbox interface by its ID
+	SelectSandboxes(user string, limit int, filter func(sandbox Sandbox) bool) ([]Sandbox, error) // Select Sandboxes based on the options provided
+	GetSandbox(ctx context.Context, sandboxID string) (Sandbox, error)                            // Get a Sandbox interface by its ID
 }
 
 type SandboxPool interface {
@@ -47,14 +48,15 @@ type Sandbox interface {
 	metav1.Object                     // For K8s object metadata access
 	Pause(ctx context.Context) error  // Pause a Sandbox (not available for K8sInfra)
 	Resume(ctx context.Context) error // Resume a paused Sandbox
+	GetSandboxID() string
 	GetRoute() proxy.Route
-	GetState() string                                                // Get Sandbox State (pending, running, paused, killing, etc.)
-	SetState(ctx context.Context, state string) error                // Set the state of the Sandbox
-	GetTemplate() string                                             // Get the template name of the Sandbox
-	GetResource() SandboxResource                                    // Get the CPU / Memory requirements of the Sandbox
-	PatchLabels(ctx context.Context, labels map[string]string) error // Patch some labels to the Sandbox Resource
+	GetState() (string, string)   // Get Sandbox State (pending, running, paused, killing, etc.)
+	GetTemplate() string          // Get the template name of the Sandbox
+	GetResource() SandboxResource // Get the CPU / Memory requirements of the Sandbox
 	SetTimeout(ttl time.Duration)
 	SaveTimeout(ctx context.Context, ttl time.Duration) error
+	GetTimeout() time.Time
+	GetClaimTime() (time.Time, error)
 	Kill(ctx context.Context) error                                         // Delete the Sandbox resource
 	InplaceRefresh(deepcopy bool) error                                     // Update the Sandbox resource object to the latest
 	Request(r *http.Request, path string, port int) (*http.Response, error) // Make a request to the Sandbox

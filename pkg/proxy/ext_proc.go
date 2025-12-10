@@ -16,12 +16,13 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 )
 
-var LogLevel = 6
+var LogLevel = consts.DebugLogLevel + 1
 
 func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	log := klog.LoggerWithValues(klog.Background(), "contextID", uuid.NewString()).V(LogLevel)

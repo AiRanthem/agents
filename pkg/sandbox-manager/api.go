@@ -3,7 +3,6 @@ package sandbox_manager
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/openkruise/agents/api/v1alpha1"
@@ -11,13 +10,12 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
-	"github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 )
 
 // ClaimSandbox attempts to lock a Pod and assign it to the current caller
-func (m *SandboxManager) ClaimSandbox(ctx context.Context, user, template string, timeoutSeconds int) (infra.Sandbox, error) {
+func (m *SandboxManager) ClaimSandbox(ctx context.Context, user, template string, modifier func(sandbox infra.Sandbox)) (infra.Sandbox, error) {
 	log := klog.FromContext(ctx)
 	start := time.Now()
 	pool, ok := m.infra.GetPoolByTemplate(template)
@@ -25,9 +23,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, user, template string
 		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("pool %s not found", template))
 	}
 	sandbox, err := pool.ClaimSandbox(ctx, user, consts.DefaultPoolingCandidateCounts, func(sbx infra.Sandbox) {
-		if timeoutSeconds > 0 {
-			sbx.SetTimeout(time.Duration(timeoutSeconds) * time.Second)
-		}
+		modifier(sbx)
 		sbx.SetOwnerReferences([]metav1.OwnerReference{}) // TODO: just try empty slice
 	})
 	if err != nil {
@@ -46,53 +42,36 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, user, template string
 }
 
 // GetClaimedSandbox returns a claimed (running or paused) Pod by its ID
-func (m *SandboxManager) GetClaimedSandbox(sandboxID string) (infra.Sandbox, error) {
-	sbx, err := m.infra.GetSandbox(sandboxID)
+func (m *SandboxManager) GetClaimedSandbox(ctx context.Context, user, sandboxID string) (infra.Sandbox, error) {
+	sbx, err := m.infra.GetSandbox(ctx, sandboxID)
 	if err != nil {
 		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("sandbox %s not found", sandboxID))
 	}
-	if utils.SandboxClaimed(sbx) {
-		return sbx, nil
-	} else {
-		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("sandbox %s is not claimed", sandboxID))
+
+	state, reason := sbx.GetState()
+	if state != v1alpha1.SandboxStatePaused && state != v1alpha1.SandboxStateRunning {
+		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("sandbox %s is not claimed (state %s, reason %s)", sandboxID, state, reason))
 	}
+	if sbx.GetRoute().Owner != user {
+		return nil, errors.NewError(errors.ErrorNotAllowed, fmt.Sprintf("sandbox %s is not owned", sandboxID))
+	}
+	return sbx, nil
 }
 
 func (m *SandboxManager) GetRoute(sandboxID string) (proxy.Route, bool) {
 	return m.proxy.LoadRoute(sandboxID)
 }
 
-// ListClaimedSandboxes returns a list of claimed with given state (running or paused, both are listed if `state` is not provided)
-// Sandboxes by their template and custom label selector.
-// NOTE: internal labels will be ignored
-func (m *SandboxManager) ListClaimedSandboxes(state string, selector map[string]string) ([]infra.Sandbox, error) {
-	options := infra.SandboxSelectorOptions{
-		Labels: map[string]string{},
-	}
-	for k, v := range selector {
-		if strings.HasPrefix(k, v1alpha1.InternalPrefix) {
-			continue
-		}
-		options.Labels[k] = v
-	}
-	switch state {
-	case v1alpha1.SandboxStatePaused:
-		options.WantPaused = true
-	case v1alpha1.SandboxStateRunning:
-		options.WantRunning = true
-	default:
-		options.WantRunning = true
-		options.WantPaused = true
-	}
-	sandboxes, err := m.infra.SelectSandboxes(options)
+func (m *SandboxManager) ListSandboxes(user string, limit int, filter func(infra.Sandbox) bool) ([]infra.Sandbox, error) {
+	sandboxes, err := m.infra.SelectSandboxes(user, limit, filter)
 	if err != nil {
 		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("failed to list sandboxes: %v", err))
 	}
 	return sandboxes, nil
 }
 
-func (m *SandboxManager) DeleteClaimedSandbox(ctx context.Context, sandboxID string) error {
-	sbx, err := m.GetClaimedSandbox(sandboxID)
+func (m *SandboxManager) DeleteClaimedSandbox(ctx context.Context, user, sandboxID string) error {
+	sbx, err := m.GetClaimedSandbox(ctx, user, sandboxID)
 	if err != nil {
 		return err
 	}
@@ -110,7 +89,9 @@ func (m *SandboxManager) killSandbox(ctx context.Context, sbx infra.Sandbox) err
 }
 
 func (m *SandboxManager) SetSandboxTimeout(ctx context.Context, sbx infra.Sandbox, seconds int) error {
-	if sbx.GetState() != v1alpha1.SandboxStateRunning {
+	state, reason := sbx.GetState()
+	if state != v1alpha1.SandboxStateRunning {
+		klog.FromContext(ctx).Info("cannot set sandbox timeout for sandbox not running", "name", sbx.GetName(), "state", state, "reason", reason)
 		return errors.NewError(errors.ErrorConflict, fmt.Sprintf("sandbox %s is not running", sbx.GetName()))
 	}
 	return sbx.SaveTimeout(ctx, time.Duration(seconds)*time.Second)

@@ -6,8 +6,6 @@ WORKDIR /app
 # Copy go mod and sum files
 COPY ../go.mod go.sum ./
 
-COPY vendor ./vendor
-
 # Copy the source code
 COPY ../cmd/sandbox-manager ./cmd/sandbox-manager
 COPY ../pkg ./pkg
@@ -26,7 +24,7 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
     rm -rf /usr/sbin/* && \
     rm -rf /usr/bin/* && \
     rm -rf /sbin/* && \
-    rm -rf /bin/* \
+    rm -rf /bin/*
 
 WORKDIR /
 # Copy the binary from builder stage

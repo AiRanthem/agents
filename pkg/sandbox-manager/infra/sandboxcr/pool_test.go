@@ -11,10 +11,21 @@ import (
 	"github.com/openkruise/agents/client/clientset/versioned/fake"
 	informers "github.com/openkruise/agents/client/informers/externalversions"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/utils/sandboxutils"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func GetSbsOwnerReference() []metav1.OwnerReference {
+	sbs := &v1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-sandboxset",
+			UID:  "12345",
+		},
+	}
+	return []metav1.OwnerReference{*metav1.NewControllerRef(sbs, v1alpha1.SandboxSetControllerKind)}
+}
 
 func CreateSandboxWithStatus(t *testing.T, client versioned.Interface, sbx *v1alpha1.Sandbox) {
 	ctx := context.Background()
@@ -35,7 +46,7 @@ func TestPool_ClaimSandbox(t *testing.T) {
 		preModifier func(pod *corev1.Pod)
 	}{
 		{
-			name:        "claim with available available pods",
+			name:        "claim with available pods",
 			available:   2,
 			modifier:    nil,
 			expectError: false,
@@ -70,9 +81,9 @@ func TestPool_ClaimSandbox(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset()
 
-			informerFactory := informers.NewSharedInformerFactoryWithOptions(client, time.Minute*10, informers.WithNamespace("default"))
+			informerFactory := informers.NewSharedInformerFactory(client, time.Minute*10)
 			sandboxInformer := informerFactory.Api().V1alpha1().Sandboxes().Informer()
-			c, err := NewCache[*v1alpha1.Sandbox]("default", informerFactory, sandboxInformer)
+			c, err := NewCache(informerFactory, sandboxInformer, sandboxInformer)
 			if err != nil {
 				t.Fatalf("Failed to create cache: %v", err)
 			}
@@ -95,19 +106,28 @@ func TestPool_ClaimSandbox(t *testing.T) {
 						Name:      fmt.Sprintf("pod-%d", i),
 						Namespace: "default",
 						Labels: map[string]string{
-							v1alpha1.LabelSandboxPool:  pool.Name,
-							v1alpha1.LabelSandboxState: v1alpha1.SandboxStateAvailable,
+							v1alpha1.LabelSandboxPool: pool.Name,
 						},
-						Annotations: map[string]string{},
+						Annotations:     map[string]string{},
+						OwnerReferences: GetSbsOwnerReference(),
 					},
 					Status: corev1.PodStatus{
 						Phase: corev1.PodRunning,
+						Conditions: []corev1.PodCondition{
+							{
+								Type:   corev1.PodReady,
+								Status: corev1.ConditionTrue,
+							},
+						},
 					},
 				}
 				if tt.preModifier != nil {
 					tt.preModifier(pod)
 				}
-				CreateSandboxWithStatus(t, client, ConvertPodToSandboxCR(pod))
+				sbx := ConvertPodToSandboxCR(pod)
+				state, reason := sandboxutils.GetSandboxState(sbx)
+				assert.Equal(t, v1alpha1.SandboxStateAvailable, state, "reason", reason)
+				CreateSandboxWithStatus(t, client, sbx)
 			}
 			c.Refresh()
 			time.Sleep(100 * time.Millisecond)
@@ -121,7 +141,6 @@ func TestPool_ClaimSandbox(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, sbx)
-				assert.Equal(t, v1alpha1.SandboxStateRunning, sbx.GetLabels()[v1alpha1.LabelSandboxState])
 				assert.NotEmpty(t, sbx.GetAnnotations()[v1alpha1.AnnotationLock])
 				assert.Equal(t, user, sbx.GetAnnotations()[v1alpha1.AnnotationOwner])
 				if tt.modifier != nil {

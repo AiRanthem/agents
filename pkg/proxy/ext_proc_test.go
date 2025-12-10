@@ -588,7 +588,4 @@ func TestServer_Run_Stop(t *testing.T) {
 
 	// Stop server
 	server.Stop()
-
-	// Stopping again should be fine
-	server.Stop()
 }

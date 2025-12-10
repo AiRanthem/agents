@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager"
+	sandbox_manager "github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
@@ -18,8 +18,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 )
-
-var DebugLevel = 5
 
 // Controller handles sandbox-related operations
 type Controller struct {
@@ -32,20 +30,18 @@ type Controller struct {
 	domain       string
 	manager      *sandbox_manager.SandboxManager
 	keys         *keys.SecretKeyStorage
+	maxTimeout   int
 }
 
-// NewController creates a new Controller
-//
-//	Params:
-//	- domain: The domain name of the sandbox service, a TLS cert is required, e.g.
-//	- listenAddr: The address to listen on, e.g. ":8080"
-func NewController(domain, adminKey, sysNs string, port int, enableAuth bool, clientSet *clients.ClientSet) *Controller {
+// NewController creates a new E2B Controller
+func NewController(domain, adminKey string, sysNs string, maxTimeout int, port int, enableAuth bool, clientSet *clients.ClientSet) *Controller {
 	sc := &Controller{
 		mux:          http.NewServeMux(),
 		client:       clientSet,
 		domain:       domain,
 		clientConfig: clientSet.Config,
 		port:         port,
+		maxTimeout:   maxTimeout,
 	}
 
 	sc.server = &http.Server{
@@ -69,9 +65,8 @@ func (sc *Controller) Init(infrastructure string) error {
 	ctx := logs.NewContext()
 	log := klog.FromContext(ctx)
 	log.Info("init controller", "infra", infrastructure)
-	adapter := &adapters.CommonAdapter{Port: sc.port, Keys: sc.keys}
-
-	sandboxManager, err := sandbox_manager.NewSandboxManager(Namespace, sc.client, adapter, infrastructure)
+	var adapter = &adapters.CommonAdapter{Port: sc.port, Keys: sc.keys}
+	sandboxManager, err := sandbox_manager.NewSandboxManager(sc.client, adapter, infrastructure)
 	if err != nil {
 		return err
 	}

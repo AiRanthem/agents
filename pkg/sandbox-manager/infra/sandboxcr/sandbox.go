@@ -2,17 +2,17 @@ package sandboxcr
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	kruise "github.com/openkruise/agents/api/v1alpha1"
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
+	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -22,8 +22,7 @@ import (
 )
 
 type SandboxCR interface {
-	//*kruise.Sandbox | *microvm.Sandbox
-	*kruise.Sandbox
+	*agentsv1alpha1.Sandbox
 	metav1.Object
 }
 
@@ -37,7 +36,7 @@ type DeepCopyFunc[T any] func(src T) T
 
 type BaseSandbox[T SandboxCR] struct {
 	Sandbox T
-	Cache   Cache[T]
+	Cache   *Cache
 
 	PatchSandbox  PatchFunc[T]
 	UpdateStatus  UpdateFunc[T]
@@ -48,47 +47,12 @@ type BaseSandbox[T SandboxCR] struct {
 	DeepCopy      DeepCopyFunc[T]
 }
 
-func (s *BaseSandbox[T]) Patch(ctx context.Context, patchStr string) error {
-	if s.PatchSandbox == nil {
-		return errors.New("patch is not supported")
-	}
-	_, err := s.PatchSandbox(
-		ctx,
-		s.Sandbox.GetName(),
-		types.MergePatchType,
-		[]byte(patchStr),
-		metav1.PatchOptions{},
-	)
-
-	return err
-}
-
-func (s *BaseSandbox[T]) PatchLabels(ctx context.Context, labels map[string]string) error {
-	if labels == nil || len(labels) == 0 {
-		return nil
-	}
-	j, err := json.Marshal(labels)
-	if err != nil {
-		return err
-	}
-	patchStr := fmt.Sprintf(`{"metadata":{"labels":%s}}`, string(j))
-	return s.Patch(ctx, patchStr)
-}
-
-func (s *BaseSandbox[T]) GetState() string {
-	return s.Sandbox.GetLabels()[kruise.LabelSandboxState]
-}
-
 func (s *BaseSandbox[T]) GetTemplate() string {
-	return s.Sandbox.GetLabels()[kruise.LabelSandboxPool]
-}
-
-func (s *BaseSandbox[T]) SetState(ctx context.Context, state string) error {
-	return s.Patch(ctx, fmt.Sprintf(`{"metadata":{"labels":{"%s":"%s"}}}`, kruise.LabelSandboxState, state))
+	return s.Sandbox.GetLabels()[agentsv1alpha1.LabelSandboxPool]
 }
 
 func (s *BaseSandbox[T]) InplaceRefresh(deepcopy bool) error {
-	sbx, err := s.Cache.GetSandbox(s.Sandbox.GetName())
+	sbx, err := s.Cache.GetSandbox(stateutils.GetSandboxID(s.Sandbox))
 	if err != nil {
 		return err
 	}
@@ -98,10 +62,6 @@ func (s *BaseSandbox[T]) InplaceRefresh(deepcopy bool) error {
 		s.Sandbox = sbx
 	}
 	return nil
-}
-
-func (s *BaseSandbox[T]) RetryModifyStatus(ctx context.Context, modifier func(sbx T)) error {
-	return s.retryUpdate(ctx, s.UpdateStatus, modifier)
 }
 
 func (s *BaseSandbox[T]) retryUpdate(ctx context.Context, updateFunc UpdateFunc[T], modifier func(sbx T)) error {
@@ -115,11 +75,17 @@ func (s *BaseSandbox[T]) retryUpdate(ctx context.Context, updateFunc UpdateFunc[
 			return fmt.Errorf("failed to refresh sandbox: %w", err)
 		}
 		modifier(s.Sandbox)
-		_, err := updateFunc(ctx, s.Sandbox, metav1.UpdateOptions{})
-		return err
+		updated, err := updateFunc(ctx, s.Sandbox, metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+		s.Sandbox = updated
+		return nil
 	})
 	if err != nil {
 		log.Error(err, "failed to update sandbox status after retries")
+	} else {
+		log.Info("successfully updated sandbox status")
 	}
 	return err
 }
@@ -128,23 +94,25 @@ func (s *BaseSandbox[T]) Kill(ctx context.Context) error {
 	if s.Sandbox.GetDeletionTimestamp() != nil {
 		return nil
 	}
-	if err := s.SetState(ctx, kruise.SandboxStateKilling); err != nil {
-		return err
-	}
 	return s.DeleteFunc(ctx, s.Sandbox.GetName(), metav1.DeleteOptions{})
 }
 
 type Sandbox struct {
-	BaseSandbox[*kruise.Sandbox]
-	*kruise.Sandbox
+	BaseSandbox[*agentsv1alpha1.Sandbox]
+	*agentsv1alpha1.Sandbox
+}
+
+func (s *Sandbox) GetSandboxID() string {
+	return stateutils.GetSandboxID(s.Sandbox)
 }
 
 func (s *Sandbox) GetRoute() proxy.Route {
+	state, _ := s.GetState()
 	return proxy.Route{
 		IP:    s.Status.PodInfo.PodIP,
-		ID:    s.Name,
-		Owner: s.GetAnnotations()[kruise.AnnotationOwner],
-		State: s.GetState(),
+		ID:    s.GetSandboxID(),
+		Owner: s.GetAnnotations()[agentsv1alpha1.AnnotationOwner],
+		State: state,
 	}
 }
 
@@ -153,9 +121,16 @@ func (s *Sandbox) SetTimeout(ttl time.Duration) {
 }
 
 func (s *Sandbox) SaveTimeout(ctx context.Context, ttl time.Duration) error {
-	return s.retryUpdate(ctx, s.Update, func(sbx *kruise.Sandbox) {
+	return s.retryUpdate(ctx, s.Update, func(sbx *agentsv1alpha1.Sandbox) {
 		sbx.Spec.ShutdownTime = ptr.To(metav1.NewTime(time.Now().Add(ttl)))
 	})
+}
+
+func (s *Sandbox) GetTimeout() time.Time {
+	if s.Spec.ShutdownTime == nil {
+		return time.Time{}
+	}
+	return s.Spec.ShutdownTime.Time
 }
 
 func (s *Sandbox) GetResource() infra.SandboxResource {
@@ -163,50 +138,55 @@ func (s *Sandbox) GetResource() infra.SandboxResource {
 }
 
 func (s *Sandbox) Request(r *http.Request, path string, port int) (*http.Response, error) {
-	if s.Status.Phase != kruise.SandboxRunning {
+	if s.Status.Phase != agentsv1alpha1.SandboxRunning {
 		return nil, errors.New("sandbox is not running")
 	}
 	return proxyutils.ProxyRequest(r, path, port, s.Status.PodInfo.PodIP)
 }
 
 func (s *Sandbox) Pause(ctx context.Context) error {
-	if s.Status.Phase != kruise.SandboxRunning {
+	log := klog.FromContext(ctx)
+	if s.Status.Phase != agentsv1alpha1.SandboxRunning {
 		return fmt.Errorf("sandbox is not in running phase")
 	}
-	state := s.GetState()
-	if state != kruise.SandboxStateRunning && state != kruise.SandboxStateAvailable {
-		return fmt.Errorf("pausing is only available for the following state [%s,%s],not for the current state %s",
-			kruise.SandboxStateRunning, kruise.SandboxStateAvailable, state)
+	state, reason := s.GetState()
+	if state != agentsv1alpha1.SandboxStateRunning {
+		err := fmt.Errorf("pausing is only available for running state, current state: %s", state)
+		log.Error(err, "sandbox is not running", "state", state, "reason", reason)
+		return err
 	}
-	var nextState string
-	if state == kruise.SandboxStateRunning {
-		nextState = kruise.SandboxStatePaused
-	} else {
-		nextState = state
+	err := s.retryUpdate(ctx, s.Update, func(sbx *agentsv1alpha1.Sandbox) {
+		sbx.Spec.Paused = true
+	})
+	if err != nil {
+		log.Error(err, "failed to update sandbox spec.paused")
+		return err
 	}
-	return s.Patch(ctx, fmt.Sprintf(`{"metadata":{"labels":{"%s":"%s"}},"spec":{"paused":true}}`,
-		kruise.LabelSandboxState, nextState))
+	utils.ResourceVersionExpectationExpect(s.Sandbox)
+	return nil
 }
 
 func (s *Sandbox) Resume(ctx context.Context) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
-	if s.Status.Phase != kruise.SandboxPaused {
-		return fmt.Errorf("sandbox is not in paused state")
+	state, reason := s.GetState()
+	log.Info("try to resume sandbox", "state", state, "reason", reason)
+	if state != agentsv1alpha1.SandboxStatePaused {
+		err := fmt.Errorf("resuming is only available for paused state, current state: %s", state)
+		log.Error(err, "sandbox is not paused", "state", state, "reason", reason)
+		return err
 	}
-	state := s.GetState()
-	if state != kruise.SandboxStatePaused && state != kruise.SandboxStateAvailable {
-		return fmt.Errorf("resuming is only available for the following state [%s,%s],not for the current state %s",
-			kruise.SandboxStatePaused, kruise.SandboxStateAvailable, state)
-	}
-	cond, ok := GetSandboxCondition(s.Sandbox, kruise.SandboxConditionPaused)
+	cond, ok := GetSandboxCondition(s.Sandbox, agentsv1alpha1.SandboxConditionPaused)
 	if !ok || cond.Status != metav1.ConditionTrue {
 		return fmt.Errorf("sandbox is pausing, please wait a moment and try again")
 	}
-	err := s.Patch(ctx, `{"spec":{"paused":false}}`)
+	err := s.retryUpdate(ctx, s.Update, func(sbx *agentsv1alpha1.Sandbox) {
+		sbx.Spec.Paused = false
+	})
 	if err != nil {
-		log.Error(err, "failed to patch sandbox spec")
+		log.Error(err, "failed to update sandbox spec.paused")
 		return err
 	}
+	utils.ResourceVersionExpectationExpect(s.Sandbox)
 	log.Info("waiting sandbox resume")
 	start := time.Now()
 	err = retry.OnError(wait.Backoff{
@@ -221,10 +201,11 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if s.Status.Phase != kruise.SandboxRunning {
-			return fmt.Errorf("check phase failed, expect: %s, actual: %s", kruise.SandboxRunning, s.Status.Phase)
+		utils.ResourceVersionExpectationObserve(s)
+		if s.Status.Phase != agentsv1alpha1.SandboxRunning {
+			return fmt.Errorf("check phase failed, expect: %s, actual: %s", agentsv1alpha1.SandboxRunning, s.Status.Phase)
 		}
-		condition, ok := GetSandboxCondition(s.Sandbox, kruise.SandboxConditionReady)
+		condition, ok := GetSandboxCondition(s.Sandbox, agentsv1alpha1.SandboxConditionReady)
 		if !ok {
 			return fmt.Errorf("check condition failed, SandboxConditionReady not found")
 		}
@@ -236,14 +217,6 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 	if err != nil {
 		log.Error(err, "failed to wait sandbox resume")
 		return err
-	}
-	// For paused state, convert to running, others remain unchanged
-	if state == kruise.SandboxStatePaused {
-		if err = s.Patch(ctx, fmt.Sprintf(`{"metadata":{"labels":{"%s":"%s"}}}`,
-			kruise.LabelSandboxState, kruise.SandboxStateRunning)); err != nil {
-			log.Error(err, "failed to patch sandbox state")
-			return err
-		}
 	}
 	log.Info("sandbox resumed", "cost", time.Since(start))
 	return nil
@@ -258,7 +231,16 @@ func (s *Sandbox) InplaceRefresh(deepcopy bool) error {
 	return nil
 }
 
-func DeepCopy(sbx *kruise.Sandbox) *kruise.Sandbox {
+func (s *Sandbox) GetState() (string, string) {
+	return stateutils.GetSandboxState(s.Sandbox)
+}
+
+func (s *Sandbox) GetClaimTime() (time.Time, error) {
+	claimTimestamp := s.GetAnnotations()[agentsv1alpha1.AnnotationClaimTime]
+	return time.Parse(time.RFC3339, claimTimestamp)
+}
+
+func DeepCopy(sbx *agentsv1alpha1.Sandbox) *agentsv1alpha1.Sandbox {
 	return sbx.DeepCopy()
 }
 

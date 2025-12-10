@@ -12,14 +12,11 @@ import (
 	"time"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"k8s.io/klog/v2"
-)
-
-var (
-	Namespace = "default"
 )
 
 var (
@@ -54,7 +51,13 @@ func (sc *Controller) pauseAndResumeSandbox(r *http.Request, pause bool) (web.Ap
 	id := r.PathValue("sandboxID")
 	ctx := r.Context()
 	log := klog.FromContext(ctx).WithValues("sandboxID", id)
-	sbx, err := sc.manager.GetClaimedSandbox(id)
+	user := GetUserFromContext(ctx)
+	if user == nil {
+		return web.ApiResponse[struct{}]{}, &web.ApiError{
+			Message: "User not found",
+		}
+	}
+	sbx, err := sc.manager.GetClaimedSandbox(ctx, user.ID.String(), id)
 	if err != nil {
 		return web.ApiResponse[struct{}]{}, &web.ApiError{
 			Code:    http.StatusNotFound,
@@ -62,7 +65,8 @@ func (sc *Controller) pauseAndResumeSandbox(r *http.Request, pause bool) (web.Ap
 		}
 	}
 	if pause {
-		if state := sbx.GetState(); state != v1alpha1.SandboxStateRunning {
+		if state, reason := sbx.GetState(); state != v1alpha1.SandboxStateRunning {
+			log.Info("skip pause sandbox: sandbox is not running", "state", state, "reason", reason)
 			return web.ApiResponse[struct{}]{}, &web.ApiError{
 				Code:    http.StatusConflict,
 				Message: fmt.Sprintf("Sandbox %s is not running", id),
@@ -75,7 +79,8 @@ func (sc *Controller) pauseAndResumeSandbox(r *http.Request, pause bool) (web.Ap
 		}
 		log.Info("sandbox paused")
 	} else {
-		if state := sbx.GetState(); state != v1alpha1.SandboxStatePaused {
+		if state, reason := sbx.GetState(); state != v1alpha1.SandboxStatePaused {
+			log.Info("skip resume sandbox: sandbox is not paused", "state", state, "reason", reason)
 			return web.ApiResponse[struct{}]{}, &web.ApiError{
 				Code:    http.StatusConflict,
 				Message: fmt.Sprintf("Sandbox %s is not paused", id),
@@ -94,16 +99,16 @@ func (sc *Controller) pauseAndResumeSandbox(r *http.Request, pause bool) (web.Ap
 }
 
 func (sc *Controller) convertToE2BSandbox(ctx context.Context, sbx infra.Sandbox) *models.Sandbox {
-	log := klog.FromContext(ctx).V(DebugLevel).WithValues("sandbox", klog.KObj(sbx))
+	log := klog.FromContext(ctx).V(consts.DebugLogLevel).WithValues("sandbox", klog.KObj(sbx))
 
 	sandbox := &models.Sandbox{
-		SandboxID:   sbx.GetName(),
+		SandboxID:   sbx.GetSandboxID(),
 		TemplateID:  sbx.GetTemplate(),
 		Domain:      sc.domain,
 		EnvdVersion: "0.1.1",
-		State:       sbx.GetState(),
 	}
-	route, ok := sc.manager.GetRoute(sbx.GetName())
+	sandbox.State, _ = sbx.GetState()
+	route, ok := sc.manager.GetRoute(sbx.GetSandboxID())
 	if ok {
 		if sc.keys == nil {
 			sandbox.EnvdAccessToken = "whatever"
@@ -122,20 +127,30 @@ func (sc *Controller) convertToE2BSandbox(ctx context.Context, sbx infra.Sandbox
 	if len(labels) > 0 {
 		sandbox.Metadata = make(map[string]string, len(labels))
 	}
-Outer:
 	for key, val := range sbx.GetLabels() {
-		for _, prefix := range BlackListPrefix {
-			if strings.HasPrefix(key, prefix) {
-				continue Outer
-			}
+		if ValidateMetadataKey(key) {
+			sandbox.Metadata[key] = val
 		}
-		sandbox.Metadata[key] = val
 	}
-	sandbox.StartedAt = sbx.GetCreationTimestamp().Format(time.RFC3339)
-	sandbox.EndAt = sbx.GetCreationTimestamp().Add(1000 * time.Hour).Format(time.RFC3339)
+	claimTime, err := sbx.GetClaimTime()
+	if err != nil {
+		sandbox.StartedAt = "<unknown>"
+	} else {
+		sandbox.StartedAt = claimTime.Format(time.RFC3339)
+	}
+	sandbox.EndAt = sbx.GetTimeout().Format(time.RFC3339)
 	resource := sbx.GetResource()
 	sandbox.CPUCount = resource.CPUMilli / 1000
 	sandbox.MemoryMB = resource.MemoryMB
 	sandbox.DiskSizeMB = resource.DiskSizeMB
 	return sandbox
+}
+
+func ValidateMetadataKey(key string) bool {
+	for _, prefix := range BlackListPrefix {
+		if strings.HasPrefix(key, prefix) {
+			return false
+		}
+	}
+	return true
 }

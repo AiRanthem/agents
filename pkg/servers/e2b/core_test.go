@@ -1,0 +1,175 @@
+package e2b
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/client/clientset/versioned"
+	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
+	"github.com/openkruise/agents/pkg/servers/e2b/keys"
+	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+)
+
+var TestServerPort = 9999
+var Namespace = "test"
+var InitKey = "admin-987654321"
+
+func CreateSandboxWithStatus(t *testing.T, client versioned.Interface, sbx *agentsv1alpha1.Sandbox) {
+	ctx := context.Background()
+	_, err := client.ApiV1alpha1().Sandboxes(sbx.Namespace).Create(ctx, sbx, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	_, err = client.ApiV1alpha1().Sandboxes(sbx.Namespace).UpdateStatus(ctx, sbx, metav1.UpdateOptions{})
+	assert.NoError(t, err)
+}
+
+func CreatePodWithStatus(t *testing.T, client kubernetes.Interface, pod *corev1.Pod) {
+	ctx := context.Background()
+	_, err := client.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	_, err = client.CoreV1().Pods(pod.Namespace).UpdateStatus(ctx, pod, metav1.UpdateOptions{})
+	assert.NoError(t, err)
+}
+
+func Setup(t *testing.T) (*Controller, *clients.ClientSet, func()) {
+	utils.InitLogOutput()
+	clientSet := clients.NewFakeClientSet()
+	namespace := "sandbox-system"
+	// mock self pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sandbox-manager",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"component": "sandbox-manager",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{
+				{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				},
+			},
+			PodIP: "127.0.0.1",
+		},
+	}
+	CreatePodWithStatus(t, clientSet.K8sClient, pod)
+
+	// create key store
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      keys.KeySecretName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{},
+	}
+	_, err := clientSet.CoreV1().Secrets(namespace).Create(context.Background(), secret, metav1.CreateOptions{})
+	assert.NoError(t, err)
+
+	controller := NewController("example.com", InitKey, namespace, DefaultMaxTimeout, TestServerPort, true, clientSet)
+	assert.NoError(t, controller.Init(consts.InfraSandboxCR))
+	_, err = controller.Run(namespace, "component=sandbox-manager")
+	assert.NoError(t, err)
+	return controller, clientSet, func() {
+		controller.stop <- syscall.SIGTERM
+	}
+}
+
+func NewRequest(t *testing.T, query map[string]string, body any, pathValues map[string]string, user *models.CreatedTeamAPIKey) *http.Request {
+	var bodyBuf io.Reader
+	if body != nil {
+		marshal, err := json.Marshal(body)
+		assert.NoError(t, err)
+		bodyBuf = bytes.NewBuffer(marshal)
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d", TestServerPort)
+	if query != nil {
+		queryStr := "?"
+		for k, v := range query {
+			queryStr += fmt.Sprintf("%s=%s&", k, v)
+		}
+		queryStr = queryStr[:len(queryStr)-1]
+		url += queryStr
+	}
+	req, err := http.NewRequest("", url, bodyBuf)
+	assert.NoError(t, err)
+	if pathValues != nil {
+		for k, v := range pathValues {
+			req.SetPathValue(k, v)
+		}
+	}
+	return req.WithContext(context.WithValue(req.Context(), "user", user))
+}
+
+func GetSbsOwnerReference(sbs *agentsv1alpha1.SandboxSet) []metav1.OwnerReference {
+	return []metav1.OwnerReference{*metav1.NewControllerRef(sbs, agentsv1alpha1.SandboxSetControllerKind)}
+}
+
+func CreateSandboxPool(t *testing.T, client versioned.Interface, name string, available int) func() {
+	sbs := &agentsv1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: Namespace,
+			UID:       types.UID(uuid.NewString()),
+		},
+	}
+	_, err := client.ApiV1alpha1().SandboxSets(Namespace).Create(context.Background(), sbs, metav1.CreateOptions{})
+	assert.NoError(t, err)
+	for i := 0; i < available; i++ {
+		sbx := &agentsv1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-%d", name, i),
+				Namespace: Namespace,
+				Labels: map[string]string{
+					agentsv1alpha1.LabelSandboxPool: name,
+				},
+				OwnerReferences: GetSbsOwnerReference(sbs),
+			},
+			Status: agentsv1alpha1.SandboxStatus{
+				Phase: agentsv1alpha1.SandboxRunning,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(agentsv1alpha1.SandboxConditionReady),
+						Status: metav1.ConditionTrue,
+					},
+				},
+				PodInfo: agentsv1alpha1.PodInfo{
+					PodIP: "1.2.3.4",
+				},
+			},
+		}
+		CreateSandboxWithStatus(t, client, sbx)
+	}
+	time.Sleep(50 * time.Millisecond)
+	return func() {
+		assert.NoError(t, client.ApiV1alpha1().SandboxSets(Namespace).Delete(context.Background(), name, metav1.DeleteOptions{}))
+		for i := 0; i < available; i++ {
+			assert.NoError(t, client.ApiV1alpha1().Sandboxes(Namespace).Delete(context.Background(), fmt.Sprintf("%s-%d", name, i), metav1.DeleteOptions{}))
+		}
+	}
+}
+
+func AssertTimeAlmostEqual(t *testing.T, expected, actual time.Time) {
+	offset := expected.Sub(actual)
+	if offset < 0 {
+		offset = -offset
+	}
+	assert.True(t, offset < time.Second, fmt.Sprintf("actual time %s should be almost equal to expected %s", actual, expected))
+}
