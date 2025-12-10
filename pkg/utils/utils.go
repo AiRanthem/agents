@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"sync"
@@ -13,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -141,16 +139,6 @@ func PatchFinalizer(c client.Client, object client.Object, op FinalizerOpType, f
 func DumpJson(o interface{}) string {
 	by, _ := json.Marshal(o)
 	return string(by)
-}
-
-var klogInitOnce sync.Once
-
-func InitKLogOutput() {
-	klogInitOnce.Do(func() {
-		klog.InitFlags(nil)
-		_ = flag.Set("v", fmt.Sprintf("%d", DebugLogLevel))
-		flag.Parse()
-	})
 }
 
 func GetAgentSandboxNamespace() string {

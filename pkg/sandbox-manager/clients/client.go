@@ -59,10 +59,10 @@ func NewClientSet(infra string) (*ClientSet, error) {
 	// For high-activity applications, increasing these can reduce client-side throttling
 	// Be careful not to set these too high as it might overload the Kubernetes API server
 	// These can be configured via environment variables:
-	// KUBE_CLIENT_QPS (default: 50)
-	// KUBE_CLIENT_BURST (default: 100)
-	config.QPS = 50    // Default QPS
-	config.Burst = 100 // Default Burst
+	// KUBE_CLIENT_QPS (default: 500)
+	// KUBE_CLIENT_BURST (default: 1000)
+	config.QPS = 500    // Default QPS
+	config.Burst = 1000 // Default Burst
 
 	// Override with environment variables if set
 	if qpsStr := os.Getenv("KUBE_CLIENT_QPS"); qpsStr != "" {

@@ -36,7 +36,7 @@ func TestFakeSandbox_AllMethods(t *testing.T) {
 		{"GetFinalizers", func() { _ = fs.GetFinalizers() }},
 		{"GetOwnerReferences", func() { _ = fs.GetOwnerReferences() }},
 		{"GetManagedFields", func() { _ = fs.GetManagedFields() }},
-		{"GetState", func() { _ = fs.GetState() }},
+		{"GetState", func() { _, _ = fs.GetState() }},
 		{"GetIP", func() { _ = fs.GetIP() }},
 		{"GetTemplate", func() { _ = fs.GetTemplate() }},
 		{"GetResource", func() { _ = fs.GetResource() }},

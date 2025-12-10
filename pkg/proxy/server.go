@@ -177,7 +177,7 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) handleHello(r *http.Request) (web.ApiResponse[struct{}], *web.ApiError) {
-	log := klog.FromContext(r.Context()).V(consts.DebugLogLevel + 1)
+	log := klog.FromContext(r.Context()).V(LogLevel + 1)
 	ip := getRealIP(r)
 	if ip != "" {
 		log.Info("hello", "ip", ip)

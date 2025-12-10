@@ -37,11 +37,6 @@ func main() {
 		domain = domainEnv
 	}
 
-	// Get namespace from environment variable or use "default"
-	if ns := os.Getenv("NAMESPACE"); ns != "" {
-		e2b.Namespace = ns
-	}
-
 	sysNs := os.Getenv("SYSTEM_NAMESPACE")
 	if sysNs == "" {
 		klog.Fatalf("env var SYSTEM_NAMESPACE is required")

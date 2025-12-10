@@ -10,18 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
-	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 )
-
-var DebugLevel = 5
 
 // Controller handles sandbox-related operations
 type Controller struct {
@@ -71,14 +67,8 @@ func (sc *Controller) Init(infrastructure string) error {
 	ctx := logs.NewContext()
 	log := klog.FromContext(ctx)
 	log.Info("init controller", "infra", infrastructure)
-	var adapter proxy.RequestAdapter
-	baseAdapter := &adapters.CommonAdapter{Port: sc.port, Keys: sc.keys}
-	if infrastructure == consts.InfraMicroVM {
-		adapter = &adapters.MicroVMAdapter{CommonAdapter: baseAdapter}
-	} else {
-		adapter = baseAdapter
-	}
-	sandboxManager, err := sandbox_manager.NewSandboxManager(Namespace, sc.client, adapter, infrastructure)
+	var adapter = &adapters.CommonAdapter{Port: sc.port, Keys: sc.keys}
+	sandboxManager, err := sandbox_manager.NewSandboxManager(sc.client, adapter, infrastructure)
 	if err != nil {
 		return err
 	}

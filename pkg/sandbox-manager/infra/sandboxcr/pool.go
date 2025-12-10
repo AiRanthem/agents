@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openkruise/agents/api/v1alpha1"
 	sandboxclient "github.com/openkruise/agents/client/clientset/versioned"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,7 +28,7 @@ type Pool struct {
 
 	// Should init fields
 	client sandboxclient.Interface
-	cache  Cache[*v1alpha1.Sandbox]
+	cache  *Cache
 }
 
 // AsSandbox converts the given sbx object to a Sandbox interface
@@ -61,9 +62,9 @@ func (p *Pool) ClaimSandbox(ctx context.Context, user string, candidateCounts in
 	lock := uuid.New().String()
 	log := klog.FromContext(ctx).WithValues("pool", p.Namespace+"/"+p.Name)
 	start := time.Now()
+	r := rand.New(rand.NewSource(start.UnixNano()))
 	for i := 0; ; i++ {
-		objects, err := p.cache.SelectSandboxes(v1alpha1.LabelSandboxState, v1alpha1.SandboxStateAvailable,
-			v1alpha1.LabelSandboxPool, p.Name)
+		objects, err := p.cache.ListAvailableSandboxes(p.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -73,6 +74,10 @@ func (p *Pool) ClaimSandbox(ctx context.Context, user string, candidateCounts in
 		var obj *v1alpha1.Sandbox
 		candidates := make([]*v1alpha1.Sandbox, 0, candidateCounts)
 		for _, obj = range objects {
+			if !utils.ResourceVersionExpectationSatisfied(obj) {
+				log.V(consts.DebugLogLevel).Info("skip out-dated sandbox cache", "sandbox", klog.KObj(obj))
+				continue
+			}
 			if obj.Status.Phase == v1alpha1.SandboxRunning && obj.Annotations[v1alpha1.AnnotationLock] == "" {
 				candidates = append(candidates, obj)
 				if len(candidates) >= candidateCounts {
@@ -82,10 +87,9 @@ func (p *Pool) ClaimSandbox(ctx context.Context, user string, candidateCounts in
 		}
 
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("no available sandboxes for template %s (all sandboxes are locked)", p.Name)
+			return nil, fmt.Errorf("no available sandboxes for template %s (no candidate)", p.Name)
 		}
 
-		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		obj = candidates[r.Intn(len(candidates))]
 
 		// Go to Sandbox interface
@@ -93,17 +97,17 @@ func (p *Pool) ClaimSandbox(ctx context.Context, user string, candidateCounts in
 		if modifier != nil {
 			modifier(sbx)
 		}
-		sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStateRunning
-		err = p.LockSandbox(ctx, sbx, lock, user)
-		if err == nil {
-			log.Info("acquired optimistic lock of pod", "cost", time.Since(start), "retries", i)
+		sbx.Annotations[v1alpha1.AnnotationClaimTime] = time.Now().Format(time.RFC3339)
+		if err = p.LockSandbox(ctx, sbx, lock, user); err == nil {
+			utils.ResourceVersionExpectationExpect(sbx)
+			log.Info("acquired optimistic lock of sandbox", "cost", time.Since(start), "retries", i)
 			return sbx, nil
 		}
 		if !apierrors.IsConflict(err) {
-			log.Error(err, "failed to update pod")
+			log.Error(err, "failed to update sandbox")
 			return nil, err
 		}
-		log.Error(err, "failed to acquire optimistic lock of pod", "retries", i+1)
+		log.Error(err, "failed to acquire optimistic lock of sandbox", "retries", i+1)
 		if time.Since(start) > claimTimeout {
 			break
 		}

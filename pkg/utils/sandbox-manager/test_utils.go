@@ -33,6 +33,12 @@ func (f FakeSandbox) SaveTimeout(ctx context.Context, ttl time.Duration) error {
 func (f FakeSandbox) SetTimeout(ttl time.Duration) {
 }
 
+func (f FakeSandbox) GetTimeout() time.Time { return time.Time{} }
+
+func (f FakeSandbox) GetClaimTime() time.Time {
+	return time.Time{}
+}
+
 func (f FakeSandbox) SetNamespace(string) {
 	// noop
 }
@@ -165,8 +171,12 @@ func (f FakeSandbox) GetRoute() proxy.Route {
 	return proxy.Route{}
 }
 
-func (f FakeSandbox) GetState() string {
-	return f.State
+func (f FakeSandbox) GetState() (string, string) {
+	return f.State, ""
+}
+
+func (f FakeSandbox) GetSandboxID() string {
+	return ""
 }
 
 func (f FakeSandbox) GetTemplate() string {

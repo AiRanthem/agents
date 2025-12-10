@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -35,8 +36,8 @@ var (
 
 var OwnerIndexFunc = func(obj client.Object) []string {
 	var owners []string
-	for _, ref := range obj.GetOwnerReferences() {
-		owners = append(owners, string(ref.UID))
+	if controller := metav1.GetControllerOfNoCopy(obj); controller != nil {
+		owners = append(owners, string(controller.UID))
 	}
 	return owners
 }

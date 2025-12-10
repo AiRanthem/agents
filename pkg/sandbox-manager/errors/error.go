@@ -9,6 +9,7 @@ type ErrorCode string
 
 const (
 	ErrorNotFound   = ErrorCode("NotFound")
+	ErrorNotAllowed = ErrorCode("NotAllowed")
 	ErrorInternal   = ErrorCode("Internal")
 	ErrorConflict   = ErrorCode("Conflict")
 	ErrorUnknown    = ErrorCode("Unknown")

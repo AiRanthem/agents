@@ -25,20 +25,22 @@ const (
 	InternalPrefix = "agents.kruise.io/"
 
 	LabelSandboxPool  = InternalPrefix + "sandbox-pool"
-	LabelSandboxState = InternalPrefix + "sandbox-state"
-	LabelSandboxID    = InternalPrefix + "sandbox-id"
 	LabelTemplateHash = InternalPrefix + "template-hash"
 
-	AnnotationLock  = InternalPrefix + "lock"
-	AnnotationOwner = InternalPrefix + "owner"
+	AnnotationLock      = InternalPrefix + "lock"
+	AnnotationOwner     = InternalPrefix + "owner"
+	AnnotationClaimTime = InternalPrefix + "claim-timestamp"
 )
 
 const (
+	SandboxStateCreating  = "creating"
 	SandboxStateAvailable = "available"
 	SandboxStateRunning   = "running"
 	SandboxStatePaused    = "paused"
-	SandboxStateKilling   = "killing"
+	SandboxStateDead      = "dead"
 )
+
+var SandboxSetControllerKind = GroupVersion.WithKind("SandboxSet")
 
 // SandboxSetSpec defines the desired state of SandboxSet
 type SandboxSetSpec struct {

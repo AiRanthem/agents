@@ -107,7 +107,7 @@ func (r *commonControl) EnsureSandboxPhasePaused(ctx context.Context, args Ensur
 		logger.Info("Sandbox wait pod paused")
 		return nil
 	}
-	err := r.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: pointer.Int64(30)})
+	err := client.IgnoreNotFound(r.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: pointer.Int64(30)}))
 	if err != nil {
 		logger.Error(err, "Delete pod failed")
 		return err
@@ -156,7 +156,7 @@ func (r *commonControl) EnsureSandboxPhaseTerminating(ctx context.Context, args 
 		return nil
 	}
 
-	err = r.Delete(ctx, pod)
+	err = client.IgnoreNotFound(r.Delete(ctx, pod))
 	if err != nil {
 		logger.Error(err, "delete pod failed")
 		return err

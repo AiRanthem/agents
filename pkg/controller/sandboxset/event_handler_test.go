@@ -47,8 +47,8 @@ func TestSandboxEventHandler_Create(t *testing.T) {
 					Namespace: "default",
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: sandboxSetControllerKind.GroupVersion().String(),
-							Kind:       sandboxSetControllerKind.Kind,
+							APIVersion: agentsv1alpha1.SandboxSetControllerKind.GroupVersion().String(),
+							Kind:       agentsv1alpha1.SandboxSetControllerKind.Kind,
 							Name:       sbs.Name,
 							UID:        sbs.UID,
 							Controller: ptr.To(true),
@@ -67,8 +67,8 @@ func TestSandboxEventHandler_Create(t *testing.T) {
 					Namespace: "default",
 					OwnerReferences: []metav1.OwnerReference{
 						{
-							APIVersion: sandboxSetControllerKind.GroupVersion().String(),
-							Kind:       sandboxSetControllerKind.Kind,
+							APIVersion: agentsv1alpha1.SandboxSetControllerKind.GroupVersion().String(),
+							Kind:       agentsv1alpha1.SandboxSetControllerKind.Kind,
 							Name:       sbs.Name,
 							UID:        sbs.UID,
 							Controller: ptr.To(true),
@@ -128,207 +128,18 @@ func TestSandboxEventHandler_Create(t *testing.T) {
 				Object: tt.sandbox,
 			}
 			controllerKey := GetControllerKey(sbs)
-			scaleExpectation.DeleteExpectations(controllerKey)
+			scaleUpExpectation.DeleteExpectations(controllerKey)
 			if tt.hasExpectation {
-				scaleExpectation.ExpectScale(controllerKey, expectations.Create, tt.sandbox.Name)
+				scaleUpExpectation.ExpectScale(controllerKey, expectations.Create, tt.sandbox.Name)
 			}
 			handler.Create(context.TODO(), createEvent, queue)
-			satisfied, _, _ := scaleExpectation.SatisfiedExpectations(controllerKey)
+			satisfied, _, _ := scaleUpExpectation.SatisfiedExpectations(controllerKey)
 			if tt.shouldAddToQueue {
 				assert.Equal(t, controllerKey, queue.request.String())
 				assert.True(t, satisfied)
 			} else {
 				assert.Equal(t, "/", queue.request.String())
 				assert.NotEqual(t, tt.hasExpectation, satisfied)
-			}
-		})
-	}
-}
-
-func TestSandboxEventHandler_Update(t *testing.T) {
-	sbs := &agentsv1alpha1.SandboxSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sandboxset",
-			Namespace: "default",
-			UID:       "123456789",
-		},
-	}
-	ownerReferences := []metav1.OwnerReference{
-		{
-			APIVersion: sandboxSetControllerKind.GroupVersion().String(),
-			Kind:       sandboxSetControllerKind.Kind,
-			Name:       sbs.Name,
-			UID:        sbs.UID,
-			Controller: ptr.To(true),
-		},
-	}
-	testCases := []struct {
-		name             string
-		oldSandbox       *agentsv1alpha1.Sandbox
-		newSandbox       *agentsv1alpha1.Sandbox
-		shouldAddToQueue bool
-	}{
-		{
-			name: "reason changed",
-			oldSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateAvailable,
-					},
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			newSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateRunning,
-					},
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			shouldAddToQueue: true,
-		},
-		{
-			name: "creating and ready",
-			oldSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:            "test-sandbox",
-					Namespace:       "default",
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-					Conditions: []metav1.Condition{
-						{
-							Type:   string(agentsv1alpha1.SandboxConditionReady),
-							Status: metav1.ConditionFalse,
-						},
-					},
-				},
-			},
-			newSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:            "test-sandbox",
-					Namespace:       "default",
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-					Conditions: []metav1.Condition{
-						{
-							Type:   string(agentsv1alpha1.SandboxConditionReady),
-							Status: metav1.ConditionTrue,
-						},
-					},
-				},
-			},
-			shouldAddToQueue: true,
-		},
-		{
-			name: "reason not changed",
-			oldSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateAvailable,
-					},
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			newSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateAvailable,
-					},
-					OwnerReferences: ownerReferences,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			shouldAddToQueue: false,
-		},
-		{
-			name: "not controlled by sandboxset",
-			oldSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateAvailable,
-					},
-					OwnerReferences: []metav1.OwnerReference{
-						{
-							APIVersion: appsv1.SchemeGroupVersion.String(),
-							Kind:       "Deployment",
-							Name:       sbs.Name,
-							UID:        sbs.UID,
-							Controller: ptr.To(true),
-						},
-					},
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			newSandbox: &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-sandbox",
-					Namespace: "default",
-					Labels: map[string]string{
-						agentsv1alpha1.LabelSandboxState: agentsv1alpha1.SandboxStateRunning,
-					},
-					OwnerReferences: []metav1.OwnerReference{
-						{
-							APIVersion: appsv1.SchemeGroupVersion.String(),
-							Kind:       "Deployment",
-							Name:       sbs.Name,
-							UID:        sbs.UID,
-							Controller: ptr.To(true),
-						},
-					},
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRunning,
-				},
-			},
-			shouldAddToQueue: false,
-		},
-	}
-
-	handler := &SandboxEventHandler{}
-
-	for _, tt := range testCases {
-		t.Run(tt.name, func(t *testing.T) {
-			queue := &fakePriorityQueue{}
-
-			updateEvent := event.TypedUpdateEvent[client.Object]{
-				ObjectOld: tt.oldSandbox,
-				ObjectNew: tt.newSandbox,
-			}
-
-			handler.Update(context.TODO(), updateEvent, queue)
-			controllerKey := GetControllerKey(sbs)
-			if tt.shouldAddToQueue {
-				assert.Equal(t, controllerKey, queue.request.String())
-			} else {
-				assert.Equal(t, "/", queue.request.String())
 			}
 		})
 	}
@@ -344,8 +155,8 @@ func TestSandboxEventHandler_Delete(t *testing.T) {
 	}
 	ownerReferences := []metav1.OwnerReference{
 		{
-			APIVersion: sandboxSetControllerKind.GroupVersion().String(),
-			Kind:       sandboxSetControllerKind.Kind,
+			APIVersion: agentsv1alpha1.SandboxSetControllerKind.GroupVersion().String(),
+			Kind:       agentsv1alpha1.SandboxSetControllerKind.Kind,
 			Name:       sbs.Name,
 			UID:        sbs.UID,
 			Controller: ptr.To(true),
@@ -431,12 +242,12 @@ func TestSandboxEventHandler_Delete(t *testing.T) {
 			}
 			handler := &SandboxEventHandler{}
 			controllerKey := GetControllerKey(sbs)
-			scaleExpectation.DeleteExpectations(controllerKey)
+			scaleDownExpectation.DeleteExpectations(controllerKey)
 			if tt.hasExpectation {
-				scaleExpectation.ExpectScale(controllerKey, expectations.Delete, tt.sandbox.Name)
+				scaleDownExpectation.ExpectScale(controllerKey, expectations.Delete, tt.sandbox.Name)
 			}
 			handler.Delete(context.TODO(), evt, queue)
-			satisfied, _, _ := scaleExpectation.SatisfiedExpectations(controllerKey)
+			satisfied, _, _ := scaleDownExpectation.SatisfiedExpectations(controllerKey)
 			if tt.shouldAddToQueue {
 				assert.Equal(t, controllerKey, queue.request.String())
 				assert.True(t, satisfied)

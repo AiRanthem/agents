@@ -15,6 +15,12 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// means 2 min timeout
+const (
+	PeerInitInterval   = 6 * time.Second
+	PeerInitMaxRetries = 20
+)
+
 type SandboxManager struct {
 	Namespace string
 
@@ -27,23 +33,15 @@ type SandboxManager struct {
 }
 
 // NewSandboxManager creates a new SandboxManager instance.
-//
-//	Params:
-//	- namespace: The namespace where the helm and all managed sandbox pods are running
-//	- templateDir: The directory where the built-in sandbox templates are stored
-//	- client / restConfig: The k8s client and rest config
-//	- adapter: The request adapter for mapping helm logic to a specific framework like 'e2b'
-//	- debug: run in prod or debug mode (debug mode is useful in developing, making it possible to run locally)
-func NewSandboxManager(namespace string, client *clients.ClientSet, adapter proxy.RequestAdapter, infra string) (*SandboxManager, error) {
+func NewSandboxManager(client *clients.ClientSet, adapter proxy.RequestAdapter, infra string) (*SandboxManager, error) {
 	m := &SandboxManager{
-		client:    client,
-		Namespace: namespace,
-		proxy:     proxy.NewServer(adapter),
+		client: client,
+		proxy:  proxy.NewServer(adapter),
 	}
 	var err error
 	switch infra {
 	case consts.InfraSandboxCR:
-		m.infra, err = sandboxcr.NewInfra(namespace, client.SandboxClient, m.proxy)
+		m.infra, err = sandboxcr.NewInfra(client.SandboxClient, m.proxy)
 	default:
 		err = fmt.Errorf("infra must be one of: [%s]",
 			consts.InfraSandboxCR)
@@ -63,7 +61,7 @@ func (m *SandboxManager) Run(ctx context.Context, sysNs, peerSelector string) er
 	// TODO peer system is not optimized
 	var peerInited bool
 	log.Info("start to find peers")
-	for i := 0; i < 20; i++ {
+	for i := 0; i < PeerInitMaxRetries; i++ {
 		peerList, err := m.client.CoreV1().Pods(sysNs).List(ctx, metav1.ListOptions{
 			LabelSelector: peerSelector,
 		})
@@ -95,7 +93,7 @@ func (m *SandboxManager) Run(ctx context.Context, sysNs, peerSelector string) er
 			break
 		} else {
 			log.Info("waiting for peers to start", "ready", len(peers), "total", len(peerList.Items))
-			time.Sleep(6 * time.Second)
+			time.Sleep(PeerInitInterval)
 		}
 	}
 	if !peerInited {
@@ -108,6 +106,7 @@ func (m *SandboxManager) Run(ctx context.Context, sysNs, peerSelector string) er
 }
 
 func (m *SandboxManager) Stop() {
+	m.proxy.Stop()
 	m.infra.Stop()
 }
 

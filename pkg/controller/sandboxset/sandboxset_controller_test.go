@@ -11,6 +11,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/utils/fieldindex"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	"github.com/openkruise/agents/pkg/utils/sandboxutils"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +72,6 @@ func getBaseSandbox(idx int32, prefix, templateHash string) *v1alpha1.Sandbox {
 			Name:      prefix + strconv.Itoa(int(idx)),
 			Namespace: "default",
 			Labels: map[string]string{
-				v1alpha1.LabelSandboxID:    "sandbox-" + strconv.Itoa(int(idx)),
 				v1alpha1.LabelTemplateHash: templateHash,
 				v1alpha1.LabelSandboxPool:  "test",
 			},
@@ -95,50 +95,68 @@ func NewClient() client.Client {
 }
 
 type createSandboxRequest struct {
-	createCreatingSandboxes  int32
-	createAvailableSandboxes int32
-	createRunningSandboxes   int32
-	createPausedSandboxes    int32
-	createFailedSandboxes    int32
-	createLegacySandboxes    int32
-	createDeletedSandboxes   int32
-	createKilledSandboxes    int32
-	lockedOwner              string
+	createCreatingSandboxes    int32
+	createAvailableSandboxes   int32
+	createRunningSandboxes     int32
+	createPausedSandboxes      int32
+	createFailedSandboxes      int32
+	createLegacySandboxes      int32
+	createDeletedSandboxes     int32
+	createTerminatingSandboxes int32
+	lockedOwner                string
 }
 
 func CreateSandboxes(t *testing.T, tt createSandboxRequest, sbs *v1alpha1.SandboxSet, k8sClient client.Client) int32 {
 	var idx int32
 	var toCreate []*v1alpha1.Sandbox
+	creatingPhases := []v1alpha1.SandboxPhase{v1alpha1.SandboxRunning, v1alpha1.SandboxPending}
 	for i := int32(0); i < tt.createCreatingSandboxes; i++ {
 		sbx := getBaseSandbox(idx, "creating-", sbs.Status.UpdateRevision)
-		sbx.Status.Phase = v1alpha1.SandboxPending
+		sbx.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(sbs, v1alpha1.SandboxSetControllerKind)}
+		sbx.Status.Phase = creatingPhases[int(i)%len(creatingPhases)]
 		sbx.Labels["type"] = "creating"
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStateCreating, state, reason)
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
 	for i := int32(0); i < tt.createAvailableSandboxes; i++ {
 		sbx := getBaseSandbox(idx, "available-", sbs.Status.UpdateRevision)
 		sbx.Status.Phase = v1alpha1.SandboxRunning
+		sbx.Status.Conditions = []metav1.Condition{
+			{
+				Type:   string(v1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+			},
+		}
+		sbx.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(sbs, v1alpha1.SandboxSetControllerKind)}
 		sbx.Labels["type"] = "available"
-		sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStateAvailable
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStateAvailable, state, reason)
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
 	for i := int32(0); i < tt.createRunningSandboxes; i++ {
 		sbx := getBaseSandbox(idx, "running-", sbs.Status.UpdateRevision)
-
 		sbx.Status.Phase = v1alpha1.SandboxRunning
+		sbx.Status.Conditions = []metav1.Condition{
+			{
+				Type:   string(v1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+			},
+		}
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStateRunning, state, reason)
 		sbx.Labels["type"] = "running"
-		sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStateRunning
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
 	for i := int32(0); i < tt.createPausedSandboxes; i++ {
 		sbx := getBaseSandbox(idx, "paused-", sbs.Status.UpdateRevision)
-		sbx.Status.Phase = v1alpha1.SandboxRunning
-		sbx.Labels["type"] = "running"
-		sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStatePaused
-		_ = ctrl.SetControllerReference(sbs, sbx, testScheme)
+		sbx.Status.Phase = v1alpha1.SandboxPaused
+		sbx.Labels["type"] = "paused"
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStatePaused, state, reason)
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
@@ -148,15 +166,8 @@ func CreateSandboxes(t *testing.T, tt createSandboxRequest, sbs *v1alpha1.Sandbo
 		_ = ctrl.SetControllerReference(sbs, sbx, testScheme)
 		sbx.Status.Phase = failedPhases[int(idx)%len(failedPhases)]
 		sbx.Labels["type"] = "failed"
-		toCreate = append(toCreate, sbx)
-		idx++
-	}
-	for i := int32(0); i < tt.createLegacySandboxes; i++ {
-		sbx := getBaseSandbox(idx, "legacy-", "legacy-hash")
-		_ = ctrl.SetControllerReference(sbs, sbx, testScheme)
-		sbx.Status.Phase = v1alpha1.SandboxRunning
-		sbx.Labels["type"] = "legacy"
-		sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStateRunning
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStateDead, state, reason)
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
@@ -169,22 +180,17 @@ func CreateSandboxes(t *testing.T, tt createSandboxRequest, sbs *v1alpha1.Sandbo
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
-	for i := int32(0); i < tt.createKilledSandboxes; i++ {
+	for i := int32(0); i < tt.createTerminatingSandboxes; i++ {
 		sbx := getBaseSandbox(idx, "killed-", sbs.Status.UpdateRevision)
 		_ = ctrl.SetControllerReference(sbs, sbx, testScheme)
-		killPerformed := idx%2 > 0
-		if killPerformed {
-			sbx.Status.Phase = v1alpha1.SandboxTerminating
-		} else {
-			sbx.Status.Phase = v1alpha1.SandboxRunning
-			sbx.Labels["type"] = "killed"
-			sbx.Labels[v1alpha1.LabelSandboxState] = v1alpha1.SandboxStateKilling
-		}
+		sbx.Status.Phase = v1alpha1.SandboxTerminating
+		sbx.Labels["type"] = "terminating"
+		state, reason := sandboxutils.GetSandboxState(sbx)
+		assert.Equal(t, v1alpha1.SandboxStateDead, state, reason)
 		toCreate = append(toCreate, sbx)
 		idx++
 	}
 	for _, sbx := range toCreate {
-		_ = ctrl.SetControllerReference(sbs, sbx, testScheme)
 		if tt.lockedOwner != "" {
 			sbx.Annotations[v1alpha1.AnnotationLock] = "some-lock"
 			sbx.Annotations[v1alpha1.AnnotationOwner] = tt.lockedOwner
@@ -192,6 +198,10 @@ func CreateSandboxes(t *testing.T, tt createSandboxRequest, sbs *v1alpha1.Sandbo
 		CreateSandboxWithStatus(t, k8sClient, sbx)
 		if strings.HasPrefix(sbx.Name, "deleted-") {
 			assert.NoError(t, k8sClient.Delete(context.TODO(), sbx))
+			deletedSbx := &v1alpha1.Sandbox{}
+			assert.NoError(t, k8sClient.Get(context.TODO(), types.NamespacedName{Name: sbx.Name, Namespace: sbx.Namespace}, deletedSbx))
+			state, reason := sandboxutils.GetSandboxState(deletedSbx)
+			assert.Equal(t, v1alpha1.SandboxStateDead, state, reason)
 		}
 	}
 	return idx
@@ -219,183 +229,7 @@ func CheckEvent(t *testing.T, eventRecorder *record.FakeRecorder, tp, evt string
 	}
 }
 
-func TestReconcile_ReleaseControl(t *testing.T) {
-	utils.InitLogOutput()
-	checkFunc := func(expectReleasedCnt int) func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
-		return func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
-			var sandboxList v1alpha1.SandboxList
-			assert.NoError(t, client.List(context.Background(), &sandboxList))
-
-			releasedCount := len(sandboxList.Items)
-			for _, sbx := range sandboxList.Items {
-				if sbx.Labels[newPodKey] != "" {
-					releasedCount--
-					continue
-				}
-				owners := fieldindex.OwnerIndexFunc(&sbx)
-				for _, owner := range owners {
-					if owner == string(sbs.UID) {
-						releasedCount--
-					}
-				}
-			}
-			assert.Equal(t, expectReleasedCnt, releasedCount)
-		}
-	}
-	tests := []struct {
-		name         string
-		request      createSandboxRequest
-		replicas     int32
-		expectEvents []string
-		checkFunc    func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet)
-	}{
-		{
-			name: "not released",
-			request: createSandboxRequest{
-				createAvailableSandboxes: 2,
-			},
-			replicas:  2,
-			checkFunc: checkFunc(0),
-		},
-		{
-			name: "release running",
-			request: createSandboxRequest{
-				createAvailableSandboxes: 1,
-				createRunningSandboxes:   1,
-			},
-			replicas:     1,
-			expectEvents: []string{EventSandboxReleased},
-			checkFunc:    checkFunc(1),
-		},
-		{
-			name: "release running and paused",
-			request: createSandboxRequest{
-				createPausedSandboxes:  1,
-				createRunningSandboxes: 1,
-			},
-			replicas:     0,
-			expectEvents: []string{EventSandboxReleased, EventSandboxReleased},
-			checkFunc:    checkFunc(2),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			k8sClient := NewClient()
-
-			sbs := getSandboxSet(tt.replicas)
-			assert.NoError(t, k8sClient.Create(ctx, sbs))
-
-			eventRecorder := record.NewFakeRecorder(10)
-			reconciler := &Reconciler{
-				Client:   k8sClient,
-				Scheme:   testScheme,
-				Recorder: eventRecorder,
-				Codec:    codec,
-			}
-			newStatus, err := reconciler.initNewStatus(sbs)
-			assert.NoError(t, err)
-			sbs.Status = *newStatus
-			CreateSandboxes(t, tt.request, sbs, k8sClient)
-
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sbs)})
-			assert.NoError(t, err)
-
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, k8sClient, sbs)
-			}
-			CheckAllEvents(t, eventRecorder, tt.expectEvents)
-		})
-	}
-}
-
-func TestReconcile_ProcessCreating(t *testing.T) {
-	utils.InitLogOutput()
-	checkFunc := func(expectCnt int) func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
-		return func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
-			var sandboxList v1alpha1.SandboxList
-			assert.NoError(t, client.List(context.Background(), &sandboxList))
-
-			availableCount := 0
-			for _, sbx := range sandboxList.Items {
-				if sbx.Labels[v1alpha1.LabelSandboxState] == v1alpha1.SandboxStateAvailable {
-					availableCount++
-				}
-			}
-			assert.Equal(t, expectCnt, availableCount, "Expected no sandboxes to become available")
-		}
-	}
-	tests := []struct {
-		name         string
-		makeReady    bool // Should sandboxes in the Creating state be marked as ready?
-		expectEvents []string
-		checkFunc    func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet)
-	}{
-		{
-			name:         "process ready creating sandboxes",
-			makeReady:    true,
-			expectEvents: []string{EventSandboxAvailable, EventSandboxAvailable},
-			checkFunc:    checkFunc(2),
-		},
-		{
-			name:         "process non-ready creating sandboxes",
-			makeReady:    false,
-			expectEvents: []string{},
-			checkFunc:    checkFunc(0),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			k8sClient := NewClient()
-
-			sbs := getSandboxSet(2)
-			assert.NoError(t, k8sClient.Create(ctx, sbs))
-
-			eventRecorder := record.NewFakeRecorder(10)
-			reconciler := &Reconciler{
-				Client:   k8sClient,
-				Scheme:   testScheme,
-				Recorder: eventRecorder,
-				Codec:    codec,
-			}
-
-			// create sandbox
-			newStatus, err := reconciler.initNewStatus(sbs)
-			assert.NoError(t, err)
-			sbs.Status = *newStatus
-			CreateSandboxes(t, createSandboxRequest{createCreatingSandboxes: 2}, sbs, k8sClient)
-
-			// If needed, mark sandboxes in Creating state as ready
-			if tt.makeReady {
-				var sandboxList v1alpha1.SandboxList
-				assert.NoError(t, k8sClient.List(ctx, &sandboxList))
-				for i := range sandboxList.Items {
-					sbx := &sandboxList.Items[i]
-					if sbx.Labels["type"] == "creating" {
-						// Add Ready condition
-						sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
-							Type:   string(v1alpha1.SandboxConditionReady),
-							Status: metav1.ConditionTrue,
-						})
-						assert.NoError(t, k8sClient.Status().Update(ctx, sbx))
-					}
-				}
-			}
-
-			_, err = reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sbs)})
-			assert.NoError(t, err)
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, k8sClient, sbs)
-			}
-			CheckAllEvents(t, eventRecorder, tt.expectEvents)
-		})
-	}
-}
-
-func TestReconcile_DeleteFailed(t *testing.T) {
+func TestReconcile_DeleteDead(t *testing.T) {
 	utils.InitLogOutput()
 	checkFunc := func(expectNonDeletedCnt int) func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
 		return func(t *testing.T, client client.Client, sbs *v1alpha1.SandboxSet) {
@@ -429,7 +263,7 @@ func TestReconcile_DeleteFailed(t *testing.T) {
 			checkFunc:    checkFunc(1),
 		},
 		{
-			name: "delete failed sandboxes with already deleted ones",
+			name: "delete dead sandboxes with already deleted ones",
 			request: createSandboxRequest{
 				createFailedSandboxes:    2,
 				createDeletedSandboxes:   1, // will not send a event
@@ -504,7 +338,6 @@ func TestReconcile_BasicScale(t *testing.T) {
 		expectNewSandboxes   int
 		expectEvents         []string
 	}{
-		// Default watermarks are used in all cases: high = 80%, low = 60%
 		{
 			name:                 "simple scale up from 0",
 			replicas:             2,
@@ -522,7 +355,6 @@ func TestReconcile_BasicScale(t *testing.T) {
 			expectTotalSandboxes: 3,
 			expectNewSandboxes:   1,
 			expectEvents: []string{
-				EventSandboxReleased,
 				EventSandboxCreated,
 			},
 		},
@@ -535,9 +367,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 			},
 			expectTotalSandboxes: 3,
 			expectNewSandboxes:   0,
-			expectEvents: []string{
-				EventSandboxReleased,
-			},
+			expectEvents:         []string{},
 		},
 		{
 			name:     "2 running, 2 paused",
@@ -549,7 +379,6 @@ func TestReconcile_BasicScale(t *testing.T) {
 			expectTotalSandboxes: 6,
 			expectNewSandboxes:   2,
 			expectEvents: []string{
-				EventSandboxReleased, EventSandboxReleased, EventSandboxReleased, EventSandboxReleased,
 				EventSandboxCreated, EventSandboxCreated,
 			},
 		},
@@ -568,12 +397,12 @@ func TestReconcile_BasicScale(t *testing.T) {
 			name:     "1 killed, scale up from 1 to 2, 1 gc",
 			replicas: 2,
 			request: createSandboxRequest{
-				createKilledSandboxes:    1,
-				createAvailableSandboxes: 1,
+				createTerminatingSandboxes: 1,
+				createAvailableSandboxes:   1,
 			},
 			expectTotalSandboxes: 2,
 			expectNewSandboxes:   1,
-			expectEvents:         []string{EventFailedSandboxDeleted, EventSandboxCreated},
+			expectEvents:         []string{EventSandboxCreated, EventFailedSandboxDeleted},
 		},
 		{
 			name:     "scale down 1 available",
@@ -598,19 +427,17 @@ func TestReconcile_BasicScale(t *testing.T) {
 			name:     "complex",
 			replicas: 3,
 			request: createSandboxRequest{
-				createAvailableSandboxes: 2,
-				createRunningSandboxes:   2,
-				createPausedSandboxes:    2,
-				createFailedSandboxes:    2, // should gc
-				createKilledSandboxes:    2, // should gc
-				createDeletedSandboxes:   2, // should gc
+				createAvailableSandboxes:   2,
+				createRunningSandboxes:     2,
+				createPausedSandboxes:      2,
+				createFailedSandboxes:      2, // should gc
+				createTerminatingSandboxes: 2, // should gc
+				createDeletedSandboxes:     2, // should gc
 			},
 			expectEvents: []string{
-				EventSandboxReleased, EventSandboxReleased,
-				EventSandboxReleased, EventSandboxReleased,
-				EventFailedSandboxDeleted, EventFailedSandboxDeleted,
-				EventFailedSandboxDeleted, EventFailedSandboxDeleted,
 				EventSandboxCreated,
+				EventFailedSandboxDeleted, EventFailedSandboxDeleted,
+				EventFailedSandboxDeleted, EventFailedSandboxDeleted,
 			},
 			expectTotalSandboxes: 7,
 			expectNewSandboxes:   1,
@@ -624,7 +451,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 			},
 			expectTotalSandboxes: 3,
 			expectNewSandboxes:   1,
-			expectEvents:         []string{EventSandboxReleased, EventSandboxCreated},
+			expectEvents:         []string{EventSandboxCreated},
 		},
 		{
 			name:     "user story 1, step 2: pause it",
@@ -634,7 +461,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 				createPausedSandboxes:    1,
 			},
 			expectTotalSandboxes: 3,
-			expectEvents:         []string{EventSandboxReleased},
+			expectEvents:         []string{},
 		},
 		{
 			name:     "user story 1, step 3: claim the second",
@@ -646,7 +473,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 			},
 			expectTotalSandboxes: 4,
 			expectNewSandboxes:   1,
-			expectEvents:         []string{EventSandboxReleased, EventSandboxReleased, EventSandboxCreated},
+			expectEvents:         []string{EventSandboxCreated},
 		},
 		{
 			name:     "user story 1, step 4: claim the third",
@@ -658,7 +485,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 			},
 			expectTotalSandboxes: 5,
 			expectNewSandboxes:   1,
-			expectEvents:         []string{EventSandboxReleased, EventSandboxReleased, EventSandboxReleased, EventSandboxCreated},
+			expectEvents:         []string{EventSandboxCreated},
 		},
 		{
 			name:     "user story 1, step 5: claim the forth",
@@ -670,7 +497,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 			},
 			expectTotalSandboxes: 6,
 			expectNewSandboxes:   1,
-			expectEvents:         []string{EventSandboxReleased, EventSandboxReleased, EventSandboxReleased, EventSandboxReleased, EventSandboxCreated},
+			expectEvents:         []string{EventSandboxCreated},
 		},
 		{
 			name:     "user story 1, step 6: kill the first",
@@ -681,7 +508,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 				createPausedSandboxes:    1,
 			},
 			expectTotalSandboxes: 5,
-			expectEvents:         []string{EventSandboxReleased, EventSandboxReleased, EventSandboxReleased},
+			expectEvents:         []string{},
 		},
 		{
 			name:     "user story 1, step 7: kill the second and third and the forth",
@@ -690,7 +517,7 @@ func TestReconcile_BasicScale(t *testing.T) {
 				createAvailableSandboxes: 2,
 				createPausedSandboxes:    1,
 			},
-			expectEvents:         []string{EventSandboxReleased},
+			expectEvents:         []string{},
 			expectTotalSandboxes: 3,
 		},
 	}
@@ -714,7 +541,8 @@ func TestReconcile_BasicScale(t *testing.T) {
 			assert.NoError(t, err)
 			sbs.Status = *newStatus
 			_ = CreateSandboxes(t, tt.request, sbs, k8sClient)
-			scaleExpectation.DeleteExpectations(GetControllerKey(sbs))
+			scaleUpExpectation.DeleteExpectations(GetControllerKey(sbs))
+			scaleDownExpectation.DeleteExpectations(GetControllerKey(sbs))
 			_, err = reconciler.Reconcile(ctx, ctrl.Request{
 				NamespacedName: client.ObjectKeyFromObject(sbs),
 			})
@@ -773,7 +601,7 @@ func TestReconcile_ScaleDown(t *testing.T) {
 			checkFunc: func(t *testing.T, sandboxes []v1alpha1.Sandbox) {
 				assert.Equal(t, 1, len(sandboxes))
 			},
-			expectEvents: []string{EventSandboxReleased},
+			expectEvents: []string{},
 		},
 		{
 			name:     "scale down mixed sandboxes (creating first)",
@@ -829,7 +657,8 @@ func TestReconcile_ScaleDown(t *testing.T) {
 			assert.NoError(t, k8sClient.Create(ctx, sbs))
 			CreateSandboxes(t, tt.request, sbs, k8sClient)
 
-			scaleExpectation.DeleteExpectations(GetControllerKey(sbs))
+			scaleUpExpectation.DeleteExpectations(GetControllerKey(sbs))
+			scaleDownExpectation.DeleteExpectations(GetControllerKey(sbs))
 			_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sbs)})
 			assert.NoError(t, err)
 

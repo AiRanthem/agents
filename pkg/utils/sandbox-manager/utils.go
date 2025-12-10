@@ -4,26 +4,13 @@
 package utils
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/utils/expectations"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
-
-func ValidatedCustomLabelKey(key string) error {
-	if strings.HasPrefix(v1alpha1.InternalPrefix, key) {
-		return fmt.Errorf("label key %s is reserved", key)
-	}
-	return nil
-}
-
-func SandboxClaimed(sbx infra.Sandbox) bool {
-	state := sbx.GetState()
-	return state == v1alpha1.SandboxStateRunning || state == v1alpha1.SandboxStatePaused
-}
 
 func CalculateResourceFromContainers(containers []corev1.Container) infra.SandboxResource {
 	resource := infra.SandboxResource{}
@@ -54,4 +41,32 @@ func LockSandbox(sbx client.Object, lock string, owner string) {
 	annotations[v1alpha1.AnnotationLock] = lock
 	annotations[v1alpha1.AnnotationOwner] = owner
 	sbx.SetAnnotations(annotations)
+}
+
+// resourceVersionExpectation usage:
+// 1. Observes in utils.SelectObjectWithIndex, which is the final step of selecting any object from informer.
+// 2. Expects when sandbox state changes, including claim, pause, resume, delete, etc.
+// 3. Always check satisfied after select.
+// 4. Use functions like ResourceVersionExpectationSatisfied, don't call IsSatisfied directly.
+var resourceVersionExpectation = expectations.NewResourceVersionExpectation()
+
+func ResourceVersionExpectationObserve(obj metav1.Object) {
+	resourceVersionExpectation.Observe(obj)
+}
+
+func ResourceVersionExpectationExpect(obj metav1.Object) {
+	resourceVersionExpectation.Expect(obj)
+}
+
+func ResourceVersionExpectationDelete(obj metav1.Object) {
+	resourceVersionExpectation.Delete(obj)
+}
+
+func ResourceVersionExpectationSatisfied(obj metav1.Object) bool {
+	satisfied, sinceFirstUnsatisfied := resourceVersionExpectation.IsSatisfied(obj)
+	if sinceFirstUnsatisfied > expectations.ExpectationTimeout {
+		ResourceVersionExpectationDelete(obj)
+		return true
+	}
+	return satisfied
 }
