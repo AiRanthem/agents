@@ -23,7 +23,7 @@ func ConvertPodToSandboxCR(pod *corev1.Pod) *agentsv1alpha1.Sandbox {
 	return &agentsv1alpha1.Sandbox{
 		ObjectMeta: pod.ObjectMeta,
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: corev1.PodTemplateSpec{
+			Template: &corev1.PodTemplateSpec{
 				Spec: pod.Spec,
 			},
 		},

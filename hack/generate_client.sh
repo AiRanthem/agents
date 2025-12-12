@@ -3,7 +3,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-#go mod vendor
+go mod vendor
 retVal=$?
 if [ $retVal -ne 0 ]; then
     exit $retVal
@@ -32,4 +32,4 @@ GOPATH=${TMP_DIR} GO111MODULE=off kube::codegen::gen_client \
 
 rm -rf ./client/{clientset,informers,listers}
 mv "${TMP_DIR}"/src/github.com/openkruise/agents/client/* ./client
-#rm -rf vendor
+rm -rf vendor

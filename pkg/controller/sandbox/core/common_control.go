@@ -59,6 +59,9 @@ func (r *commonControl) EnsureSandboxPhaseRunning(ctx context.Context, args Ensu
 		return nil
 	}
 
+	newStatus.NodeName = pod.Spec.NodeName
+	newStatus.SandboxIp = pod.Status.PodIP
+
 	newStatus.PodInfo = agentsv1alpha1.PodInfo{
 		PodIP:    pod.Status.PodIP,
 		NodeName: pod.Spec.NodeName,

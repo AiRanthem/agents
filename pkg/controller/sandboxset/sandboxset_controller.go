@@ -316,7 +316,7 @@ func (r *Reconciler) createSandbox(ctx context.Context, sbs *agentsv1alpha1.Sand
 			Annotations:  template.Annotations,
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template:           *template,
+			Template:           template,
 			PersistentContents: sbs.Spec.PersistentContents,
 		},
 	}

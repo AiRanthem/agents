@@ -107,6 +107,10 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	logger := logf.FromContext(ctx).WithValues("sandbox", klog.KObj(box))
 
+	if box.Spec.Template == nil {
+		return reconcile.Result{}, nil
+	}
+
 	// Add finalizer
 	if box.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(box, utils.SandboxFinalizer) {
 		err = utils.UpdateFinalizer(r.Client, box, utils.AddFinalizerOpType, utils.SandboxFinalizer)

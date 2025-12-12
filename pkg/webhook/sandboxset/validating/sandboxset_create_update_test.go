@@ -38,7 +38,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
 								"app": "test",
@@ -67,6 +67,21 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
+					Template: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								"app": "test",
+							},
+						},
+						Spec: corev1.PodSpec{
+							Containers: []corev1.Container{
+								{
+									Name:  "test",
+									Image: "nginx:latest",
+								},
+							},
+						},
+					},
 				},
 			},
 			expectAllow:  false,
@@ -82,6 +97,13 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: -1, // Negative replicas are invalid
+					Template: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								v1alpha1.InternalPrefix + "test": "value", // Template internal prefix labels are invalid
+							},
+						},
+					},
 				},
 			},
 			expectAllow:  false,
@@ -100,6 +122,13 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
+					Template: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								v1alpha1.InternalPrefix + "test": "value", // Template internal prefix labels are invalid
+							},
+						},
+					},
 				},
 			},
 			expectAllow:  false,
@@ -118,6 +147,13 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
+					Template: &corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								v1alpha1.InternalPrefix + "test": "value", // Template internal prefix labels are invalid
+							},
+						},
+					},
 				},
 			},
 			expectAllow:  false,
@@ -133,7 +169,7 @@ func TestSandboxSetValidatingHandler_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
 								v1alpha1.InternalPrefix + "test": "value", // Template internal prefix labels are invalid

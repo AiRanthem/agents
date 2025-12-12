@@ -45,7 +45,7 @@ func getSandboxSet(replicas int32) *v1alpha1.SandboxSet {
 		},
 		Spec: v1alpha1.SandboxSetSpec{
 			Replicas: replicas,
-			Template: corev1.PodTemplateSpec{
+			Template: &corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
 						newPodKey: "true",

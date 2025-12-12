@@ -18,6 +18,7 @@ package sandbox
 
 import (
 	"context"
+	"github.com/openkruise/agents/pkg/controller/sandbox/core"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ var (
 			Namespace: "default",
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
-			Template: corev1.PodTemplateSpec{
+			Template: &corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
@@ -95,7 +96,6 @@ func init() {
 }
 
 func TestSandboxReconcile(t *testing.T) {
-	t.Skip()
 	type Case struct {
 		name        string
 		getSandbox  func() *agentsv1alpha1.Sandbox
@@ -170,6 +170,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -204,6 +206,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -235,6 +239,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -270,6 +276,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -308,6 +316,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -350,6 +360,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -380,6 +392,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -413,6 +427,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -443,6 +459,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -479,6 +497,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -512,6 +532,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -548,6 +570,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -574,6 +598,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -609,6 +635,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -641,6 +669,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -668,6 +698,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -695,6 +727,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -723,6 +757,8 @@ func TestSandboxReconcile(t *testing.T) {
 						NodeName:    "virtual-kubelet-cn-beijing-d",
 						PodIP:       "172.17.0.61",
 					},
+					NodeName:  "virtual-kubelet-cn-beijing-d",
+					SandboxIp: "172.17.0.61",
 				}
 				return obj
 			},
@@ -754,8 +790,9 @@ func TestSandboxReconcile(t *testing.T) {
 				_ = fakeClient.Delete(context.TODO(), box)
 			}
 			reconciler := SandboxReconciler{
-				Client: fakeClient,
-				Scheme: scheme,
+				Client:   fakeClient,
+				Scheme:   scheme,
+				controls: core.NewSandboxControl(fakeClient),
 			}
 			if _, err := reconciler.Reconcile(context.TODO(), ctrl.Request{NamespacedName: types.NamespacedName{
 				Namespace: boxDemo.Namespace,

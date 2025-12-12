@@ -48,10 +48,15 @@ type SandboxSetSpec struct {
 	// PersistentContents indicates resume pod with persistent content, Enum: ip, memory, filesystem
 	PersistentContents []string `json:"persistentContents,omitempty"`
 
+	// TemplateRef references a SandboxTemplate, which will be used to create the sandbox.
+	// +optional
+	TemplateRef *SandboxTemplateRef `json:"templateRef,omitempty"`
+
 	// Template describes the pods that will be created.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +kubebuilder:validation:Schemaless
-	Template v1.PodTemplateSpec `json:"template"`
+	// +optional
+	Template *v1.PodTemplateSpec `json:"template,omitempty"`
 }
 
 // SandboxSetStatus defines the observed state of SandboxSet.

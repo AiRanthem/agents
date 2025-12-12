@@ -43,10 +43,33 @@ type SandboxSpec struct {
 	// +kubebuilder:validation:Format="date-time"
 	ShutdownTime *metav1.Time `json:"shutdownTime,omitempty"`
 
+	// TemplateRef references a SandboxTemplate, which will be used to create the sandbox.
+	// +optional
+	TemplateRef *SandboxTemplateRef `json:"templateRef,omitempty"`
+
 	// Template describes the pods that will be created.
+	// Template is mutual exclusive with TemplateRef
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +kubebuilder:validation:Schemaless
-	Template v1.PodTemplateSpec `json:"template"`
+	// +optional
+	Template *v1.PodTemplateSpec `json:"template,omitempty"`
+}
+
+// SandboxTemmplateRef references a SandboxTemplate
+type SandboxTemplateRef struct {
+	// name of the SandboxTemplate
+	// +kubebuilder:validation:Required
+	Name string `json:"name" protobuf:"bytes,1,name=name"`
+
+	// name of the SandboxTemplate kind
+	// Default to PodTemplate
+	// +optional
+	Kind *string `json:"kind,omitempty"`
+
+	// name of the SandboxTemplate apiVersion
+	// Default to v1
+	// +optional
+	APIVersion *string `json:"apiVersion,omitempty"`
 }
 
 const (
@@ -85,6 +108,14 @@ type SandboxStatus struct {
 
 	// Pod Info
 	PodInfo PodInfo `json:"podInfo,omitempty"`
+
+	// NodeName indicates in which node this sandbox is scheduled.
+	// +optional
+	NodeName string `json:"nodeName,omitempty"`
+
+	// SandboxIp is the ip address allocated to the sandbox.
+	// +optional
+	SandboxIp string `json:"sandboxIp,omitempty"`
 }
 
 // SandboxPhase is a label for the condition of a pod at the current time.

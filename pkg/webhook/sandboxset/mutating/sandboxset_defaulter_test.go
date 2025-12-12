@@ -37,7 +37,7 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
 								{
@@ -61,7 +61,7 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							AutomountServiceAccountToken: ptr.To(true),
 							Containers: []corev1.Container{
@@ -86,7 +86,7 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							AutomountServiceAccountToken: ptr.To(false),
 							Containers: []corev1.Container{
@@ -111,7 +111,7 @@ func TestSandboxSetDefaulter_Handle(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 3,
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{},
 					},
 				},
@@ -180,7 +180,7 @@ func TestSandboxSetDefaulter_HandleUpdate(t *testing.T) {
 				},
 				Spec: v1alpha1.SandboxSetSpec{
 					Replicas: 5, // Changed replicas
-					Template: corev1.PodTemplateSpec{
+					Template: &corev1.PodTemplateSpec{
 						Spec: corev1.PodSpec{
 							Containers: []corev1.Container{
 								{
