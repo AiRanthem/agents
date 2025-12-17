@@ -1,0 +1,5 @@
+ignore:
+- "pkg/client/.*"
+- "test/e2e/.*"
+
+
