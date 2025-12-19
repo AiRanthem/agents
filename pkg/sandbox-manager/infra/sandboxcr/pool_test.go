@@ -88,9 +88,8 @@ func TestPool_ClaimSandbox(t *testing.T) {
 				t.Fatalf("Failed to create cache: %v", err)
 			}
 
-			done := make(chan struct{})
-			go c.Run(done)
-			<-done
+			err = c.Run(context.Background())
+			assert.NoError(t, err)
 			defer c.Stop()
 
 			pool := &Pool{

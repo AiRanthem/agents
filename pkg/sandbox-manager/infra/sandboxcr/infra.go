@@ -52,12 +52,8 @@ func NewInfra(client sandboxclient.Interface, proxy *proxy.Server) (*Infra, erro
 	return instance, nil
 }
 
-func (i *Infra) Run(context.Context) error {
-	done := make(chan struct{})
-	defer close(done)
-	i.Cache.Run(done)
-	<-done
-	return nil
+func (i *Infra) Run(ctx context.Context) error {
+	return i.Cache.Run(ctx)
 }
 
 func (i *Infra) Stop() {

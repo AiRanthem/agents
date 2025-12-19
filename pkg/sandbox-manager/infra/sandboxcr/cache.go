@@ -3,6 +3,7 @@ package sandboxcr
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
@@ -22,6 +23,7 @@ type Cache struct {
 	sandboxInformer    cache.SharedIndexInformer
 	sandboxSetInformer cache.SharedIndexInformer
 	stopCh             chan struct{}
+	waitHooks          sync.Map
 }
 
 func NewCache(informerFactory informers.SharedInformerFactory, sandboxInformer, sandboxSetInformer cache.SharedIndexInformer) (*Cache, error) {
@@ -37,16 +39,28 @@ func NewCache(informerFactory informers.SharedInformerFactory, sandboxInformer, 
 	return c, nil
 }
 
-func (c *Cache) Run(done chan<- struct{}) {
+func (c *Cache) Run(ctx context.Context) error {
+	log := klog.FromContext(ctx)
+	_, err := c.sandboxInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			c.watchSandboxSatisfied(newObj)
+		},
+		AddFunc: func(obj interface{}) {
+			c.watchSandboxSatisfied(obj)
+		},
+		DeleteFunc: func(obj interface{}) {
+			c.watchSandboxSatisfied(obj)
+		},
+	})
+	if err != nil {
+		log.Error(err, "failed to create waiter handler")
+		return err
+	}
 	c.informerFactory.Start(c.stopCh)
-	klog.Info("Cache informer started")
-	go func() {
-		c.informerFactory.WaitForCacheSync(c.stopCh)
-		if done != nil {
-			done <- struct{}{}
-		}
-		klog.Info("Cache informer synced")
-	}()
+	log.Info("Cache informer started")
+	c.informerFactory.WaitForCacheSync(c.stopCh)
+	log.Info("Cache informer synced")
+	return nil
 }
 
 func (c *Cache) Stop() {
@@ -102,67 +116,67 @@ type satisfiedResult struct {
 	err error
 }
 
-func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, key client.ObjectKey, satisfiedFunc checkFunc, timeout time.Duration) error {
-	log := klog.FromContext(ctx).V(consts.DebugLogLevel)
+type waitEntry struct {
+	ctx     context.Context
+	ch      chan satisfiedResult
+	checker checkFunc
+}
+
+func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1.Sandbox, satisfiedFunc checkFunc, timeout time.Duration) error {
+	key := client.ObjectKeyFromObject(sbx)
+	log := klog.FromContext(ctx).V(consts.DebugLogLevel).WithValues("key", key)
 	ch := make(chan satisfiedResult, 1)
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 
-	handler, err := c.sandboxInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			watchSandboxSatisfied(ctx, key, ch, satisfiedFunc, newObj)
-		},
-		AddFunc: func(obj interface{}) {
-			watchSandboxSatisfied(ctx, key, ch, satisfiedFunc, obj)
-		},
-		DeleteFunc: func(obj interface{}) {
-			watchSandboxSatisfied(ctx, key, ch, satisfiedFunc, obj)
-		},
-	})
-	log.Info("temp event handler added to wait for sandbox satisfied")
-
-	if err != nil {
-		return err
+	entry := &waitEntry{
+		ctx:     ctx,
+		ch:      ch,
+		checker: satisfiedFunc,
 	}
+	_, exists := c.waitHooks.LoadOrStore(key, entry)
+	if exists {
+		log.Error(nil, "wait hook already exists")
+		return fmt.Errorf("wait hook for %s already exists", key)
+	}
+	log.Info("wait hook created")
 
+	timer := time.NewTimer(timeout)
 	defer func() {
-		if err := c.sandboxInformer.RemoveEventHandler(handler); err != nil {
-			log.Error(err, "failed to remove sandbox event handler")
-		} else {
-			log.Info("temp event handler removed")
-		}
+		timer.Stop()
+		c.waitHooks.Delete(key)
+		log.Info("wait hook deleted")
 	}()
 
 	select {
 	case <-timer.C:
+		log.Error(nil, "timeout waiting for sandbox satisfied")
 		return fmt.Errorf("timeout waiting for sandbox satisfied")
 	case result := <-ch:
+		log.Info("got wait result", "satisfied", result.ok, "err", result.err)
 		if result.err != nil {
+			log.Error(result.err, "wait hook failed")
 			return result.err
 		}
 		return nil
 	}
 }
 
-func watchSandboxSatisfied(ctx context.Context, key client.ObjectKey, ch chan satisfiedResult, satisfiedFunc checkFunc, obj interface{}) {
-	log := klog.FromContext(ctx).V(consts.DebugLogLevel)
+func (c *Cache) watchSandboxSatisfied(obj interface{}) {
 	sbx, ok := obj.(*agentsv1alpha1.Sandbox)
 	if !ok {
 		return
 	}
-	gotKey := client.ObjectKeyFromObject(sbx)
-	if gotKey != key {
+	key := client.ObjectKeyFromObject(sbx)
+	value, ok := c.waitHooks.Load(key)
+	if !ok {
 		return
 	}
-	satisfied, err := satisfiedFunc(sbx)
-	log.Info("watch sandbox satisfied result", "sandbox", gotKey, "satisfied", satisfied,
-		"err", err, "resourceVersion", sbx.GetResourceVersion())
-	if err != nil {
-		utils.WriteChannelSafely(ch, satisfiedResult{false, err})
-		return
-	}
-	if satisfied {
-		utils.WriteChannelSafely(ch, satisfiedResult{true, nil})
+	entry := value.(*waitEntry)
+	log := klog.FromContext(entry.ctx).V(consts.DebugLogLevel).WithValues("key", key)
+	satisfied, err := entry.checker(sbx)
+	log.Info("watch sandbox satisfied result",
+		"satisfied", satisfied, "err", err, "resourceVersion", sbx.GetResourceVersion())
+	if satisfied || err != nil {
+		utils.WriteChannelSafely(entry.ch, satisfiedResult{satisfied, err})
 		return
 	}
 }

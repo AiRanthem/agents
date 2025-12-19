@@ -1,6 +1,7 @@
 package sandboxcr
 
 import (
+	"context"
 	"time"
 
 	"github.com/openkruise/agents/client/clientset/versioned/fake"
@@ -17,8 +18,9 @@ func NewTestCache() (cache *Cache, client *fake.Clientset) {
 	if err != nil {
 		panic(err)
 	}
-	done := make(chan struct{})
-	go cache.Run(done)
-	<-done
+	err = cache.Run(context.Background())
+	if err != nil {
+		panic(err)
+	}
 	return cache, client
 }

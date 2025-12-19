@@ -18,7 +18,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type SandboxCR interface {
@@ -192,7 +191,7 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 	utils.ResourceVersionExpectationExpect(s.Sandbox)
 	log.Info("waiting sandbox resume")
 	start := time.Now()
-	err = s.Cache.WaitForSandboxSatisfied(ctx, client.ObjectKeyFromObject(s.Sandbox), func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+	err = s.Cache.WaitForSandboxSatisfied(ctx, s.Sandbox, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 		if sbx.Status.Phase != agentsv1alpha1.SandboxRunning {
 			return false, nil
 		}
