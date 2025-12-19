@@ -42,6 +42,9 @@ func (a *CustomizedE2BAdapter) Map(_, _, path string, _ int, headers map[string]
 		user = UserNoNeedToAuth
 		return
 	}
+	extraHeaders = map[string]string{
+		":path": "/" + split[2],
+	}
 
 	token := headers["x-access-token"] // from sandbox.EnvdAccessToken
 	key, ok := a.Keys.LoadByKey(token)

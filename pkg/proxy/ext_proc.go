@@ -91,6 +91,7 @@ func (s *Server) handleRequestHeaders(requestHeaders *extProcPb.ProcessingReques
 	sandboxID, sandboxPort, extraHeaders, err := s.adapter.Map(scheme, authority, path, port, headers)
 	if err != nil {
 		// Return error response instead of gRPC error
+		log.Error(err, "failed to map request to sandbox")
 		errorMsg := fmt.Sprintf("failed to map request to sandbox, URL=%s://%s%s", scheme, authority, path)
 		return s.logAndCreateErrorResponse(http.StatusInternalServerError, errorMsg, log)
 	}
