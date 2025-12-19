@@ -65,7 +65,7 @@ func (sc *Controller) Init(infrastructure string) error {
 	ctx := logs.NewContext()
 	log := klog.FromContext(ctx)
 	log.Info("init controller", "infra", infrastructure)
-	adapter := &adapters.CommonAdapter{Port: sc.port}
+	adapter := adapters.NewE2BAdapter(sc.port, sc.keys)
 	sandboxManager, err := sandbox_manager.NewSandboxManager(sc.client, adapter, infrastructure)
 	if err != nil {
 		return err
