@@ -54,5 +54,5 @@ func (a *CustomizedE2BAdapter) Map(_, _, path string, _ int, headers map[string]
 }
 
 func (a *CustomizedE2BAdapter) IsSandboxRequest(_, path string, _ int) bool {
-	return !strings.HasPrefix(path, "/api")
+	return !strings.HasPrefix(path, CustomPrefix+"/api")
 }
