@@ -23,7 +23,7 @@ type Cache struct {
 	sandboxInformer    cache.SharedIndexInformer
 	sandboxSetInformer cache.SharedIndexInformer
 	stopCh             chan struct{}
-	waitHooks          sync.Map
+	waitHooks          sync.Map // Key: client.ObjectKey; Value: *waitEntry
 }
 
 func NewCache(informerFactory informers.SharedInformerFactory, sandboxInformer, sandboxSetInformer cache.SharedIndexInformer) (*Cache, error) {
