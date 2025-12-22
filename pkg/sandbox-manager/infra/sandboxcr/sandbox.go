@@ -191,7 +191,7 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 	utils.ResourceVersionExpectationExpect(s.Sandbox)
 	log.Info("waiting sandbox resume")
 	start := time.Now()
-	err = s.Cache.WaitForSandboxSatisfied(ctx, s.Sandbox, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+	err = s.Cache.WaitForSandboxSatisfied(ctx, s.Sandbox, WaitActionResume, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 		if sbx.Status.Phase != agentsv1alpha1.SandboxRunning {
 			return false, nil
 		}

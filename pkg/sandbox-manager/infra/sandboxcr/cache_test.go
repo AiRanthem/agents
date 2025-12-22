@@ -31,12 +31,11 @@ func NewTestCache() (cache *Cache, client *fake.Clientset) {
 
 func TestCache_WaitForSandboxSatisfied(t *testing.T) {
 	tests := []struct {
-		name          string
-		setupFunc     func(*testing.T, *Cache, *fake.Clientset) *agentsv1alpha1.Sandbox
-		checkFunc     checkFunc
-		timeout       time.Duration
-		expectError   bool
-		expectTimeout bool
+		name        string
+		setupFunc   func(*testing.T, *Cache, *fake.Clientset) *agentsv1alpha1.Sandbox
+		checkFunc   checkFunc
+		timeout     time.Duration
+		expectError string
 	}{
 		{
 			name: "unsatisfied condition should timeout",
@@ -50,17 +49,14 @@ func TestCache_WaitForSandboxSatisfied(t *testing.T) {
 						Phase: agentsv1alpha1.SandboxPending,
 					},
 				}
-				_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-				assert.NoError(t, err)
-				time.Sleep(10 * time.Millisecond) // Allow informer to sync
+				CreateSandboxWithStatus(t, client, sandbox)
 				return sandbox
 			},
 			checkFunc: func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 				return sbx.Status.Phase == agentsv1alpha1.SandboxRunning, nil
 			},
-			timeout:       100 * time.Millisecond,
-			expectError:   true,
-			expectTimeout: true,
+			timeout:     100 * time.Millisecond,
+			expectError: "timeout",
 		},
 		{
 			name: "check function returns error",
@@ -74,16 +70,61 @@ func TestCache_WaitForSandboxSatisfied(t *testing.T) {
 						Phase: agentsv1alpha1.SandboxPending,
 					},
 				}
-				_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-				assert.NoError(t, err)
-				time.Sleep(10 * time.Millisecond) // Allow informer to sync
+				CreateSandboxWithStatus(t, client, sandbox)
 				return sandbox
 			},
 			checkFunc: func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 				return false, assert.AnError
 			},
 			timeout:     1 * time.Second,
-			expectError: true,
+			expectError: assert.AnError.Error(),
+		},
+		{
+			name: "wait task conflict",
+			setupFunc: func(t *testing.T, cache *Cache, client *fake.Clientset) *agentsv1alpha1.Sandbox {
+				sandbox := &agentsv1alpha1.Sandbox{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-sandbox-1",
+						Namespace: "default",
+					},
+					Status: agentsv1alpha1.SandboxStatus{
+						Phase: agentsv1alpha1.SandboxPending,
+					},
+				}
+				CreateSandboxWithStatus(t, client, sandbox)
+				go func() {
+					_ = cache.WaitForSandboxSatisfied(t.Context(), sandbox, "another", func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+						return false, nil // never satisfied
+					}, time.Hour)
+				}()
+				return sandbox
+			},
+			checkFunc: func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+				return true, nil
+			},
+			timeout:     1 * time.Second,
+			expectError: "already exists",
+		},
+		{
+			name: "sandbox satisfied",
+			setupFunc: func(t *testing.T, cache *Cache, client *fake.Clientset) *agentsv1alpha1.Sandbox {
+				sandbox := &agentsv1alpha1.Sandbox{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-sandbox-2",
+						Namespace: "default",
+					},
+					Status: agentsv1alpha1.SandboxStatus{
+						Phase: agentsv1alpha1.SandboxPending,
+					},
+				}
+				CreateSandboxWithStatus(t, client, sandbox)
+				return sandbox
+			},
+			checkFunc: func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+				return true, nil
+			},
+			timeout:     1 * time.Second,
+			expectError: "",
 		},
 	}
 
@@ -94,57 +135,27 @@ func TestCache_WaitForSandboxSatisfied(t *testing.T) {
 
 			// Setup test sandbox
 			sandbox := tt.setupFunc(t, cache, client)
+			time.Sleep(10 * time.Millisecond)
+
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				sandbox.ResourceVersion = "101"
+				_, err := client.ApiV1alpha1().Sandboxes("default").Update(context.Background(), sandbox, metav1.UpdateOptions{})
+				assert.NoError(t, err)
+			}()
 
 			// Call WaitForSandboxSatisfied
-			ctx := context.Background()
-			err := cache.WaitForSandboxSatisfied(ctx, sandbox, tt.checkFunc, tt.timeout)
+			err := cache.WaitForSandboxSatisfied(t.Context(), sandbox, "", tt.checkFunc, tt.timeout)
 
 			// Check results
-			if tt.expectError {
+			if tt.expectError != "" {
 				assert.Error(t, err)
-				if tt.expectTimeout {
-					assert.Contains(t, err.Error(), "timeout")
+				if err != nil {
+					assert.Contains(t, err.Error(), tt.expectError)
 				}
 			} else {
 				assert.NoError(t, err)
 			}
 		})
 	}
-}
-
-func TestCache_WaitForSandboxSatisfiedWithUpdate(t *testing.T) {
-	cache, client := NewTestCache()
-	defer cache.Stop()
-
-	// Create a sandbox with Pending phase
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sandbox-update",
-			Namespace: "default",
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			Phase: agentsv1alpha1.SandboxPending,
-		},
-	}
-	_, err := client.ApiV1alpha1().Sandboxes("default").Create(context.Background(), sandbox, metav1.CreateOptions{})
-	assert.NoError(t, err)
-	time.Sleep(10 * time.Millisecond) // Allow informer to sync
-
-	// Start waiting for the sandbox to become Running
-	checkFunc := func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
-		return sbx.Status.Phase == agentsv1alpha1.SandboxRunning, nil
-	}
-
-	// In a separate goroutine, update the sandbox to Running after a delay
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		sandbox.Status.Phase = agentsv1alpha1.SandboxRunning
-		_, err := client.ApiV1alpha1().Sandboxes("default").Update(context.Background(), sandbox, metav1.UpdateOptions{})
-		assert.NoError(t, err)
-	}()
-
-	// Wait for the condition to be satisfied, should succeed
-	ctx := context.Background()
-	err = cache.WaitForSandboxSatisfied(ctx, sandbox, checkFunc, 1*time.Second)
-	assert.NoError(t, err)
 }

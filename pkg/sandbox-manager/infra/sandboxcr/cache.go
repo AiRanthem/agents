@@ -9,8 +9,8 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	informers "github.com/openkruise/agents/client/informers/externalversions"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
-	"github.com/openkruise/agents/pkg/utils"
 	managerutils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
+	"github.com/openkruise/agents/pkg/utils/sandboxutils"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -111,33 +111,41 @@ func (c *Cache) Refresh() {
 	c.informerFactory.WaitForCacheSync(c.stopCh)
 }
 
-type satisfiedResult struct {
-	ok  bool
-	err error
-}
+type WaitAction string
+
+const (
+	WaitActionResume        WaitAction = "Resume"
+	WaitActionInplaceUpdate WaitAction = "InplaceUpdate"
+)
 
 type waitEntry struct {
 	ctx     context.Context
-	ch      chan satisfiedResult
+	done    chan struct{}
+	action  WaitAction
 	checker checkFunc
 }
 
-func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1.Sandbox, satisfiedFunc checkFunc, timeout time.Duration) error {
+func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1.Sandbox, action WaitAction,
+	satisfiedFunc checkFunc, timeout time.Duration) error {
 	key := client.ObjectKeyFromObject(sbx)
 	log := klog.FromContext(ctx).V(consts.DebugLogLevel).WithValues("key", key)
-	ch := make(chan satisfiedResult, 1)
-
-	entry := &waitEntry{
+	value, exists := c.waitHooks.LoadOrStore(key, &waitEntry{
 		ctx:     ctx,
-		ch:      ch,
+		done:    make(chan struct{}),
+		action:  action,
 		checker: satisfiedFunc,
-	}
-	_, exists := c.waitHooks.LoadOrStore(key, entry)
+	})
 	if exists {
-		log.Error(nil, "wait hook already exists")
-		return fmt.Errorf("wait hook for %s already exists", key)
+		log.Info("reuse existing wait hook")
+	} else {
+		log.Info("wait hook created")
 	}
-	log.Info("wait hook created")
+	entry := value.(*waitEntry)
+	if entry.action != action {
+		err := fmt.Errorf("another action(%s)'s wait task already exists", entry.action)
+		log.Error(err, "wait hook conflict", "existing", entry.action, "new", action)
+		return err
+	}
 
 	timer := time.NewTimer(timeout)
 	defer func() {
@@ -150,11 +158,21 @@ func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1
 	case <-timer.C:
 		log.Error(nil, "timeout waiting for sandbox satisfied")
 		return fmt.Errorf("timeout waiting for sandbox satisfied")
-	case result := <-ch:
-		log.Info("got wait result", "satisfied", result.ok, "err", result.err)
-		if result.err != nil {
-			log.Error(result.err, "wait hook failed")
-			return result.err
+	case <-entry.done:
+		updated, err := c.GetSandbox(sandboxutils.GetSandboxID(sbx))
+		if err != nil {
+			log.Error(err, "failed to get sandbox while double checking")
+			return err
+		}
+		satisfied, err := satisfiedFunc(updated)
+		if err != nil {
+			log.Error(err, "failed to double check sandbox satisfied")
+			return err
+		}
+		if !satisfied {
+			err = fmt.Errorf("sandbox status changed after initial satisfaction, no longer satisfied upon double check")
+			log.Error(err, "sandbox not satisfied")
+			return err
 		}
 		return nil
 	}
@@ -176,7 +194,7 @@ func (c *Cache) watchSandboxSatisfied(obj interface{}) {
 	log.Info("watch sandbox satisfied result",
 		"satisfied", satisfied, "err", err, "resourceVersion", sbx.GetResourceVersion())
 	if satisfied || err != nil {
-		utils.WriteChannelSafely(entry.ch, satisfiedResult{satisfied, err})
+		close(entry.done)
 		return
 	}
 }
