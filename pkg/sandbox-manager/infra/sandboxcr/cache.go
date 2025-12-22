@@ -156,26 +156,32 @@ func (c *Cache) WaitForSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1
 
 	select {
 	case <-timer.C:
-		log.Error(nil, "timeout waiting for sandbox satisfied")
-		return fmt.Errorf("timeout waiting for sandbox satisfied")
+		log.Info("timeout waiting for sandbox satisfied")
+		return c.doubleCheckSandboxSatisfied(ctx, sbx, satisfiedFunc)
 	case <-entry.done:
-		updated, err := c.GetSandbox(sandboxutils.GetSandboxID(sbx))
-		if err != nil {
-			log.Error(err, "failed to get sandbox while double checking")
-			return err
-		}
-		satisfied, err := satisfiedFunc(updated)
-		if err != nil {
-			log.Error(err, "failed to double check sandbox satisfied")
-			return err
-		}
-		if !satisfied {
-			err = fmt.Errorf("sandbox status changed after initial satisfaction, no longer satisfied upon double check")
-			log.Error(err, "sandbox not satisfied")
-			return err
-		}
-		return nil
+		log.Info("satisfied signal received")
+		return c.doubleCheckSandboxSatisfied(ctx, sbx, satisfiedFunc)
 	}
+}
+
+func (c *Cache) doubleCheckSandboxSatisfied(ctx context.Context, sbx *agentsv1alpha1.Sandbox, satisfiedFunc checkFunc) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", sbx)
+	updated, err := c.GetSandbox(sandboxutils.GetSandboxID(sbx))
+	if err != nil {
+		log.Error(err, "failed to get sandbox while double checking")
+		return err
+	}
+	satisfied, err := satisfiedFunc(updated)
+	if err != nil {
+		log.Error(err, "failed to double check sandbox satisfied")
+		return err
+	}
+	if !satisfied {
+		err = fmt.Errorf("double check failed, maybe sandbox was updated after initial satisfaction")
+		log.Error(err, "sandbox not satisfied")
+		return err
+	}
+	return nil
 }
 
 func (c *Cache) watchSandboxSatisfied(obj interface{}) {

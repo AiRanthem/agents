@@ -9,6 +9,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/proxy"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
@@ -188,18 +189,13 @@ func (s *Sandbox) Resume(ctx context.Context) error {
 		log.Error(err, "failed to update sandbox spec.paused")
 		return err
 	}
-	utils.ResourceVersionExpectationExpect(s.Sandbox)
+	utils.ResourceVersionExpectationExpect(s.Sandbox) // expect Resuming
 	log.Info("waiting sandbox resume")
 	start := time.Now()
 	err = s.Cache.WaitForSandboxSatisfied(ctx, s.Sandbox, WaitActionResume, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
-		if sbx.Status.Phase != agentsv1alpha1.SandboxRunning {
-			return false, nil
-		}
-		condition, ok := GetSandboxCondition(sbx, agentsv1alpha1.SandboxConditionReady)
-		if !ok {
-			return false, nil
-		}
-		return condition.Status == metav1.ConditionTrue, nil
+		state, reason := stateutils.GetSandboxState(sbx)
+		log.V(consts.DebugLogLevel).Info("sandbox state updated", "state", state, "reason", reason)
+		return state == agentsv1alpha1.SandboxStateRunning, nil
 	}, time.Minute)
 	if err != nil {
 		log.Error(err, "failed to wait sandbox resume")

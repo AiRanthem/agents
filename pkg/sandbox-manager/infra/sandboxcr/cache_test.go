@@ -56,7 +56,7 @@ func TestCache_WaitForSandboxSatisfied(t *testing.T) {
 				return sbx.Status.Phase == agentsv1alpha1.SandboxRunning, nil
 			},
 			timeout:     100 * time.Millisecond,
-			expectError: "timeout",
+			expectError: "double check failed",
 		},
 		{
 			name: "check function returns error",
