@@ -30,7 +30,7 @@ func SetUpE2BAdapter(t *testing.T) proxy.RequestAdapter {
 		Stop:      make(chan struct{}),
 	}
 	assert.NoError(t, keyStore.Init(context.Background()))
-	return NewE2BAdapter(8080, keyStore)
+	return NewE2BAdapter(8080)
 }
 
 func TestMap(t *testing.T) {
@@ -43,7 +43,6 @@ func TestMap(t *testing.T) {
 		expectErr         bool
 		expectSandboxID   string
 		expectSandboxPort int
-		expectUser        string
 		expectHeaders     map[string]string
 	}{
 		{
@@ -53,7 +52,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{},
 			expectSandboxID:   "sandbox1234",
 			expectSandboxPort: 9222,
-			expectUser:        UserNoNeedToAuth,
 			expectErr:         false,
 		},
 		{
@@ -63,7 +61,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{"x-access-token": adminKey},
 			expectSandboxID:   "sandbox5678",
 			expectSandboxPort: 3000,
-			expectUser:        keys.AdminKeyID.String(),
 			expectErr:         false,
 		},
 		{
@@ -73,7 +70,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{"x-access-token": "invalid-token"},
 			expectSandboxID:   "sandbox5678",
 			expectSandboxPort: 3000,
-			expectUser:        UserUnknown,
 			expectErr:         false,
 		},
 		{
@@ -90,7 +86,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{},
 			expectSandboxID:   "sandbox1234",
 			expectSandboxPort: 9222,
-			expectUser:        UserNoNeedToAuth,
 			expectHeaders:     map[string]string{":path": "/some/path"},
 			expectErr:         false,
 		},
@@ -101,7 +96,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{"x-access-token": adminKey},
 			expectSandboxID:   "sandbox1234",
 			expectSandboxPort: 3000,
-			expectUser:        keys.AdminKeyID.String(),
 			expectHeaders:     map[string]string{":path": "/some/path"},
 			expectErr:         false,
 		},
@@ -112,7 +106,6 @@ func TestMap(t *testing.T) {
 			headers:           map[string]string{"x-access-token": "invalid-token"},
 			expectSandboxID:   "sandbox1234",
 			expectSandboxPort: 3000,
-			expectUser:        UserUnknown,
 			expectHeaders:     map[string]string{":path": "/some/path"},
 			expectErr:         false,
 		},
@@ -141,7 +134,7 @@ func TestMap(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			adapter := SetUpE2BAdapter(t)
-			sandboxID, sandboxPort, headers, user, err := adapter.Map("http", tt.authority, tt.path, 8080, tt.headers)
+			sandboxID, sandboxPort, headers, err := adapter.Map("http", tt.authority, tt.path, 8080, tt.headers)
 			if tt.expectErr {
 				assert.Error(t, err)
 				return
@@ -150,7 +143,6 @@ func TestMap(t *testing.T) {
 			if err == nil {
 				assert.Equal(t, tt.expectSandboxID, sandboxID)
 				assert.Equal(t, tt.expectSandboxPort, sandboxPort)
-				assert.Equal(t, tt.expectUser, user)
 				if tt.expectHeaders == nil {
 					assert.Nil(t, headers)
 				} else {

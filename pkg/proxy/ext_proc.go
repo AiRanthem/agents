@@ -116,13 +116,6 @@ func (s *Server) handleRequestHeaders(requestHeaders *extProcPb.ProcessingReques
 		extraHeaders[k] = v
 	}
 	extraHeaders[OrigDstHeader] = fmt.Sprintf("%s:%d", route.IP, sandboxPort)
-
-	if !s.adapter.Authorize(user, route.Owner) {
-		// Return 401 Unauthorized error
-		errorMsg := fmt.Sprintf("user %s is not authorized to access sandbox %s", user, sandboxID)
-		return s.logAndCreateErrorResponse(401, errorMsg, log)
-	}
-
 	return s.logAndCreateDstResponse(requestHeaders.RequestHeaders, extraHeaders, log)
 }
 

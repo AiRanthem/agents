@@ -3,48 +3,32 @@ package adapters
 import (
 	"fmt"
 	"strings"
-
-	"github.com/openkruise/agents/pkg/servers/e2b/keys"
-)
-
-var (
-	UserNoNeedToAuth = "<port-no-need-to-auth>"
-	UserUnknown      = "<unknown>"
 )
 
 // E2BMapper is part of proxy.RequestAdapter
 type E2BMapper interface {
 	Map(scheme, authority, path string, port int, headers map[string]string) (
-		sandboxID string, sandboxPort int, extraHeaders map[string]string, user string, err error)
+		sandboxID string, sandboxPort int, extraHeaders map[string]string, err error)
 	IsSandboxRequest(authority, path string, port int) bool
 }
 
 type E2BAdapter struct {
-	Keys       *keys.SecretKeyStorage
 	Port       int
 	native     *NativeE2BAdapter
 	customized *CustomizedE2BAdapter
 }
 
-func NewE2BAdapter(port int, keys *keys.SecretKeyStorage) *E2BAdapter {
+func NewE2BAdapter(port int) *E2BAdapter {
 	return &E2BAdapter{
-		Keys:       keys,
 		Port:       port,
-		native:     &NativeE2BAdapter{Keys: keys},
-		customized: &CustomizedE2BAdapter{Keys: keys},
+		native:     &NativeE2BAdapter{},
+		customized: &CustomizedE2BAdapter{},
 	}
 }
 
 func (a *E2BAdapter) Map(scheme, authority, path string, port int, headers map[string]string) (
-	sandboxID string, sandboxPort int, extraHeaders map[string]string, user string, err error) {
+	sandboxID string, sandboxPort int, extraHeaders map[string]string, err error) {
 	return a.ChooseAdapter(path).Map(scheme, authority, path, port, headers)
-}
-
-func (a *E2BAdapter) Authorize(user, owner string) bool {
-	if a.Keys == nil {
-		return true
-	}
-	return user == owner || user == UserNoNeedToAuth
 }
 
 func (a *E2BAdapter) IsSandboxRequest(authority, path string, port int) bool {
