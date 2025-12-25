@@ -41,19 +41,19 @@ if __name__ == "__main__":
 
 私有协议与原生协议的对比：
 
-> 假设您配置的 E2B_DOMAIN 为 your.domian
+> 假设您配置的 E2B_DOMAIN 为 your.domain
 
 | 原生协议                     | 私有协议                            | 
 |--------------------------|---------------------------------|
-| api.your.domian          | your.domian/kruise/api          | 
-| <port>-<sid>.your.domain | your.domian/kruise/<sid>/<port> |
+| api.your.domain          | your.domain/kruise/api          | 
+| <port>-<sid>.your.domain | your.domain/kruise/<sid>/<port> |
 
 ### 1. 使用原生协议接入
 > 这是最标准、原生的接入方式，配置门槛也最高，一般需要手动部署。
 
 1. 客户端配置环境变量：
     ```bash
-    export E2B_DOMAIN=your.domian
+    export E2B_DOMAIN=your.domain
     export E2B_API_KEY=<your-api-key>
     ```
 2. 将泛域名 `*.your.domain` 解析到 sandbox-manager ingress 接入点
@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
 1. 客户端配置环境变量：
     ```bash
-    export E2B_DOMAIN=your.domian
+    export E2B_DOMAIN=your.domain
     export E2B_API_KEY=<your-api-key>
     ```
 2. patch 客户端：
@@ -72,8 +72,8 @@ if __name__ == "__main__":
     from kruise_agents.e2b import patch_e2b
     patch_e2b()
     ```
-3. 将单域名 `your.domian` 解析到 sandbox-manager ingress 接入点
-4. 安装单域名证书 `your.domian`
+3. 将单域名 `your.domain` 解析到 sandbox-manager ingress 接入点
+4. 安装单域名证书 `your.domain`
 
 ### 3. 使用私有协议集群内接入
 > 这种方式可以快速自动部署，不需要配置域名与证书，推荐仅 E2E 测试等场景或严谨评估后使用。
