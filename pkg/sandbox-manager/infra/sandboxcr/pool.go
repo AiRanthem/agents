@@ -31,31 +31,6 @@ type Pool struct {
 	cache  *Cache
 }
 
-// AsSandbox converts the given sbx object to a Sandbox interface
-// NOTE: If the sbx object is about to be updated, you may have to DeepCopy it like `s := p.AsSandbox(sbx.DeepCopy())`
-func (p *Pool) AsSandbox(sbx *v1alpha1.Sandbox) *Sandbox {
-	if sbx.Annotations == nil {
-		sbx.Annotations = make(map[string]string)
-	}
-	if sbx.Labels == nil {
-		sbx.Labels = make(map[string]string)
-	}
-	return &Sandbox{
-		BaseSandbox: BaseSandbox[*v1alpha1.Sandbox]{
-			Sandbox:       sbx,
-			Cache:         p.cache,
-			PatchSandbox:  p.client.ApiV1alpha1().Sandboxes(p.Namespace).Patch,
-			UpdateStatus:  p.client.ApiV1alpha1().Sandboxes(p.Namespace).UpdateStatus,
-			Update:        p.client.ApiV1alpha1().Sandboxes(p.Namespace).Update,
-			DeleteFunc:    p.client.ApiV1alpha1().Sandboxes(p.Namespace).Delete,
-			SetCondition:  SetSandboxCondition,
-			GetConditions: ListSandboxConditions,
-			DeepCopy:      DeepCopy,
-		},
-		Sandbox: sbx,
-	}
-}
-
 type noAvailableError struct {
 	Template string
 	Reason   string
@@ -154,7 +129,7 @@ func (p *Pool) pickAnAvailableSandbox(ctx context.Context, cnt int, r *rand.Rand
 		return nil, NoAvailableError(p.Name, "no candidate")
 	}
 	obj = candidates[r.Intn(len(candidates))]
-	return p.AsSandbox(obj.DeepCopy()), nil
+	return AsSandboxDeepCopy(obj, p.cache, p.client), nil
 }
 
 func (p *Pool) modifyPickedSandbox(sbx *Sandbox, opts infra.ClaimSandboxOptions) {
@@ -182,13 +157,19 @@ func (p *Pool) lockSandbox(ctx context.Context, sbx *Sandbox, lock string, owner
 func (p *Pool) waitForInplaceUpdate(ctx context.Context, sbx *Sandbox, timeout time.Duration) error {
 	log := klog.FromContext(ctx).V(consts.DebugLogLevel)
 	return p.cache.WaitForSandboxSatisfied(ctx, sbx.Sandbox, WaitActionInplaceUpdate, func(sbx *v1alpha1.Sandbox) (bool, error) {
-		state, reason := stateutils.GetSandboxState(sbx)
-		cond := GetSandboxCondition(sbx, "InPlaceUpdateReady") // TODO: change to const
-		log.Info("sandbox update watched", "state", state, "reason", reason, "condition", cond.Status)
-		if state != v1alpha1.SandboxStateRunning {
+		if sbx.Status.ObservedGeneration != sbx.Generation {
+			log.Info("watched sandbox not updated", "generation", sbx.Generation, "observedGeneration", sbx.Status.ObservedGeneration)
 			return false, nil
 		}
-		return cond.Status == metav1.ConditionTrue, nil
+		cond := GetSandboxCondition(sbx, v1alpha1.SandboxConditionReady)
+		if cond.Reason == v1alpha1.SandboxReadyReasonInplaceUpdateFailed {
+			err := fmt.Errorf("sandbox inplace update failed: %s", cond.Message)
+			log.Error(err, "sandbox inplace update failed")
+			return false, err // stop early
+		}
+		state, reason := stateutils.GetSandboxState(sbx)
+		log.Info("sandbox update watched", "state", state, "reason", reason)
+		return state == v1alpha1.SandboxStateRunning, nil
 	}, timeout)
 }
 

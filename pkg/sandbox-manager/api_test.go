@@ -173,10 +173,6 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 							Type:   string(agentsv1alpha1.SandboxConditionReady),
 							Status: metav1.ConditionTrue,
 						},
-						{
-							Type:   "InPlaceUpdateReady", // TODO change to const
-							Status: metav1.ConditionTrue,
-						},
 					},
 					PodInfo: agentsv1alpha1.PodInfo{
 						PodIP: "1.2.3.4",

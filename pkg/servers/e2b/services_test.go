@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -132,7 +131,7 @@ func TestCreateSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
-					InternalPrefix + "key": "test-value",
+					models.InternalPrefix + "key": "test-value",
 				},
 			},
 			expectError: &web.ApiError{
@@ -171,7 +170,7 @@ func TestCreateSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
-					consts.ExtensionKeyClaimWithImage: "new-image",
+					models.ExtensionKeyClaimWithImage: "new-image",
 				},
 			},
 			postCheck: imageChecker("new-image", controller),
@@ -183,12 +182,12 @@ func TestCreateSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
-					consts.ExtensionKeyClaimWithImage: "bad-@@-image",
+					models.ExtensionKeyClaimWithImage: "bad-@@-image",
 				},
 			},
 			expectError: &web.ApiError{
 				Code:    http.StatusBadRequest,
-				Message: "Invalid image [bad-@@-image]: invalid reference format",
+				Message: "Bad extension param: invalid image [bad-@@-image]: invalid reference format",
 			},
 		},
 	}

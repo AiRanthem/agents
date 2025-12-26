@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/openkruise/agents/pkg/sandbox-manager/storage"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openkruise/agents/pkg/proxy"
@@ -58,4 +59,5 @@ type Sandbox interface {
 	Kill(ctx context.Context) error                                         // Delete the Sandbox resource
 	InplaceRefresh(deepcopy bool) error                                     // Update the Sandbox resource object to the latest
 	Request(r *http.Request, path string, port int) (*http.Response, error) // Make a request to the Sandbox
+	Mount(ctx context.Context, opts storage.MountOptions) error
 }
