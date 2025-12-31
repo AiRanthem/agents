@@ -2,7 +2,6 @@ package sandboxcr
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -222,18 +221,10 @@ func TestSandbox_SetPause(t *testing.T) {
 			assert.Equal(t, tt.operatePause, updatedSbx.Spec.Paused)
 
 			if tt.operatePause {
-				AssertTimeAlmostEqual(t, shutdownTime, updatedSbx.Spec.ShutdownTime.Time)
+				assert.WithinDuration(t, shutdownTime, updatedSbx.Spec.ShutdownTime.Time, time.Second)
 			}
 		})
 	}
-}
-
-func AssertTimeAlmostEqual(t *testing.T, expected, actual time.Time) {
-	offset := expected.Sub(actual)
-	if offset < 0 {
-		offset = -offset
-	}
-	assert.True(t, offset < time.Second, fmt.Sprintf("actual time %s should be almost equal to expected %s", actual, expected))
 }
 
 // TestSandbox_ResumeConcurrent tests concurrent resume operations on the same sandbox

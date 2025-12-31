@@ -323,16 +323,20 @@ func TestSandbox_GetTimeout(t *testing.T) {
 	tests := []struct {
 		name     string
 		sandbox  *v1alpha1.Sandbox
-		expected time.Time
+		expected infra.TimeoutOptions
 	}{
 		{
-			name: "with shutdown time set",
+			name: "with timeout set",
 			sandbox: &v1alpha1.Sandbox{
 				Spec: v1alpha1.SandboxSpec{
 					ShutdownTime: &future,
+					PauseTime:    &now,
 				},
 			},
-			expected: future.Time,
+			expected: infra.TimeoutOptions{
+				ShutdownTime: future.Time,
+				PauseTime:    now.Time,
+			},
 		},
 		{
 			name: "without shutdown time",
@@ -341,7 +345,7 @@ func TestSandbox_GetTimeout(t *testing.T) {
 					ShutdownTime: nil,
 				},
 			},
-			expected: time.Time{},
+			expected: infra.TimeoutOptions{},
 		},
 	}
 
@@ -357,20 +361,26 @@ func TestSandbox_GetTimeout(t *testing.T) {
 }
 
 func TestSandbox_SaveTimeout(t *testing.T) {
+	now := time.Now()
 	tests := []struct {
 		name        string
 		initialTime *metav1.Time
-		ttl         time.Duration
+		opts        infra.TimeoutOptions
 	}{
 		{
 			name:        "set timeout on sandbox without existing timeout",
 			initialTime: nil,
-			ttl:         30 * time.Minute,
+			opts: infra.TimeoutOptions{
+				ShutdownTime: now.Add(30 * time.Minute),
+				PauseTime:    now.Add(15 * time.Minute),
+			},
 		},
 		{
 			name:        "update timeout on sandbox with existing timeout",
-			initialTime: &metav1.Time{Time: time.Now().Add(1 * time.Hour)},
-			ttl:         45 * time.Minute,
+			initialTime: &metav1.Time{Time: now.Add(1 * time.Hour)},
+			opts: infra.TimeoutOptions{
+				ShutdownTime: now.Add(30 * time.Minute),
+			},
 		},
 	}
 
@@ -393,13 +403,19 @@ func TestSandbox_SaveTimeout(t *testing.T) {
 
 			s := AsSandbox(sandbox, client, cache)
 
-			err = s.SaveTimeout(context.Background(), tt.ttl)
+			err = s.SaveTimeout(t.Context(), tt.opts)
 			assert.NoError(t, err)
 
 			updatedSandbox, err := client.ApiV1alpha1().Sandboxes("default").Get(context.Background(), "test-sandbox", metav1.GetOptions{})
 			assert.NoError(t, err)
-			assert.NotNil(t, updatedSandbox.Spec.ShutdownTime)
-			assert.WithinDuration(t, time.Now().Add(tt.ttl), updatedSandbox.Spec.ShutdownTime.Time, time.Second)
+			if !tt.opts.PauseTime.IsZero() {
+				assert.NotNil(t, updatedSandbox.Spec.PauseTime)
+				assert.WithinDuration(t, tt.opts.PauseTime, updatedSandbox.Spec.PauseTime.Time, time.Second)
+			}
+			if !tt.opts.ShutdownTime.IsZero() {
+				assert.NotNil(t, updatedSandbox.Spec.ShutdownTime)
+				assert.WithinDuration(t, tt.opts.ShutdownTime, updatedSandbox.Spec.ShutdownTime.Time, time.Second)
+			}
 		})
 	}
 }

@@ -69,7 +69,14 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 	accessToken := uuid.NewString()
 	claimStart := time.Now()
 	sbx, err := sc.manager.ClaimSandbox(ctx, user.ID.String(), request.TemplateID, func(sbx infra.Sandbox) {
-		sbx.SetTimeout(time.Duration(request.Timeout) * time.Second)
+		opts := infra.TimeoutOptions{}
+		if request.AutoPause {
+			opts.ShutdownTime = TimeAfterSeconds(claimStart, sc.maxTimeout)
+			opts.PauseTime = TimeAfterSeconds(claimStart, request.Timeout)
+		} else {
+			opts.ShutdownTime = TimeAfterSeconds(claimStart, request.Timeout)
+		}
+		sbx.SetTimeout(opts)
 		annotations := sbx.GetAnnotations()
 		if annotations == nil {
 			annotations = make(map[string]string)
@@ -172,6 +179,7 @@ func (sc *Controller) SetSandboxTimeout(r *http.Request) (web.ApiResponse[struct
 func (sc *Controller) setSandboxTimeout(r *http.Request, allowNonRunning bool) *web.ApiError {
 	ctx := r.Context()
 	log := klog.FromContext(ctx)
+	now := time.Now()
 
 	var request models.SetTimeoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -203,14 +211,31 @@ func (sc *Controller) setSandboxTimeout(r *http.Request, allowNonRunning bool) *
 		}
 	}
 
-	if err := sbx.SaveTimeout(ctx, time.Duration(request.TimeoutSeconds)*time.Second); err != nil {
+	opts := sc.buildSetTimeoutOptions(sbx, now, request.TimeoutSeconds)
+	if err := sbx.SaveTimeout(ctx, opts); err != nil {
 		return &web.ApiError{
 			Message: fmt.Sprintf("Failed to set sandbox timeout: %v", err),
 		}
 	}
 
-	log.Info("sandbox timeout set", "id", id, "timeout", request.TimeoutSeconds)
+	log.Info("sandbox timeout set", "id", id, "timeout", request.TimeoutSeconds, "options", opts)
 	return nil
+}
+
+func (sc *Controller) buildSetTimeoutOptions(sbx infra.Sandbox, now time.Time, timeoutSeconds int) infra.TimeoutOptions {
+	if autoPause, _ := ParseTimeout(sbx); autoPause {
+		return infra.TimeoutOptions{
+			PauseTime:    TimeAfterSeconds(now, timeoutSeconds),
+			ShutdownTime: TimeAfterSeconds(now, sc.maxTimeout),
+		}
+	}
+	return infra.TimeoutOptions{
+		ShutdownTime: TimeAfterSeconds(now, timeoutSeconds),
+	}
+}
+
+func TimeAfterSeconds(now time.Time, afterSeconds int) time.Time {
+	return now.Add(time.Duration(afterSeconds) * time.Second)
 }
 
 type browserHandShake struct {

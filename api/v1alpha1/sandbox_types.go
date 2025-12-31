@@ -43,6 +43,10 @@ type SandboxSpec struct {
 	// +kubebuilder:validation:Format="date-time"
 	ShutdownTime *metav1.Time `json:"shutdownTime,omitempty"`
 
+	// PauseTime - Absolute time when the sandbox will be paused automatically.
+	// +kubebuilder:validation:Format="date-time"
+	PauseTime *metav1.Time `json:"pauseTime,omitempty"`
+
 	// TemplateRef references a SandboxTemplate, which will be used to create the sandbox.
 	// +optional
 	TemplateRef *SandboxTemplateRef `json:"templateRef,omitempty"`

@@ -54,7 +54,7 @@ func TestPauseSandbox(t *testing.T) {
 	assert.Equal(t, models.SandboxStatePaused, describeResp.Body.State)
 	endAt, parseErr := time.Parse(time.RFC3339, describeResp.Body.EndAt)
 	assert.NoError(t, parseErr)
-	AssertTimeAlmostEqual(t, time.Now().Add(time.Duration(controller.maxTimeout)*time.Second), endAt)
+	assert.WithinDuration(t, time.Now().Add(time.Duration(controller.maxTimeout)*time.Second), endAt, time.Second)
 }
 
 func TestConnectSandbox(t *testing.T) {
@@ -180,7 +180,7 @@ func TestConnectSandbox(t *testing.T) {
 				assert.Equal(t, models.SandboxStateRunning, resumeResp.Body.State)
 				endAt, err := time.Parse(time.RFC3339, resumeResp.Body.EndAt)
 				assert.NoError(t, err)
-				AssertTimeAlmostEqual(t, now.Add(time.Duration(tt.timeout)*time.Second), endAt)
+				assert.WithinDuration(t, now.Add(time.Duration(tt.timeout)*time.Second), endAt, time.Second)
 			}
 		})
 	}
@@ -312,7 +312,7 @@ func TestResumeSandbox(t *testing.T) {
 				assert.Equal(t, models.SandboxStateRunning, describeResp.Body.State)
 				endAt, err2 := time.Parse(time.RFC3339, describeResp.Body.EndAt)
 				assert.NoError(t, err2)
-				AssertTimeAlmostEqual(t, now.Add(time.Duration(tt.timeout)*time.Second), endAt)
+				assert.WithinDuration(t, now.Add(time.Duration(tt.timeout)*time.Second), endAt, time.Second)
 			}
 		})
 	}

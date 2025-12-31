@@ -113,15 +113,25 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		logger.Info("add sandbox finalizer success")
 	}
 
-	// Check Shutdown
+	// Check ShutdownTime and PauseTime
 	now := metav1.Now()
 	var requeueAfter time.Duration
 	if box.Spec.ShutdownTime != nil && box.DeletionTimestamp == nil {
 		if box.Spec.ShutdownTime.Before(&now) {
-			logger.Info("Sandbox is shutdown time reached, will be deleted")
+			logger.Info("sandbox shutdown time reached, will be deleted")
 			return ctrl.Result{}, r.Delete(ctx, box)
 		}
 		requeueAfter = box.Spec.ShutdownTime.Sub(now.Time)
+	}
+	if box.Spec.PauseTime != nil && !box.Spec.Paused {
+		if box.Spec.PauseTime.Before(&now) {
+			logger.Info("sandbox pause time reached, will be paused")
+			modified := box.DeepCopy()
+			patch := client.MergeFrom(box)
+			modified.Spec.Paused = true
+			return ctrl.Result{}, r.Patch(ctx, modified, patch)
+		}
+		requeueAfter = min(requeueAfter, box.Spec.PauseTime.Sub(now.Time))
 	}
 
 	logger.V(consts.DebugLogLevel).Info("Began to process Sandbox for reconcile")
