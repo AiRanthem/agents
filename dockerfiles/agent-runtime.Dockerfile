@@ -11,4 +11,5 @@ WORKDIR /workspace
 COPY --from=builder /go/src/infra/packages/envd/bin/envd /workspace/envd
 COPY "../cmd/agent-runtime/entrypoint.sh" /workspace/entrypoint.sh
 COPY ../pkg/agent-runtime/envd-run.sh /workspace/envd-run.sh
-ENTRYPOINT ["sh", "/workspace/entrypoint.sh"]
+RUN apk add --no-cache bash
+CMD sleep
