@@ -736,4 +736,5 @@ func TestWaitActionConstants(t *testing.T) {
 	assert.Equal(t, WaitAction("Pause"), WaitActionPause)
 	assert.Equal(t, WaitAction("WaitReady"), WaitActionWaitReady)
 	assert.Equal(t, WaitAction("Checkpoint"), WaitActionCheckpoint)
+	assert.Equal(t, WaitAction("ResumeCompletion"), WaitActionResumeCompletion)
 }

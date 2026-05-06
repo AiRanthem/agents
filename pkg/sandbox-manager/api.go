@@ -18,13 +18,14 @@ package sandbox_manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
 )
@@ -36,7 +37,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts infra.ClaimSandb
 		// Requirement: Track failure in API layer
 		sandboxClaimCreationResponses.WithLabelValues("failure").Inc()
 		sandboxClaimTotal.WithLabelValues("failure", "unknown").Inc()
-		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("template %s not found", opts.Template))
+		return nil, managererrors.NewError(managererrors.ErrorNotFound, fmt.Sprintf("template %s not found", opts.Template))
 	}
 	sandbox, claimMetrics, err := m.infra.ClaimSandbox(ctx, opts)
 	if err != nil {
@@ -44,7 +45,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts infra.ClaimSandb
 		// Requirement: Track failure in API layer
 		sandboxClaimCreationResponses.WithLabelValues("failure").Inc()
 		sandboxClaimTotal.WithLabelValues("failure", "unknown").Inc()
-		return nil, errors.NewError(errors.ErrorInternal, fmt.Sprintf("failed to claim sandbox: %v", err))
+		return nil, managererrors.NewError(managererrors.ErrorInternal, fmt.Sprintf("failed to claim sandbox: %v", err))
 	}
 
 	// Success: Record metrics
@@ -71,7 +72,7 @@ func (m *SandboxManager) CloneSandbox(ctx context.Context, opts infra.CloneSandb
 	if err != nil {
 		log.Error(err, "failed to clone sandbox", "metrics", cloneMetrics)
 		sandboxCloneTotal.WithLabelValues("failure").Inc()
-		return nil, errors.NewError(errors.ErrorInternal, fmt.Sprintf("failed to clone sandbox: %v", err))
+		return nil, managererrors.NewError(managererrors.ErrorInternal, fmt.Sprintf("failed to clone sandbox: %v", err))
 	}
 
 	// Clone-specific metrics
@@ -95,24 +96,24 @@ func (m *SandboxManager) GetClaimedSandbox(ctx context.Context, user, sandboxID 
 	sbx, err := m.infra.GetClaimedSandbox(ctx, sandboxID)
 	if err != nil {
 		log.Error(err, "failed to get sandbox from cache")
-		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("sandbox %s not found", sandboxID))
+		return nil, managererrors.NewError(managererrors.ErrorNotFound, fmt.Sprintf("sandbox %s not found", sandboxID))
 	}
 
 	state, reason := sbx.GetState()
 	if state == v1alpha1.SandboxStateAvailable || state == v1alpha1.SandboxStateCreating {
 		// not claimed sandbox should return not found
 		log.Error(nil, "sandbox is not claimed", "state", state, "reason", reason)
-		return nil, errors.NewError(errors.ErrorNotFound, fmt.Sprintf("sandbox %s not found", sandboxID))
+		return nil, managererrors.NewError(managererrors.ErrorNotFound, fmt.Sprintf("sandbox %s not found", sandboxID))
 	}
 
 	if sbx.GetRoute().Owner != user {
 		log.Error(nil, "sandbox is not owned by user")
-		return nil, errors.NewError(errors.ErrorNotAllowed, fmt.Sprintf("sandbox %s is not owned", sandboxID))
+		return nil, managererrors.NewError(managererrors.ErrorNotAllowed, fmt.Sprintf("sandbox %s is not owned", sandboxID))
 	}
 
 	if state != v1alpha1.SandboxStatePaused && state != v1alpha1.SandboxStateRunning {
 		log.Error(nil, "sandbox is not healthy", "state", state, "reason", reason)
-		return nil, errors.NewError(errors.ErrorBadRequest, fmt.Sprintf("sandbox %s is not healthy (state %s, reason %s)", sandboxID, state, reason))
+		return nil, managererrors.NewError(managererrors.ErrorBadRequest, fmt.Sprintf("sandbox %s is not healthy (state %s, reason %s)", sandboxID, state, reason))
 	}
 	return sbx, nil
 }
@@ -120,7 +121,7 @@ func (m *SandboxManager) GetClaimedSandbox(ctx context.Context, user, sandboxID 
 func (m *SandboxManager) ListSandboxes(ctx context.Context, user string, p *utils.Paginator[infra.Sandbox]) ([]infra.Sandbox, string, error) {
 	sandboxes, err := m.infra.SelectSandboxes(ctx, user)
 	if err != nil {
-		return nil, "", errors.NewError(errors.ErrorNotFound, fmt.Sprintf("failed to list sandboxes: %v", err))
+		return nil, "", managererrors.NewError(managererrors.ErrorNotFound, fmt.Sprintf("failed to list sandboxes: %v", err))
 	}
 	var nextToken string
 	if p != nil {
@@ -132,7 +133,7 @@ func (m *SandboxManager) ListSandboxes(ctx context.Context, user string, p *util
 func (m *SandboxManager) ListCheckpoints(ctx context.Context, user string, p *utils.Paginator[infra.CheckpointInfo]) ([]infra.CheckpointInfo, string, error) {
 	checkpoints, err := m.infra.SelectSucceededCheckpoints(ctx, user)
 	if err != nil {
-		return nil, "", errors.NewError(errors.ErrorNotFound, fmt.Sprintf("failed to list checkpoints: %v", err))
+		return nil, "", managererrors.NewError(managererrors.ErrorNotFound, fmt.Sprintf("failed to list checkpoints: %v", err))
 	}
 	var nextToken string
 	if p != nil {
@@ -203,10 +204,18 @@ func (m *SandboxManager) PauseSandbox(ctx context.Context, sbx infra.Sandbox, op
 }
 
 // ResumeSandbox resumes a sandbox and syncs route with peers
-func (m *SandboxManager) ResumeSandbox(ctx context.Context, sbx infra.Sandbox) error {
+func (m *SandboxManager) ResumeSandbox(ctx context.Context, sbx infra.Sandbox, opts infra.ResumeOptions) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
 	start := time.Now()
-	if err := sbx.Resume(ctx); err != nil {
+	if err := sbx.Resume(ctx, opts); err != nil {
+		if errors.Is(err, infra.ErrResumeCompletedByOtherRequest) {
+			sandboxResumeResponses.WithLabelValues("success").Inc()
+			sandboxResumeDuration.Observe(time.Since(start).Seconds())
+			if syncErr := m.syncRoute(ctx, sbx, true); syncErr != nil {
+				log.Error(syncErr, "failed to sync route with peers after resume completed by another request")
+			}
+			return err
+		}
 		log.Error(err, "failed to resume sandbox")
 		sandboxResumeResponses.WithLabelValues("failure").Inc()
 		return err

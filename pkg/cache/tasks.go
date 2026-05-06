@@ -19,6 +19,7 @@ package cache
 import (
 	"context"
 	"fmt"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -66,15 +67,58 @@ func (c *Cache) NewSandboxPauseTask(ctx context.Context, sbx *agentsv1alpha1.San
 }
 
 // NewSandboxResumeTask builds a WaitTask that succeeds when the sandbox reaches
-// SandboxStateRunning.
+// SandboxStateRunning and reports SandboxResumed=True.
 func (c *Cache) NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
 	check := func(s *agentsv1alpha1.Sandbox) (bool, error) {
 		state, _ := sandboxutils.GetSandboxState(s)
-		return state == agentsv1alpha1.SandboxStateRunning, nil
+		resumedCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionResumed))
+		return state == agentsv1alpha1.SandboxStateRunning &&
+			resumedCond != nil && resumedCond.Status == metav1.ConditionTrue, nil
 	}
 	return cacheutils.NewWaitTask[*agentsv1alpha1.Sandbox](
 		ctx, c.waitHooks, cacheutils.WaitActionResume, sbx, c.SandboxUpdateFunc(ctx), check,
 	)
+}
+
+// NewSandboxResumeCompletionTask builds a WaitTask for follower resume callers.
+func (c *Cache) NewSandboxResumeCompletionTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, staleTTL time.Duration) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
+	check := func(s *agentsv1alpha1.Sandbox) (bool, error) {
+		if resumeCompletionSatisfied(s) {
+			return true, nil
+		}
+		if s.GetDeletionTimestamp() != nil ||
+			(s.Spec.ShutdownTime != nil && time.Now().After(s.Spec.ShutdownTime.Time)) ||
+			s.Status.Phase == agentsv1alpha1.SandboxFailed ||
+			s.Status.Phase == agentsv1alpha1.SandboxSucceeded ||
+			s.Status.Phase == agentsv1alpha1.SandboxTerminating {
+			state, reason := sandboxutils.GetSandboxState(s)
+			return false, fmt.Errorf("%w: state %s, reason %s", cacheutils.ErrSandboxResumeUnresumable, state, reason)
+		}
+		lock := s.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock]
+		if lock == "" {
+			return false, cacheutils.ErrSandboxResumeOwnerFinished
+		}
+		since := s.GetAnnotations()[agentsv1alpha1.AnnotationResumingSince]
+		resumingSince, err := time.Parse(time.RFC3339Nano, since)
+		if err != nil || time.Since(resumingSince) >= staleTTL {
+			return false, cacheutils.ErrSandboxResumeLockStale
+		}
+		return false, nil
+	}
+	return cacheutils.NewWaitTask[*agentsv1alpha1.Sandbox](
+		ctx, c.waitHooks, cacheutils.WaitActionResumeCompletion, sbx, c.SandboxUpdateFunc(ctx), check,
+	)
+}
+
+func resumeCompletionSatisfied(s *agentsv1alpha1.Sandbox) bool {
+	if s.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock] != "" {
+		return false
+	}
+	readyCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionReady))
+	resumedCond := utils.GetSandboxCondition(&s.Status, string(agentsv1alpha1.SandboxConditionResumed))
+	return s.Status.Phase == agentsv1alpha1.SandboxRunning &&
+		readyCond != nil && readyCond.Status == metav1.ConditionTrue &&
+		resumedCond != nil && resumedCond.Status == metav1.ConditionTrue
 }
 
 // NewSandboxWaitReadyTask builds a WaitTask that encapsulates the readiness check

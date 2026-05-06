@@ -107,7 +107,12 @@ func pauseSandboxHelper(t *testing.T, controller *Controller, client client.Clie
 		// Set resuming state: Spec.Paused=false, Phase=Running, Ready=false
 		// This means sandbox is transitioning from paused to running
 		sbx := GetSandbox(t, sandboxID, client)
+		if sbx.Annotations == nil {
+			sbx.Annotations = map[string]string{}
+		}
 		sbx.Spec.Paused = false
+		sbx.Annotations[agentsv1alpha1.AnnotationResumingLock] = "test-owner"
+		sbx.Annotations[agentsv1alpha1.AnnotationResumingSince] = time.Now().Format(time.RFC3339Nano)
 		require.NoError(t, client.Update(t.Context(), sbx))
 		// Update status to reflect resuming state
 		UpdateSandboxWhen(t, client, sandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
@@ -203,9 +208,21 @@ func TestConnectSandbox(t *testing.T) {
 				tt.sandboxID = createResp.Body.SandboxID
 			}
 			if tt.expectStatus < 300 {
+				completeResume := DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue)
+				if tt.resuming {
+					completeResume = func(t *testing.T, c client.Client, sbx *agentsv1alpha1.Sandbox) {
+						delete(sbx.Annotations, agentsv1alpha1.AnnotationResumingLock)
+						delete(sbx.Annotations, agentsv1alpha1.AnnotationResumingSince)
+						shutdownTime := metav1.NewTime(time.Now().Add(time.Duration(tt.timeout) * time.Second))
+						sbx.Spec.ShutdownTime = &shutdownTime
+						sbx.Spec.PauseTime = nil
+						require.NoError(t, c.Update(t.Context(), sbx))
+						DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue)(t, c, sbx)
+					}
+				}
 				go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 					return sbx.Spec.Paused == false
-				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+				}, completeResume)
 			}
 			now := time.Now()
 			connectResp, err := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
@@ -409,9 +426,21 @@ func TestResumeSandbox(t *testing.T) {
 			}
 			if tt.expectStatus < 300 {
 				// Only schedule async update when expecting success
+				completeResume := DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue)
+				if tt.resuming {
+					completeResume = func(t *testing.T, c client.Client, sbx *agentsv1alpha1.Sandbox) {
+						delete(sbx.Annotations, agentsv1alpha1.AnnotationResumingLock)
+						delete(sbx.Annotations, agentsv1alpha1.AnnotationResumingSince)
+						shutdownTime := metav1.NewTime(time.Now().Add(time.Duration(tt.timeout) * time.Second))
+						sbx.Spec.ShutdownTime = &shutdownTime
+						sbx.Spec.PauseTime = nil
+						require.NoError(t, c.Update(t.Context(), sbx))
+						DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue)(t, c, sbx)
+					}
+				}
 				go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 					return sbx.Spec.Paused == false
-				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+				}, completeResume)
 			}
 			now := time.Now()
 			resumeResp, apiErr := controller.ResumeSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
@@ -440,6 +469,57 @@ func TestResumeSandbox(t *testing.T) {
 				expectEndAt := now.Add(time.Duration(tt.timeout) * time.Second)
 				assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second,
 					fmt.Sprintf("expect end at: %s, but got %s", expectEndAt, endAt))
+			}
+		})
+	}
+}
+
+func TestFollowerResumeTimeoutGuard(t *testing.T) {
+	templateName := "test-template-follower-timeout-guard"
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+	tests := []struct {
+		name            string
+		initialTimeout  int
+		requestTimeout  int
+		expectUnchanged bool
+	}{
+		{name: "shorter follower timeout is ignored", initialTimeout: 600, requestTimeout: 300, expectUnchanged: true},
+		{name: "longer follower timeout extends", initialTimeout: 300, requestTimeout: 600, expectUnchanged: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller, _, teardown := Setup(t)
+			defer teardown()
+			cleanup := CreateSandboxPool(t, controller, templateName, 1)
+			defer cleanup()
+
+			createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+				Timeout:    tt.initialTimeout,
+				TemplateID: templateName,
+				Metadata: map[string]string{
+					models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+				},
+			}, nil, user))
+			require.Nil(t, err)
+
+			ctx := NewRequest(t, nil, nil, nil, user).Context()
+			sbx, apiErr := controller.getSandboxOfUser(ctx, createResp.Body.SandboxID)
+			require.Nil(t, apiErr)
+			_, initialEndAt := ParseTimeout(sbx)
+
+			apiErr = controller.updateTimeoutAfterFollowerResume(ctx, sbx, tt.requestTimeout)
+			require.Nil(t, apiErr)
+			require.NoError(t, sbx.InplaceRefresh(ctx, false))
+			_, updatedEndAt := ParseTimeout(sbx)
+
+			if tt.expectUnchanged {
+				assert.WithinDuration(t, initialEndAt, updatedEndAt, time.Second)
+			} else {
+				assert.True(t, updatedEndAt.After(initialEndAt), "updated endAt %s should be after initial %s", updatedEndAt, initialEndAt)
 			}
 		})
 	}

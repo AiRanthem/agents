@@ -19,6 +19,9 @@ package sandboxcr
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -26,11 +29,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
+	"github.com/openkruise/agents/pkg/cache/controllers"
+	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
@@ -89,7 +100,7 @@ func TestSandbox_ResumeConcurrent(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		s := AsSandbox(sandbox, cache)
 		go func() {
-			err := s.Resume(t.Context())
+			err := s.Resume(t.Context(), infra.ResumeOptions{})
 			resultCh <- err
 		}()
 	}
@@ -103,6 +114,7 @@ func TestSandbox_ResumeConcurrent(t *testing.T) {
 		modified := sbxToUpdate.DeepCopy()
 		modified.Status.Phase = v1alpha1.SandboxRunning
 		SetSandboxCondition(modified, string(v1alpha1.SandboxConditionReady), metav1.ConditionTrue, "Resume", "")
+		SetSandboxCondition(modified, string(v1alpha1.SandboxConditionResumed), metav1.ConditionTrue, "Resume", "")
 		_ = fc.Status().Patch(t.Context(), modified, ctrl.MergeFrom(&sbxToUpdate))
 	})
 
@@ -112,12 +124,20 @@ func TestSandbox_ResumeConcurrent(t *testing.T) {
 		results[i] = <-resultCh
 	}
 
-	// Check that all goroutines returned nil (no error)
-	for i, result := range results {
-		if result != nil {
-			t.Errorf("Goroutine %d returned error: %v", i, result)
+	var ownerCount, followerCount int
+	for _, result := range results {
+		if result == nil {
+			ownerCount++
+			continue
+		}
+		if errors.Is(result, infra.ErrResumeCompletedByOtherRequest) {
+			followerCount++
+		} else {
+			t.Fatalf("unexpected resume error: %v", result)
 		}
 	}
+	assert.Equal(t, 1, ownerCount)
+	assert.Equal(t, 2, followerCount)
 
 	assert.True(t, time.Since(start) >= 500*time.Millisecond)
 
@@ -127,6 +147,8 @@ func TestSandbox_ResumeConcurrent(t *testing.T) {
 	state, reason = sandboxutils.GetSandboxState(&updatedSbx)
 	assert.Equal(t, v1alpha1.SandboxStateRunning, state, reason)
 	assert.False(t, updatedSbx.Spec.Paused)
+	assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+	assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
 }
 
 // TestSandbox_Resume_ContextExpiredAfterWait tests the scenario where the wait operation
@@ -197,6 +219,7 @@ func TestSandbox_Resume_ContextExpiredAfterWait(t *testing.T) {
 		modified.Status.Phase = v1alpha1.SandboxRunning
 		modified.Status.Conditions = []metav1.Condition{
 			{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Resume"},
+			{Type: string(v1alpha1.SandboxConditionResumed), Status: metav1.ConditionTrue, Reason: "Resume"},
 		}
 		_ = fc.Status().Patch(t.Context(), modified, mergeFrom)
 	})
@@ -206,10 +229,8 @@ func TestSandbox_Resume_ContextExpiredAfterWait(t *testing.T) {
 	resumeCtx, resumeCancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer resumeCancel()
 
-	err = s.Resume(resumeCtx)
-
-	// Should succeed because Resume creates a fresh context for post-resume operations
-	require.NoError(t, err)
+	err = s.Resume(resumeCtx, infra.ResumeOptions{})
+	require.Error(t, err)
 
 	// Verify sandbox is in Running state
 	var updatedSbx v1alpha1.Sandbox
@@ -219,6 +240,7 @@ func TestSandbox_Resume_ContextExpiredAfterWait(t *testing.T) {
 	assert.False(t, updatedSbx.Spec.Paused)
 	assert.Nil(t, updatedSbx.Spec.ShutdownTime)
 	assert.Nil(t, updatedSbx.Spec.PauseTime)
+	assert.NotEmpty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
 }
 
 //goland:noinspection GoDeprecation
@@ -443,7 +465,7 @@ func TestSandbox_Resume(t *testing.T) {
 				assert.Equal(t, v1alpha1.SandboxStatePaused, state, reason)
 			},
 			expectedState:   "",
-			expectError:     "object is not satisfied during double check",
+			expectError:     "context deadline exceeded",
 			useShortTimeout: true,
 		},
 		{
@@ -607,6 +629,7 @@ func TestSandbox_Resume(t *testing.T) {
 					modified.Status.Phase = v1alpha1.SandboxRunning
 					modified.Status.Conditions = []metav1.Condition{
 						{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Resume"},
+						{Type: string(v1alpha1.SandboxConditionResumed), Status: metav1.ConditionTrue, Reason: "Resume"},
 					}
 					_ = fc.Status().Patch(t.Context(), modified, mergeFrom)
 				})
@@ -621,7 +644,7 @@ func TestSandbox_Resume(t *testing.T) {
 			}
 			defer resumeCancel()
 
-			err = s.Resume(resumeCtx)
+			err = s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &infra.TimeoutOptions{}})
 
 			if tt.expectError != "" {
 				require.Error(t, err)
@@ -640,4 +663,701 @@ func TestSandbox_Resume(t *testing.T) {
 			assert.Nil(t, updatedSbx.Spec.PauseTime)
 		})
 	}
+}
+
+func TestSandbox_ResumeBumpsTimeoutsDuringUnpause(t *testing.T) {
+	utils.InitLogOutput()
+	now := time.Now()
+	expired := metav1.NewTime(now.Add(-time.Minute))
+	finalPauseTime := now.Add(15 * time.Minute)
+	finalShutdownTime := now.Add(20 * time.Minute)
+
+	tests := []struct {
+		name         string
+		pauseTime    *metav1.Time
+		shutdownTime *metav1.Time
+		expectError  string
+	}{
+		{
+			name:      "unpause succeeds and wait timeout saves final timeout",
+			pauseTime: &expired,
+		},
+		{
+			name:         "only shutdown expired is rejected",
+			pauseTime:    nil,
+			shutdownTime: &expired,
+			expectError:  "ShutdownTimeReached",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused:       true,
+					PauseTime:    tt.pauseTime,
+					ShutdownTime: tt.shutdownTime,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxPaused,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionPaused),
+							Status: metav1.ConditionTrue,
+						},
+					},
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+
+			s := AsSandbox(sandbox, cache)
+			ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+			defer cancel()
+			err = s.Resume(ctx, infra.ResumeOptions{
+				Timeout: &infra.TimeoutOptions{
+					PauseTime:    finalPauseTime,
+					ShutdownTime: finalShutdownTime,
+				},
+			})
+			require.Error(t, err)
+
+			var updatedSbx v1alpha1.Sandbox
+			if tt.expectError != "" {
+				assert.Contains(t, err.Error(), tt.expectError)
+				require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: sandbox.Name}, &updatedSbx))
+				assert.True(t, updatedSbx.Spec.Paused)
+				if tt.pauseTime == nil {
+					assert.Nil(t, updatedSbx.Spec.PauseTime)
+				} else {
+					require.NotNil(t, updatedSbx.Spec.PauseTime)
+					assert.WithinDuration(t, tt.pauseTime.Time, updatedSbx.Spec.PauseTime.Time, time.Second)
+				}
+				if tt.shutdownTime == nil {
+					assert.Nil(t, updatedSbx.Spec.ShutdownTime)
+				} else {
+					require.NotNil(t, updatedSbx.Spec.ShutdownTime)
+					assert.WithinDuration(t, tt.shutdownTime.Time, updatedSbx.Spec.ShutdownTime.Time, time.Second)
+				}
+				return
+			}
+
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: sandbox.Name}, &updatedSbx))
+			assert.False(t, updatedSbx.Spec.Paused)
+			assert.NotEmpty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+			require.NotNil(t, updatedSbx.Spec.PauseTime)
+			assert.True(t, updatedSbx.Spec.PauseTime.Time.After(time.Now().Add(30*time.Minute)))
+			assert.Nil(t, updatedSbx.Spec.ShutdownTime)
+		})
+	}
+}
+
+func TestSandbox_ResumeOwnerFailureLeavesLock(t *testing.T) {
+	utils.InitLogOutput()
+	server := testutils.NewTestRuntimeServer(testutils.TestRuntimeServerOptions{
+		RunCommandResult: runtime.RunCommandResult{
+			PID:    1,
+			Exited: true,
+		},
+		RunCommandImmediately: true,
+		InitErrCode:           500,
+	})
+	defer server.Close()
+
+	initRuntimeOpts := config.InitRuntimeOptions{
+		EnvVars:     map[string]string{"TEST_VAR": "test_value"},
+		AccessToken: "test-token",
+	}
+	initRuntimeJSON, err := json.Marshal(initRuntimeOpts)
+	require.NoError(t, err)
+
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	sandbox := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-sandbox",
+			Namespace: "default",
+			Labels: map[string]string{
+				v1alpha1.LabelSandboxIsClaimed: "true",
+			},
+			Annotations: map[string]string{
+				v1alpha1.AnnotationRuntimeURL:         server.URL,
+				v1alpha1.AnnotationInitRuntimeRequest: string(initRuntimeJSON),
+				v1alpha1.AnnotationOwner:              "test-user",
+			},
+		},
+		Spec: v1alpha1.SandboxSpec{
+			Paused:    true,
+			PauseTime: &expired,
+		},
+		Status: v1alpha1.SandboxStatus{
+			Phase: v1alpha1.SandboxPaused,
+			Conditions: []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionPaused),
+					Status: metav1.ConditionTrue,
+				},
+			},
+			PodInfo: v1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
+			},
+		},
+	}
+
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	defer cache.Stop(t.Context())
+	CreateSandboxWithStatus(t, fc, sandbox)
+
+	finalTimeout := infra.TimeoutOptions{
+		ShutdownTime: time.Now().Add(2 * time.Hour),
+		PauseTime:    time.Now().Add(15 * time.Minute),
+	}
+	time.AfterFunc(20*time.Millisecond, func() {
+		markSandboxRunningAndSignalResumeWait(fc, cache, sandbox)
+	})
+
+	s := AsSandbox(sandbox, cache)
+	ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
+	err = s.Resume(ctx, infra.ResumeOptions{Timeout: &finalTimeout})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to perform ReInit after resume")
+
+	updatedSbx := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: sandbox.Name}, updatedSbx))
+	assert.NotEmpty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+	assert.NotEmpty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+	assert.Nil(t, updatedSbx.Spec.ShutdownTime)
+	require.NotNil(t, updatedSbx.Spec.PauseTime)
+	assert.True(t, updatedSbx.Spec.PauseTime.Time.After(time.Now().Add(30*time.Minute)))
+}
+
+func TestSandbox_ResumeDeferredSaveTimeoutFailure(t *testing.T) {
+	utils.InitLogOutput()
+	tests := []struct {
+		name          string
+		reInitFails   bool
+		expectError   string
+		expectUpdates int
+	}{
+		{
+			name:          "main flow succeeds returns save timeout error",
+			expectError:   "injected save timeout failure",
+			expectUpdates: 2,
+		},
+		{
+			name:          "main flow fails leaves lock before final save",
+			reInitFails:   true,
+			expectError:   "failed to perform ReInit after resume",
+			expectUpdates: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var annotations map[string]string
+			var server *httptest.Server
+			if tt.reInitFails {
+				server = testutils.NewTestRuntimeServer(testutils.TestRuntimeServerOptions{
+					RunCommandResult: runtime.RunCommandResult{
+						PID:    1,
+						Exited: true,
+					},
+					RunCommandImmediately: true,
+					InitErrCode:           500,
+				})
+				defer server.Close()
+
+				initRuntimeOpts := config.InitRuntimeOptions{
+					EnvVars:     map[string]string{"TEST_VAR": "test_value"},
+					AccessToken: "test-token",
+				}
+				initRuntimeJSON, err := json.Marshal(initRuntimeOpts)
+				require.NoError(t, err)
+				annotations = map[string]string{
+					v1alpha1.AnnotationRuntimeURL:         server.URL,
+					v1alpha1.AnnotationInitRuntimeRequest: string(initRuntimeJSON),
+					v1alpha1.AnnotationOwner:              "test-user",
+				}
+			}
+
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: annotations,
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused: true,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxPaused,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionPaused),
+							Status: metav1.ConditionTrue,
+						},
+					},
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+				},
+			}
+
+			var sandboxUpdates int
+			cache, fc := newResumeTestCacheWithUpdateInterceptor(t, func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, opts ...ctrl.UpdateOption) error {
+				if _, ok := obj.(*v1alpha1.Sandbox); ok {
+					sandboxUpdates++
+					if sandboxUpdates == 2 {
+						return fmt.Errorf("injected save timeout failure")
+					}
+				}
+				latest := obj.DeepCopyObject().(ctrl.Object)
+				if err := c.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, latest); err == nil {
+					obj.SetResourceVersion(latest.GetResourceVersion())
+				}
+				return c.Update(ctx, obj, opts...)
+			})
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+
+			time.AfterFunc(20*time.Millisecond, func() {
+				markSandboxRunningAndSignalResumeWait(fc, cache, sandbox)
+			})
+
+			finalTimeout := infra.TimeoutOptions{
+				ShutdownTime: time.Now().Add(2 * time.Hour),
+				PauseTime:    time.Now().Add(15 * time.Minute),
+			}
+			s := AsSandbox(sandbox, cache)
+			resumeCtx := t.Context()
+			var cancel context.CancelFunc
+			if tt.reInitFails {
+				resumeCtx, cancel = context.WithTimeout(t.Context(), 250*time.Millisecond)
+				defer cancel()
+			}
+			err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &finalTimeout})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+			assert.Equal(t, tt.expectUpdates, sandboxUpdates)
+			if tt.reInitFails {
+				assert.NotContains(t, err.Error(), "injected save timeout failure")
+			}
+		})
+	}
+}
+
+func TestSandbox_RenewResumeOwnerLock(t *testing.T) {
+	utils.InitLogOutput()
+	now := time.Now()
+	tests := []struct {
+		name          string
+		ownerID       string
+		init          func(*v1alpha1.Sandbox)
+		expectRenewed bool
+		expectError   string
+	}{
+		{
+			name:    "renews matching owner when lock expires soon",
+			ownerID: "owner-a",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-a"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = now.Add(-resumeLockStaleTTL + resumeLockRenewBefore/2).Format(time.RFC3339Nano)
+			},
+			expectRenewed: true,
+		},
+		{
+			name:    "skips matching owner when lock has enough ttl",
+			ownerID: "owner-a",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-a"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = now.Format(time.RFC3339Nano)
+			},
+		},
+		{
+			name:    "returns owner lost when lock belongs to another owner",
+			ownerID: "owner-a",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-b"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = now.Add(-resumeLockStaleTTL + resumeLockRenewBefore/2).Format(time.RFC3339Nano)
+			},
+			expectError: errResumeOwnerLockLost.Error(),
+		},
+		{
+			name:        "returns owner lost when lock is already cleared",
+			ownerID:     "owner-a",
+			init:        func(sbx *v1alpha1.Sandbox) {},
+			expectError: errResumeOwnerLockLost.Error(),
+		},
+		{
+			name:    "renews matching owner when since cannot be parsed",
+			ownerID: "owner-a",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-a"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = "not-a-time"
+			},
+			expectRenewed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-sandbox",
+					Namespace:   "default",
+					Labels:      map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.True},
+					Annotations: map[string]string{},
+				},
+			}
+			tt.init(sandbox)
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+
+			s := AsSandbox(sandbox, cache)
+			renewed, err := s.renewResumeOwnerLock(t.Context(), tt.ownerID, now)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				assert.False(t, renewed)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectRenewed, renewed)
+
+			updatedSbx := &v1alpha1.Sandbox{}
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, updatedSbx))
+			if tt.expectRenewed {
+				renewedSince, parseErr := time.Parse(time.RFC3339Nano, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+				require.NoError(t, parseErr)
+				assert.WithinDuration(t, now, renewedSince, time.Second)
+				return
+			}
+			assert.Equal(t, sandbox.Annotations[v1alpha1.AnnotationResumingSince], updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+		})
+	}
+}
+
+func TestSandbox_FinishResumeOwnerRequiresMatchingLock(t *testing.T) {
+	utils.InitLogOutput()
+	finalTimeout := infra.TimeoutOptions{
+		PauseTime:    time.Now().Add(30 * time.Minute),
+		ShutdownTime: time.Now().Add(time.Hour),
+	}
+	tests := []struct {
+		name        string
+		init        func(*v1alpha1.Sandbox)
+		expectError string
+	}{
+		{
+			name: "matching owner saves timeout and clears lock",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-a"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = time.Now().Format(time.RFC3339Nano)
+			},
+		},
+		{
+			name: "changed owner blocks stale owner final update",
+			init: func(sbx *v1alpha1.Sandbox) {
+				sbx.Annotations[v1alpha1.AnnotationResumingLock] = "owner-b"
+				sbx.Annotations[v1alpha1.AnnotationResumingSince] = time.Now().Format(time.RFC3339Nano)
+			},
+			expectError: errResumeOwnerLockLost.Error(),
+		},
+		{
+			name:        "cleared lock blocks stale owner final update",
+			init:        func(sbx *v1alpha1.Sandbox) {},
+			expectError: errResumeOwnerLockLost.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-sandbox",
+					Namespace:   "default",
+					Labels:      map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.True},
+					Annotations: map[string]string{},
+				},
+			}
+			tt.init(sandbox)
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+
+			s := AsSandbox(sandbox, cache)
+			err = s.finishResumeOwner(t.Context(), "owner-a", &finalTimeout)
+			updatedSbx := &v1alpha1.Sandbox{}
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, updatedSbx))
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				assert.Nil(t, updatedSbx.Spec.PauseTime)
+				assert.Nil(t, updatedSbx.Spec.ShutdownTime)
+				return
+			}
+			require.NoError(t, err)
+			assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+			assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+			require.NotNil(t, updatedSbx.Spec.PauseTime)
+			require.NotNil(t, updatedSbx.Spec.ShutdownTime)
+			assert.WithinDuration(t, finalTimeout.PauseTime, updatedSbx.Spec.PauseTime.Time, time.Second)
+			assert.WithinDuration(t, finalTimeout.ShutdownTime, updatedSbx.Spec.ShutdownTime.Time, time.Second)
+		})
+	}
+}
+
+func TestSandbox_ResumeOwnerRenewsLockDuringLongResumeWait(t *testing.T) {
+	utils.InitLogOutput()
+	originalRecheckInterval := resumeCompletionRecheckInterval
+	originalStaleTTL := resumeLockStaleTTL
+	originalRenewBefore := resumeLockRenewBefore
+	resumeCompletionRecheckInterval = 50 * time.Millisecond
+	resumeLockStaleTTL = 200 * time.Millisecond
+	resumeLockRenewBefore = 125 * time.Millisecond
+	defer func() {
+		resumeCompletionRecheckInterval = originalRecheckInterval
+		resumeLockStaleTTL = originalStaleTTL
+		resumeLockRenewBefore = originalRenewBefore
+	}()
+
+	sandbox := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-sandbox",
+			Namespace: "default",
+			Labels: map[string]string{
+				v1alpha1.LabelSandboxIsClaimed: "true",
+			},
+			Annotations: map[string]string{},
+		},
+		Spec: v1alpha1.SandboxSpec{
+			Paused: true,
+		},
+		Status: v1alpha1.SandboxStatus{
+			Phase: v1alpha1.SandboxPaused,
+			Conditions: []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionPaused),
+					Status: metav1.ConditionTrue,
+				},
+			},
+			PodInfo: v1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
+			},
+		},
+	}
+
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	require.NoError(t, cache.Run(t.Context()))
+	defer cache.Stop(t.Context())
+	CreateSandboxWithStatus(t, fc, sandbox)
+	cache.GetMockManager().AddWaitReconcileKey(sandbox)
+
+	resultCh := make(chan error, 2)
+	go func() {
+		resultCh <- AsSandbox(sandbox, cache).Resume(t.Context(), infra.ResumeOptions{})
+	}()
+	time.Sleep(300 * time.Millisecond)
+	go func() {
+		resultCh <- AsSandbox(sandbox, cache).Resume(t.Context(), infra.ResumeOptions{})
+	}()
+	time.AfterFunc(450*time.Millisecond, func() {
+		markSandboxRunningAndSignalResumeWait(fc, cache, sandbox)
+	})
+
+	results := []error{<-resultCh, <-resultCh}
+	var ownerCount, followerCount int
+	for _, result := range results {
+		if result == nil {
+			ownerCount++
+			continue
+		}
+		if errors.Is(result, infra.ErrResumeCompletedByOtherRequest) {
+			followerCount++
+			continue
+		}
+		t.Fatalf("unexpected resume result: %v", result)
+	}
+	assert.Equal(t, 1, ownerCount)
+	assert.Equal(t, 1, followerCount)
+
+	updatedSbx := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, updatedSbx))
+	assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+	assert.Empty(t, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+}
+
+func TestSandbox_ResumeOwnerRenewsLockDuringPostResumeRetry(t *testing.T) {
+	utils.InitLogOutput()
+	originalRecheckInterval := resumeCompletionRecheckInterval
+	originalStaleTTL := resumeLockStaleTTL
+	originalRenewBefore := resumeLockRenewBefore
+	originalPostResumeRetryInterval := postResumeRetryInterval
+	resumeCompletionRecheckInterval = 50 * time.Millisecond
+	resumeLockStaleTTL = 200 * time.Millisecond
+	resumeLockRenewBefore = 125 * time.Millisecond
+	postResumeRetryInterval = 25 * time.Millisecond
+	defer func() {
+		resumeCompletionRecheckInterval = originalRecheckInterval
+		resumeLockStaleTTL = originalStaleTTL
+		resumeLockRenewBefore = originalRenewBefore
+		postResumeRetryInterval = originalPostResumeRetryInterval
+	}()
+
+	server := testutils.NewTestRuntimeServer(testutils.TestRuntimeServerOptions{
+		RunCommandResult: runtime.RunCommandResult{
+			PID:    1,
+			Exited: true,
+		},
+		RunCommandImmediately: true,
+		InitErrCode:           500,
+	})
+	defer server.Close()
+	initRuntimeOpts := config.InitRuntimeOptions{
+		EnvVars:     map[string]string{"TEST_VAR": "test_value"},
+		AccessToken: "test-token",
+	}
+	initRuntimeJSON, err := json.Marshal(initRuntimeOpts)
+	require.NoError(t, err)
+
+	ownerID := "owner-a"
+	originalSince := time.Now()
+	sandbox := &v1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-sandbox",
+			Namespace: "default",
+			Labels: map[string]string{
+				v1alpha1.LabelSandboxIsClaimed: "true",
+			},
+			Annotations: map[string]string{
+				v1alpha1.AnnotationRuntimeURL:         server.URL,
+				v1alpha1.AnnotationInitRuntimeRequest: string(initRuntimeJSON),
+				v1alpha1.AnnotationOwner:              "test-user",
+				v1alpha1.AnnotationResumingLock:       ownerID,
+				v1alpha1.AnnotationResumingSince:      originalSince.Format(time.RFC3339Nano),
+			},
+		},
+		Spec: v1alpha1.SandboxSpec{
+			Paused: false,
+		},
+		Status: v1alpha1.SandboxStatus{
+			Phase: v1alpha1.SandboxRunning,
+			Conditions: []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				},
+				{
+					Type:   string(v1alpha1.SandboxConditionResumed),
+					Status: metav1.ConditionTrue,
+				},
+			},
+			PodInfo: v1alpha1.PodInfo{
+				PodIP: "10.0.0.1",
+			},
+		},
+	}
+
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	defer cache.Stop(t.Context())
+	CreateSandboxWithStatus(t, fc, sandbox)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 350*time.Millisecond)
+	defer cancel()
+	err = AsSandbox(sandbox, cache).runResumeOwner(ctx, ownerID, infra.ResumeOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to perform ReInit after resume")
+
+	updatedSbx := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, updatedSbx))
+	assert.Equal(t, ownerID, updatedSbx.Annotations[v1alpha1.AnnotationResumingLock])
+	renewedSince, parseErr := time.Parse(time.RFC3339Nano, updatedSbx.Annotations[v1alpha1.AnnotationResumingSince])
+	require.NoError(t, parseErr)
+	assert.True(t, renewedSince.After(originalSince), "expected resuming-since to be renewed during post-resume retry")
+}
+
+func markSandboxRunningAndSignalResumeWait(fc ctrl.Client, cache *infracache.Cache, sandbox *v1alpha1.Sandbox) {
+	updated := &v1alpha1.Sandbox{}
+	if getErr := fc.Get(context.Background(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, updated); getErr != nil {
+		return
+	}
+	updated.Status.Phase = v1alpha1.SandboxRunning
+	updated.Status.Conditions = []metav1.Condition{
+		{
+			Type:   string(v1alpha1.SandboxConditionReady),
+			Status: metav1.ConditionTrue,
+		},
+		{
+			Type:   string(v1alpha1.SandboxConditionResumed),
+			Status: metav1.ConditionTrue,
+		},
+	}
+	if updateErr := fc.Status().Update(context.Background(), updated); updateErr != nil {
+		return
+	}
+	if value, ok := cache.GetWaitHooks().Load(cacheutils.WaitHookKey[*v1alpha1.Sandbox](sandbox)); ok {
+		value.(*cacheutils.WaitEntry[*v1alpha1.Sandbox]).Close()
+	}
+}
+
+func newResumeTestCacheWithUpdateInterceptor(
+	t *testing.T,
+	update func(context.Context, ctrl.WithWatch, ctrl.Object, ...ctrl.UpdateOption) error,
+) (*infracache.Cache, ctrl.Client) {
+	t.Helper()
+	scheme := k8sruntime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
+
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	for _, idx := range infracache.GetIndexFuncs() {
+		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
+	}
+	builder = builder.WithStatusSubresource(
+		&v1alpha1.Sandbox{},
+		&v1alpha1.SandboxSet{},
+		&v1alpha1.Checkpoint{},
+		&v1alpha1.SandboxClaim{},
+		&v1alpha1.SandboxTemplate{},
+	)
+	builder = builder.WithInterceptorFuncs(interceptor.Funcs{Update: update})
+	fakeClient := builder.Build()
+
+	mgrBuilder, err := controllers.NewMockManagerBuilder(t)
+	require.NoError(t, err)
+	mgr := mgrBuilder.
+		WithScheme(scheme).
+		WithClient(fakeClient).
+		WithWaitSimulation().
+		Build()
+	testCache, err := infracache.NewCache(mgr)
+	require.NoError(t, err)
+	mgr.SetWaitHooks(testCache.GetWaitHooks())
+
+	return testCache, fakeClient
 }

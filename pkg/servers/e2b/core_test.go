@@ -352,6 +352,12 @@ func DoSetSandboxStatus(phase agentsv1alpha1.SandboxPhase, pausedStatus, readySt
 				Status: readyStatus,
 			},
 		}
+		if phase == agentsv1alpha1.SandboxRunning && readyStatus == metav1.ConditionTrue {
+			sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
+				Type:   string(agentsv1alpha1.SandboxConditionResumed),
+				Status: metav1.ConditionTrue,
+			})
+		}
 		err := c.Status().Update(t.Context(), sbx)
 		if err != nil {
 			log.Printf("failed to update sandbox status: %v", err)

@@ -699,6 +699,10 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 							Type:   string(agentsv1alpha1.SandboxConditionReady),
 							Status: metav1.ConditionTrue,
 						},
+						{
+							Type:   string(agentsv1alpha1.SandboxConditionResumed),
+							Status: metav1.ConditionTrue,
+						},
 					}
 					if tt.ipChanged {
 						updated.Status.PodInfo.PodIP = tt.expectedIP
@@ -707,7 +711,7 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 				})
 			}
 
-			err = manager.ResumeSandbox(t.Context(), sbx)
+			err = manager.ResumeSandbox(t.Context(), sbx, infra.ResumeOptions{})
 
 			if tt.expectError {
 				assert.Error(t, err)

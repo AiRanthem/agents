@@ -18,6 +18,7 @@ package cache
 
 import (
 	"context"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -74,8 +75,14 @@ type Provider interface {
 	NewSandboxPauseTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
 
 	// NewSandboxResumeTask builds an immutable wait task for Resume. The task
-	// succeeds when the sandbox reaches SandboxStateRunning.
+	// succeeds when the sandbox reaches SandboxStateRunning and reports
+	// SandboxResumed=True.
 	NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
+
+	// NewSandboxResumeCompletionTask builds an immutable wait task for follower
+	// resume requests. It succeeds only after the owner clears the lock and the
+	// sandbox is Running, Ready, and Resumed.
+	NewSandboxResumeCompletionTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox, staleTTL time.Duration) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
 
 	// NewSandboxWaitReadyTask builds an immutable wait task for post-claim
 	// readiness (Generation observed + Ready condition not StartContainerFailed

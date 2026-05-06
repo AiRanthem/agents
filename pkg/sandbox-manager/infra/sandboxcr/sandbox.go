@@ -18,11 +18,13 @@ package sandboxcr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -32,10 +34,10 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
+	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
-	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils"
 	csimountutils "github.com/openkruise/agents/pkg/utils/csiutils"
@@ -115,7 +117,7 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) error 
 
 		copied := sbx.DeepCopy()
 		modifier(copied)
-		if err = s.Cache.GetClient().Update(ctx, copied); err != nil {
+		if err := s.Cache.GetClient().Update(ctx, copied); err != nil {
 			return err
 		}
 		s.Sandbox = copied
@@ -145,6 +147,15 @@ func (s *Sandbox) GetRoute() proxy.Route {
 	return proxyutils.DefaultGetRouteFunc(s.Sandbox)
 }
 
+// setTimeout overwrites Spec.PauseTime / Spec.ShutdownTime from opts.
+//
+// Contract (relied upon by callers such as buildResumeTimeoutOptions and
+// SaveTimeout): a zero time.Time in opts is treated as "clear this field" and
+// will set the corresponding Spec.*Time pointer back to nil. This is the
+// intended way for upper layers to express "this sandbox should be
+// never-timeout"; do not change this to skip-on-zero, otherwise callers that
+// pass infra.TimeoutOptions{} expecting the underlying fields to be cleared
+// will silently retain stale values.
 func setTimeout(s *agentsv1alpha1.Sandbox, opts infra.TimeoutOptions) {
 	if !opts.PauseTime.IsZero() {
 		s.Spec.PauseTime = ptr.To(metav1.NewTime(opts.PauseTime))
@@ -189,6 +200,11 @@ func (s *Sandbox) GetImage() string {
 	return ""
 }
 
+// SaveTimeout persists opts to Spec.PauseTime / Spec.ShutdownTime via the
+// API server. Per setTimeout's contract, a zero time.Time in opts clears the
+// corresponding spec field; callers that want to mark a sandbox as
+// never-timeout should pass infra.TimeoutOptions{} (or a struct with both
+// times zero).
 func (s *Sandbox) SaveTimeout(ctx context.Context, opts infra.TimeoutOptions) error {
 	return s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) {
 		setTimeout(sbx, opts)
@@ -253,103 +269,411 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 	return s.InplaceRefresh(ctx, false)
 }
 
-const postResumeOperationTimeout = 30 * time.Second
+func bumpResumeTimeoutProtection(sbx *agentsv1alpha1.Sandbox, protectUntil time.Time) {
+	if sbx.Spec.PauseTime != nil && sbx.Spec.PauseTime.Time.Before(protectUntil) {
+		sbx.Spec.PauseTime = ptr.To(metav1.NewTime(protectUntil))
+	}
+	if sbx.Spec.ShutdownTime != nil && sbx.Spec.ShutdownTime.Time.Before(protectUntil) {
+		sbx.Spec.ShutdownTime = ptr.To(metav1.NewTime(protectUntil))
+	}
+}
 
-func (s *Sandbox) Resume(ctx context.Context) error {
+type resumeState string
+
+const (
+	resumeStateStartable  resumeState = "startable"
+	resumeStateInProgress resumeState = "in-progress"
+	resumeStateCompleted  resumeState = "completed"
+	resumeStateStale      resumeState = "stale"
+	resumeStateBlocked    resumeState = "blocked"
+)
+
+var (
+	resumeCompletionRecheckInterval = 30 * time.Second
+	resumeLockStaleTTL              = 5 * time.Minute
+	resumeLockRenewBefore           = time.Minute
+	resumeTimeoutProtectionDuration = time.Hour
+	postResumeRetryInterval         = 200 * time.Millisecond
+
+	errResumeOwnerLockLost = errors.New("resume owner lock lost")
+)
+
+type resumeStateResult struct {
+	state resumeState
+	err   error
+}
+
+func classifyResumeState(sbx *agentsv1alpha1.Sandbox, now time.Time, staleTTL time.Duration) resumeStateResult {
+	if isSandboxResumeCompleted(sbx) {
+		return resumeStateResult{state: resumeStateCompleted}
+	}
+	if isTerminalResumeState(sbx, now) {
+		state, reason := stateutils.GetSandboxState(sbx)
+		return resumeStateResult{
+			state: resumeStateBlocked,
+			err:   fmt.Errorf("resuming is only available for paused state, current state: %s, reason: %s", state, reason),
+		}
+	}
+	if lock := sbx.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock]; lock != "" {
+		if resumeLockStale(sbx, now, staleTTL) {
+			return resumeStateResult{state: resumeStateStale}
+		}
+		return resumeStateResult{state: resumeStateInProgress}
+	}
+
+	state, reason := stateutils.GetSandboxState(sbx)
+	if state != agentsv1alpha1.SandboxStatePaused {
+		return resumeStateResult{
+			state: resumeStateBlocked,
+			err:   fmt.Errorf("resuming is only available for paused state, current state: %s, reason: %s", state, reason),
+		}
+	}
+	if sbx.Status.Phase != agentsv1alpha1.SandboxPaused {
+		return resumeStateResult{
+			state: resumeStateBlocked,
+			err:   fmt.Errorf("resuming is only available for sandboxes in phase Paused, current phase: %s, state: %s, reason: %s", sbx.Status.Phase, state, reason),
+		}
+	}
+	if !sbx.Spec.Paused {
+		return resumeStateResult{
+			state: resumeStateBlocked,
+			err:   fmt.Errorf("resuming is only available for sandboxes with spec.paused == true, current state: %s, reason: %s", state, reason),
+		}
+	}
+	cond := GetSandboxCondition(sbx, agentsv1alpha1.SandboxConditionPaused)
+	if cond.Status == metav1.ConditionFalse {
+		return resumeStateResult{
+			state: resumeStateBlocked,
+			err:   fmt.Errorf("sandbox is pausing, please wait a moment and try again"),
+		}
+	}
+	return resumeStateResult{state: resumeStateStartable}
+}
+
+func isSandboxResumeCompleted(sbx *agentsv1alpha1.Sandbox) bool {
+	if sbx.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock] != "" {
+		return false
+	}
+	readyCond := GetSandboxCondition(sbx, agentsv1alpha1.SandboxConditionReady)
+	resumedCond := GetSandboxCondition(sbx, agentsv1alpha1.SandboxConditionResumed)
+	return sbx.Status.Phase == agentsv1alpha1.SandboxRunning &&
+		readyCond.Status == metav1.ConditionTrue &&
+		resumedCond.Status == metav1.ConditionTrue
+}
+
+func isTerminalResumeState(sbx *agentsv1alpha1.Sandbox, now time.Time) bool {
+	return sbx.GetDeletionTimestamp() != nil ||
+		(sbx.Spec.ShutdownTime != nil && now.After(sbx.Spec.ShutdownTime.Time)) ||
+		sbx.Status.Phase == agentsv1alpha1.SandboxFailed ||
+		sbx.Status.Phase == agentsv1alpha1.SandboxSucceeded ||
+		sbx.Status.Phase == agentsv1alpha1.SandboxTerminating
+}
+
+func resumeLockStale(sbx *agentsv1alpha1.Sandbox, now time.Time, staleTTL time.Duration) bool {
+	since := sbx.GetAnnotations()[agentsv1alpha1.AnnotationResumingSince]
+	resumingSince, err := time.Parse(time.RFC3339Nano, since)
+	return err != nil || !now.Before(resumingSince.Add(staleTTL))
+}
+
+func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := s.InplaceRefresh(ctx, false); err != nil {
+			return err
+		}
+		classification := classifyResumeState(s.Sandbox, time.Now(), resumeLockStaleTTL)
+		switch classification.state {
+		case resumeStateCompleted:
+			return infra.ErrResumeCompletedByOtherRequest
+		case resumeStateStartable, resumeStateStale:
+			ownerID := uuid.NewString()
+			acquired, err := s.tryAcquireResumeOwner(ctx, ownerID)
+			if err != nil {
+				log.Error(err, "failed to acquire resume owner")
+				return err
+			}
+			if acquired {
+				return s.runResumeOwner(ctx, ownerID, opts)
+			}
+		case resumeStateInProgress:
+			err := s.waitResumeOwner(ctx)
+			if err == nil {
+				return infra.ErrResumeCompletedByOtherRequest
+			}
+			if errors.Is(err, cacheutils.ErrSandboxResumeLockStale) ||
+				errors.Is(err, cacheutils.ErrSandboxResumeOwnerFinished) ||
+				errors.Is(err, cacheutils.ErrObjectNotSatisfiedDuringDoubleCheck) {
+				continue
+			}
+			return err
+		default:
+			return classification.err
+		}
+	}
+}
+
+func (s *Sandbox) tryAcquireResumeOwner(ctx context.Context, ownerID string) (bool, error) {
+	acquired := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		sbx, err := s.Cache.GetClaimedSandbox(ctx, stateutils.GetSandboxID(s.Sandbox))
+		if err != nil {
+			return err
+		}
+		classification := classifyResumeState(sbx, time.Now(), resumeLockStaleTTL)
+		if classification.state != resumeStateStartable && classification.state != resumeStateStale {
+			s.Sandbox = sbx
+			return nil
+		}
+		copied := sbx.DeepCopy()
+		if copied.Annotations == nil {
+			copied.Annotations = map[string]string{}
+		}
+		copied.Spec.Paused = false
+		bumpResumeTimeoutProtection(copied, time.Now().Add(resumeTimeoutProtectionDuration))
+		copied.Annotations[agentsv1alpha1.AnnotationResumingLock] = ownerID
+		copied.Annotations[agentsv1alpha1.AnnotationResumingSince] = time.Now().Format(time.RFC3339Nano)
+		if err := s.Cache.GetClient().Update(ctx, copied); err != nil {
+			return err
+		}
+		s.Sandbox = copied
+		expectationutils.ResourceVersionExpectationExpect(copied)
+		acquired = true
+		return nil
+	})
+	return acquired, err
+}
+
+func (s *Sandbox) runResumeOwner(ctx context.Context, ownerID string, opts infra.ResumeOptions) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox), "resumeOwner", ownerID)
+	log.Info("waiting sandbox resume as owner")
+	ownerCtx, cancelOwner := context.WithCancel(ctx)
+	defer cancelOwner()
+	keeperCtx, stopKeeper := context.WithCancel(ownerCtx)
+	leaseErrCh := s.startResumeOwnerLeaseKeeper(keeperCtx, ownerID, cancelOwner)
+	defer stopKeeper()
+
+	checkLeaseErr := func(err error) error {
+		stopKeeper()
+		select {
+		case leaseErr := <-leaseErrCh:
+			if leaseErr != nil {
+				return leaseErr
+			}
+		default:
+		}
+		return err
+	}
+
+	start := time.Now()
+	if err := s.waitOwnerResumeStatus(ownerCtx); err != nil {
+		return checkLeaseErr(err)
+	}
+	log.Info("sandbox resume status reached running", "cost", time.Since(start))
+
+	if err := s.retryPostResumeOperations(ownerCtx); err != nil {
+		log.Error(err, "post-resume operations did not complete")
+		return checkLeaseErr(err)
+	}
+	if opts.Timeout != nil && !opts.DisablePushTimeout {
+		infra.PushTimeout(opts.Timeout, time.Since(start))
+	}
+	if err := s.finishResumeOwner(ownerCtx, ownerID, opts.Timeout); err != nil {
+		log.Error(err, "failed to finish resume owner")
+		return checkLeaseErr(err)
+	}
+	stopKeeper()
+	return nil
+}
+
+func (s *Sandbox) startResumeOwnerLeaseKeeper(ctx context.Context, ownerID string, cancelOwner context.CancelFunc) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(resumeCompletionRecheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if _, err := s.renewResumeOwnerLock(ctx, ownerID, time.Now()); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case errCh <- err:
+				default:
+				}
+				cancelOwner()
+				return
+			}
+		}
+	}()
+	return errCh
+}
+
+func (s *Sandbox) renewResumeOwnerLock(ctx context.Context, ownerID string, now time.Time) (bool, error) {
+	renewed := false
+	objectKey := client.ObjectKeyFromObject(s.Sandbox)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &agentsv1alpha1.Sandbox{}
+		if err := s.Cache.GetAPIReader().Get(ctx, objectKey, latest); err != nil {
+			return err
+		}
+		if latest.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock] != ownerID {
+			return errResumeOwnerLockLost
+		}
+		resumingSince, err := time.Parse(time.RFC3339Nano, latest.GetAnnotations()[agentsv1alpha1.AnnotationResumingSince])
+		if err == nil && resumingSince.Add(resumeLockStaleTTL).Sub(now) > resumeLockRenewBefore {
+			s.Sandbox = latest
+			return nil
+		}
+		copied := latest.DeepCopy()
+		if copied.Annotations == nil {
+			copied.Annotations = map[string]string{}
+		}
+		copied.Annotations[agentsv1alpha1.AnnotationResumingSince] = now.Format(time.RFC3339Nano)
+		if err := s.Cache.GetClient().Update(ctx, copied); err != nil {
+			return err
+		}
+		s.Sandbox = copied
+		expectationutils.ResourceVersionExpectationExpect(copied)
+		renewed = true
+		return nil
+	})
+	return renewed, err
+}
+
+func (s *Sandbox) waitOwnerResumeStatus(ctx context.Context) error {
+	for {
+		err := s.Cache.NewSandboxResumeTask(ctx, s.Sandbox).Wait(resumeCompletionRecheckInterval)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, cacheutils.ErrObjectNotSatisfiedDuringDoubleCheck) {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			continue
+		}
+		return err
+	}
+}
+
+func (s *Sandbox) waitResumeOwner(ctx context.Context) error {
+	err := s.Cache.NewSandboxResumeCompletionTask(ctx, s.Sandbox, resumeLockStaleTTL).Wait(resumeCompletionRecheckInterval)
+	if err == nil {
+		return s.InplaceRefresh(ctx, false)
+	}
+	if ctx.Err() != nil && errors.Is(err, cacheutils.ErrObjectNotSatisfiedDuringDoubleCheck) {
+		return ctx.Err()
+	}
+	return err
+}
+
+func (s *Sandbox) retryPostResumeOperations(ctx context.Context) error {
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return fmt.Errorf("%w: %v", lastErr, err)
+			}
+			return err
+		}
+		if err := s.postResumeOperations(ctx); err != nil {
+			lastErr = err
+			timer := time.NewTimer(postResumeRetryInterval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+			continue
+		}
+		return nil
+	}
+}
+
+func (s *Sandbox) postResumeOperations(ctx context.Context) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
+	if err := s.InplaceRefresh(ctx, false); err != nil {
+		return fmt.Errorf("failed to refresh sandbox after resume: %w", err)
+	}
+	expectationutils.ResourceVersionExpectationExpect(s.Sandbox)
+
+	if s.Labels[agentsv1alpha1.LabelSandboxClaimName] != "" {
+		log.Info("sandbox is claimed by SandboxClaim, skipping E2B post-resume initialization",
+			"claimName", s.Labels[agentsv1alpha1.LabelSandboxClaimName])
+		return nil
+	}
 
 	initRuntimeOpts, err := runtime.GetInitRuntimeRequest(s.Sandbox)
 	if err != nil {
-		log.Error(err, "failed to get init runtime request")
 		return fmt.Errorf("failed to get init runtime request: %w", err)
 	}
+	if initRuntimeOpts != nil {
+		log.Info("will re-init runtime after resume")
+		if _, err := runtime.InitRuntime(ctx, s.Sandbox, *initRuntimeOpts, s.refreshFunc()); err != nil {
+			return fmt.Errorf("failed to perform ReInit after resume: %w", err)
+		}
+		log.Info("ReInit completed after resume")
+	}
 
-	state, reason := s.GetState()
-	log.Info("try to resume sandbox", "state", state, "reason", reason)
-	if state != agentsv1alpha1.SandboxStatePaused {
-		err := fmt.Errorf("resuming is only available for paused state, current state: %s", state)
-		log.Error(err, "sandbox is not paused", "state", state, "reason", reason)
-		return err
+	csiMountConfigRequests, err := runtime.GetCsiMountExtensionRequest(s.Sandbox)
+	if err != nil {
+		return fmt.Errorf("failed to get csi mount request: %w", err)
 	}
-	cond := GetSandboxCondition(s.Sandbox, agentsv1alpha1.SandboxConditionPaused)
-	if s.Spec.Paused && cond.Status == metav1.ConditionFalse {
-		return errors.NewError(errors.ErrorConflict, "sandbox is pausing, please wait a moment and try again")
+	if len(csiMountConfigRequests) == 0 {
+		return nil
 	}
-	if s.Sandbox.Spec.Paused {
-		if err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) {
-			sbx.Spec.Paused = false
-			setTimeout(sbx, infra.TimeoutOptions{}) // remove all timeout options
-		}); err != nil {
-			log.Error(err, "failed to update sandbox spec.paused")
+	log.Info("will re-mount csi storage after resume")
+	startTime := time.Now()
+	csiClient := csimountutils.NewCSIMountHandler(s.Cache.GetClient(), s.Cache.GetAPIReader(), s.storageRegistry, utils.DefaultSandboxDeployNamespace)
+	mountConfigs, resolveErr := resolveCSIMountConfigs(ctx, csiClient, csiMountConfigRequests)
+	if resolveErr != nil {
+		return resolveErr
+	}
+	mountOpts := config.CSIMountOptions{MountOptionList: mountConfigs}
+	if _, mountErr := runtime.ProcessCSIMounts(ctx, s.Sandbox, mountOpts); mountErr != nil {
+		return fmt.Errorf("failed to remount csi storage after resume: %v", mountErr)
+	}
+	log.Info("remount csi storage completed after resume", "costTime", time.Since(startTime))
+	return nil
+}
+
+func (s *Sandbox) finishResumeOwner(ctx context.Context, ownerID string, timeout *infra.TimeoutOptions) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
+	objectKey := client.ObjectKeyFromObject(s.Sandbox)
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		sbx := &agentsv1alpha1.Sandbox{}
+		if err := s.Cache.GetAPIReader().Get(ctx, objectKey, sbx); err != nil {
 			return err
 		}
-	}
-	expectationutils.ResourceVersionExpectationExpect(s.Sandbox) // expect Resuming
-	log.Info("waiting sandbox resume")
-	start := time.Now()
-	if err = s.Cache.NewSandboxResumeTask(ctx, s.Sandbox).Wait(time.Minute); err != nil {
-		log.Error(err, "failed to wait sandbox resume")
-		return err
-	}
-	log.Info("sandbox resumed", "cost", time.Since(start))
-
-	// If the original context deadline was consumed by the wait, create a fresh
-	// context for post-resume operations (ReInit, CSI mount, inplace refresh).
-	// This can happen when the wait succeeds via double-check right at the deadline boundary.
-	postCtx := ctx
-	if ctx.Err() != nil {
-		var postCancel context.CancelFunc
-		postCtx, postCancel = context.WithTimeout(context.Background(), postResumeOperationTimeout)
-		defer postCancel()
-		log.Info("original context expired after wait, using fresh context for post-resume operations")
-	}
-	if err = s.InplaceRefresh(postCtx, false); err != nil {
-		log.Error(err, "failed to refresh sandbox after resume")
-		return err
-	}
-	expectationutils.ResourceVersionExpectationExpect(s.Sandbox) // expect Running
-
-	// E2B only handles post-resume initialization for non-claimed sandboxes.
-	// Claimed sandboxes (with claim-name label) are handled by the controller's Initialize function.
-	if s.Labels[agentsv1alpha1.LabelSandboxClaimName] == "" {
-		// Perform ReInit if initRuntimeOpts is set
-		if initRuntimeOpts != nil {
-			log.Info("will re-init runtime after resume")
-			if _, err := runtime.InitRuntime(ctx, s.Sandbox, *initRuntimeOpts, s.refreshFunc()); err != nil {
-				log.Error(err, "failed to perform ReInit after resume")
-				return fmt.Errorf("failed to perform ReInit after resume: %w", err)
-			}
-			log.Info("ReInit completed after resume")
+		if sbx.GetAnnotations()[agentsv1alpha1.AnnotationResumingLock] != ownerID {
+			return errResumeOwnerLockLost
 		}
-
-		// Perform csi mount after resume
-		csiMountConfigRequests, err := runtime.GetCsiMountExtensionRequest(s.Sandbox)
-		if err != nil {
-			log.Error(err, "failed to get csi mount request")
-			return fmt.Errorf("failed to get csi mount request: %w", err)
+		copied := sbx.DeepCopy()
+		if timeout != nil {
+			setTimeout(copied, *timeout)
 		}
-
-		if len(csiMountConfigRequests) != 0 {
-			log.Info("will re-mount csi storage after resume")
-			startTime := time.Now()
-			csiClient := csimountutils.NewCSIMountHandler(s.Cache.GetClient(), s.Cache.GetAPIReader(), s.storageRegistry, utils.DefaultSandboxDeployNamespace)
-			mountConfigs, resolveErr := resolveCSIMountConfigs(postCtx, csiClient, csiMountConfigRequests)
-			if resolveErr != nil {
-				return resolveErr
-			}
-			opts := config.CSIMountOptions{MountOptionList: mountConfigs}
-			if _, mountErr := runtime.ProcessCSIMounts(postCtx, s.Sandbox, opts); mountErr != nil {
-				log.Error(mountErr, "failed to remount csi storage after resume")
-				return fmt.Errorf("failed to remount csi storage after resume: %v", mountErr)
-			}
-			log.Info("remount csi storage completed after resume", "costTime", time.Since(startTime))
+		if copied.Annotations != nil {
+			delete(copied.Annotations, agentsv1alpha1.AnnotationResumingLock)
+			delete(copied.Annotations, agentsv1alpha1.AnnotationResumingSince)
 		}
-	} else {
-		log.Info("sandbox is claimed by SandboxClaim, skipping E2B post-resume initialization",
-			"claimName", s.Labels[agentsv1alpha1.LabelSandboxClaimName])
+		if err := s.Cache.GetClient().Update(ctx, copied); err != nil {
+			return err
+		}
+		s.Sandbox = copied
+		expectationutils.ResourceVersionExpectationExpect(copied)
+		return nil
+	})
+	if err != nil {
+		log.Error(err, "failed to finish resume owner after retries")
 	}
-
-	return nil
+	return err
 }
 
 func (s *Sandbox) GetState() (string, string) {

@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -105,10 +106,7 @@ func (r *WaitReconciler[T]) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		if errors.IsNotFound(err) {
 			log.V(consts.DebugLogLevel).Info("object not found, may have been deleted")
-			if entry, ok := r.loadWaitHook(waitKey); ok {
-				entry.Close()
-				log.V(consts.DebugLogLevel).Info("existing wait entry closed")
-			}
+			r.closeWaitHooks(waitKey)
 			managerutils.ResourceVersionExpectationDelete(obj)
 		} else {
 			log.Error(err, "failed to get object")
@@ -123,18 +121,44 @@ func (r *WaitReconciler[T]) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *WaitReconciler[T]) checkWaitHooks(key string, obj T) {
-	entry, ok := r.loadWaitHook(key)
-	if !ok {
+	if r.waitHooks == nil {
 		return
 	}
-	// If the wait context is already canceled, skip
-	if entry.Context().Err() != nil {
+	r.waitHooks.Range(func(rawKey, value any) bool {
+		hookKey, ok := rawKey.(string)
+		if !ok || !matchesWaitHookKey(hookKey, key) {
+			return true
+		}
+		entry, ok := value.(*cacheutils.WaitEntry[T])
+		if !ok || entry.Context().Err() != nil {
+			return true
+		}
+		satisfied, err := entry.Check(obj)
+		if satisfied || err != nil {
+			entry.Close()
+		}
+		return true
+	})
+}
+
+func (r *WaitReconciler[T]) closeWaitHooks(key string) {
+	if r.waitHooks == nil {
 		return
 	}
-	satisfied, err := entry.Check(obj)
-	if satisfied || err != nil {
-		entry.Close()
-	}
+	r.waitHooks.Range(func(rawKey, value any) bool {
+		hookKey, ok := rawKey.(string)
+		if !ok || !matchesWaitHookKey(hookKey, key) {
+			return true
+		}
+		if entry, ok := value.(*cacheutils.WaitEntry[T]); ok {
+			entry.Close()
+		}
+		return true
+	})
+}
+
+func matchesWaitHookKey(hookKey, objectKey string) bool {
+	return hookKey == objectKey || strings.HasPrefix(hookKey, objectKey+"/")
 }
 
 func (r *WaitReconciler[T]) loadWaitHook(key string) (*cacheutils.WaitEntry[T], bool) {

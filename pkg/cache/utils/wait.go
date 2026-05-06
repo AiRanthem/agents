@@ -18,6 +18,7 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,10 +33,19 @@ import (
 type WaitAction string
 
 const (
-	WaitActionResume     WaitAction = "Resume"
-	WaitActionPause      WaitAction = "Pause"
-	WaitActionWaitReady  WaitAction = "WaitReady"
-	WaitActionCheckpoint WaitAction = "Checkpoint"
+	WaitActionResume           WaitAction = "Resume"
+	WaitActionPause            WaitAction = "Pause"
+	WaitActionWaitReady        WaitAction = "WaitReady"
+	WaitActionCheckpoint       WaitAction = "Checkpoint"
+	WaitActionResumeCompletion WaitAction = "ResumeCompletion"
+)
+
+var (
+	ErrObjectNotSatisfied                  = errors.New("object is not satisfied")
+	ErrObjectNotSatisfiedDuringDoubleCheck = errors.New("object is not satisfied during double check")
+	ErrSandboxResumeLockStale              = errors.New("sandbox resume lock is stale")
+	ErrSandboxResumeOwnerFinished          = errors.New("sandbox resume owner finished without completion")
+	ErrSandboxResumeUnresumable            = errors.New("sandbox is not resumable")
 )
 
 type CheckFunc[T client.Object] func(obj T) (bool, error)
@@ -53,6 +63,14 @@ func WaitHookKey[T client.Object](obj T) string {
 func WaitHookKeyFromRequest[T client.Object](req ctrl.Request) string {
 	var typeHint T
 	return fmt.Sprintf("%T/%s/%s", typeHint, req.Namespace, req.Name)
+}
+
+func WaitHookKeyForAction[T client.Object](obj T, action WaitAction) string {
+	key := WaitHookKey(obj)
+	if action == WaitActionResumeCompletion {
+		return fmt.Sprintf("%s/%s", key, action)
+	}
+	return key
 }
 
 type WaitEntry[T client.Object] struct {
@@ -93,7 +111,7 @@ func (e *WaitEntry[T]) Check(obj T) (bool, error) {
 
 func WaitForObjectSatisfied[T client.Object](ctx context.Context, waitHooks *sync.Map, obj T, action WaitAction,
 	update UpdateFunc[T], satisfiedFunc CheckFunc[T], timeout time.Duration) error {
-	key := WaitHookKey(obj)
+	key := WaitHookKeyForAction(obj, action)
 	objKey := client.ObjectKeyFromObject(obj)
 	log := klog.FromContext(ctx).V(consts.DebugLogLevel).WithValues("waitHookKey", key, "object", objKey)
 	satisfied, err := satisfiedFunc(obj)
@@ -103,7 +121,7 @@ func WaitForObjectSatisfied[T client.Object](ctx context.Context, waitHooks *syn
 	}
 	if timeout <= 0 {
 		log.Info("waiting is skipped due to zero timeout")
-		return fmt.Errorf("object is not satisfied")
+		return ErrObjectNotSatisfied
 	}
 	value, exists := waitHooks.LoadOrStore(key, NewWaitEntry(ctx, action, satisfiedFunc))
 	if exists {
@@ -148,7 +166,7 @@ func DoubleCheckObjectSatisfied[T client.Object](ctx context.Context, obj T, upd
 		return err
 	}
 	if !satisfied {
-		err = fmt.Errorf("object is not satisfied during double check")
+		err = ErrObjectNotSatisfiedDuringDoubleCheck
 		log.Error(err, "object not satisfied")
 		return err
 	}

@@ -41,6 +41,8 @@ const (
 	AnnotationInitRuntimeRequest = InternalPrefix + "init-runtime-request"
 	AnnotationSandboxID          = InternalPrefix + "sandbox-id"
 	AnnotationMemberlistURL      = InternalPrefix + "memberlist-url"
+	AnnotationResumingLock       = InternalPrefix + "resuming-lock"
+	AnnotationResumingSince      = InternalPrefix + "resuming-since"
 )
 
 const (
