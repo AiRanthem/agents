@@ -95,6 +95,45 @@ func TestCache_GetCheckpoint(t *testing.T) {
 	})
 }
 
+func TestCacheTestResourceVersionInterceptorRefreshesStatusUpdate(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "status update with stale resource version succeeds"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+
+			sbx := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sbx",
+					Namespace: "default",
+				},
+			}
+			require.NoError(t, fc.Create(t.Context(), sbx))
+
+			stale := &agentsv1alpha1.Sandbox{}
+			require.NoError(t, fc.Get(t.Context(), ctrlclient.ObjectKeyFromObject(sbx), stale))
+
+			latest := stale.DeepCopy()
+			latest.Labels = map[string]string{"updated": "true"}
+			require.NoError(t, fc.Update(t.Context(), latest))
+
+			stale.Status.Phase = agentsv1alpha1.SandboxRunning
+			stale.Status.Conditions = []metav1.Condition{
+				{
+					Type:   string(agentsv1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				},
+			}
+			require.NoError(t, fc.Status().Update(t.Context(), stale))
+		})
+	}
+}
+
 func TestCache_GetSandboxSet(t *testing.T) {
 	sbs := &agentsv1alpha1.SandboxSet{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-1", Namespace: "team-a"},
