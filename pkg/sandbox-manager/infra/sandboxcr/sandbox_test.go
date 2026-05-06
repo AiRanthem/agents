@@ -18,6 +18,7 @@ package sandboxcr
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,11 +36,14 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/proxy"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/sandbox-manager/proxyutils"
+	stateutils "github.com/openkruise/agents/pkg/utils/sandboxutils"
 	testutils "github.com/openkruise/agents/test/utils"
 )
 
@@ -71,6 +75,70 @@ func ConvertPodToSandboxCR(pod *corev1.Pod) *v1alpha1.Sandbox {
 		sbx.Spec.Paused = true
 	}
 	return sbx
+}
+
+func TestSandboxSingleflightDoUsesConfiguredPreemptionThreshold(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold time.Duration
+	}{
+		{
+			name:      "custom threshold preempts stale runner before default threshold",
+			threshold: 50 * time.Millisecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+				DisableRouteReconciliation:      true,
+				SingleflightPreemptionThreshold: tt.threshold,
+			})
+			defer testInfra.Stop(t.Context())
+
+			staleUpdate := time.Now().Add(-time.Second).Unix()
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: v1alpha1.True,
+					},
+					Annotations: map[string]string{
+						infracache.SingleflightAnnotationPrefix + "pause-resume": fmt.Sprintf("1:false:%d", staleUpdate),
+					},
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+				},
+			}
+			require.NoError(t, fc.Create(t.Context(), sandbox))
+
+			claimed, err := testInfra.GetClaimedSandbox(t.Context(), stateutils.GetSandboxID(sandbox))
+			require.NoError(t, err)
+
+			called := false
+			waitCtx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			_, err = claimed.(*Sandbox).SingleflightDo(
+				waitCtx,
+				"pause-resume",
+				func(_ *v1alpha1.Sandbox) error { return nil },
+				func(_ *v1alpha1.Sandbox) {},
+				func(_ *v1alpha1.Sandbox) error {
+					called = true
+					return nil
+				},
+			)
+
+			require.NoError(t, err)
+			assert.True(t, called)
+
+			var updated v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "test-sandbox"}, &updated))
+			assert.Contains(t, updated.Annotations[infracache.SingleflightAnnotationPrefix+"pause-resume"], "2:true:")
+		})
+	}
 }
 
 func TestSandbox_GetTemplate(t *testing.T) {

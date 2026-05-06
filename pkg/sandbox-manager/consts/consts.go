@@ -21,11 +21,12 @@ import "time"
 const (
 	OwnerManagerScaleDown = "__manager_scale_down"
 
-	DefaultPoolingCandidateCounts = 100
-	DefaultWaitReadyTimeout       = 60 * time.Second
-	DefaultWaitCheckpointTimeout  = 60 * time.Second
-	DefaultClaimWorkers           = 500
-	DefaultCreateQPS              = 49
+	DefaultPoolingCandidateCounts          = 100
+	DefaultWaitReadyTimeout                = 60 * time.Second
+	DefaultWaitCheckpointTimeout           = 60 * time.Second
+	DefaultClaimWorkers                    = 500
+	DefaultCreateQPS                       = 49
+	DefaultSingleflightPreemptionThreshold = 5 * time.Minute
 )
 
 const (

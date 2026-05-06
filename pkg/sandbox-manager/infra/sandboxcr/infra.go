@@ -67,9 +67,10 @@ var _ infra.Builder = (*InfraBuilder)(nil)
 func NewInfraBuilder(opts config.SandboxManagerOptions) *InfraBuilder {
 	return &InfraBuilder{
 		instance: &Infra{
-			reconcileRouteStopCh: make(chan struct{}),
-			claimLockChannel:     make(chan struct{}, opts.MaxClaimWorkers),
-			createLimiter:        rate.NewLimiter(rate.Limit(opts.MaxCreateQPS), opts.MaxCreateQPS),
+			reconcileRouteStopCh:            make(chan struct{}),
+			claimLockChannel:                make(chan struct{}, opts.MaxClaimWorkers),
+			createLimiter:                   rate.NewLimiter(rate.Limit(opts.MaxCreateQPS), opts.MaxCreateQPS),
+			singleflightPreemptionThreshold: opts.SingleflightPreemptionThreshold,
 		},
 		skipRouteReconciler: opts.DisableRouteReconciliation,
 	}
@@ -111,7 +112,8 @@ type Infra struct {
 	claimLockChannel chan struct{}
 	createLimiter    *rate.Limiter
 
-	reconcileRouteStopCh chan struct{}
+	reconcileRouteStopCh            chan struct{}
+	singleflightPreemptionThreshold time.Duration
 }
 
 func (i *Infra) Run(ctx context.Context) error {
@@ -168,7 +170,7 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 		}
 		return claimErr
 	})
-	return claimedSandbox, metrics, buildClaimError(err, metrics.LastError)
+	return i.withSandboxOptions(claimedSandbox), metrics, buildClaimError(err, metrics.LastError)
 }
 
 func buildClaimError(err error, lastError error) error {
@@ -193,7 +195,7 @@ func (i *Infra) CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions
 		return nil, metrics, err
 	}
 	log.Info("sandbox cloned", "sandbox", klog.KObj(sandbox))
-	return sandbox, metrics, nil
+	return i.withSandboxOptions(sandbox), metrics, nil
 }
 
 func (i *Infra) DeleteCheckpoint(ctx context.Context, user string, checkpointID string) error {
@@ -261,7 +263,7 @@ func (i *Infra) SelectSandboxes(ctx context.Context, user string) ([]infra.Sandb
 		if !managerutils.ResourceVersionExpectationSatisfied(obj) {
 			continue
 		}
-		sandboxes = append(sandboxes, AsSandbox(obj, i.Cache))
+		sandboxes = append(sandboxes, i.asSandbox(obj))
 	}
 	return sandboxes, nil
 }
@@ -304,7 +306,20 @@ func (i *Infra) GetClaimedSandbox(ctx context.Context, sandboxID string) (infra.
 		}
 		sandbox = sbx
 	}
-	return AsSandbox(sandbox, i.Cache), nil
+	return i.asSandbox(sandbox), nil
+}
+
+func (i *Infra) asSandbox(sbx *v1alpha1.Sandbox) *Sandbox {
+	sandbox := AsSandbox(sbx, i.Cache)
+	sandbox.singleflightPreemptionThreshold = i.singleflightPreemptionThreshold
+	return sandbox
+}
+
+func (i *Infra) withSandboxOptions(sandbox infra.Sandbox) infra.Sandbox {
+	if sbx, ok := sandbox.(*Sandbox); ok && sbx != nil {
+		sbx.singleflightPreemptionThreshold = i.singleflightPreemptionThreshold
+	}
+	return sandbox
 }
 
 func (i *Infra) reconcileSandbox(ctx context.Context, sbx *v1alpha1.Sandbox, notFound bool) (ctrl.Result, error) {

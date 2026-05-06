@@ -40,6 +40,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
@@ -85,7 +86,7 @@ func Setup(t *testing.T) (*Controller, ctrlclient.Client, func()) {
 	cache, fc, cacheErr := cachetest.NewTestCache(t)
 	require.NoError(t, cacheErr)
 	controller := NewController("example.com", namespace, "component=sandbox-manager", "", "", models.DefaultMaxTimeout, 10,
-		0, 0, TestServerPort, config.DefaultMemberlistBindPort, &keys.Config{
+		0, 0, TestServerPort, config.DefaultMemberlistBindPort, opts.SingleflightPreemptionThreshold, &keys.Config{
 			Mode:      keys.StorageModeSecret,
 			Namespace: namespace,
 			AdminKey:  InitKey,
@@ -166,6 +167,42 @@ func Setup(t *testing.T) (*Controller, ctrlclient.Client, func()) {
 	return controller, fc, func() {
 		controller.stop <- syscall.SIGTERM
 		_ = controller.server.Close()
+	}
+}
+
+func TestControllerSandboxManagerOptionsIncludesSingleflightPreemptionThreshold(t *testing.T) {
+	tests := []struct {
+		name      string
+		threshold time.Duration
+	}{
+		{
+			name:      "preserves configured threshold",
+			threshold: 2 * time.Minute,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := NewController(
+				"example.com",
+				"sandbox-system",
+				"component=sandbox-manager",
+				"",
+				"",
+				models.DefaultMaxTimeout,
+				10,
+				0,
+				0,
+				TestServerPort,
+				config.DefaultMemberlistBindPort,
+				tt.threshold,
+				nil,
+				nil,
+			)
+
+			opts := controller.sandboxManagerOptions()
+			assert.Equal(t, tt.threshold, opts.SingleflightPreemptionThreshold)
+		})
 	}
 }
 
@@ -341,18 +378,24 @@ func UpdateSandboxWhen(t *testing.T, c ctrlclient.Client, sandboxID string, when
 
 func DoSetSandboxStatus(phase agentsv1alpha1.SandboxPhase, pausedStatus, readyStatus metav1.ConditionStatus) DoFunc {
 	return func(t *testing.T, c ctrlclient.Client, sbx *agentsv1alpha1.Sandbox) {
-		sbx.Status.Phase = phase
-		sbx.Status.Conditions = []metav1.Condition{
-			{
-				Type:   string(agentsv1alpha1.SandboxConditionPaused),
-				Status: pausedStatus,
-			},
-			{
-				Type:   string(agentsv1alpha1.SandboxConditionReady),
-				Status: readyStatus,
-			},
-		}
-		err := c.Status().Update(t.Context(), sbx)
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			latest := &agentsv1alpha1.Sandbox{}
+			if err := c.Get(t.Context(), ctrlclient.ObjectKeyFromObject(sbx), latest); err != nil {
+				return err
+			}
+			latest.Status.Phase = phase
+			latest.Status.Conditions = []metav1.Condition{
+				{
+					Type:   string(agentsv1alpha1.SandboxConditionPaused),
+					Status: pausedStatus,
+				},
+				{
+					Type:   string(agentsv1alpha1.SandboxConditionReady),
+					Status: readyStatus,
+				},
+			}
+			return c.Status().Update(t.Context(), latest)
+		})
 		if err != nil {
 			log.Printf("failed to update sandbox status: %v", err)
 		}
