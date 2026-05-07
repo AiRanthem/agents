@@ -165,7 +165,7 @@ func (k *mysqlKeyStorage) ensureAdminTeam(ctx context.Context) (uint, error) {
 		return 0, fmt.Errorf("ensure admin team: %w", err)
 	}
 	if team.UID != AdminTeamUID.String() {
-		if err := k.db.WithContext(ctx).Unscoped().Model(&TeamEntity{}).
+		if err := k.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Unscoped().Model(&TeamEntity{}).
 			Where("id = ?", team.ID).
 			Update("uid", AdminTeamUID.String()).Error; err != nil {
 			return 0, fmt.Errorf("update admin team uid: %w", err)
@@ -190,13 +190,13 @@ func (k *mysqlKeyStorage) ensureAdminKey(ctx context.Context, adminTeamID uint) 
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("lookup admin key by uid: %w", err)
 		}
-		if err := k.db.WithContext(ctx).Create(&key).Error; err != nil {
+		if err := k.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Create(&key).Error; err != nil {
 			return fmt.Errorf("create admin key: %w", err)
 		}
 		return nil
 	}
 
-	if err := k.db.WithContext(ctx).Model(&TeamAPIKeyEntity{}).
+	if err := k.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&TeamAPIKeyEntity{}).
 		Where("uid = ?", key.UID).
 		Updates(map[string]any{
 			"name":     key.Name,
@@ -364,7 +364,7 @@ func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeam
 			TeamID:       teamEntity.ID,
 			CreatedByUID: &createdBy,
 		}
-		if err := db.Create(&entity).Error; err != nil {
+		if err := db.Session(&gorm.Session{SkipDefaultTransaction: true}).Create(&entity).Error; err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
 				return errRetryableDuplicateKey
 			}
@@ -586,7 +586,7 @@ func (k *mysqlKeyStorage) getOrCreateTeamDB(ctx context.Context, tx *gorm.DB, te
 		} else {
 			team.UID = generateUUID().String()
 		}
-		if err := tx.WithContext(ctx).Create(team).Error; err != nil {
+		if err := tx.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Create(team).Error; err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
 				return nil, errRetryableDuplicateKey
 			}

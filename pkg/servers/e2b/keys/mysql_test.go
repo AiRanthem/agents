@@ -142,9 +142,7 @@ func TestMySQL_InitBranches(t *testing.T) {
 		h := st.hashKey("admin")
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(1, AdminTeamUID.String(), "admin"))
 		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "key_hash", "name", "team_id", "deleted_at"}).AddRow(1, AdminKeyID.String(), h, "admin", 1, nil))
-		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE `team_api_keys` SET .*").WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit()
 		require.NoError(t, st.Init(context.Background()))
 	})
 
@@ -165,9 +163,7 @@ func TestMySQL_InitBranches(t *testing.T) {
 		h := st.hashKey("admin")
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(1, AdminTeamUID.String(), "admin"))
 		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "key_hash", "name", "team_id", "deleted_at"}).AddRow(1, AdminKeyID.String(), h, "admin", 1, nil))
-		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE `team_api_keys` SET .*").WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit()
 
 		require.NoError(t, st.Init(context.Background()))
 		require.Zero(t, autoMigrateCalls)
@@ -199,9 +195,7 @@ func TestMySQL_EnsureAdminTeamAndKey(t *testing.T) {
 		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnRows(
 			sqlmock.NewRows([]string{"id", "uid", "key_hash", "name", "team_id", "deleted_at"}).AddRow(1, AdminKeyID.String(), h, "admin", 1, nil),
 		)
-		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE `team_api_keys` SET .*").WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit()
 		require.NoError(t, st.ensureAdminKey(context.Background(), 1))
 	})
 
@@ -209,9 +203,7 @@ func TestMySQL_EnsureAdminTeamAndKey(t *testing.T) {
 		st, mock, done := newMockStorage(t)
 		defer done()
 		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnError(gorm.ErrRecordNotFound)
-		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
 		require.NoError(t, st.ensureAdminKey(context.Background(), 1))
 	})
 
@@ -226,9 +218,7 @@ func TestMySQL_EnsureAdminTeamAndKey(t *testing.T) {
 		st, mock, done := newMockStorage(t)
 		defer done()
 		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnError(gorm.ErrRecordNotFound)
-		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnError(errors.New("insert fail"))
-		mock.ExpectRollback()
 		require.Error(t, st.ensureAdminKey(context.Background(), 1))
 	})
 }
@@ -332,9 +322,7 @@ func TestMySQL_CreateKeyBranches(t *testing.T) {
 	t.Run("team lookup error", func(t *testing.T) {
 		st, mock, done := newMockStorage(t)
 		defer done()
-		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnError(errors.New("team error"))
-		mock.ExpectRollback()
 		_, err := st.CreateKey(context.Background(), user, CreateKeyOptions{Name: "n"})
 		require.Error(t, err)
 	})
@@ -343,17 +331,13 @@ func TestMySQL_CreateKeyBranches(t *testing.T) {
 		st, mock, done := newMockStorage(t)
 		defer done()
 
-		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, userTeam.ID.String(), userTeam.Name))
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnError(errors.New("insert failed"))
-		mock.ExpectRollback()
 		_, err := st.CreateKey(context.Background(), user, CreateKeyOptions{Name: "n"})
 		require.Error(t, err)
 
-		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, userTeam.ID.String(), userTeam.Name))
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
 		key, err := st.CreateKey(context.Background(), user, CreateKeyOptions{Name: "n"})
 		require.NoError(t, err)
 		require.NotEmpty(t, key.Key)
@@ -367,10 +351,8 @@ func TestMySQL_CreateKeyBranches(t *testing.T) {
 		st, mock, done := newMockStorage(t)
 		defer done()
 
-		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, AdminTeamUID.String(), "admin"))
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(1, 1))
-		mock.ExpectCommit()
 		key, err := st.CreateKey(context.Background(), &models.CreatedTeamAPIKey{ID: uuid.New()}, CreateKeyOptions{Name: "n"})
 		require.NoError(t, err)
 		require.Equal(t, models.AdminTeam(), key.Team)
@@ -386,10 +368,8 @@ func TestMySQL_CreateKeyBranches(t *testing.T) {
 
 		// MySQL unique-index collision is intentionally capped to 5 retries.
 		for i := 0; i < 5; i++ {
-			mock.ExpectBegin()
 			mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, userTeam.ID.String(), userTeam.Name))
 			mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnError(gorm.ErrDuplicatedKey)
-			mock.ExpectRollback()
 		}
 		_, err := st.CreateKey(context.Background(), user, CreateKeyOptions{Name: "n"})
 		require.Error(t, err)
@@ -417,12 +397,10 @@ func TestMySQL_CreateKeyCachesSanitizedClones(t *testing.T) {
 
 			team := &models.Team{ID: uuid.New(), Name: tt.teamName}
 			user := &models.CreatedTeamAPIKey{ID: uuid.New(), Team: team}
-			mock.ExpectBegin()
 			mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(
 				sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, team.ID.String(), team.Name),
 			)
 			mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(1, 1))
-			mock.ExpectCommit()
 
 			created, err := st.CreateKey(context.Background(), user, CreateKeyOptions{Name: "n"})
 			if tt.expectError != "" {
@@ -827,11 +805,9 @@ func TestMySQL_TeamLifecycle(t *testing.T) {
 		defer done()
 		admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Team: models.AdminTeam()}
 
-		mock.ExpectBegin()
 		mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnError(gorm.ErrRecordNotFound)
 		mock.ExpectExec("INSERT INTO `teams`.*").WillReturnResult(sqlmock.NewResult(3, 1))
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(10, 1))
-		mock.ExpectCommit()
 		key, err := st.CreateKey(context.Background(), admin, CreateKeyOptions{Name: "new-key", TeamName: "new-team"})
 		require.NoError(t, err)
 		require.Equal(t, "new-team", key.Team.Name)
