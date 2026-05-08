@@ -18,6 +18,7 @@ package sandboxcr
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -32,9 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -367,6 +370,214 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	var updated v1alpha1.Sandbox
 	require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}, &updated))
 	assert.True(t, timeout.Equal(requested, timeout.GetTimeoutFromSandbox(&updated)))
+}
+
+type countingReader struct {
+	client.Reader
+
+	getCalls atomic.Int32
+}
+
+func (r *countingReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	r.getCalls.Add(1)
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
+
+func (r *countingReader) Calls() int32 {
+	return r.getCalls.Load()
+}
+
+type retryUpdateTestProvider struct {
+	infracache.Provider
+
+	client         client.Client
+	apiReader      *countingReader
+	claimedSandbox *v1alpha1.Sandbox
+}
+
+func (p *retryUpdateTestProvider) GetClaimedSandbox(_ context.Context, sandboxID string) (*v1alpha1.Sandbox, error) {
+	expectedID := p.claimedSandbox.Namespace + "--" + p.claimedSandbox.Name
+	if sandboxID != expectedID {
+		return nil, errors.New("unexpected sandbox ID")
+	}
+	return p.claimedSandbox.DeepCopy(), nil
+}
+
+func (p *retryUpdateTestProvider) GetClient() client.Client {
+	return p.client
+}
+
+func (p *retryUpdateTestProvider) GetAPIReader() client.Reader {
+	return p.apiReader
+}
+
+func newRetryUpdateTestCache(
+	t *testing.T,
+	sbx *v1alpha1.Sandbox,
+	claimedSandbox *v1alpha1.Sandbox,
+	updateInterceptor func(context.Context, client.WithWatch, client.Object, ...client.UpdateOption) error,
+) (*retryUpdateTestProvider, client.Client) {
+	t.Helper()
+
+	scheme := k8sruntime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(v1alpha1.AddToScheme(scheme))
+
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	for _, idx := range infracache.GetIndexFuncs() {
+		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
+	}
+	builder = builder.WithStatusSubresource(&v1alpha1.Sandbox{})
+	builder = builder.WithObjects(sbx)
+	if updateInterceptor != nil {
+		builder = builder.WithInterceptorFuncs(interceptor.Funcs{Update: updateInterceptor})
+	}
+
+	fc := builder.Build()
+	apiReader := &countingReader{Reader: fc}
+	return &retryUpdateTestProvider{
+		client:         fc,
+		apiReader:      apiReader,
+		claimedSandbox: claimedSandbox,
+	}, fc
+}
+
+func TestSandbox_retryUpdate(t *testing.T) {
+	tests := []struct {
+		name              string
+		initialPaused     bool
+		wrapperPaused     *bool
+		claimedPaused     *bool
+		modifier          func(t *testing.T) ModifierFunc
+		expectUpdated     bool
+		expectUpdateCalls int32
+		expectPaused      bool
+		expectError       string
+	}{
+		{
+			name:          "modifier returns false skips update and refreshes sandbox",
+			initialPaused: false,
+			wrapperPaused: ptr.To(true),
+			claimedPaused: ptr.To(true),
+			modifier: func(t *testing.T) ModifierFunc {
+				return func(sbx *v1alpha1.Sandbox) (bool, error) {
+					assert.False(t, sbx.Spec.Paused)
+					return false, nil
+				}
+			},
+			expectUpdated:     false,
+			expectUpdateCalls: 0,
+			expectPaused:      false,
+		},
+		{
+			name:          "modifier returns true updates sandbox",
+			initialPaused: true,
+			modifier: func(t *testing.T) ModifierFunc {
+				return func(sbx *v1alpha1.Sandbox) (bool, error) {
+					sbx.Spec.Paused = false
+					return true, nil
+				}
+			},
+			expectUpdated:     true,
+			expectUpdateCalls: 1,
+			expectPaused:      false,
+		},
+		{
+			name:          "modifier error aborts update",
+			initialPaused: true,
+			modifier: func(t *testing.T) ModifierFunc {
+				return func(sbx *v1alpha1.Sandbox) (bool, error) {
+					sbx.Spec.Paused = false
+					return false, errors.New("modifier failed")
+				}
+			},
+			expectUpdated:     false,
+			expectUpdateCalls: 0,
+			expectPaused:      true,
+			expectError:       "modifier failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var updateCalls atomic.Int32
+			sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+			sbx.Spec.Paused = tt.initialPaused
+			claimedSandbox := sbx.DeepCopy()
+			if tt.claimedPaused != nil {
+				claimedSandbox.Spec.Paused = *tt.claimedPaused
+			}
+
+			testCache, fc := newRetryUpdateTestCache(t, sbx, claimedSandbox, func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				updateCalls.Add(1)
+				return c.Update(ctx, obj, opts...)
+			})
+			wrapper := sbx.DeepCopy()
+			if tt.wrapperPaused != nil {
+				wrapper.Spec.Paused = *tt.wrapperPaused
+			}
+			s := AsSandbox(wrapper, testCache)
+
+			updated, err := s.retryUpdate(t.Context(), tt.modifier(t))
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.expectUpdated, updated)
+			assert.Equal(t, tt.expectUpdateCalls, updateCalls.Load())
+			assert.GreaterOrEqual(t, testCache.apiReader.Calls(), int32(1))
+			assert.Equal(t, tt.expectPaused, s.Sandbox.Spec.Paused)
+
+			var stored v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}, &stored))
+			assert.Equal(t, tt.expectPaused, stored.Spec.Paused)
+		})
+	}
+}
+
+func TestSandbox_retryUpdate_ConflictRefreshesFromAPIReader(t *testing.T) {
+	sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+	sbx.Spec.Paused = true
+
+	var updateAttempts atomic.Int32
+	key := types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}
+	staleClaimedSandbox := sbx.DeepCopy()
+	testCache, fc := newRetryUpdateTestCache(t, sbx, staleClaimedSandbox, func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if updateAttempts.Add(1) == 1 {
+			latest := &v1alpha1.Sandbox{}
+			require.NoError(t, c.Get(ctx, key, latest))
+			patched := latest.DeepCopy()
+			patched.Spec.Paused = false
+			require.NoError(t, c.Patch(ctx, patched, client.MergeFrom(latest)))
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "sandboxes"},
+				obj.GetName(),
+				errors.New("forced conflict"),
+			)
+		}
+		return c.Update(ctx, obj, opts...)
+	})
+
+	s := AsSandbox(sbx.DeepCopy(), testCache)
+	updated, err := s.retryUpdate(t.Context(), func(sbx *v1alpha1.Sandbox) (bool, error) {
+		if !sbx.Spec.Paused {
+			return false, nil
+		}
+		sbx.Spec.Paused = false
+		return true, nil
+	})
+
+	require.NoError(t, err)
+	assert.False(t, updated)
+	assert.Equal(t, int32(1), updateAttempts.Load())
+	assert.GreaterOrEqual(t, testCache.apiReader.Calls(), int32(2))
+	assert.False(t, s.Sandbox.Spec.Paused)
+
+	var stored v1alpha1.Sandbox
+	require.NoError(t, fc.Get(t.Context(), key, &stored))
+	assert.False(t, stored.Spec.Paused)
 }
 
 func TestSandbox_GetTemplate(t *testing.T) {

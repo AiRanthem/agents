@@ -19,6 +19,7 @@ package sandboxcr
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,14 +31,39 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+	cachepkg "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	utils "github.com/openkruise/agents/pkg/utils/sandbox-manager"
-	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 	"github.com/openkruise/agents/pkg/utils/sandboxutils"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 	testutils "github.com/openkruise/agents/test/utils"
 )
+
+type apiReaderOverrideCache struct {
+	cachepkg.Provider
+	apiReader ctrl.Reader
+}
+
+func (c *apiReaderOverrideCache) GetAPIReader() ctrl.Reader {
+	return c.apiReader
+}
+
+type mutatingAPIReader struct {
+	ctrl.Reader
+	calls                 atomic.Int32
+	mutateBeforeSecondGet func(context.Context) error
+}
+
+func (r *mutatingAPIReader) Get(ctx context.Context, key ctrl.ObjectKey, obj ctrl.Object, opts ...ctrl.GetOption) error {
+	if r.calls.Add(1) == 2 && r.mutateBeforeSecondGet != nil {
+		if err := r.mutateBeforeSecondGet(ctx); err != nil {
+			return err
+		}
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}
 
 // TestSandbox_ResumeConcurrent tests concurrent resume operations on the same sandbox
 func TestSandbox_ResumeConcurrent(t *testing.T) {
@@ -429,6 +455,259 @@ func TestSandbox_Pause(t *testing.T) {
 	}
 }
 
+func TestSandbox_PauseCaptureSnapshotWithoutTimeoutDoesNotCreateSnapshot(t *testing.T) {
+	tests := []struct {
+		name string
+		opts infra.PauseOptions
+	}{
+		{
+			name: "capture snapshot ignored when timeout is nil",
+			opts: infra.PauseOptions{
+				Timeout:                nil,
+				CaptureTimeoutSnapshot: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused:       false,
+					ShutdownTime: &metav1.Time{Time: now.Add(2 * time.Hour)},
+					PauseTime:    &metav1.Time{Time: now.Add(time.Hour)},
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+			time.Sleep(10 * time.Millisecond)
+
+			s := AsSandbox(sandbox, cache)
+			mockMgr := cache.GetMockManager()
+			mockMgr.AddWaitReconcileKey(sandbox)
+			modified := s.Sandbox.DeepCopy()
+			mergeFrom := ctrl.MergeFrom(s.Sandbox)
+			patchErrCh := make(chan error, 1)
+			time.AfterFunc(20*time.Millisecond, func() {
+				modified.Status.Phase = v1alpha1.SandboxPaused
+				SetSandboxCondition(modified, string(v1alpha1.SandboxConditionPaused), metav1.ConditionTrue, "Pause", "Paused by user")
+				patchErrCh <- fc.Status().Patch(t.Context(), modified, mergeFrom)
+			})
+
+			pauseCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.Pause(pauseCtx, tt.opts))
+			select {
+			case err := <-patchErrCh:
+				require.NoError(t, err)
+			default:
+			}
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, &updatedSbx))
+			assert.True(t, updatedSbx.Spec.Paused)
+			_, hasSnapshot := updatedSbx.Annotations[v1alpha1.AnnotationPauseTimeoutSnapshot]
+			assert.False(t, hasSnapshot)
+		})
+	}
+}
+
+func TestSandbox_PauseSkipsSideEffectsWhenLatestAlreadyPaused(t *testing.T) {
+	tests := []struct {
+		name string
+		opts infra.PauseOptions
+	}{
+		{
+			name: "does not update timeout or capture snapshot when latest already paused",
+			opts: infra.PauseOptions{
+				Timeout: &infra.TimeoutOptions{
+					ShutdownTime: time.Now().Add(3 * time.Hour),
+					PauseTime:    time.Now().Add(90 * time.Minute),
+				},
+				CaptureTimeoutSnapshot: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused:       false,
+					ShutdownTime: &metav1.Time{Time: now.Add(2 * time.Hour)},
+					PauseTime:    &metav1.Time{Time: now.Add(time.Hour)},
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+			time.Sleep(10 * time.Millisecond)
+
+			key := types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}
+			apiReader := &mutatingAPIReader{
+				Reader: fc,
+				mutateBeforeSecondGet: func(ctx context.Context) error {
+					var current v1alpha1.Sandbox
+					if err := fc.Get(ctx, key, &current); err != nil {
+						return err
+					}
+					modified := current.DeepCopy()
+					modified.Spec.Paused = true
+					return fc.Patch(ctx, modified, ctrl.MergeFrom(&current))
+				},
+			}
+			s := AsSandbox(sandbox.DeepCopy(), &apiReaderOverrideCache{
+				Provider:  cache,
+				apiReader: apiReader,
+			})
+			mockMgr := cache.GetMockManager()
+			mockMgr.AddWaitReconcileKey(sandbox)
+			modified := sandbox.DeepCopy()
+			mergeFrom := ctrl.MergeFrom(sandbox)
+			patchErrCh := make(chan error, 1)
+			time.AfterFunc(20*time.Millisecond, func() {
+				modified.Status.Phase = v1alpha1.SandboxPaused
+				modified.Status.Conditions = []metav1.Condition{
+					{Type: string(v1alpha1.SandboxConditionPaused), Status: metav1.ConditionTrue, Reason: "Pause"},
+				}
+				patchErrCh <- fc.Status().Patch(t.Context(), modified, mergeFrom)
+			})
+
+			pauseCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.Pause(pauseCtx, tt.opts))
+			select {
+			case err := <-patchErrCh:
+				require.NoError(t, err)
+			default:
+			}
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), key, &updatedSbx))
+			assert.True(t, updatedSbx.Spec.Paused)
+			require.NotNil(t, updatedSbx.Spec.ShutdownTime)
+			require.NotNil(t, updatedSbx.Spec.PauseTime)
+			assert.WithinDuration(t, now.Add(2*time.Hour), updatedSbx.Spec.ShutdownTime.Time, time.Second)
+			assert.WithinDuration(t, now.Add(time.Hour), updatedSbx.Spec.PauseTime.Time, time.Second)
+			_, hasSnapshot := updatedSbx.Annotations[v1alpha1.AnnotationPauseTimeoutSnapshot]
+			assert.False(t, hasSnapshot)
+		})
+	}
+}
+
+func TestSandbox_PauseRefreshesBeforePreconditionChecks(t *testing.T) {
+	tests := []struct {
+		name        string
+		expectError string
+	}{
+		{
+			name:        "local running wrapper does not pause latest paused sandbox",
+			expectError: "sandbox is not in running phase",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			latest := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused: true,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxPaused,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionPaused),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+			local := latest.DeepCopy()
+			local.Spec.Paused = false
+			local.Status.Phase = v1alpha1.SandboxRunning
+			local.Status.Conditions = []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, latest)
+			time.Sleep(10 * time.Millisecond)
+
+			s := AsSandbox(local, cache)
+			err = s.Pause(t.Context(), infra.PauseOptions{})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &updatedSbx))
+			assert.True(t, updatedSbx.Spec.Paused)
+		})
+	}
+}
+
 //goland:noinspection GoDeprecation
 func TestSandbox_Resume(t *testing.T) {
 	utils.InitLogOutput()
@@ -674,6 +953,249 @@ func TestSandbox_Resume(t *testing.T) {
 			require.NotNil(t, updatedSbx.Spec.PauseTime)
 			assert.WithinDuration(t, shutdownTime, updatedSbx.Spec.ShutdownTime.Time, time.Second)
 			assert.WithinDuration(t, pauseTime, updatedSbx.Spec.PauseTime.Time, time.Second)
+		})
+	}
+}
+
+func TestSandbox_ResumeRefreshesBeforePreconditionChecksAndUpdatesLatest(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "local running wrapper resumes latest paused sandbox",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			latest := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused: true,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxPaused,
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionPaused),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+			local := latest.DeepCopy()
+			local.Spec.Paused = false
+			local.Status.Phase = v1alpha1.SandboxRunning
+			local.Status.Conditions = []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, latest)
+			time.Sleep(10 * time.Millisecond)
+
+			s := AsSandbox(local, cache)
+			mockMgr := cache.GetMockManager()
+			mockMgr.AddWaitReconcileKey(latest)
+			patchErrCh := make(chan error, 1)
+			time.AfterFunc(20*time.Millisecond, func() {
+				var current v1alpha1.Sandbox
+				if err := fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &current); err != nil {
+					patchErrCh <- err
+					return
+				}
+				modified := current.DeepCopy()
+				modified.Status.Phase = v1alpha1.SandboxRunning
+				modified.Status.Conditions = []metav1.Condition{
+					{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Resume"},
+				}
+				patchErrCh <- fc.Status().Patch(t.Context(), modified, ctrl.MergeFrom(&current))
+			})
+
+			resumeCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.Resume(resumeCtx, infra.ResumeOptions{}))
+			select {
+			case err := <-patchErrCh:
+				require.NoError(t, err)
+			default:
+			}
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &updatedSbx))
+			assert.False(t, updatedSbx.Spec.Paused)
+			state, reason := sandboxutils.GetSandboxState(&updatedSbx)
+			assert.Equal(t, v1alpha1.SandboxStateRunning, state, reason)
+		})
+	}
+}
+
+func TestSandbox_ResumeAllowsAlreadyResumedLatestForStalePausedWrapper(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{
+			name: "local paused wrapper treats latest running sandbox as already resumed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			latest := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused: false,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxRunning,
+					PodInfo: v1alpha1.PodInfo{
+						PodIP: "10.0.0.1",
+					},
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+			local := latest.DeepCopy()
+			local.Spec.Paused = true
+			local.Status.Phase = v1alpha1.SandboxPaused
+			local.Status.Conditions = []metav1.Condition{
+				{
+					Type:   string(v1alpha1.SandboxConditionPaused),
+					Status: metav1.ConditionTrue,
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, latest)
+			time.Sleep(10 * time.Millisecond)
+
+			s := AsSandbox(local, cache)
+			resumeCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.Resume(resumeCtx, infra.ResumeOptions{}))
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &updatedSbx))
+			assert.False(t, updatedSbx.Spec.Paused)
+			state, reason := sandboxutils.GetSandboxState(&updatedSbx)
+			assert.Equal(t, v1alpha1.SandboxStateRunning, state, reason)
+		})
+	}
+}
+
+func TestSandbox_ResumeSkipsSnapshotWhenLatestAlreadyUnpaused(t *testing.T) {
+	tests := []struct {
+		name string
+		opts infra.ResumeOptions
+	}{
+		{
+			name: "does not create missing snapshot when latest spec is already unpaused",
+			opts: infra.ResumeOptions{
+				EnsureTimeoutSnapshotIfMissing: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shutdownTime := time.Now().Add(2 * time.Hour)
+			pauseTime := time.Now().Add(time.Hour)
+			latest := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels: map[string]string{
+						v1alpha1.LabelSandboxIsClaimed: "true",
+					},
+					Annotations: map[string]string{},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused:       false,
+					ShutdownTime: &metav1.Time{Time: shutdownTime},
+					PauseTime:    &metav1.Time{Time: pauseTime},
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase: v1alpha1.SandboxPaused,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionPaused),
+							Status: metav1.ConditionTrue,
+						},
+					},
+				},
+			}
+			local := latest.DeepCopy()
+			local.Spec.Paused = true
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, latest)
+			time.Sleep(10 * time.Millisecond)
+
+			s := AsSandbox(local, cache)
+			mockMgr := cache.GetMockManager()
+			mockMgr.AddWaitReconcileKey(latest)
+			patchErrCh := make(chan error, 1)
+			time.AfterFunc(20*time.Millisecond, func() {
+				var current v1alpha1.Sandbox
+				if err := fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &current); err != nil {
+					patchErrCh <- err
+					return
+				}
+				modified := current.DeepCopy()
+				modified.Status.Phase = v1alpha1.SandboxRunning
+				modified.Status.Conditions = []metav1.Condition{
+					{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Resume"},
+				}
+				patchErrCh <- fc.Status().Patch(t.Context(), modified, ctrl.MergeFrom(&current))
+			})
+
+			resumeCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, s.Resume(resumeCtx, tt.opts))
+			select {
+			case err := <-patchErrCh:
+				require.NoError(t, err)
+			default:
+			}
+
+			var updatedSbx v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: latest.Namespace, Name: latest.Name}, &updatedSbx))
+			assert.False(t, updatedSbx.Spec.Paused)
+			_, hasSnapshot := updatedSbx.Annotations[v1alpha1.AnnotationPauseTimeoutSnapshot]
+			assert.False(t, hasSnapshot)
 		})
 	}
 }

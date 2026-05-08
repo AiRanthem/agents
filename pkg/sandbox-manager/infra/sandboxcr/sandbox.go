@@ -48,7 +48,12 @@ import (
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
-type ModifierFunc func(sbx *agentsv1alpha1.Sandbox)
+// ModifierFunc mutates the sandbox and decides whether retryUpdate should persist it.
+// It returns:
+//   - changed: true when the provided sandbox was modified and should be updated;
+//     false when no update should be issued.
+//   - err:     non-nil to abort retryUpdate immediately.
+type ModifierFunc func(sbx *agentsv1alpha1.Sandbox) (bool, error)
 
 type Sandbox struct {
 	*agentsv1alpha1.Sandbox
@@ -105,33 +110,57 @@ func (s *Sandbox) refreshFunc() runtime.RefreshFunc {
 	}
 }
 
-func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) error {
+// retryUpdate loads the latest sandbox from APIReader, applies modifier, and retries on conflict.
+//
+// Returns:
+//   - updated: true if a real Update was issued and the sandbox was written back; false if no update was needed.
+//   - err:     non-nil when either refresh/update failed or modifier/Update returned an error.
+func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
+	updated := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		// get the latest sandbox from cache
-		sbx, err := s.Cache.GetClaimedSandbox(ctx, cache.GetClaimedSandboxOptions{
-			SandboxID: stateutils.GetSandboxID(s.Sandbox),
-			Namespace: s.Namespace,
-		})
-		if err != nil {
+		latest := &agentsv1alpha1.Sandbox{}
+		if err := s.Cache.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(s.Sandbox), latest); err != nil {
 			return err
 		}
 
-		copied := sbx.DeepCopy()
-		modifier(copied)
+		copied := latest.DeepCopy()
+		shouldUpdate, err := modifier(copied)
+		if err != nil {
+			return err
+		}
+		if !shouldUpdate {
+			s.Sandbox = latest
+			updated = false
+			return nil
+		}
 		if err = s.Cache.GetClient().Update(ctx, copied); err != nil {
 			return err
 		}
 		s.Sandbox = copied
 		expectationutils.ResourceVersionExpectationExpect(copied)
+		updated = true
 		return nil
 	})
 	if err != nil {
 		log.Error(err, "failed to update sandbox after retries")
-	} else {
-		log.Info("sandbox updated successfully")
+		return false, err
 	}
-	return err
+	if updated {
+		log.Info("sandbox updated successfully")
+	} else {
+		log.Info("sandbox update skipped")
+	}
+	return updated, nil
+}
+
+func (s *Sandbox) refreshFromAPIReader(ctx context.Context) error {
+	latest := &agentsv1alpha1.Sandbox{}
+	if err := s.Cache.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(s.Sandbox), latest); err != nil {
+		return err
+	}
+	s.Sandbox = latest
+	return nil
 }
 
 func (s *Sandbox) Kill(ctx context.Context) error {
@@ -285,6 +314,9 @@ func (s *Sandbox) Request(ctx context.Context, method, path string, port int, bo
 
 func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 	log := klog.FromContext(ctx)
+	if err := s.refreshFromAPIReader(ctx); err != nil {
+		return err
+	}
 	if s.Status.Phase != agentsv1alpha1.SandboxRunning {
 		return fmt.Errorf("sandbox is not in running phase")
 	}
@@ -294,20 +326,33 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 		log.Error(err, "sandbox is not running", "state", state, "reason", reason)
 		return err
 	}
-	err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) {
+	updated, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+		if sbx.Spec.Paused {
+			// Pause is first-writer-wins: only the request that flips
+			// spec.paused may apply timeout and snapshot side effects.
+			return false, nil
+		}
 		sbx.Spec.Paused = true
 		if opts.Timeout != nil {
-			setTimeout(sbx, *opts.Timeout)
+			current := timeout.GetTimeoutFromSandbox(sbx)
+			if !timeout.Equal(current, *opts.Timeout) {
+				setTimeout(sbx, *opts.Timeout)
+			}
 			if opts.CaptureTimeoutSnapshot {
-				_ = timeout.SetTimeoutSnapshot(sbx) // JSON marshal will never fail here, error should be ignored
+				if err := timeout.SetTimeoutSnapshot(sbx); err != nil {
+					return false, err
+				}
 			}
 		}
+		return true, nil
 	})
 	if err != nil {
-		log.Error(err, "failed to update sandbox spec.paused")
+		log.Error(err, "failed to update sandbox")
 		return err
 	}
-	expectationutils.ResourceVersionExpectationExpect(s.Sandbox)
+	if !updated {
+		log.Info("skip update sandbox as it is already set to paused")
+	}
 	log.Info("waiting sandbox pause")
 	start := time.Now()
 	if err = s.Cache.NewSandboxPauseTask(ctx, s.Sandbox).Wait(time.Minute); err != nil {
@@ -323,15 +368,17 @@ const postResumeOperationTimeout = 30 * time.Second
 func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
 
-	initRuntimeOpts, err := runtime.GetInitRuntimeRequest(s.Sandbox)
-	if err != nil {
-		log.Error(err, "failed to get init runtime request")
-		return fmt.Errorf("failed to get init runtime request: %w", err)
+	localState, _ := s.GetState()
+	if err := s.refreshFromAPIReader(ctx); err != nil {
+		return err
 	}
-
 	state, reason := s.GetState()
 	log.Info("try to resume sandbox", "state", state, "reason", reason)
 	if state != agentsv1alpha1.SandboxStatePaused {
+		if localState == agentsv1alpha1.SandboxStatePaused && state == agentsv1alpha1.SandboxStateRunning && !s.Spec.Paused {
+			log.Info("sandbox already resumed")
+			return nil
+		}
 		err := fmt.Errorf("resuming is only available for paused state, current state: %s", state)
 		log.Error(err, "sandbox is not paused", "state", state, "reason", reason)
 		return err
@@ -340,20 +387,30 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	if s.Spec.Paused && cond.Status == metav1.ConditionFalse {
 		return errors.NewError(errors.ErrorConflict, "sandbox is pausing, please wait a moment and try again")
 	}
-	if s.Sandbox.Spec.Paused {
-		if err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) {
-			sbx.Spec.Paused = false // TODO Next: parallel optimize
-			if opts.EnsureTimeoutSnapshotIfMissing {
-				if _, exists, snapshotErr := timeout.GetTimeoutSnapshot(sbx); snapshotErr != nil || !exists {
-					_ = timeout.SetTimeoutSnapshot(sbx) // JSON marshal will never fail here, error should be ignored
+	initRuntimeOpts, err := runtime.GetInitRuntimeRequest(s.Sandbox)
+	if err != nil {
+		log.Error(err, "failed to get init runtime request")
+		return fmt.Errorf("failed to get init runtime request: %w", err)
+	}
+	if _, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+		if !sbx.Spec.Paused {
+			// Resume is first-writer-wins: only the request that flips
+			// spec.paused may apply timeout snapshot side effects.
+			return false, nil
+		}
+		sbx.Spec.Paused = false
+		if opts.EnsureTimeoutSnapshotIfMissing {
+			if _, exists, snapshotErr := timeout.GetTimeoutSnapshot(sbx); snapshotErr != nil || !exists {
+				if err := timeout.SetTimeoutSnapshot(sbx); err != nil {
+					return false, err
 				}
 			}
-		}); err != nil {
-			log.Error(err, "failed to update sandbox spec.paused")
-			return err
 		}
+		return true, nil
+	}); err != nil {
+		log.Error(err, "failed to update sandbox spec.paused")
+		return err
 	}
-	expectationutils.ResourceVersionExpectationExpect(s.Sandbox) // expect Resuming
 	log.Info("waiting sandbox resume")
 	start := time.Now()
 	if err = s.Cache.NewSandboxResumeTask(ctx, s.Sandbox).Wait(time.Minute); err != nil {

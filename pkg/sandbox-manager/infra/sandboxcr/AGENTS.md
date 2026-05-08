@@ -17,3 +17,4 @@ controller-runtime clients, informer cache, and the local proxy route model.
 - Use `retriableError` only when the outer retry loop should attempt a new claim operation.
 - Update `infra.ClaimMetrics` or `infra.CloneMetrics` consistently when adding operation stages.
 - Preserve package-level `Default...` function variables as test seams.
+- Treat `Pause` and `Resume` as first-writer-wins state transitions.
