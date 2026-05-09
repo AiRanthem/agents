@@ -32,7 +32,6 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
-	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
@@ -321,9 +320,12 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 	if pausable, reason := stateutils.IsSandboxPausable(s.Sandbox); !pausable {
 		return errors.NewError(errors.ErrorConflict, "sandbox is not pausable, reason: %s", reason)
 	}
-	if err := s.Cache.CheckSandboxWaitHookConflict(s.Sandbox, cacheutils.WaitActionPause); err != nil {
+	pauseTask, err := s.Cache.NewSandboxPauseTask(ctx, s.Sandbox)
+	if err != nil {
 		return err
 	}
+	defer pauseTask.Release()
+
 	cond := GetSandboxCondition(s.Sandbox, agentsv1alpha1.SandboxConditionPaused)
 	if s.Status.Phase == agentsv1alpha1.SandboxPaused {
 		if cond.Status == metav1.ConditionTrue {
@@ -360,7 +362,7 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 	}
 	log.Info("waiting sandbox pause")
 	start := time.Now()
-	if err = s.Cache.NewSandboxPauseTask(ctx, s.Sandbox).Wait(time.Minute); err != nil {
+	if err = pauseTask.Wait(time.Minute); err != nil {
 		log.Error(err, "failed to wait sandbox pause")
 		return err
 	}
@@ -380,9 +382,12 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	if resumable, reason := stateutils.IsSandboxResumable(s.Sandbox); !resumable {
 		return errors.NewError(errors.ErrorConflict, "sandbox is not resumable, reason: %s", reason)
 	}
-	if err := s.Cache.CheckSandboxWaitHookConflict(s.Sandbox, cacheutils.WaitActionResume); err != nil {
+	resumeTask, err := s.Cache.NewSandboxResumeTask(ctx, s.Sandbox)
+	if err != nil {
 		return err
 	}
+	defer resumeTask.Release()
+
 	cond := GetSandboxCondition(s.Sandbox, agentsv1alpha1.SandboxConditionReady)
 	if cond.Status == metav1.ConditionTrue {
 		log.Info("sandbox is already resumed")
@@ -418,7 +423,7 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	}
 	log.Info("waiting sandbox resume")
 	start := time.Now()
-	if err = s.Cache.NewSandboxResumeTask(ctx, s.Sandbox).Wait(time.Minute); err != nil {
+	if err = resumeTask.Wait(time.Minute); err != nil {
 		log.Error(err, "failed to wait sandbox resume")
 		return err
 	}

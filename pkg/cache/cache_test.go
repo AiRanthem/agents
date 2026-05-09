@@ -966,7 +966,13 @@ func TestRegression_SameActionConcurrentWaitsConverge(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errCh <- c.NewSandboxPauseTask(t.Context(), sbx).Wait(3 * time.Second)
+			task, err := c.NewSandboxPauseTask(t.Context(), sbx)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer task.Release()
+			errCh <- task.Wait(3 * time.Second)
 		}()
 	}
 	close(start)

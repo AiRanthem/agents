@@ -54,16 +54,18 @@ type Provider interface {
 	ListSandboxesInPool(ctx context.Context, opts ListSandboxesInPoolOptions) ([]*agentsv1alpha1.Sandbox, error)
 
 	// NewSandboxPauseTask builds an immutable wait task encapsulating the Pause
-	// readiness check. See pkg/cache/tasks.go for the checker definition.
-	NewSandboxPauseTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
+	// readiness check and pre-acquires its wait hook before callers mutate
+	// spec.paused. Call Release if Wait will not be reached; deferring Release
+	// after successful construction is safe. Wait releases the acquired hook
+	// when it returns.
+	NewSandboxPauseTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error)
 
 	// NewSandboxResumeTask builds an immutable wait task for Resume. The task
-	// succeeds when the sandbox reaches SandboxStateRunning.
-	NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox]
-
-	// CheckSandboxWaitHookConflict returns an error if the sandbox currently has
-	// an active wait hook for a different action.
-	CheckSandboxWaitHookConflict(sbx *agentsv1alpha1.Sandbox, action cacheutils.WaitAction) error
+	// pre-acquires its wait hook before callers mutate spec.paused and succeeds
+	// when the Ready condition is True. Call Release if Wait will not be reached;
+	// deferring Release after successful construction is safe. Wait releases the
+	// acquired hook when it returns.
+	NewSandboxResumeTask(ctx context.Context, sbx *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error)
 
 	// NewSandboxWaitReadyTask builds an immutable wait task for post-claim
 	// readiness (Generation observed + Ready condition not StartContainerFailed

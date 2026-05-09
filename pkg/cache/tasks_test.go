@@ -50,11 +50,21 @@ func TestNewSandboxPauseTask_BoundAction(t *testing.T) {
 	sbx := makePausedSandbox("sbx-pause-1", corev1.ConditionTrue)
 	c, _, err := cachetest.NewTestCache(t, sbx)
 	require.NoError(t, err)
-	task := c.NewSandboxPauseTask(context.Background(), sbx)
+	task, err := c.NewSandboxPauseTask(context.Background(), sbx)
+	require.NoError(t, err)
+	defer task.Release()
+
 	assert.Equal(t, cacheutils.WaitActionPause, task.Action())
 	assert.Same(t, sbx, task.Object())
-	// Already paused → Wait returns nil immediately.
+
+	key := cacheutils.WaitHookKey[*agentsv1alpha1.Sandbox](sbx)
+	_, ok := c.GetWaitHooks().Load(key)
+	assert.True(t, ok)
+
+	// Already paused means Wait returns nil immediately and releases the hook.
 	assert.NoError(t, task.Wait(100*time.Millisecond))
+	_, ok = c.GetWaitHooks().Load(key)
+	assert.False(t, ok)
 }
 
 func TestNewSandboxResumeTask_BoundAction(t *testing.T) {
@@ -73,10 +83,21 @@ func TestNewSandboxResumeTask_BoundAction(t *testing.T) {
 	}
 	c, _, err := cachetest.NewTestCache(t, sbx)
 	require.NoError(t, err)
-	task := c.NewSandboxResumeTask(context.Background(), sbx)
+	task, err := c.NewSandboxResumeTask(context.Background(), sbx)
+	require.NoError(t, err)
+	defer task.Release()
+
 	assert.Equal(t, cacheutils.WaitActionResume, task.Action())
-	// Running state → satisfied fast path.
+	assert.Same(t, sbx, task.Object())
+
+	key := cacheutils.WaitHookKey[*agentsv1alpha1.Sandbox](sbx)
+	_, ok := c.GetWaitHooks().Load(key)
+	assert.True(t, ok)
+
+	// Running state means Wait returns nil immediately and releases the hook.
 	assert.NoError(t, task.Wait(100*time.Millisecond))
+	_, ok = c.GetWaitHooks().Load(key)
+	assert.False(t, ok)
 }
 
 func TestNewSandboxWaitReadyTask_BoundAction(t *testing.T) {

@@ -124,30 +124,6 @@ func ReleaseEntry[T client.Object](waitHooks *sync.Map, key string, entry *WaitE
 	}
 }
 
-func CheckEntryActionConflict[T client.Object](waitHooks *sync.Map, obj T, action WaitAction) error {
-	key := WaitHookKey(obj)
-	for {
-		value, ok := waitHooks.Load(key)
-		if !ok {
-			return nil
-		}
-		entry := value.(*WaitEntry[T])
-
-		entry.mu.Lock()
-		current, ok := waitHooks.Load(key)
-		if !ok || current != entry {
-			entry.mu.Unlock()
-			continue
-		}
-		if entry.Action != action {
-			entry.mu.Unlock()
-			return fmt.Errorf("another action(%s)'s wait task already exists", entry.Action)
-		}
-		entry.mu.Unlock()
-		return nil
-	}
-}
-
 func (e *WaitEntry[T]) Close() {
 	e.closeOnce.Do(func() {
 		close(e.done)

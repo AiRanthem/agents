@@ -123,12 +123,18 @@ return client.Update(ctx, sbxCopy)
 
 ### Waiting for state transition
 ```go
-err := cacheProvider.NewSandboxResumeTask(ctx, sbx).Wait(30 * time.Second)
+task, err := cacheProvider.NewSandboxResumeTask(ctx, sbx)
+if err != nil { return err }
+defer task.Release()
+err = task.Wait(30 * time.Second)
 ```
 
 For the four production transitions the API is fixed: Pause, Resume, WaitReady, Checkpoint.
 Use the corresponding `NewXxxTask` factory. The checker is hard-wired - callers cannot pair the same
 `(action, object)` with a different predicate.
+Pause and Resume tasks pre-acquire their wait hook, so release them if execution returns before `Wait`.
+`Wait` also releases the hook when it returns, and `Release` is idempotent. WaitReady and Checkpoint tasks remain
+one-value lazy wait tasks.
 
 ## Dependencies
 

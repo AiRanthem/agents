@@ -29,8 +29,9 @@ import (
 // cannot accidentally pair the same (object, action) with different checkers.
 // A task may be lazy, acquiring its wait hook during Wait, or pre-acquired,
 // acquiring the wait hook during construction. Pre-acquired tasks are
-// single-use: call exactly one of Wait or Release, and Wait releases the hook
-// when it returns. The zero value is not usable.
+// single-use: Wait releases the hook when it returns, and Release is safe to
+// defer after construction as cleanup for paths that do not reach Wait. The
+// zero value is not usable.
 //
 // Immutability:
 //   - All fields are unexported; once constructed by a factory, callers can use
@@ -80,8 +81,9 @@ func NewWaitTask[T client.Object](
 }
 
 // NewAcquiredWaitTask builds a single-use WaitTask that acquires its wait hook
-// immediately. Callers must call exactly one of Wait or Release; Wait releases
-// the acquired hook when it returns.
+// immediately. Callers may defer Release after successful construction; Wait
+// releases the acquired hook when it returns, and the deferred Release is
+// idempotent cleanup for paths that do not reach Wait.
 func NewAcquiredWaitTask[T client.Object](
 	ctx context.Context,
 	waitHooks *sync.Map,

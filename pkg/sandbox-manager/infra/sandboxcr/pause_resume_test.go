@@ -746,7 +746,13 @@ func TestSandbox_PauseConflictsWithActiveResumeWaitHook(t *testing.T) {
 	defer waitCancel()
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- cache.NewSandboxResumeTask(waitCtx, sandbox).Wait(time.Hour)
+		task, taskErr := cache.NewSandboxResumeTask(waitCtx, sandbox)
+		if taskErr != nil {
+			waitDone <- taskErr
+			return
+		}
+		defer task.Release()
+		waitDone <- task.Wait(time.Hour)
 	}()
 
 	key := cacheutils.WaitHookKey[*v1alpha1.Sandbox](sandbox)
@@ -815,15 +821,9 @@ func TestSandbox_PauseConflictsWithActiveResumeWaitHookBeforeMutation(t *testing
 			CreateSandboxWithStatus(t, fc, sandbox)
 			time.Sleep(10 * time.Millisecond)
 
-			key := cacheutils.WaitHookKey[*v1alpha1.Sandbox](sandbox)
-			cache.GetWaitHooks().Store(key, cacheutils.NewWaitEntry[*v1alpha1.Sandbox](
-				t.Context(),
-				cacheutils.WaitActionResume,
-				func(*v1alpha1.Sandbox) (bool, error) {
-					return false, nil
-				},
-			))
-			defer cache.GetWaitHooks().Delete(key)
+			resumeTask, taskErr := cache.NewSandboxResumeTask(t.Context(), sandbox)
+			require.NoError(t, taskErr)
+			defer resumeTask.Release()
 
 			s := AsSandbox(sandbox, cache)
 			err = s.Pause(t.Context(), infra.PauseOptions{})
@@ -1121,7 +1121,13 @@ func TestSandbox_ResumeConflictsWithActivePauseWaitHook(t *testing.T) {
 	defer waitCancel()
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- cache.NewSandboxPauseTask(waitCtx, sandbox).Wait(time.Hour)
+		task, taskErr := cache.NewSandboxPauseTask(waitCtx, sandbox)
+		if taskErr != nil {
+			waitDone <- taskErr
+			return
+		}
+		defer task.Release()
+		waitDone <- task.Wait(time.Hour)
 	}()
 
 	key := cacheutils.WaitHookKey[*v1alpha1.Sandbox](sandbox)
@@ -1193,15 +1199,9 @@ func TestSandbox_ResumeConflictsWithActivePauseWaitHookBeforeMutation(t *testing
 			CreateSandboxWithStatus(t, fc, sandbox)
 			time.Sleep(10 * time.Millisecond)
 
-			key := cacheutils.WaitHookKey[*v1alpha1.Sandbox](sandbox)
-			cache.GetWaitHooks().Store(key, cacheutils.NewWaitEntry[*v1alpha1.Sandbox](
-				t.Context(),
-				cacheutils.WaitActionPause,
-				func(*v1alpha1.Sandbox) (bool, error) {
-					return false, nil
-				},
-			))
-			defer cache.GetWaitHooks().Delete(key)
+			pauseTask, taskErr := cache.NewSandboxPauseTask(t.Context(), sandbox)
+			require.NoError(t, taskErr)
+			defer pauseTask.Release()
 
 			s := AsSandbox(sandbox, cache)
 			err = s.Resume(t.Context(), infra.ResumeOptions{})
