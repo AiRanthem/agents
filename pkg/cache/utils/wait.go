@@ -38,6 +38,13 @@ const (
 	WaitActionCheckpoint WaitAction = "Checkpoint"
 )
 
+// defaultWaitPollInterval is the interval for the ticker-based polling fallback.
+// When the event-driven WaitReconciler fails to close the wait entry (due to
+// transient errors, controller backoff, or queue delays), the polling ticker
+// provides an independent second path that periodically re-checks whether the
+// condition is satisfied. Both the ticker and the reconciler read from the same
+// informer cache, so the ticker cannot on its own overcome informer staleness
+// caused by watch connection loss before a re-list completes.
 var defaultWaitPollInterval = 10 * time.Second
 
 type CheckFunc[T client.Object] func(obj T) (bool, error)
@@ -188,6 +195,17 @@ func waitForAcquiredObjectSatisfied[T client.Object](ctx context.Context, entry 
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Polling ticker serves as an independent fallback for the event-driven path
+	// (entry.Done). It guards against scenarios where the WaitReconciler fails to
+	// call entry.Close() — for example, when the reconciler encounters a transient
+	// Get error, is delayed by controller-runtime backoff, or the checkWaitHooks
+	// logic does not fire. The ticker runs on a fixed interval independent of the
+	// controller-runtime event queue.
+	//
+	// Note: the ticker reads from the same informer cache as the reconciler via
+	// the update function, so it does not bypass informer staleness caused by
+	// watch event loss. In those cases recovery still depends on the informer
+	// re-listing on its own.
 	ticker := time.NewTicker(defaultWaitPollInterval)
 	defer ticker.Stop()
 

@@ -346,7 +346,7 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 				setTimeout(sbx, *opts.Timeout)
 			}
 		}
-		if opts.Timeout != nil && opts.CaptureTimeoutSnapshot {
+		if opts.CaptureTimeoutSnapshot {
 			if err := timeout.SetTimeoutSnapshot(sbx); err != nil {
 				return false, err
 			}
@@ -446,6 +446,10 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	expectationutils.ResourceVersionExpectationExpect(s.Sandbox) // expect Running
 
 	if !resumeUpdated {
+		// Concurrent same-action Resume callers share the Sandbox resume wait.
+		// Once the Sandbox reaches Ready, losing callers return success without
+		// running or waiting for the transitional E2B post-resume initialization
+		// below. ReInit and CSI remount are not part of the loser success contract.
 		log.Info("sandbox resume already won by another request, skipping post-resume operations")
 		return nil
 	}

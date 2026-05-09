@@ -119,7 +119,7 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 	}
 	builder, err := b.buildInfraFunc()
 	if err != nil {
-		return nil, errors.NewError(errors.ErrorInternal, fmt.Sprintf("failed to get infra builder: %s", err.Error()))
+		return nil, errors.NewError(errors.ErrorInternal, "failed to get infra builder: %v", err)
 	}
 	b.instance.infra = builder.Build()
 	reader := b.instance.infra.GetCache().GetAPIReader()
@@ -128,7 +128,7 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 	if b.getPeersFunc != nil {
 		peersManager, err := b.getPeersFunc(NewPeerArgs{apiReader: reader})
 		if err != nil {
-			return nil, errors.NewError(errors.ErrorInternal, fmt.Sprintf("failed to get peers manager: %s", err.Error()))
+			return nil, errors.NewError(errors.ErrorInternal, "failed to get peers manager: %v", err)
 		}
 		b.instance.peersManager = peersManager
 		b.instance.proxy.SetPeersManager(peersManager)

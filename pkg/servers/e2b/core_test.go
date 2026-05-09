@@ -473,15 +473,18 @@ func UpdateSandboxWhen(t *testing.T, c ctrlclient.Client, sandboxID string, when
 func DoSetSandboxStatus(phase agentsv1alpha1.SandboxPhase, pausedStatus, readyStatus metav1.ConditionStatus) DoFunc {
 	return func(t *testing.T, c ctrlclient.Client, sbx *agentsv1alpha1.Sandbox) {
 		sbx.Status.Phase = phase
-		sbx.Status.Conditions = []metav1.Condition{
-			{
+		sbx.Status.Conditions = nil
+		if pausedStatus != "" {
+			sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
 				Type:   string(agentsv1alpha1.SandboxConditionPaused),
 				Status: pausedStatus,
-			},
-			{
+			})
+		}
+		if readyStatus != "" {
+			sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
 				Type:   string(agentsv1alpha1.SandboxConditionReady),
 				Status: readyStatus,
-			},
+			})
 		}
 		err := c.Status().Update(t.Context(), sbx)
 		if err != nil {

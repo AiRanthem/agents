@@ -581,7 +581,7 @@ func TestSandboxManager_PauseSandbox(t *testing.T) {
 			expectedIP:    "10.0.0.1",
 		},
 		{
-			name: "pause already paused sandbox should fail",
+			name: "pause already paused sandbox should success",
 			initSandbox: func(sbx *agentsv1alpha1.Sandbox) {
 				sbx.Status.Phase = agentsv1alpha1.SandboxPaused
 				sbx.Status.Conditions = []metav1.Condition{
@@ -593,9 +593,9 @@ func TestSandboxManager_PauseSandbox(t *testing.T) {
 				sbx.Spec.Paused = true
 				sbx.Status.PodInfo.PodIP = "10.0.0.2"
 			},
-			expectError:   true,
-			expectedState: "",
-			expectedIP:    "",
+			expectError:   false,
+			expectedState: agentsv1alpha1.SandboxStatePaused,
+			expectedIP:    "10.0.0.2",
 		},
 	}
 
@@ -711,7 +711,7 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 			ipChanged:     true,
 		},
 		{
-			name: "resume already running sandbox should fail",
+			name: "resume already running sandbox should success",
 			initSandbox: func(sbx *agentsv1alpha1.Sandbox) {
 				sbx.Status.Phase = agentsv1alpha1.SandboxRunning
 				sbx.Status.Conditions = []metav1.Condition{
@@ -723,9 +723,9 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 				sbx.Spec.Paused = false
 				sbx.Status.PodInfo.PodIP = "10.0.0.1"
 			},
-			expectError:   true,
-			expectedState: "",
-			expectedIP:    "",
+			expectError:   false,
+			expectedState: agentsv1alpha1.SandboxStateRunning,
+			expectedIP:    "10.0.0.1",
 			ipChanged:     false,
 		},
 	}

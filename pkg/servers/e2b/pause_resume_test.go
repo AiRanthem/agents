@@ -105,7 +105,7 @@ func pauseSandboxHelper(t *testing.T, controller *Controller, client client.Clie
 	if pausing {
 		UpdateSandboxWhen(t, client, sandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 			return sbx.Spec.Paused == true
-		}, DoSetSandboxStatus(agentsv1alpha1.SandboxPaused, metav1.ConditionFalse, metav1.ConditionFalse))
+		}, DoSetSandboxStatus(agentsv1alpha1.SandboxPaused, metav1.ConditionFalse, ""))
 	} else if resuming {
 		// Set resuming state: Spec.Paused=false, Phase=Running, Ready=false
 		// This means sandbox is transitioning from paused to running
@@ -115,7 +115,7 @@ func pauseSandboxHelper(t *testing.T, controller *Controller, client client.Clie
 		// Update status to reflect resuming state
 		UpdateSandboxWhen(t, client, sandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 			return sbx.Spec.Paused == false
-		}, DoSetSandboxStatus(agentsv1alpha1.SandboxPaused, metav1.ConditionFalse, metav1.ConditionFalse))
+		}, DoSetSandboxStatus(agentsv1alpha1.SandboxResuming, "", metav1.ConditionFalse))
 	}
 }
 
@@ -208,7 +208,7 @@ func TestConnectSandbox(t *testing.T) {
 			if tt.expectStatus < 300 {
 				go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 					return sbx.Spec.Paused == false
-				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, "", metav1.ConditionTrue))
 			}
 			now := time.Now()
 			connectResp, err := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
@@ -414,7 +414,7 @@ func TestResumeSandbox(t *testing.T) {
 				// Only schedule async update when expecting success
 				go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 					return sbx.Spec.Paused == false
-				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+				}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, "", metav1.ConditionTrue))
 			}
 			now := time.Now()
 			resumeResp, apiErr := controller.ResumeSandbox(NewRequest(t, nil, models.SetTimeoutRequest{

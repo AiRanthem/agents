@@ -134,8 +134,8 @@ func IsSandboxResumable(sbx *agentsv1alpha1.Sandbox) (bool, string) {
 	}
 	if sbx.Status.Phase == agentsv1alpha1.SandboxPaused {
 		pauseCond := utils.GetSandboxCondition(&sbx.Status, string(agentsv1alpha1.SandboxConditionPaused))
-		resumable := pauseCond != nil && pauseCond.Status == metav1.ConditionTrue
-		if resumable {
+		paused := pauseCond != nil && pauseCond.Status == metav1.ConditionTrue
+		if paused {
 			return true, "SandboxIsPaused"
 		}
 		return false, "SandboxIsPausing"
