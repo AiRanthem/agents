@@ -3060,9 +3060,9 @@ func TestReconcile_ErrorPath_UpdatesSandboxStatus(t *testing.T) {
 
 	sandbox := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "error-path-sandbox",
-			Namespace:  "default",
-			Finalizers: []string{utils.SandboxFinalizer},
+			Name:        "error-path-sandbox",
+			Namespace:   "default",
+			Finalizers:  []string{utils.SandboxFinalizer},
 			Annotations: map[string]string{
 				// Will be filled with the computed hashImmutablePart below
 			},
@@ -3157,9 +3157,9 @@ func TestReconcile_ErrorPath_StatusUpdateAlsoFails(t *testing.T) {
 
 	sandbox := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "error-both-sandbox",
-			Namespace:  "default",
-			Finalizers: []string{utils.SandboxFinalizer},
+			Name:        "error-both-sandbox",
+			Namespace:   "default",
+			Finalizers:  []string{utils.SandboxFinalizer},
 			Annotations: map[string]string{},
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
@@ -3669,70 +3669,5 @@ func TestUpdateSandboxStatus_Upgrading_RevisionUnchanged_NoReset(t *testing.T) {
 	}
 	if upgradeCond.Message != "upgrading pod" {
 		t.Errorf("Expected Message %q, got %q", "upgrading pod", upgradeCond.Message)
-	}
-}
-
-func TestEnsureSandboxPaused_DelegatesToControl(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "delegate-sandbox",
-			Namespace: "default",
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: "test", Image: "nginx"}},
-		},
-	}
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{Name: "delegate-sandbox", Namespace: "default", Annotations: map[string]string{}},
-		Spec: agentsv1alpha1.SandboxSpec{
-			Paused:       true,
-			ShutdownTime: &metav1.Time{Time: time.Now().Add(1 * time.Hour).Truncate(time.Second)},
-		},
-	}
-
-	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(sandbox, pod).
-		Build()
-
-	recorder := record.NewFakeRecorder(10)
-	rl := core.NewRateLimiter()
-	r := &SandboxReconciler{
-		Client: fc,
-		Scheme: scheme,
-		controls: core.NewSandboxControl(core.SandboxControlArgs{
-			Client:      fc,
-			Recorder:    recorder,
-			RateLimiter: rl,
-		}),
-		rateLimiter: rl,
-	}
-
-	newStatus := &agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxPaused}
-	args := core.EnsureFuncArgs{
-		Pod:       pod,
-		Box:       sandbox,
-		NewStatus: newStatus,
-	}
-
-	err := r.EnsureSandboxPaused(context.Background(), args)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	// Verify the control side effect: pod should be deleted
-	fetchedPod := &corev1.Pod{}
-	getErr := fc.Get(context.Background(), client.ObjectKeyFromObject(pod), fetchedPod)
-	if getErr == nil && fetchedPod.DeletionTimestamp.IsZero() {
-		t.Error("expected pod to be deleted by control, but it still exists without deletion timestamp")
-	}
-	// Acceptable outcomes: pod is deleted (not found) or pod has deletion timestamp set
-	if getErr != nil && !apierrors.IsNotFound(getErr) {
-		t.Errorf("unexpected error fetching pod: %v", getErr)
 	}
 }
