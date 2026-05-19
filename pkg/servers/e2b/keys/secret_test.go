@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -845,28 +846,72 @@ func TestSecretKeyStorage_IdxByTeamCache(t *testing.T) {
 	}
 }
 
-func TestSecretKeyStorage_RunStop(t *testing.T) {
+func TestSecretKeyStorage_RunStop_RegistersAndRemovesHandler(t *testing.T) {
 	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
-	oldTicker := newRefreshTicker
-	newRefreshTicker = func() *time.Ticker { return time.NewTicker(2 * time.Millisecond) }
-	t.Cleanup(func() { newRefreshTicker = oldTicker })
+	stub := newStubCache()
+	storage.Cache = stub
+
 	storage.Run()
-	time.Sleep(8 * time.Millisecond)
+	require.NotNil(t, stub.informer.currentHandler(), "Run should register an event handler")
+
 	storage.Stop()
-	require.NotPanics(t, func() { storage.Stop() })
+	require.True(t, stub.informer.wasRemoved(), "Stop should remove the event handler")
+	require.NotPanics(t, func() { storage.Stop() }, "Stop must be idempotent")
 }
 
-func TestSecretKeyStorage_RunRefreshErrorBranch(t *testing.T) {
-	storage, c := newSecretStorageForTest(t, map[string][]byte{})
-	require.NoError(t, c.Delete(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: KeySecretName, Namespace: "default"},
-	}))
-	oldTicker := newRefreshTicker
-	newRefreshTicker = func() *time.Ticker { return time.NewTicker(2 * time.Millisecond) }
-	t.Cleanup(func() { newRefreshTicker = oldTicker })
+func TestSecretKeyStorage_Run_HandlerEventTriggersRefresh(t *testing.T) {
+	// Seed a Secret with a key the storage does not yet know about.
+	id := uuid.New()
+	keyStr := uuid.NewString()
+	apiKey := &models.CreatedTeamAPIKey{
+		ID: id, Key: keyStr, Name: "watched", Team: models.AdminTeam(), CreatedAt: time.Now(),
+	}
+	apiKeyJSON, err := json.Marshal(apiKey)
+	require.NoError(t, err)
+
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{id.String(): apiKeyJSON})
+	stub := newStubCache()
+	storage.Cache = stub
+
+	// Reset the in-memory indexes so we can observe the worker re-populating them.
+	storage.idxByKey = sync.Map{}
+	storage.idxByID = sync.Map{}
+	storage.idxByTeam = sync.Map{}
+	_, ok := storage.LoadByKey(t.Context(), keyStr)
+	require.False(t, ok, "precondition: key should not be in cache before Run")
+
 	storage.Run()
-	time.Sleep(8 * time.Millisecond)
-	storage.Stop()
+	t.Cleanup(storage.Stop)
+
+	// Drive a synthetic event matching the watched Secret.
+	stub.informer.currentHandler().OnUpdate(nil, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: KeySecretName},
+	})
+
+	require.Eventually(t, func() bool {
+		_, ok := storage.LoadByKey(t.Context(), keyStr)
+		return ok
+	}, time.Second, 5*time.Millisecond, "expected refreshWorker to repopulate the index")
+}
+
+func TestSecretKeyStorage_Run_FilteredEventDoesNotTriggerRefresh(t *testing.T) {
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+	stub := newStubCache()
+	storage.Cache = stub
+
+	storage.Run()
+	t.Cleanup(storage.Stop)
+
+	// Event for an unrelated Secret should be filtered out — refreshC stays empty.
+	stub.informer.currentHandler().OnUpdate(nil, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "unrelated"},
+	})
+
+	select {
+	case <-storage.refreshC:
+		t.Fatal("did not expect a refresh signal for unrelated Secret")
+	case <-time.After(20 * time.Millisecond):
+	}
 }
 
 func TestSecretKeyStorage_TriggerRefresh_Coalesces(t *testing.T) {
