@@ -230,20 +230,23 @@ func (i *Infra) DeleteCheckpoint(ctx context.Context, opts infra.DeleteCheckpoin
 		return managererrors.NewError(managererrors.ErrorNotAllowed, "checkpoint %s is not owned by user %s", opts.CheckpointID, user)
 	}
 
-	// Step 3: Delete the SandboxTemplate
-	log.Info("deleting sandbox template", "template", klog.KObj(tmpl))
-	if err := DefaultDeleteSandboxTemplate(ctx, i.Cache.GetClient(), tmpl.Namespace, tmpl.Name); err != nil {
-		log.Error(err, "failed to delete sandbox template")
+	// Step 3: Delete the Checkpoint. For new-shape data (SandboxTemplate owned
+	// by Checkpoint), Kubernetes garbage collection cascades the
+	// SandboxTemplate after the agents.kruise.io/checkpoint finalizer is
+	// processed.
+	log.Info("deleting checkpoint", "checkpoint", klog.KObj(cp))
+	if err := DefaultDeleteCheckpointCR(ctx, i.Cache.GetClient(), cp.Namespace, cp.Name); err != nil {
+		log.Error(err, "failed to delete checkpoint")
 		return managererrors.NewError(managererrors.ErrorInternal, "%s", err.Error())
 	}
 
-	// Step 4: Check if checkpoint has OwnerReference to the SandboxTemplate
-	// If yes, Kubernetes garbage collection will handle deletion automatically
-	// If no, explicitly delete the checkpoint
-	if !metav1.IsControlledBy(cp, tmpl) {
-		log.Info("checkpoint has no controller reference to template, deleting explicitly", "checkpoint", klog.KObj(cp))
-		if err := DefaultDeleteCheckpointCR(ctx, i.Cache.GetClient(), cp.Namespace, cp.Name); err != nil {
-			log.Error(err, "failed to delete checkpoint")
+	// Step 4: For legacy-shape data (Checkpoint owned by SandboxTemplate, with
+	// no owner reference on the SandboxTemplate itself), GC will not reach the
+	// SandboxTemplate. Delete it explicitly.
+	if !metav1.IsControlledBy(tmpl, cp) {
+		log.Info("template not controlled by checkpoint, deleting explicitly", "template", klog.KObj(tmpl))
+		if err := DefaultDeleteSandboxTemplate(ctx, i.Cache.GetClient(), tmpl.Namespace, tmpl.Name); err != nil {
+			log.Error(err, "failed to delete sandbox template")
 			return managererrors.NewError(managererrors.ErrorInternal, "%s", err.Error())
 		}
 	}

@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/api/v1alpha1"
@@ -1003,4 +1004,76 @@ func TestInfra_startRouteReconciler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInfra_DeleteCheckpoint_NewShape_SkipsExplicitTemplateDelete(t *testing.T) {
+	infraInstance, fc := NewTestInfra(t)
+
+	var deleteCpCount, deleteTmplCount int
+
+	origDelCp := DefaultDeleteCheckpointCR
+	DefaultDeleteCheckpointCR = func(ctx context.Context, c client.Client, namespace, name string) error {
+		deleteCpCount++
+		return origDelCp(ctx, c, namespace, name)
+	}
+	t.Cleanup(func() { DefaultDeleteCheckpointCR = origDelCp })
+
+	origDelTmpl := DefaultDeleteSandboxTemplate
+	DefaultDeleteSandboxTemplate = func(ctx context.Context, c client.Client, namespace, name string) error {
+		deleteTmplCount++
+		return origDelTmpl(ctx, c, namespace, name)
+	}
+	t.Cleanup(func() { DefaultDeleteSandboxTemplate = origDelTmpl })
+
+	const namespace = "default"
+	const cpName = "cp-new-shape"
+	const cpUID types.UID = "cp-new-shape-uid"
+
+	// Create the Checkpoint first (mirroring production order) with an explicit
+	// UID so the SandboxTemplate's OwnerReference resolves deterministically.
+	cp := &v1alpha1.Checkpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        cpName,
+			Namespace:   namespace,
+			UID:         cpUID,
+			Annotations: map[string]string{v1alpha1.AnnotationOwner: "test-user"},
+		},
+		Status: v1alpha1.CheckpointStatus{CheckpointId: cpName},
+	}
+	require.NoError(t, fc.Create(t.Context(), cp))
+	require.NoError(t, fc.Status().Update(t.Context(), cp))
+
+	tmpl := &v1alpha1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cpName,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         v1alpha1.CheckpointControllerKind.GroupVersion().String(),
+					Kind:               v1alpha1.CheckpointControllerKind.Kind,
+					Name:               cpName,
+					UID:                cpUID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			},
+		},
+		Spec: v1alpha1.SandboxTemplateSpec{
+			Template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: "test"}},
+				},
+			},
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), tmpl))
+
+	err := infraInstance.DeleteCheckpoint(t.Context(), infra.DeleteCheckpointOptions{
+		Namespace:    namespace,
+		CheckpointID: cpName,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, deleteCpCount, "DefaultDeleteCheckpointCR must be called exactly once")
+	assert.Equal(t, 0, deleteTmplCount, "DefaultDeleteSandboxTemplate must not be called for new-shape data; GC handles cascade")
 }
