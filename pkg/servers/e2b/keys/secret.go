@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -66,6 +67,8 @@ type secretKeyStorage struct {
 	stop     chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	refreshC chan struct{}
+	wg       sync.WaitGroup
 
 	idxByKey  sync.Map
 	idxByID   sync.Map
@@ -81,6 +84,7 @@ func NewSecretKeyStorage(client client.Client, apiReader client.Reader, cache ct
 		Cache:     cache,
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
+		refreshC:  make(chan struct{}, 1),
 	}
 }
 
@@ -156,6 +160,44 @@ func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) er
 		return true
 	})
 	return nil
+}
+
+func (k *secretKeyStorage) triggerRefresh() {
+	select {
+	case k.refreshC <- struct{}{}:
+	default:
+	}
+}
+
+func (k *secretKeyStorage) refreshWorker(ctx context.Context) {
+	defer k.wg.Done()
+	log := klog.FromContext(ctx)
+	for {
+		select {
+		case <-k.refreshC:
+			if err := k.refresh(ctx, k.Client); err != nil {
+				log.Error(err, "failed to refresh key store")
+			}
+		case <-k.stop:
+			return
+		}
+	}
+}
+
+func (k *secretKeyStorage) onSecretEvent(obj any) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		if t, isTombstone := obj.(toolscache.DeletedFinalStateUnknown); isTombstone {
+			secret, ok = t.Obj.(*corev1.Secret)
+		}
+		if !ok {
+			return
+		}
+	}
+	if secret.Namespace != k.Namespace || secret.Name != KeySecretName {
+		return
+	}
+	k.triggerRefresh()
 }
 
 func (k *secretKeyStorage) Run() {

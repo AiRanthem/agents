@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -866,4 +867,96 @@ func TestSecretKeyStorage_RunRefreshErrorBranch(t *testing.T) {
 	storage.Run()
 	time.Sleep(8 * time.Millisecond)
 	storage.Stop()
+}
+
+func TestSecretKeyStorage_TriggerRefresh_Coalesces(t *testing.T) {
+	s := &secretKeyStorage{refreshC: make(chan struct{}, 1)}
+
+	s.triggerRefresh()
+	s.triggerRefresh()
+	s.triggerRefresh()
+
+	select {
+	case <-s.refreshC:
+	default:
+		t.Fatal("expected at least one signal in refreshC")
+	}
+	select {
+	case <-s.refreshC:
+		t.Fatal("expected coalescing; multiple signals queued")
+	default:
+	}
+}
+
+func TestSecretKeyStorage_OnSecretEvent_Match(t *testing.T) {
+	s := &secretKeyStorage{Namespace: "default", refreshC: make(chan struct{}, 1)}
+
+	s.onSecretEvent(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "default",
+		Name:      KeySecretName,
+	}})
+
+	select {
+	case <-s.refreshC:
+	default:
+		t.Fatal("expected refresh signal for matching Secret")
+	}
+}
+
+func TestSecretKeyStorage_OnSecretEvent_Mismatch(t *testing.T) {
+	cases := []struct {
+		name      string
+		namespace string
+		objName   string
+	}{
+		{"wrong namespace", "other-ns", KeySecretName},
+		{"wrong name", "default", "other-secret"},
+		{"both wrong", "other-ns", "other-secret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &secretKeyStorage{Namespace: "default", refreshC: make(chan struct{}, 1)}
+
+			s.onSecretEvent(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+				Namespace: tc.namespace,
+				Name:      tc.objName,
+			}})
+
+			select {
+			case <-s.refreshC:
+				t.Fatal("did not expect a refresh signal for non-matching Secret")
+			default:
+			}
+		})
+	}
+}
+
+func TestSecretKeyStorage_OnSecretEvent_Tombstone(t *testing.T) {
+	s := &secretKeyStorage{Namespace: "default", refreshC: make(chan struct{}, 1)}
+
+	s.onSecretEvent(toolscache.DeletedFinalStateUnknown{
+		Key: "default/" + KeySecretName,
+		Obj: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      KeySecretName,
+		}},
+	})
+
+	select {
+	case <-s.refreshC:
+	default:
+		t.Fatal("expected refresh signal from tombstone")
+	}
+}
+
+func TestSecretKeyStorage_OnSecretEvent_UnknownType(t *testing.T) {
+	s := &secretKeyStorage{Namespace: "default", refreshC: make(chan struct{}, 1)}
+
+	s.onSecretEvent("not a secret")
+
+	select {
+	case <-s.refreshC:
+		t.Fatal("did not expect a refresh signal for non-Secret object")
+	default:
+	}
 }
