@@ -22,11 +22,10 @@ sub-second).
 - `Run()` registers the handler and starts a single-worker goroutine that
   drains a coalescing channel and calls `refresh()` against the cached
   client. `Stop()` removes the handler and waits for the worker to exit.
-- `CreateKey` and `DeleteKey` call `triggerRefresh()` after a successful API
-  write to compress the writer's own propagation latency. This also heals
-  the historical `retryCreateKey` cross-replica visibility issue: if a retry
-  re-reads a Secret revision containing concurrent writes from another
-  replica, the next refresh syncs them all at once.
+- Cross-replica visibility (including the historical `retryCreateKey` case
+  where a retry re-reads a Secret revision containing concurrent writes
+  from another replica) is healed by the next informer event reaching the
+  affected replica — typically within a few hundred milliseconds.
 
 ## Interface And Callers
 
