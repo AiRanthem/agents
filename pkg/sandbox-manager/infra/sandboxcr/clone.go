@@ -298,44 +298,17 @@ func createCheckpoint(ctx context.Context, c client.Client, cp *v1alpha1.Checkpo
 
 func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracache.Provider, opts infra.CreateCheckpointOptions) (string, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
-	log.Info("creating sandbox template")
-	tmpl := &v1alpha1.SandboxTemplate{
+
+	// Step 1: Build the Checkpoint with GenerateName. The Checkpoint is the new
+	// owner of the SandboxTemplate; it carries no OwnerReferences itself.
+	cp := &v1alpha1.Checkpoint{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: sbx.Name + "-",
 			Namespace:    sbx.Namespace,
-		},
-		Spec: v1alpha1.SandboxTemplateSpec{
-			PersistentContents:   sbx.Spec.PersistentContents,
-			Template:             sbx.Spec.Template,
-			VolumeClaimTemplates: sbx.Spec.VolumeClaimTemplates,
-			Runtimes:             sbx.Spec.Runtimes,
-		},
-	}
-	tmpl, err := DefaultCreateSandboxTemplate(ctx, cache.GetClient(), tmpl)
-	if err != nil {
-		log.Error(err, "failed to create sandbox template")
-		return "", fmt.Errorf("failed to create sandbox template: %w", err)
-	}
-	log = log.WithValues("template", klog.KObj(tmpl))
-	log.Info("template created")
-	cp := &v1alpha1.Checkpoint{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      tmpl.Name,
-			Namespace: sbx.Namespace,
 			Annotations: map[string]string{
 				v1alpha1.AnnotationInitRuntimeRequest: sbx.Annotations[v1alpha1.AnnotationInitRuntimeRequest],
 				v1alpha1.AnnotationOwner:              sbx.Annotations[v1alpha1.AnnotationOwner],
 				v1alpha1.AnnotationSandboxID:          stateutils.GetSandboxID(sbx),
-			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         v1alpha1.SandboxTemplateControllerKind.GroupVersion().String(),
-					Kind:               v1alpha1.SandboxTemplateControllerKind.Kind,
-					Name:               tmpl.Name,
-					UID:                tmpl.UID,
-					Controller:         ptr.To(true),
-					BlockOwnerDeletion: ptr.To(true),
-				},
 			},
 		},
 		Spec: v1alpha1.CheckpointSpec{
@@ -347,21 +320,62 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 	if len(opts.PersistentContents) > 0 {
 		cp.Spec.PersistentContents = opts.PersistentContents
 	} else {
-		for _, pc := range tmpl.Spec.PersistentContents {
+		// Source falls back to the Sandbox itself (the same data the
+		// SandboxTemplate would copy from), filtered to the persistent-content
+		// values the Checkpoint understands.
+		for _, pc := range sbx.Spec.PersistentContents {
 			if pc == v1alpha1.CheckpointPersistentContentFilesystem || pc == v1alpha1.CheckpointPersistentContentMemory {
 				cp.Spec.PersistentContents = append(cp.Spec.PersistentContents, pc)
 			}
 		}
 	}
-	// to make sure the sandbox annotations are propagated to the checkpoint
+	// Propagate sandbox annotations (e.g., csi mount config) to the Checkpoint
+	// before creation.
 	checkpointUtils.PropagateAnnotationsToCheckpoint(sbx, cp)
-	cp, err = DefaultCreateCheckpoint(ctx, cache.GetClient(), cp)
+	log.Info("creating checkpoint")
+	cp, err := DefaultCreateCheckpoint(ctx, cache.GetClient(), cp)
 	if err != nil {
 		log.Error(err, "failed to create checkpoint")
 		return "", fmt.Errorf("failed to create checkpoint: %w", err)
 	}
 	log = log.WithValues("checkpoint", klog.KObj(cp))
-	log.Info("checkpoint creating")
+	log.Info("checkpoint created")
+
+	// Step 2: Build the SandboxTemplate with the Checkpoint's name and an
+	// OwnerReference pointing back at the Checkpoint, so deletion of the
+	// Checkpoint cascades to the SandboxTemplate via Kubernetes GC.
+	tmpl := &v1alpha1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cp.Name,
+			Namespace: sbx.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         v1alpha1.CheckpointControllerKind.GroupVersion().String(),
+					Kind:               v1alpha1.CheckpointControllerKind.Kind,
+					Name:               cp.Name,
+					UID:                cp.UID,
+					Controller:         ptr.To(true),
+					BlockOwnerDeletion: ptr.To(true),
+				},
+			},
+		},
+		Spec: v1alpha1.SandboxTemplateSpec{
+			PersistentContents:   sbx.Spec.PersistentContents,
+			Template:             sbx.Spec.Template,
+			VolumeClaimTemplates: sbx.Spec.VolumeClaimTemplates,
+			Runtimes:             sbx.Spec.Runtimes,
+		},
+	}
+	log.Info("creating sandbox template")
+	tmpl, err = DefaultCreateSandboxTemplate(ctx, cache.GetClient(), tmpl)
+	if err != nil {
+		log.Error(err, "failed to create sandbox template")
+		return "", fmt.Errorf("failed to create sandbox template: %w", err)
+	}
+	log = log.WithValues("template", klog.KObj(tmpl))
+	log.Info("template created")
+
+	// Step 3: Wait for the Checkpoint to reach Succeeded.
 	if err = cache.NewCheckpointTask(ctx, cp).Wait(opts.WaitSuccessTimeout); err != nil {
 		log.Error(err, "failed to wait checkpoint ready")
 		return "", fmt.Errorf("failed to wait checkpoint ready: %w", err)
@@ -371,7 +385,7 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 		log.Error(err, "failed to refresh checkpoint after wait")
 		return "", fmt.Errorf("failed to refresh checkpoint: %w", err)
 	}
-	log.Info("checkpoint created")
+	log.Info("checkpoint ready")
 	return fresh.Status.CheckpointId, nil
 }
 

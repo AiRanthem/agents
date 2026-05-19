@@ -970,20 +970,12 @@ func TestCreateCheckPoint(t *testing.T) {
 		injectErrCheckpoint injectErrTarget = "checkpoint"
 	)
 
-	// Decorator 1: DefaultCreateSandboxTemplate
+	// Decorator 1: DefaultCreateSandboxTemplate (only for error injection now;
+	// after the flip, the SandboxTemplate inherits its Name from the Checkpoint).
 	origCreateSandboxTemplate := DefaultCreateSandboxTemplate
 	DefaultCreateSandboxTemplate = func(ctx context.Context, c client.Client, tmpl *v1alpha1.SandboxTemplate) (*v1alpha1.SandboxTemplate, error) {
-		// Check for error injection
 		if target, ok := ctx.Value(injectErrKey{}).(injectErrTarget); ok && target == injectErrTemplate {
 			return nil, fmt.Errorf("injected error: template creation failed")
-		}
-		if override, ok := ctx.Value(tmplOverrideKey{}).(tmplOverride); ok {
-			if override.Name != "" {
-				tmpl.Name = override.Name
-			}
-			if override.UID != "" {
-				tmpl.UID = override.UID
-			}
 		}
 		return origCreateSandboxTemplate(ctx, c, tmpl)
 	}
@@ -992,9 +984,20 @@ func TestCreateCheckPoint(t *testing.T) {
 	// Decorator 2: DefaultCreateCheckpoint
 	origCreateCheckpoint := DefaultCreateCheckpoint
 	DefaultCreateCheckpoint = func(ctx context.Context, c client.Client, cp *v1alpha1.Checkpoint) (*v1alpha1.Checkpoint, error) {
-		// Check for error injection
 		if target, ok := ctx.Value(injectErrKey{}).(injectErrTarget); ok && target == injectErrCheckpoint {
 			return nil, fmt.Errorf("injected error: checkpoint creation failed")
+		}
+		// After the flip the Checkpoint is the first object created (with GenerateName).
+		// Apply the test override here so the rest of the flow sees a deterministic
+		// Name and UID.
+		if override, ok := ctx.Value(tmplOverrideKey{}).(tmplOverride); ok {
+			if override.Name != "" {
+				cp.Name = override.Name
+				cp.GenerateName = ""
+			}
+			if override.UID != "" {
+				cp.UID = override.UID
+			}
 		}
 		if status, ok := ctx.Value(cpStatusKey{}).(v1alpha1.CheckpointStatus); ok {
 			cp.Status = status
@@ -1035,13 +1038,14 @@ func TestCreateCheckPoint(t *testing.T) {
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-1"}, &cp))
 				assert.Equal(t, "tmpl-1", cp.Name)
 				assert.Equal(t, "test-sandbox-1", *cp.Spec.PodName)
-				require.Len(t, cp.OwnerReferences, 1)
-				assert.Equal(t, "SandboxTemplate", cp.OwnerReferences[0].Kind)
-				assert.Equal(t, "tmpl-1", cp.OwnerReferences[0].Name)
-				assert.Equal(t, types.UID("uid-1"), cp.OwnerReferences[0].UID)
-				// Verify PersistentContents: sandbox has no PersistentContents, so both template and checkpoint should be empty
+				assert.Empty(t, cp.OwnerReferences, "checkpoint should have no owner references")
 				var tmpl v1alpha1.SandboxTemplate
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-1"}, &tmpl))
+				require.Len(t, tmpl.OwnerReferences, 1)
+				assert.Equal(t, "Checkpoint", tmpl.OwnerReferences[0].Kind)
+				assert.Equal(t, "tmpl-1", tmpl.OwnerReferences[0].Name)
+				assert.Equal(t, types.UID("uid-1"), tmpl.OwnerReferences[0].UID)
+				// Verify PersistentContents: sandbox has no PersistentContents, so both template and checkpoint should be empty
 				assert.Empty(t, tmpl.Spec.PersistentContents, "template PersistentContents should be empty when sandbox has no PersistentContents")
 				assert.Empty(t, cp.Spec.PersistentContents, "checkpoint PersistentContents should be empty when sandbox has no PersistentContents")
 			},
@@ -1066,18 +1070,19 @@ func TestCreateCheckPoint(t *testing.T) {
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-2"}, &cp))
 				assert.Equal(t, "tmpl-2", cp.Name)
 				assert.Equal(t, "test-sandbox-2", *cp.Spec.PodName)
-				require.Len(t, cp.OwnerReferences, 1)
-				assert.Equal(t, "SandboxTemplate", cp.OwnerReferences[0].Kind)
-				assert.Equal(t, "tmpl-2", cp.OwnerReferences[0].Name)
-				assert.Equal(t, types.UID("uid-2"), cp.OwnerReferences[0].UID)
+				assert.Empty(t, cp.OwnerReferences, "checkpoint should have no owner references")
+				var tmpl v1alpha1.SandboxTemplate
+				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-2"}, &tmpl))
+				require.Len(t, tmpl.OwnerReferences, 1)
+				assert.Equal(t, "Checkpoint", tmpl.OwnerReferences[0].Kind)
+				assert.Equal(t, "tmpl-2", tmpl.OwnerReferences[0].Name)
+				assert.Equal(t, types.UID("uid-2"), tmpl.OwnerReferences[0].UID)
 				// Verify options
 				require.NotNil(t, cp.Spec.KeepRunning)
 				assert.True(t, *cp.Spec.KeepRunning)
 				require.NotNil(t, cp.Spec.TtlAfterFinished)
 				assert.Equal(t, "30m", *cp.Spec.TtlAfterFinished)
 				// Verify PersistentContents: opts.PersistentContents should override template's PersistentContents
-				var tmpl v1alpha1.SandboxTemplate
-				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-2"}, &tmpl))
 				assert.Empty(t, tmpl.Spec.PersistentContents, "template PersistentContents should be empty when sandbox has no PersistentContents")
 				assert.Equal(t, []string{"memory", "filesystem"}, cp.Spec.PersistentContents, "checkpoint PersistentContents should use opts.PersistentContents")
 			},
@@ -1103,10 +1108,13 @@ func TestCreateCheckPoint(t *testing.T) {
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-3"}, &cp))
 				assert.Equal(t, "tmpl-3", cp.Name)
 				assert.Equal(t, "test-sandbox-3", *cp.Spec.PodName)
-				require.Len(t, cp.OwnerReferences, 1)
-				assert.Equal(t, "SandboxTemplate", cp.OwnerReferences[0].Kind)
-				assert.Equal(t, "tmpl-3", cp.OwnerReferences[0].Name)
-				assert.Equal(t, types.UID("uid-3"), cp.OwnerReferences[0].UID)
+				assert.Empty(t, cp.OwnerReferences, "checkpoint should have no owner references")
+				var tmpl v1alpha1.SandboxTemplate
+				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-3"}, &tmpl))
+				require.Len(t, tmpl.OwnerReferences, 1)
+				assert.Equal(t, "Checkpoint", tmpl.OwnerReferences[0].Kind)
+				assert.Equal(t, "tmpl-3", tmpl.OwnerReferences[0].Name)
+				assert.Equal(t, types.UID("uid-3"), tmpl.OwnerReferences[0].UID)
 				// Verify init runtime annotation
 				assert.Equal(t, `{"accessToken":"test-token","envVars":{"VAR1":"value1"}}`, cp.Annotations[v1alpha1.AnnotationInitRuntimeRequest])
 			},
