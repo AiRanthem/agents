@@ -403,6 +403,7 @@ func (k *secretKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTea
 		return nil, err
 	}
 	k.storeKey(createdKey)
+	k.triggerRefresh()
 	return createdKey, nil
 }
 
@@ -419,6 +420,7 @@ func (k *secretKeyStorage) DeleteKey(ctx context.Context, key *models.CreatedTea
 	}
 	k.idxByKey.Delete(key.Key)
 	k.idxByID.Delete(key.ID.String())
+	k.triggerRefresh()
 	return nil
 }
 
