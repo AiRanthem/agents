@@ -49,8 +49,8 @@ type Config struct {
 func NewKeyStorage(cfg Config) (KeyStorage, error) {
 	switch cfg.Mode {
 	case "", StorageModeSecret:
-		if cfg.Client == nil || cfg.APIReader == nil {
-			return nil, errors.New("secret key storage requires controller-runtime client and api-reader")
+		if cfg.Client == nil || cfg.APIReader == nil || cfg.Cache == nil {
+			return nil, errors.New("secret key storage requires controller-runtime client, api-reader, and cache")
 		}
 		return NewSecretKeyStorage(cfg.Client, cfg.APIReader, cfg.Cache, cfg.Namespace, cfg.AdminKey), nil
 	case StorageModeMySQL:
