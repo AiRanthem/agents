@@ -57,6 +57,20 @@ func (c *updateHookClient) Update(ctx context.Context, obj client.Object, opts .
 	return c.Client.Update(ctx, obj, opts...)
 }
 
+type getHookClient struct {
+	client.Client
+	getHook func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error
+}
+
+func (c *getHookClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.getHook != nil {
+		if err := c.getHook(ctx, key, obj, opts...); err != nil {
+			return err
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
 func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -553,6 +567,118 @@ func TestSecretKeyStorage_CreateKey(t *testing.T) {
 	}
 }
 
+func TestSecretKeyStorage_CreateKeyInSecretErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		run         func(t *testing.T) error
+		expectError string
+	}{
+		{
+			name: "get secret error",
+			run: func(t *testing.T) error {
+				c := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
+				storage := NewSecretKeyStorage(c, c, nil, "default", "admin-key").(*secretKeyStorage)
+				_, err := storage.createKeyInSecret(t.Context(), uuid.NewString(), &models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "new",
+				})
+				return err
+			},
+			expectError: "not found",
+		},
+		{
+			name: "marshal error",
+			run: func(t *testing.T) error {
+				storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+				oldMarshal := marshalAPIKey
+				marshalAPIKey = func(v any) ([]byte, error) { return nil, fmt.Errorf("marshal failed") }
+				t.Cleanup(func() { marshalAPIKey = oldMarshal })
+				_, err := storage.createKeyInSecret(t.Context(), uuid.NewString(), &models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "new",
+				})
+				return err
+			},
+			expectError: "failed to marshal",
+		},
+		{
+			name: "update error",
+			run: func(t *testing.T) error {
+				_, c := newSecretStorageForTest(t, map[string][]byte{})
+				hookClient := &updateHookClient{
+					Client: c,
+					updateHook: func(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
+						return errors.New("update failed")
+					},
+				}
+				storage := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
+				_, err := storage.createKeyInSecret(t.Context(), uuid.NewString(), &models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "new",
+				})
+				return err
+			},
+			expectError: "update failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run(t)
+			assertExpectedError(t, err, tt.expectError)
+		})
+	}
+}
+
+func TestFindTeamByNameInSecret(t *testing.T) {
+	tests := []struct {
+		name      string
+		data      map[string][]byte
+		teamName  string
+		expectHit bool
+	}{
+		{
+			name:      "invalid data is skipped",
+			data:      map[string][]byte{"invalid": []byte("not-json")},
+			teamName:  "team-a",
+			expectHit: false,
+		},
+		{
+			name: "matching team is cloned",
+			data: func() map[string][]byte {
+				key := &models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "existing",
+					Team: &models.Team{Name: "team-a"},
+				}
+				b, err := json.Marshal(key)
+				require.NoError(t, err)
+				return map[string][]byte{key.ID.String(): b}
+			}(),
+			teamName:  "team-a",
+			expectHit: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			secret := &corev1.Secret{Data: tt.data}
+			team, found := findTeamByNameInSecret(secret, tt.teamName)
+			assert.Equal(t, tt.expectHit, found)
+			if tt.expectHit {
+				require.NotNil(t, team)
+				assert.Equal(t, tt.teamName, team.Name)
+			}
+		})
+	}
+}
+
 func TestSecretKeyStorage_DeleteAndList(t *testing.T) {
 	storage, c := newSecretStorageForTest(t, map[string][]byte{})
 	owner := uuid.New()
@@ -600,6 +726,58 @@ func TestSecretKeyStorage_DeleteAndList(t *testing.T) {
 	}
 	storageWithDeleteError := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
 	require.Error(t, storageWithDeleteError.DeleteKey(context.Background(), key2))
+}
+
+func TestSecretKeyStorage_ListNilUsers(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(t *testing.T, storage *secretKeyStorage)
+	}{
+		{
+			name: "nil owner returns nil keys",
+			run: func(t *testing.T, storage *secretKeyStorage) {
+				keys, err := storage.ListByOwnerTeam(t.Context(), nil)
+				require.NoError(t, err)
+				assert.Nil(t, keys)
+			},
+		},
+		{
+			name: "nil user returns nil teams",
+			run: func(t *testing.T, storage *secretKeyStorage) {
+				teams, err := storage.ListTeams(t.Context(), nil)
+				require.NoError(t, err)
+				assert.Nil(t, teams)
+			},
+		},
+		{
+			name: "non-admin skips other teams",
+			run: func(t *testing.T, storage *secretKeyStorage) {
+				storage.storeKey(&models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "other",
+					Team: &models.Team{Name: "team-b"},
+				})
+
+				teams, err := storage.ListTeams(t.Context(), &models.CreatedTeamAPIKey{
+					ID:   uuid.New(),
+					Key:  uuid.NewString(),
+					Name: "caller",
+					Team: &models.Team{Name: "team-a"},
+				})
+				require.NoError(t, err)
+				assert.Empty(t, teams)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+			tt.run(t, storage)
+		})
+	}
 }
 
 func TestSecretKeyStorage_ListByOwnerMatchesLegacyTeamsByName(t *testing.T) {
@@ -859,6 +1037,92 @@ func TestSecretKeyStorage_RunStop_RegistersAndRemovesHandler(t *testing.T) {
 	require.NotPanics(t, func() { storage.Stop() }, "Stop must be idempotent")
 }
 
+func TestSecretKeyStorage_RunErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		stub   func() *stubCache
+		verify func(t *testing.T, storage *secretKeyStorage, stub *stubCache)
+	}{
+		{
+			name: "get informer error closes done",
+			stub: func() *stubCache {
+				stub := newStubCache()
+				stub.getInformerErr = errors.New("get informer failed")
+				return stub
+			},
+			verify: func(t *testing.T, storage *secretKeyStorage, _ *stubCache) {
+				select {
+				case <-storage.done:
+				case <-time.After(time.Second):
+					t.Fatal("expected done to be closed when GetInformer fails")
+				}
+			},
+		},
+		{
+			name: "add event handler error closes done",
+			stub: func() *stubCache {
+				stub := newStubCache()
+				stub.informer.addErr = errors.New("add handler failed")
+				return stub
+			},
+			verify: func(t *testing.T, storage *secretKeyStorage, _ *stubCache) {
+				select {
+				case <-storage.done:
+				case <-time.After(time.Second):
+					t.Fatal("expected done to be closed when AddEventHandler fails")
+				}
+			},
+		},
+		{
+			name: "remove event handler error still stops",
+			stub: func() *stubCache {
+				stub := newStubCache()
+				stub.informer.removeErr = errors.New("remove handler failed")
+				return stub
+			},
+			verify: func(t *testing.T, storage *secretKeyStorage, stub *stubCache) {
+				storage.Stop()
+				assert.True(t, stub.informer.wasRemoved())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+			stub := tt.stub()
+			storage.Cache = stub
+
+			storage.Run()
+			tt.verify(t, storage, stub)
+		})
+	}
+}
+
+func TestSecretKeyStorage_RefreshWorkerLogsRefreshErrorAndContinues(t *testing.T) {
+	storage, c := newSecretStorageForTest(t, map[string][]byte{})
+	var getCount int32
+	storage.Client = &getHookClient{
+		Client: c,
+		getHook: func(_ context.Context, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+			atomic.AddInt32(&getCount, 1)
+			return errors.New("refresh failed")
+		},
+	}
+
+	storage.wg.Add(1)
+	go storage.refreshWorker(t.Context())
+
+	storage.triggerRefresh()
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&getCount) > 0
+	}, time.Second, 5*time.Millisecond)
+
+	close(storage.stop)
+	storage.wg.Wait()
+}
+
 func TestSecretKeyStorage_Run_HandlerEventTriggersRefresh(t *testing.T) {
 	// Seed a Secret with a key the storage does not yet know about.
 	id := uuid.New()
@@ -1005,4 +1269,3 @@ func TestSecretKeyStorage_OnSecretEvent_UnknownType(t *testing.T) {
 	default:
 	}
 }
-
