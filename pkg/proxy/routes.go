@@ -37,7 +37,6 @@ import (
 
 // Route represents an internal sandbox routing rule
 type Route struct {
-	Namespace       string    `json:"namespace,omitempty"`
 	IP              string    `json:"ip"`
 	ID              string    `json:"id"`
 	UID             types.UID `json:"uid"`

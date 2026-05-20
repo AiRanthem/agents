@@ -77,7 +77,6 @@ func GetRouteFromSandbox(s *agentsv1alpha1.Sandbox) proxy.Route {
 		state = agentsv1alpha1.SandboxStateCreating
 	}
 	return proxy.Route{
-		Namespace:       s.Namespace,
 		IP:              s.Status.PodInfo.PodIP,
 		ID:              GetSandboxID(s),
 		UID:             s.GetUID(),

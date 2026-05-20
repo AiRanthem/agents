@@ -64,16 +64,11 @@ Every E2B route is registered twice via `RegisterE2BRoute`: once for the native 
 
 ### Namespace Naming Constraint
 - Sandbox IDs are encoded as `<namespace>--<name>` (see `sandboxutils.GetSandboxID`). The `--` is a reserved separator.
-- Team / namespace names in the E2B path **must not contain `--`**. Such names produce ambiguous sandbox IDs
-  (`sandboxutils.ParseSandboxID` cannot recover the split), break hostname-based routing of the form
-  `{port}-{namespace}--{name}.{domain}`, and silently corrupt cross-replica route fallbacks.
+- Team / namespace names in the E2B path **must not contain `--`**. 
 - The constraint is enforced at API key creation in `validateTeamNamespace` via `sandboxutils.ValidateNamespaceForSandboxID`.
   Admin-team callers creating keys for other teams pass through the same check.
 - The admin team itself (`models.AdminTeamName = "admin"`) has no `--`, never maps to a namespace
   (`getNamespaceOfUser` returns `""` for admin), and is therefore not affected by this rule.
-- Pre-existing legacy namespaces with `--` are detected by a one-shot startup scan (`scanInvalidNamespaces`)
-  that emits warnings and the `sandbox_invalid_namespace_resources{namespace,resource}` Prometheus gauge.
-  The scan does not delete or block — operator action is required.
 
 ### List And Delete Authorization
 - Any resource returned by a List endpoint should be deletable by the same caller unless deletion is explicitly unsupported

@@ -341,7 +341,6 @@ func TestInfra_GetClaimedSandbox_CacheMiss_WaitsUntilCacheHit(t *testing.T) {
 
 			if tt.withRoute {
 				infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-					Namespace:       apiSbx.Namespace,
 					ID:              id,
 					IP:              apiSbx.Status.PodInfo.PodIP,
 					State:           v1alpha1.SandboxStateRunning,
@@ -386,7 +385,6 @@ func TestInfra_GetClaimedSandbox_CacheMiss_ReturnsContextError(t *testing.T) {
 			id := "team-a--missing"
 			if tt.withRoute {
 				infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-					Namespace:       "team-a",
 					ID:              id,
 					IP:              "10.0.0.11",
 					State:           v1alpha1.SandboxStateRunning,
@@ -422,7 +420,6 @@ func TestInfra_GetClaimedSandbox_RouteRVNewerThanCache_FallsBackToAPIReader(t *t
 
 	id := stateutils.GetSandboxID(apiSbx)
 	infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-		Namespace:       apiSbx.Namespace,
 		ID:              id,
 		IP:              apiSbx.Status.PodInfo.PodIP,
 		State:           v1alpha1.SandboxStateRunning,
@@ -457,7 +454,6 @@ func TestInfra_GetClaimedSandbox_CacheRVEqualsRouteRV_NoFallback(t *testing.T) {
 
 	id := stateutils.GetSandboxID(apiSbx)
 	infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-		Namespace:       apiSbx.Namespace,
 		ID:              id,
 		IP:              apiSbx.Status.PodInfo.PodIP,
 		State:           v1alpha1.SandboxStateRunning,
@@ -507,7 +503,6 @@ func TestInfra_GetClaimedSandbox_StaleCacheFallback_APIReaderRequiresClaimedLabe
 
 			id := stateutils.GetSandboxID(apiSbx)
 			infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-				Namespace:       apiSbx.Namespace,
 				ID:              id,
 				IP:              apiSbx.Status.PodInfo.PodIP,
 				State:           v1alpha1.SandboxStateRunning,
@@ -538,7 +533,6 @@ func TestInfra_GetClaimedSandbox_StaleCacheFallback_APIReaderNotFound_WrapsCache
 
 	id := stateutils.GetSandboxID(cacheSbx)
 	infraInstance.Proxy.SetRoute(t.Context(), proxy.Route{
-		Namespace:       "team-a",
 		ID:              id,
 		IP:              "10.0.0.5",
 		State:           v1alpha1.SandboxStateRunning,
