@@ -17,6 +17,7 @@ limitations under the License.
 package e2b
 
 import (
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -29,6 +30,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -511,6 +513,36 @@ func TestConnectSandboxConcurrentPausedTimeouts(t *testing.T) {
 				assert.WithinDuration(t, expectedEndAt, updated.Spec.ShutdownTime.Time, 5*time.Second)
 				assert.Nil(t, updated.Spec.PauseTime)
 			}
+		})
+	}
+}
+
+func TestPauseSandboxErrorCode(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		expectStatus int
+	}{
+		{
+			name:         "manager conflict returns conflict",
+			err:          managererrors.NewError(managererrors.ErrorConflict, "pause conflict"),
+			expectStatus: http.StatusConflict,
+		},
+		{
+			name:         "wait task conflict returns conflict",
+			err:          fmt.Errorf("pause failed: %w", cacheutils.ErrWaitTaskConflict),
+			expectStatus: http.StatusConflict,
+		},
+		{
+			name:         "unknown error returns internal server error",
+			err:          stderrors.New("pause failed"),
+			expectStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expectStatus, pauseSandboxErrorCode(tt.err))
 		})
 	}
 }
