@@ -58,6 +58,7 @@ func ValidateAndInitCloneOptions(opts infra.CloneSandboxOptions) (infra.CloneSan
 	if opts.CloneTimeout <= 0 {
 		opts.CloneTimeout = DefaultCloneTimeout
 	}
+	opts.ReserveFailedSandboxFor = defaultReserveFailedSandboxFor(opts.ReserveFailedSandboxFor)
 	return opts, nil
 }
 

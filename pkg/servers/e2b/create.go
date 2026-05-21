@@ -92,8 +92,8 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 			// record the basic csi mount persistent volume config to sandbox
 			sc.csiMountOptionsConfigRecord(ctx, sbx, request)
 		},
-		ReserveFailedSandbox: request.Extensions.ReserveFailedSandbox,
-		CreateOnNoStock:      request.Extensions.CreateOnNoStock,
+		ReserveFailedSandboxFor: request.Extensions.ReserveFailedSandboxFor,
+		CreateOnNoStock:         request.Extensions.CreateOnNoStock,
 	}
 
 	if !request.Extensions.SkipInitRuntime {
@@ -180,6 +180,7 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
 		},
+		ReserveFailedSandboxFor: request.Extensions.ReserveFailedSandboxFor,
 	}
 	if request.Extensions.WaitReadySeconds > 0 {
 		opts.WaitReadyTimeout = time.Duration(request.Extensions.WaitReadySeconds) * time.Second

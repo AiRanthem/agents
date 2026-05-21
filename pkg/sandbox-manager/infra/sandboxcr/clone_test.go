@@ -112,6 +112,66 @@ func TestValidateAndInitCloneOptions(t *testing.T) {
 	}
 }
 
+func TestValidateAndInitCloneOptions_ReserveFailedSandboxFor(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       infra.CloneSandboxOptions
+		expectFor  time.Duration
+		expectSame bool
+	}{
+		{
+			name: "default reserve for 24h",
+			opts: infra.CloneSandboxOptions{
+				User:         "test-user",
+				CheckPointID: "test-checkpoint",
+			},
+			expectFor: DefaultReserveFailedSandboxFor,
+		},
+		{
+			name: "explicit never deletes immediately",
+			opts: infra.CloneSandboxOptions{
+				User:                    "test-user",
+				CheckPointID:            "test-checkpoint",
+				ReserveFailedSandboxFor: durationPtr(0),
+			},
+			expectFor:  0,
+			expectSame: true,
+		},
+		{
+			name: "explicit finite reserve",
+			opts: infra.CloneSandboxOptions{
+				User:                    "test-user",
+				CheckPointID:            "test-checkpoint",
+				ReserveFailedSandboxFor: durationPtr(90 * time.Minute),
+			},
+			expectFor:  90 * time.Minute,
+			expectSame: true,
+		},
+		{
+			name: "explicit forever reserve",
+			opts: infra.CloneSandboxOptions{
+				User:                    "test-user",
+				CheckPointID:            "test-checkpoint",
+				ReserveFailedSandboxFor: durationPtr(-1),
+			},
+			expectFor:  -1,
+			expectSame: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ValidateAndInitCloneOptions(tt.opts)
+			require.NoError(t, err)
+			require.NotNil(t, got.ReserveFailedSandboxFor)
+			assert.Equal(t, tt.expectFor, *got.ReserveFailedSandboxFor)
+			if tt.expectSame {
+				assert.Same(t, tt.opts.ReserveFailedSandboxFor, got.ReserveFailedSandboxFor)
+			}
+		})
+	}
+}
+
 func TestValidateAndInitCheckpointOptions(t *testing.T) {
 	tests := []struct {
 		name       string

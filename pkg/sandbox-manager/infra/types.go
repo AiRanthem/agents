@@ -41,8 +41,9 @@ type ClaimSandboxOptions struct {
 	PreCheck func(sandbox Sandbox) error `json:"-"`
 	// Set Modifier to modify the Sandbox before it is updated
 	Modifier func(sandbox Sandbox) `json:"-"`
-	// Set ReserveFailedSandbox to true to reserve failed sandboxes
-	ReserveFailedSandbox bool `json:"reserveFailedSandbox"`
+	// ReserveFailedSandboxFor controls how long failed sandboxes are kept for debugging.
+	// nil means the backend should use its default.
+	ReserveFailedSandboxFor *time.Duration `json:"reserveFailedSandboxFor"`
 	// Set InplaceUpdate to trigger an inplace-update (image and/or resources)
 	InplaceUpdate *config.InplaceUpdateOptions `json:"inplaceUpdate"`
 	// Set RuntimeConfig to non-nil value to inject runtime configuration
@@ -65,15 +66,16 @@ type ClaimSandboxOptions struct {
 }
 
 type CloneSandboxOptions struct {
-	Namespace          string                  `json:"namespace,omitempty"`
-	User               string                  `json:"user"`
-	CheckPointID       string                  `json:"checkPointID"`
-	WaitReadyTimeout   time.Duration           `json:"waitReadyTimeout"`
-	CloneTimeout       time.Duration           `json:"cloneTimeout"`
-	CSIMount           *config.CSIMountOptions `json:"CSIMount"`
-	Modifier           func(sbx Sandbox)       `json:"-"`
-	CreateLimiter      *rate.Limiter           `json:"-"`
-	SkipWaitCheckpoint bool                    `json:"skipWaitCheckpoint"`
+	Namespace               string                  `json:"namespace,omitempty"`
+	User                    string                  `json:"user"`
+	CheckPointID            string                  `json:"checkPointID"`
+	WaitReadyTimeout        time.Duration           `json:"waitReadyTimeout"`
+	CloneTimeout            time.Duration           `json:"cloneTimeout"`
+	CSIMount                *config.CSIMountOptions `json:"CSIMount"`
+	Modifier                func(sbx Sandbox)       `json:"-"`
+	CreateLimiter           *rate.Limiter           `json:"-"`
+	SkipWaitCheckpoint      bool                    `json:"skipWaitCheckpoint"`
+	ReserveFailedSandboxFor *time.Duration          `json:"reserveFailedSandboxFor"`
 }
 
 type CreateCheckpointOptions struct {

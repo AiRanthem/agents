@@ -226,6 +226,10 @@ func (c *commonControl) claimSandboxes(ctx context.Context, claim *agentsv1alpha
 	if err != nil {
 		return 0, fmt.Errorf("failed to build claim options: %w", err)
 	}
+	opts, err = sandboxcr.ValidateAndInitClaimOptions(opts)
+	if err != nil {
+		return 0, fmt.Errorf("failed to validate claim options: %w", err)
+	}
 
 	claimLockChannel := make(chan struct{}, batchSize) // set to max batch size, not controlled
 	limiter := rate.NewLimiter(rate.Inf, batchSize)
@@ -256,6 +260,12 @@ func (c *commonControl) claimSandboxes(ctx context.Context, claim *agentsv1alpha
 // buildClaimOptions constructs ClaimSandboxOptions for TryClaimSandbox
 func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1alpha1.SandboxClaim, sandboxSet *agentsv1alpha1.SandboxSet) (infra.ClaimSandboxOptions, error) {
 	logger := logf.FromContext(ctx).WithValues("SandboxClaim", klog.KObj(claim))
+	var reserveFailedSandboxFor *time.Duration
+	if claim.Spec.ReserveFailedSandbox {
+		reserveFor := time.Duration(-1)
+		reserveFailedSandboxFor = &reserveFor
+	}
+
 	opts := infra.ClaimSandboxOptions{
 		User:     string(claim.UID), // Use UID to ensure uniqueness across claim recreations
 		Template: sandboxSet.Name,
@@ -302,8 +312,8 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 				})
 			}
 		},
-		ReserveFailedSandbox: claim.Spec.ReserveFailedSandbox,
-		CreateOnNoStock:      claim.Spec.CreateOnNoStock,
+		ReserveFailedSandboxFor: reserveFailedSandboxFor,
+		CreateOnNoStock:         claim.Spec.CreateOnNoStock,
 	}
 
 	if claim.Spec.InplaceUpdate != nil {
@@ -384,8 +394,14 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 		opts.RuntimeConfig = claim.Spec.Runtimes
 	}
 
-	// Validate and initialize
-	return sandboxcr.ValidateAndInitClaimOptions(opts)
+	opts, err := sandboxcr.ValidateAndInitClaimOptions(opts)
+	if err != nil {
+		return infra.ClaimSandboxOptions{}, err
+	}
+	if reserveFailedSandboxFor == nil {
+		opts.ReserveFailedSandboxFor = nil
+	}
+	return opts, nil
 }
 
 // countClaimedSandboxes counts sandboxes that are claimed by this claim

@@ -19,6 +19,7 @@ package models
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,10 @@ import (
 
 	"github.com/openkruise/agents/api/v1alpha1"
 )
+
+func durationPtr(d time.Duration) *time.Duration {
+	return &d
+}
 
 func TestParseExtensions(t *testing.T) {
 	tests := []struct {
@@ -81,6 +86,87 @@ func TestParseExtensions(t *testing.T) {
 				ExtensionKeyCreateOnNoStock: "false",
 			},
 			wantErr: false,
+		},
+		{
+			name: "reserve failed sandbox for never",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "never",
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(0),
+			},
+		},
+		{
+			name: "reserve failed sandbox for forever",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "forever",
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(-1),
+			},
+		},
+		{
+			name: "reserve failed sandbox for positive duration",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "600s",
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(10 * time.Minute),
+			},
+		},
+		{
+			name: "reserve failed sandbox for zero duration string",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "0s",
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(0),
+			},
+		},
+		{
+			name: "reserve failed sandbox for negative duration is invalid",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "-1h",
+			},
+			wantErr: true,
+		},
+		{
+			name: "reserve failed sandbox for invalid duration is invalid",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandboxFor: "abc",
+			},
+			wantErr: true,
+		},
+		{
+			name: "old reserve failed sandbox true maps to forever",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandbox: v1alpha1.True,
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(-1),
+			},
+		},
+		{
+			name: "new reserve failed sandbox for overrides old reserve failed sandbox",
+			metadata: map[string]string{
+				ExtensionKeyReserveFailedSandbox:    v1alpha1.True,
+				ExtensionKeyReserveFailedSandboxFor: "never",
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock:         true,
+				ReserveFailedSandboxFor: durationPtr(0),
+			},
 		},
 		{
 			name: "invalid image extension",

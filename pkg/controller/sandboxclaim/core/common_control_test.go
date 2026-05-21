@@ -1088,6 +1088,54 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name: "reserve failed sandbox converts to forever duration",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-reserve-failed",
+					Namespace: "default",
+					UID:       "test-uid-reserve",
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName:         "test-template",
+					ReserveFailedSandbox: true,
+				},
+			},
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-template",
+					Namespace: "default",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
+				require.NotNil(t, opts.ReserveFailedSandboxFor)
+				assert.Equal(t, time.Duration(-1), *opts.ReserveFailedSandboxFor)
+			},
+		},
+		{
+			name: "reserve failed sandbox omitted leaves backend default",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-reserve-failed-default",
+					Namespace: "default",
+					UID:       "test-uid-reserve-default",
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "test-template",
+				},
+			},
+			sandboxSet: &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-template",
+					Namespace: "default",
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
+				assert.Nil(t, opts.ReserveFailedSandboxFor)
+			},
+		},
+		{
 			name: "claim with all fields",
 			claim: &agentsv1alpha1.SandboxClaim{
 				ObjectMeta: metav1.ObjectMeta{
