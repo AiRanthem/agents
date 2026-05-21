@@ -17,6 +17,8 @@ limitations under the License.
 package models
 
 const (
+	// DefaultMaxTimeout is a local default. Production deployments should override it
+	// with --e2b-max-timeout to a far-future value that matches the desired retention policy.
 	DefaultMaxTimeout        = 2592000 // 30 days
 	DefaultMinTimeoutSeconds = 30
 	DefaultTimeoutSeconds    = 300

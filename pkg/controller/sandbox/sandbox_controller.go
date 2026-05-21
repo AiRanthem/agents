@@ -56,6 +56,11 @@ var (
 	sandboxControllerKind = agentsv1alpha1.GroupVersion.WithKind("Sandbox")
 )
 
+// autoPauseReadyStableGrace is the minimum age of Conditions[Ready]=True before
+// the auto-pause branch is allowed to flip Spec.Paused=true. See the
+// "Auto-Pause PauseTime Refresh" section of AGENTS.md.
+const autoPauseReadyStableGrace = 30 * time.Second
+
 func Add(mgr manager.Manager) error {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.SandboxGate) || !discovery.DiscoverGVK(sandboxControllerKind) {
 		return nil
@@ -210,13 +215,40 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	}
 	if box.Spec.PauseTime != nil && !box.Spec.Paused {
 		if box.Spec.PauseTime.Before(&now) {
-			klog.InfoS("sandbox pause time reached, will be paused", "sandbox", klog.KObj(box))
-			modified := box.DeepCopy()
-			patch := client.MergeFrom(box)
-			modified.Spec.Paused = true
-			return ctrl.Result{}, r.Patch(ctx, modified, patch)
+			if !canFlipPausedTrue(box, now) {
+				// Auto-pause is unsafe right now (Resuming / Ready not stable
+				// / Pending). Skip — the next reconcile re-evaluates, and any
+				// in-flight Resume's updateConnectTimeout will write a fresh
+				// PauseTime in due course. See AGENTS.md "Auto-Pause".
+				klog.V(5).InfoS("auto-pause deferred", "sandbox", klog.KObj(box), "phase", box.Status.Phase)
+				const deferredRequeue = 10 * time.Second
+				if requeueAfter == 0 || requeueAfter > deferredRequeue {
+					requeueAfter = deferredRequeue
+				}
+			} else {
+				klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
+				modified := box.DeepCopy()
+				// Optimistic-lock the patch so concurrent writes from sandbox-manager
+				// surface as 409 instead of silently winning a last-writer race.
+				patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
+				modified.Spec.Paused = true
+				if box.Spec.ShutdownTime != nil && box.Spec.ShutdownTime.After(now.Time) {
+					modified.Spec.PauseTime = box.Spec.ShutdownTime.DeepCopy()
+				} else {
+					farFuture := metav1.NewTime(now.AddDate(1000, 0, 0))
+					modified.Spec.PauseTime = &farFuture
+				}
+				if err := r.Patch(ctx, modified, patch); err != nil {
+					if errors.IsConflict(err) {
+						return ctrl.Result{Requeue: true}, nil
+					}
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, nil
+			}
+		} else {
+			requeueAfter = min(requeueAfter, box.Spec.PauseTime.Sub(now.Time))
 		}
-		requeueAfter = min(requeueAfter, box.Spec.PauseTime.Sub(now.Time))
 	}
 
 	// calculate sandbox status
@@ -261,6 +293,26 @@ func (r *SandboxReconciler) handleTerminating(ctx context.Context, args core.Ens
 
 func isSandboxCompletedPhase(phase agentsv1alpha1.SandboxPhase) bool {
 	return phase == agentsv1alpha1.SandboxFailed || phase == agentsv1alpha1.SandboxSucceeded
+}
+
+// canFlipPausedTrue reports whether the sandbox is in a stable Running state
+// that the controller is safe to auto-pause by flipping Spec.Paused=true.
+//
+// The Ready-stable grace exists because sandbox-manager's Resume() flips
+// Spec.Paused=false but does NOT write Spec.PauseTime; the new PauseTime is
+// written later by updateConnectTimeout. Between those two writes the CR can
+// be observed as {Paused=false, PauseTime=stale, Phase=Running, Ready=True}.
+// Without this grace, the controller would auto-pause an in-transition sandbox
+// and break the resume.
+func canFlipPausedTrue(box *agentsv1alpha1.Sandbox, now metav1.Time) bool {
+	if box.Status.Phase != agentsv1alpha1.SandboxRunning {
+		return false
+	}
+	readyCond := utils.GetSandboxCondition(&box.Status, string(agentsv1alpha1.SandboxConditionReady))
+	if readyCond == nil || readyCond.Status != metav1.ConditionTrue {
+		return false
+	}
+	return now.Sub(readyCond.LastTransitionTime.Time) > autoPauseReadyStableGrace
 }
 
 func (r *SandboxReconciler) addSandboxFinalizerAndHash(ctx context.Context, box *agentsv1alpha1.Sandbox) (*agentsv1alpha1.Sandbox, error) {
