@@ -179,6 +179,13 @@ func pauseSandboxHelper(t *testing.T, controller *Controller, client client.Clie
 	}
 }
 
+func setInFlightResumeTimeout(t *testing.T, client client.Client, sandboxID string, endAt time.Time) {
+	sbx := GetSandbox(t, sandboxID, client)
+	sbx.Spec.ShutdownTime = &metav1.Time{Time: endAt}
+	sbx.Spec.PauseTime = nil
+	require.NoError(t, client.Update(t.Context(), sbx))
+}
+
 func waitForResumeUpdate(controller *Controller, waitForResumeHook bool) WhenFunc {
 	return func(sbx *agentsv1alpha1.Sandbox) bool {
 		if sbx.Spec.Paused {
@@ -282,6 +289,11 @@ func TestConnectSandbox(t *testing.T) {
 			if tt.paused {
 				pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, tt.pausing, tt.resuming, user)
 			}
+			var inFlightResumeEndAt time.Time
+			if tt.resuming {
+				inFlightResumeEndAt = time.Now().Add(10 * time.Minute).Truncate(time.Second)
+				setInFlightResumeTimeout(t, fc, createResp.Body.SandboxID, inFlightResumeEndAt)
+			}
 
 			if tt.sandboxID == "" {
 				tt.sandboxID = createResp.Body.SandboxID
@@ -311,6 +323,9 @@ func TestConnectSandbox(t *testing.T) {
 				endAt, err := time.Parse(time.RFC3339, connectResp.Body.EndAt)
 				require.NoError(t, err)
 				expectEndAt := now.Add(time.Duration(tt.timeout) * time.Second)
+				if tt.resuming {
+					expectEndAt = inFlightResumeEndAt
+				}
 				assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second,
 					fmt.Sprintf("expect end at: %s, but got %s", expectEndAt, endAt))
 			}
@@ -635,6 +650,11 @@ func TestResumeSandbox(t *testing.T) {
 			if tt.paused {
 				pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, tt.pausing, tt.resuming, user)
 			}
+			var inFlightResumeEndAt time.Time
+			if tt.resuming {
+				inFlightResumeEndAt = time.Now().Add(10 * time.Minute).Truncate(time.Second)
+				setInFlightResumeTimeout(t, fc, createResp.Body.SandboxID, inFlightResumeEndAt)
+			}
 
 			if tt.sandboxID == "" {
 				tt.sandboxID = createResp.Body.SandboxID
@@ -670,6 +690,9 @@ func TestResumeSandbox(t *testing.T) {
 				endAt, parseErr := time.Parse(time.RFC3339, describeResp.Body.EndAt)
 				require.NoError(t, parseErr)
 				expectEndAt := now.Add(time.Duration(tt.timeout) * time.Second)
+				if tt.resuming {
+					expectEndAt = inFlightResumeEndAt
+				}
 				assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second,
 					fmt.Sprintf("expect end at: %s, but got %s", expectEndAt, endAt))
 			}

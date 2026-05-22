@@ -181,16 +181,17 @@ def test_connect_shorter_timeout(sandbox_context):
 
 
 def test_auto_pause_resume_no_immediate_repause(sandbox_context):
-    """Regression for the controller auto-pause leaving Spec.PauseTime stale.
+    """Regression for Connect/Resume leaving enough time before re-pause.
 
     Reproduces the scenario where:
       1. Controller patches Spec.Paused=true after Spec.PauseTime expires.
-      2. E2B Connect/Resume flips Spec.Paused=false.
-      3. The next reconcile observes the still-stale Spec.PauseTime and
-         immediately re-pauses the sandbox, breaking the resume.
+      2. E2B Connect/Resume flips Spec.Paused=false and writes a fresh
+         Spec.PauseTime from the Connect timeout.
+      3. The next reconcile must observe the refreshed Resume/Connect deadline
+         and leave the sandbox running.
 
-    The fix moves Spec.PauseTime forward in the same auto-pause patch, so
-    after Resume there is no stale deadline to trip the next reconcile.
+    The controller auto-pause patch intentionally does not refresh
+    Spec.PauseTime; the E2B Resume/Connect path owns the new running deadline.
     """
     auto_pause_timeout_seconds = 30
     sbx: Sandbox = sandbox_context.add(Sandbox.create(
@@ -217,19 +218,15 @@ def test_auto_pause_resume_no_immediate_repause(sandbox_context):
         time.sleep(2)
     assert paused, f"sandbox {sandbox_name} did not auto-pause within deadline"
 
-    # Step 2: assert post-patch Spec is no longer stale.
+    # Step 2: assert auto-pause took effect. The auto-pause controller patch
+    # intentionally leaves the expired pauseTime in place; Connect/Resume below
+    # must replace it with the requested running deadline.
     spec = _get_sandbox_spec(sandbox_name)
     assert spec.get("paused") is True, (
         f"spec.paused must be true after auto-pause; got spec={spec}"
     )
     pause_time_str = spec.get("pauseTime")
     assert pause_time_str, "spec.pauseTime must remain non-nil after auto-pause"
-    pause_time = _parse_rfc3339_utc(pause_time_str)
-    now = datetime.now(timezone.utc)
-    assert pause_time > now, (
-        f"spec.pauseTime must not be stale after auto-pause patch; "
-        f"got {pause_time_str}, now is {now.isoformat()}"
-    )
 
     # Step 3: resume via E2B Connect with an explicit timeout. The Connect path
     # for autoPause sandboxes sets Spec.PauseTime = serverNow + connect_timeout
