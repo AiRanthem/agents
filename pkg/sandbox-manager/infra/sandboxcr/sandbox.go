@@ -357,7 +357,7 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 
 const postResumeOperationTimeout = 30 * time.Second
 
-func (s *Sandbox) Resume(ctx context.Context, _ infra.ResumeOptions) error {
+func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
 
 	if err := s.refreshFromAPIReader(ctx); err != nil {
@@ -383,11 +383,19 @@ func (s *Sandbox) Resume(ctx context.Context, _ infra.ResumeOptions) error {
 	log.Info("try to resume sandbox", "state", state, "reason", reason)
 	resumeUpdated, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 		if !sbx.Spec.Paused {
-			// Resume is first-writer-wins: only the request that flips
-			// No need to update if spec.paused is already false.
+			// Resume is first-writer-wins. The loser must NOT write
+			// opts.Timeout, otherwise it could clobber the fresh
+			// PauseTime that the winner just wrote (and that the
+			// controller relies on to skip auto-pause).
 			return false, nil
 		}
 		sbx.Spec.Paused = false
+		if opts.Timeout != nil {
+			// Atomically write the placeholder timeout in the SAME patch
+			// as Spec.Paused=false. This closes the auto-pause race; see
+			// docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
+			setTimeout(sbx, *opts.Timeout)
+		}
 		return true, nil
 	})
 	if err != nil {

@@ -1429,3 +1429,199 @@ func TestSandbox_ResumePreservesTimeoutOnError(t *testing.T) {
 	assert.WithinDuration(t, shutdownTime, updatedSbx.Spec.ShutdownTime.Time, time.Second)
 	assert.WithinDuration(t, pauseTime, updatedSbx.Spec.PauseTime.Time, time.Second)
 }
+
+// TestSandbox_ResumeMutatorAtomicity verifies that the Resume mutator
+// writes Spec.Paused = false AND the placeholder timeout fields in the
+// SAME Update payload, regardless of the timeout shape supplied via
+// ResumeOptions.Timeout. This is the regression test for the
+// auto-pause / Resume race documented in
+// docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
+func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
+	utils.InitLogOutput()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	realPauseAt := metav1.NewTime(now.Add(10 * time.Minute))
+	realShutdownAt := metav1.NewTime(now.Add(30 * 24 * time.Hour))
+	stalePauseAt := metav1.NewTime(now.Add(-1 * time.Minute))
+
+	type expected struct {
+		paused       bool
+		pauseTime    *metav1.Time // nil means "must be nil"
+		shutdownTime *metav1.Time
+	}
+
+	cases := []struct {
+		name           string
+		initialPaused  bool
+		initialPauseAt *metav1.Time
+		initialShutAt  *metav1.Time
+		optsTimeout    *timeout.Options
+		want           expected
+	}{
+		{
+			name:           "winner-with-realTimeout",
+			initialPaused:  true,
+			initialPauseAt: &stalePauseAt,
+			initialShutAt:  &realShutdownAt,
+			optsTimeout: &timeout.Options{
+				PauseTime:    realPauseAt.Time,
+				ShutdownTime: realShutdownAt.Time,
+			},
+			want: expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
+		},
+		{
+			name:           "winner-no-placeholder",
+			initialPaused:  true,
+			initialPauseAt: &stalePauseAt,
+			initialShutAt:  &realShutdownAt,
+			optsTimeout:    nil,
+			want:           expected{paused: false, pauseTime: &stalePauseAt, shutdownTime: &realShutdownAt},
+		},
+		{
+			name:           "loser-already-flipped",
+			initialPaused:  false,
+			initialPauseAt: &realPauseAt,
+			initialShutAt:  &realShutdownAt,
+			optsTimeout: &timeout.Options{
+				PauseTime:    now.Add(5 * time.Minute),
+				ShutdownTime: now.Add(20 * time.Minute),
+			},
+			want: expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
+		},
+		{
+			name:           "never-timeout",
+			initialPaused:  true,
+			initialPauseAt: nil,
+			initialShutAt:  nil,
+			optsTimeout:    &timeout.Options{}, // zero PauseTime, zero ShutdownTime
+			want:           expected{paused: false, pauseTime: nil, shutdownTime: nil},
+		},
+		{
+			name:           "pausetime-only",
+			initialPaused:  true,
+			initialPauseAt: &stalePauseAt,
+			initialShutAt:  nil,
+			optsTimeout: &timeout.Options{
+				PauseTime: realPauseAt.Time,
+				// ShutdownTime left zero
+			},
+			want: expected{paused: false, pauseTime: &realPauseAt, shutdownTime: nil},
+		},
+	}
+
+	// assertTimePtrEqual compares two *metav1.Time pointers by wall-clock value,
+	// not by *time.Location identity. The fake client round-trips times through
+	// JSON which rehydrates them in the local timezone, so reflect.DeepEqual
+	// (used by assert.Equal) sees UTC vs Local and reports inequality even when
+	// the underlying instant is identical.
+	assertTimePtrEqual := func(t *testing.T, want, got *metav1.Time, msg string) {
+		t.Helper()
+		if want == nil {
+			assert.Nil(t, got, msg)
+			return
+		}
+		require.NotNil(t, got, msg)
+		assert.True(t, want.Time.Equal(got.Time), "%s: want=%s got=%s", msg, want.Time, got.Time)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Resume() early-returns at L376-380 when Status.Conditions[Ready]
+			// is already True ("sandbox is already resumed"). For winner cases
+			// (initialPaused=true) we need the mutator to actually run, so
+			// seed Phase=Paused + ConditionPaused=True (required by
+			// IsSandboxResumable for a Paused-phase sandbox) and flip to
+			// Ready=True via AfterFunc to release the resumeTask.Wait.
+			// For loser cases (initialPaused=false) Spec.Paused is already
+			// false; we seed Phase=Running + ConditionReady=True so that
+			// Resume early-returns before retryUpdate runs — exactly the
+			// behavior we want to assert (no Update issued).
+			phase := v1alpha1.SandboxPaused
+			conds := []metav1.Condition{
+				{Type: string(v1alpha1.SandboxConditionPaused), Status: metav1.ConditionTrue, Reason: "Paused"},
+			}
+			if !tc.initialPaused {
+				phase = v1alpha1.SandboxRunning
+				conds = []metav1.Condition{
+					{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+				}
+			}
+
+			sandbox := &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox",
+					Namespace: "default",
+					Labels:    map[string]string{v1alpha1.LabelSandboxIsClaimed: "true"},
+				},
+				Spec: v1alpha1.SandboxSpec{
+					Paused:       tc.initialPaused,
+					PauseTime:    tc.initialPauseAt,
+					ShutdownTime: tc.initialShutAt,
+				},
+				Status: v1alpha1.SandboxStatus{
+					Phase:      phase,
+					Conditions: conds,
+				},
+			}
+
+			cache, fc, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			require.NoError(t, cache.Run(t.Context()))
+			defer cache.Stop(t.Context())
+			CreateSandboxWithStatus(t, fc, sandbox)
+			time.Sleep(10 * time.Millisecond)
+
+			// Winner-only: release the resumeTask.Wait so Resume() returns.
+			if tc.initialPaused {
+				cache.GetMockManager().AddWaitReconcileKey(sandbox)
+				time.AfterFunc(20*time.Millisecond, func() {
+					modified := sandbox.DeepCopy()
+					modified.Status.Phase = v1alpha1.SandboxRunning
+					modified.Status.Conditions = []metav1.Condition{
+						{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue, Reason: "Ready"},
+					}
+					_ = fc.Status().Patch(t.Context(), modified, ctrl.MergeFrom(sandbox))
+				})
+			}
+
+			// Intercept Update calls to capture the payload that crossed the wire.
+			var updatePayloads []*v1alpha1.Sandbox
+			cacheClient, ok := cache.GetClient().(ctrl.WithWatch)
+			require.True(t, ok)
+			interceptedClient := interceptor.NewClient(cacheClient, interceptor.Funcs{
+				Update: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, opts ...ctrl.UpdateOption) error {
+					if sbx, ok := obj.(*v1alpha1.Sandbox); ok {
+						updatePayloads = append(updatePayloads, sbx.DeepCopy())
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			})
+
+			s := AsSandbox(sandbox.DeepCopy(), &apiReaderOverrideCache{
+				Provider: cache,
+				client:   interceptedClient,
+			})
+
+			err = s.Resume(t.Context(), infra.ResumeOptions{Timeout: tc.optsTimeout})
+			require.NoError(t, err)
+
+			// Loser case: Resume early-returns; no Update should have happened.
+			if !tc.initialPaused {
+				assert.Empty(t, updatePayloads, "loser path must not Update")
+			} else {
+				require.Len(t, updatePayloads, 1, "exactly one Update payload expected")
+				payload := updatePayloads[0]
+				assert.False(t, payload.Spec.Paused, "Paused must be false in the payload")
+				assertTimePtrEqual(t, tc.want.pauseTime, payload.Spec.PauseTime, "PauseTime in payload must match expected")
+				assertTimePtrEqual(t, tc.want.shutdownTime, payload.Spec.ShutdownTime, "ShutdownTime in payload must match expected")
+			}
+
+			// Re-read from fake client and assert the final persisted state.
+			var final v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, &final))
+			assert.Equal(t, tc.want.paused, final.Spec.Paused)
+			assertTimePtrEqual(t, tc.want.pauseTime, final.Spec.PauseTime, "final PauseTime must match expected")
+			assertTimePtrEqual(t, tc.want.shutdownTime, final.Spec.ShutdownTime, "final ShutdownTime must match expected")
+		})
+	}
+}
