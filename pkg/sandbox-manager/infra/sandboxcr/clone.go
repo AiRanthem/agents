@@ -88,15 +88,26 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 		return nil, metrics, err
 	}
 
-	// Step 2: gate sandbox creation on the rate limiter, mirroring how
-	// newSandboxFromSandboxSet gates ClaimSandbox creates.
+	// Step 2: block on the create rate limiter so a single Infra.createLimiter
+	// gates both claim and clone create traffic. Unlike newSandboxFromSandboxSet
+	// (which uses Allow() and fails fast with a retriable error), clone blocks
+	// here because the lookup above already proved this attempt is worth doing.
 	if metrics, err = waitCloneCreateLimiter(ctx, opts, metrics); err != nil {
 		return nil, metrics, err
 	}
 
-	// Step 3: create new sandbox from checkpoint
+	// Step 3: create new sandbox from checkpoint.
+	// Create failures are retriable by product choice: callers prefer a delayed
+	// success over a 500. The trade-off is orphan amplification — if a Create
+	// timed out on the client side after apiserver had already persisted the
+	// CR, the retry produces a second CR that this code path will not see
+	// (GenerateName, no IsAlreadyExists signal). Such orphans must be reaped
+	// out-of-band (e.g. by a janitor reconciler).
 	sbx, initRuntimeOpts, metrics, err := createSandboxFromCheckpoint(ctx, opts, tmpl, cp, cache, metrics)
 	if err != nil {
+		if !wait.Interrupted(err) {
+			err = retriableError{Message: fmt.Sprintf("failed to create sandbox from checkpoint: %s", err)}
+		}
 		return nil, metrics, err
 	}
 	created := sbx
@@ -189,8 +200,10 @@ func findCheckpointAndTemplateById(ctx context.Context, opts infra.CloneSandboxO
 
 // waitCloneCreateLimiter blocks on opts.CreateLimiter (when set) and records
 // the wait cost in metrics so callers see it under metrics.Wait / metrics.Total.
-// This mirrors how newSandboxFromSandboxSet gates ClaimSandbox creates,
-// keeping a single rate-limit choke point owned by Infra.
+// The limiter itself is the same Infra.createLimiter used by
+// newSandboxFromSandboxSet, so claim and clone share one rate-limit choke
+// point; the gating style differs (blocking Wait here vs non-blocking Allow
+// there) and callers should not assume identical back-pressure semantics.
 func waitCloneCreateLimiter(ctx context.Context, opts infra.CloneSandboxOptions, metrics infra.CloneMetrics) (infra.CloneMetrics, error) {
 	if opts.CreateLimiter == nil {
 		return metrics, nil

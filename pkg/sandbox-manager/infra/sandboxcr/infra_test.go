@@ -869,6 +869,92 @@ func TestInfra_CloneSandboxRetriesWaitReadyFailure(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err))
 }
 
+func TestInfra_CloneSandboxRetriesCreateFailure(t *testing.T) {
+	tests := []struct {
+		name             string
+		createErr        error
+		successOnAttempt int // attempt number that should succeed; 0 = always fail
+		expectError      string
+		expectRetries    int
+	}{
+		{
+			name:             "transient create error retries until success",
+			createErr:        fmt.Errorf("etcdserver: leader changed"),
+			successOnAttempt: 3,
+			expectRetries:    2,
+		},
+		{
+			name:             "non-transient create error also retries (orphan trade-off)",
+			createErr:        fmt.Errorf("sandbox validation failed"),
+			successOnAttempt: 2,
+			expectRetries:    1,
+		},
+		{
+			name:             "always-failing create exhausts retry budget",
+			createErr:        fmt.Errorf("apiserver unavailable"),
+			successOnAttempt: 0,
+			expectError:      "context deadline exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, fc := NewTestInfra(t)
+			checkpointID := "clone-retry-create"
+			createCloneTestCheckpoint(t, fc, infraInstance.Cache, checkpointID)
+
+			origCreateSandbox := DefaultCreateSandbox
+			attempts := 0
+			DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
+				attempts++
+				if tt.successOnAttempt == 0 || attempts < tt.successOnAttempt {
+					return nil, tt.createErr
+				}
+				sbx.Name = fmt.Sprintf("clone-retry-create-%d", attempts)
+				created, err := origCreateSandbox(ctx, sbx, c)
+				if err != nil {
+					return nil, err
+				}
+				created.Status = v1alpha1.SandboxStatus{
+					Phase:              v1alpha1.SandboxRunning,
+					ObservedGeneration: created.Generation,
+					Conditions: []metav1.Condition{
+						{
+							Type:   string(v1alpha1.SandboxConditionReady),
+							Status: metav1.ConditionTrue,
+							Reason: v1alpha1.SandboxReadyReasonPodReady,
+						},
+					},
+					PodInfo: v1alpha1.PodInfo{PodIP: "1.2.3.4"},
+				}
+				return created, c.Status().Update(ctx, created)
+			}
+			t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+			opts := infra.CloneSandboxOptions{
+				User:                    "test-user",
+				CheckPointID:            checkpointID,
+				WaitReadyTimeout:        30 * time.Second,
+				CloneTimeout:            300 * time.Millisecond,
+				ReserveFailedSandboxFor: ptr.To(infra.ReserveFailedSandboxNever),
+			}
+			sbx, metrics, err := infraInstance.CloneSandbox(t.Context(), opts)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				assert.Nil(t, sbx)
+				assert.Greater(t, attempts, 1, "should have retried at least once before giving up")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, sbx)
+			assert.Equal(t, tt.expectRetries, metrics.Retries)
+			assert.Equal(t, tt.successOnAttempt, attempts)
+			assertCloneMetricsTotalConsistent(t, metrics)
+		})
+	}
+}
+
 func assertCloneMetricsTotalConsistent(t *testing.T, metrics infra.CloneMetrics) {
 	t.Helper()
 	expectedTotal := metrics.Wait + metrics.GetTemplate + metrics.CreateSandbox + metrics.WaitReady + metrics.InitRuntime + metrics.CSIMount

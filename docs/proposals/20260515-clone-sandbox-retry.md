@@ -122,14 +122,19 @@ helper if that attempt fails after a sandbox has been created.
 
 Retriable clone failures:
 
+- Sandbox create API call fails. Product preference: callers would rather wait
+  out a retry loop than see a 500 on transient apiserver/network errors. The
+  trade-off is orphan amplification: if `Create` returned an error to the client
+  after the apiserver had already persisted the CR, the retry produces a second
+  CR. The clone path uses `GenerateName` and does not get an `IsAlreadyExists`
+  signal, so these orphans are not visible to `clearFailedSandbox` and must be
+  reaped out-of-band.
 - Waiting for sandbox readiness fails.
 - Re-initializing runtime fails.
 
 Non-retriable clone failures:
 
 - Checkpoint/template lookup fails.
-- Sandbox create API call fails unless a later implementation identifies a
-  precise safe subset.
 - CSI mount fails.
 - CSI mount options cannot be resolved from annotations.
 
