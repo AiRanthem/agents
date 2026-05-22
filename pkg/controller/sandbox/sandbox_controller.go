@@ -209,7 +209,7 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		requeueAfter = box.Spec.ShutdownTime.Sub(now.Time)
 	}
 	if box.Spec.PauseTime != nil && !box.Spec.Paused {
-		if box.Spec.PauseTime.Before(&now) {
+		if pauseTimeReached(box.Spec.PauseTime, now) {
 			klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
 			modified := box.DeepCopy()
 			// Optimistic-lock the patch so concurrent writes surface as 409
@@ -273,6 +273,10 @@ func (r *SandboxReconciler) handleTerminating(ctx context.Context, args core.Ens
 
 func isSandboxCompletedPhase(phase agentsv1alpha1.SandboxPhase) bool {
 	return phase == agentsv1alpha1.SandboxFailed || phase == agentsv1alpha1.SandboxSucceeded
+}
+
+func pauseTimeReached(pauseTime *metav1.Time, now metav1.Time) bool {
+	return pauseTime != nil && !pauseTime.After(now.Time)
 }
 
 func (r *SandboxReconciler) addSandboxFinalizerAndHash(ctx context.Context, box *agentsv1alpha1.Sandbox) (*agentsv1alpha1.Sandbox, error) {
