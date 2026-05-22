@@ -74,7 +74,9 @@ func assertTimePtrEqual(t *testing.T, want, got *metav1.Time, msg string) {
 		return
 	}
 	require.NotNil(t, got, msg)
-	assert.True(t, want.Time.Equal(got.Time), "%s: want=%s got=%s", msg, want.Time, got.Time)
+	wantTime := timeout.NormalizeTime(want.Time)
+	gotTime := timeout.NormalizeTime(got.Time)
+	assert.True(t, wantTime.Equal(gotTime), "%s: want=%s got=%s", msg, wantTime, gotTime)
 }
 
 func timePtrOrNil(t time.Time) *metav1.Time {
@@ -1538,21 +1540,6 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 		},
 	}
 
-	// assertTimePtrEqual compares two *metav1.Time pointers by wall-clock value,
-	// not by *time.Location identity. The fake client round-trips times through
-	// JSON which rehydrates them in the local timezone, so reflect.DeepEqual
-	// (used by assert.Equal) sees UTC vs Local and reports inequality even when
-	// the underlying instant is identical.
-	assertTimePtrEqual := func(t *testing.T, want, got *metav1.Time, msg string) {
-		t.Helper()
-		if want == nil {
-			assert.Nil(t, got, msg)
-			return
-		}
-		require.NotNil(t, got, msg)
-		assert.True(t, want.Time.Equal(got.Time), "%s: want=%s got=%s", msg, want.Time, got.Time)
-	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Resume() early-returns at L376-380 when Status.Conditions[Ready]
@@ -1817,27 +1804,37 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 		PauseTime:    now.Add(5 * time.Minute),
 		ShutdownTime: now.Add(30 * 24 * time.Hour),
 	}
+	atomicTimeout := timeout.Options{
+		PauseTime:    now.Add(2 * time.Minute),
+		ShutdownTime: now.Add(20 * 24 * time.Hour),
+	}
 	injectedErr := fmt.Errorf("injected sandbox update failure")
 
 	cases := []struct {
-		name        string
-		run         func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, fc ctrl.Client)
-		expectReady bool
+		name          string
+		resumeTimeout timeout.Options
+		expectTimeout timeout.Options
+		run           func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, fc ctrl.Client, resumeTimeout timeout.Options)
+		expectReady   bool
 	}{
 		{
-			name: "wait-timeout",
-			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, _ ctrl.Client) {
+			name:          "wait-timeout",
+			resumeTimeout: realTimeout,
+			expectTimeout: realTimeout,
+			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, _ ctrl.Client, resumeTimeout timeout.Options) {
 				s := AsSandbox(sandbox.DeepCopy(), cache)
 				resumeCtx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 				defer cancel()
-				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &realTimeout})
+				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &resumeTimeout})
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "object is not satisfied during double check")
 			},
 		},
 		{
-			name: "ctx-canceled-post-mutator",
-			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, _ ctrl.Client) {
+			name:          "ctx-canceled-post-mutator",
+			resumeTimeout: realTimeout,
+			expectTimeout: realTimeout,
+			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, _ ctrl.Client, resumeTimeout timeout.Options) {
 				resumeCtx, cancel := context.WithCancel(t.Context())
 				cacheClient, ok := cache.GetClient().(ctrl.WithWatch)
 				require.True(t, ok)
@@ -1855,14 +1852,16 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 					Provider: cache,
 					client:   interceptedClient,
 				})
-				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &realTimeout})
+				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &resumeTimeout})
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "object is not satisfied during double check")
 			},
 		},
 		{
-			name: "save-timeout-failure",
-			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, fc ctrl.Client) {
+			name:          "save-timeout-failure-keeps-atomic-timeout",
+			resumeTimeout: atomicTimeout,
+			expectTimeout: atomicTimeout,
+			run: func(t *testing.T, sandbox *v1alpha1.Sandbox, cache *cachepkg.Cache, fc ctrl.Client, resumeTimeout timeout.Options) {
 				key := types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}
 				cache.GetMockManager().AddWaitReconcileKey(sandbox)
 				time.AfterFunc(20*time.Millisecond, func() {
@@ -1896,13 +1895,9 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 
 				resumeCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
-				require.NoError(t, s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &realTimeout}))
+				require.NoError(t, s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &resumeTimeout}))
 
-				laterTimeout := timeout.Options{
-					PauseTime:    realTimeout.PauseTime.Add(5 * time.Minute),
-					ShutdownTime: realTimeout.ShutdownTime,
-				}
-				_, err := s.SaveTimeoutWithPolicy(t.Context(), laterTimeout, timeout.UpdatePolicyExtendOnly)
+				_, err := s.SaveTimeoutWithPolicy(t.Context(), realTimeout, timeout.UpdatePolicyExtendOnly)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), injectedErr.Error())
 			},
@@ -1938,13 +1933,13 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 			CreateSandboxWithStatus(t, fc, sandbox)
 			time.Sleep(10 * time.Millisecond)
 
-			tc.run(t, sandbox, cache, fc)
+			tc.run(t, sandbox, cache, fc, tc.resumeTimeout)
 
 			var final v1alpha1.Sandbox
 			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, &final))
 			assert.False(t, final.Spec.Paused)
-			assertTimePtrEqual(t, timePtrOrNil(realTimeout.PauseTime), final.Spec.PauseTime, "final PauseTime must keep real timeout")
-			assertTimePtrEqual(t, timePtrOrNil(realTimeout.ShutdownTime), final.Spec.ShutdownTime, "final ShutdownTime must keep real timeout")
+			assertTimePtrEqual(t, timePtrOrNil(tc.expectTimeout.PauseTime), final.Spec.PauseTime, "final PauseTime must keep expected timeout")
+			assertTimePtrEqual(t, timePtrOrNil(tc.expectTimeout.ShutdownTime), final.Spec.ShutdownTime, "final ShutdownTime must keep expected timeout")
 			if tc.expectReady {
 				state, reason := sandboxutils.GetSandboxState(&final)
 				assert.Equal(t, v1alpha1.SandboxStateRunning, state, reason)
