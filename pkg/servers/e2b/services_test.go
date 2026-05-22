@@ -252,7 +252,7 @@ func TestCreateSandbox(t *testing.T) {
 				},
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox) {
-				assert.Empty(t, resp.EndAt)
+				assert.Equal(t, "0001-01-01T00:00:00Z", resp.EndAt)
 				sbx, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
 					SandboxID: resp.SandboxID,
 				})
@@ -446,6 +446,24 @@ func TestCreateSandbox(t *testing.T) {
 				assert.NotContains(t, sbx.Spec.Template.Labels, "another-metadata")
 			},
 		},
+		{
+			name:      "success with return pod ip metadata",
+			available: 1,
+			userName:  "test-user",
+			request: models.NewSandboxRequest{
+				TemplateID: templateName,
+				Metadata: map[string]string{
+					models.ExtensionKeyReturnPodIP: v1alpha1.True,
+				},
+			},
+			postCheck: func(t *testing.T, resp *models.Sandbox) {
+				assert.Equal(t, "1.2.3.4", resp.Metadata[models.MetadataKeyPodIP])
+				assert.NotContains(t, resp.Metadata, models.ExtensionKeyReturnPodIP)
+
+				sbx := GetSandbox(t, resp.SandboxID, fc)
+				assert.Equal(t, v1alpha1.True, sbx.Annotations[models.ExtensionKeyReturnPodIP])
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -513,6 +531,9 @@ func TestCreateSandbox(t *testing.T) {
 					assert.WithinDuration(t, startedAt.Add(time.Duration(timeoutSeconds)*time.Second), endAt, 5*time.Second)
 				}
 				assert.Equal(t, models.SandboxStateRunning, sbx.State)
+				if tt.postCheck != nil {
+					tt.postCheck(t, sbx)
+				}
 			}
 		})
 	}

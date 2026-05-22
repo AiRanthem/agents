@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/features"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
@@ -302,6 +303,9 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	}
 	for k, v := range request.Metadata {
 		annotations[k] = v
+	}
+	if request.Extensions.ReturnPodIP {
+		annotations[models.ExtensionKeyReturnPodIP] = agentsv1alpha1.True
 	}
 	sbx.SetAnnotations(annotations)
 

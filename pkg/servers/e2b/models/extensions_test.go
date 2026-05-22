@@ -169,6 +169,27 @@ func TestParseExtensions(t *testing.T) {
 			},
 		},
 		{
+			name: "return pod ip == true",
+			metadata: map[string]string{
+				ExtensionKeyReturnPodIP: v1alpha1.True,
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock: true,
+				ReturnPodIP:     true,
+			},
+		},
+		{
+			name: "return pod ip == false",
+			metadata: map[string]string{
+				ExtensionKeyReturnPodIP: v1alpha1.False,
+			},
+			wantErr: false,
+			expectExtension: NewSandboxRequestExtension{
+				CreateOnNoStock: true,
+			},
+		},
+		{
 			name: "invalid image extension",
 			metadata: map[string]string{
 				ExtensionKeyClaimWithImage: "invalid:image:name",
