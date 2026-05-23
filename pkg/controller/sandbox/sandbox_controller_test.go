@@ -1169,7 +1169,7 @@ func TestSandboxReconciler_PauseTimeOnlyRequeue(t *testing.T) {
 	}
 }
 
-func TestSandboxReconciler_AutoPauseAtExactPauseTime(t *testing.T) {
+func TestPauseTimeReached(t *testing.T) {
 	now := metav1.NewTime(time.Now().Truncate(time.Second))
 	cases := []struct {
 		name      string

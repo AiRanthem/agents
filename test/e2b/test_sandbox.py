@@ -181,17 +181,9 @@ def test_connect_shorter_timeout(sandbox_context):
 
 
 def test_auto_pause_resume_no_immediate_repause(sandbox_context):
-    """Regression for Connect/Resume leaving enough time before re-pause.
-
-    Reproduces the scenario where:
-      1. Controller patches Spec.Paused=true after Spec.PauseTime expires.
-      2. E2B Connect/Resume flips Spec.Paused=false and writes a fresh
-         Spec.PauseTime from the Connect timeout.
-      3. The next reconcile must observe the refreshed Resume/Connect deadline
-         and leave the sandbox running.
-
-    The controller auto-pause patch intentionally does not refresh
-    Spec.PauseTime; the E2B Resume/Connect path owns the new running deadline.
+    """Connect after auto-pause must leave the sandbox running through the
+    stability window: the Connect path replaces the expired PauseTime with
+    the requested running deadline, and the next reconcile must respect it.
     """
     auto_pause_timeout_seconds = 30
     sbx: Sandbox = sandbox_context.add(Sandbox.create(
@@ -218,9 +210,7 @@ def test_auto_pause_resume_no_immediate_repause(sandbox_context):
         time.sleep(2)
     assert paused, f"sandbox {sandbox_name} did not auto-pause within deadline"
 
-    # Step 2: assert auto-pause took effect. The auto-pause controller patch
-    # intentionally leaves the expired pauseTime in place; Connect/Resume below
-    # must replace it with the requested running deadline.
+    # Step 2: assert auto-pause took effect.
     spec = _get_sandbox_spec(sandbox_name)
     assert spec.get("paused") is True, (
         f"spec.paused must be true after auto-pause; got spec={spec}"
@@ -228,11 +218,9 @@ def test_auto_pause_resume_no_immediate_repause(sandbox_context):
     pause_time_str = spec.get("pauseTime")
     assert pause_time_str, "spec.pauseTime must remain non-nil after auto-pause"
 
-    # Step 3: resume via E2B Connect with an explicit timeout. The Connect path
-    # for autoPause sandboxes sets Spec.PauseTime = serverNow + connect_timeout
-    # (see pkg/servers/e2b/services.go buildSetTimeoutOptions, autoPause=true),
-    # so we record the wall-clock window that brackets the server's `now` to
-    # bound the expected post-Connect Spec.PauseTime.
+    # Step 3: resume via E2B Connect with an explicit timeout. Record the
+    # wall-clock window that brackets the server's `now`, so we can bound the
+    # post-Connect Spec.PauseTime (= serverNow + connect_timeout for autoPause).
     connect_timeout_seconds = 600
     connect_start = datetime.now(timezone.utc)
     connect_sandbox(sbx, timeout=connect_timeout_seconds)
@@ -255,12 +243,10 @@ def test_auto_pause_resume_no_immediate_repause(sandbox_context):
         )
         time.sleep(poll_interval)
 
-    # Step 5: confirm final spec is consistent — paused=false (or absent) and
-    # pauseTime is approximately connect_start + connect_timeout, bracketed by
-    # the actual Connect call window plus a small skew tolerance. This is a
-    # tighter check than "future-relative-to-now": even a 5-minute-stale
-    # pauseTime would be in the future, but only the correct deadline lies in
-    # this narrow window.
+    # Step 5: confirm final spec is consistent — paused=false and pauseTime
+    # lands in the narrow [connect_start, connect_end] + connect_timeout window
+    # (a stale 5-min-old pauseTime would also be "in the future" — the bound
+    # below proves it's the freshly-written deadline, not a leftover).
     spec_after = _get_sandbox_spec(sandbox_name)
     assert not spec_after.get("paused"), (
         f"spec.paused should be false after resume; got spec={spec_after}"

@@ -90,8 +90,6 @@ func (sc *Controller) buildPauseTimeoutOptions(sbx infra.Sandbox, now time.Time)
 // - New SDK: calls ConnectSandbox directly.
 // - Old SDK: first calls SetSandboxTimeout; that path returns 500 on this flow, then falls back to ResumeSandbox.
 //
-// Because ResumeSandbox is only used for the paused->running flow, it applies the floor-enforced
-// requested timeout. Placeholder writing and ExtendOnly post-Resume semantics mirror ConnectSandbox.
 // The running-sandbox "extend only" guard is intentionally implemented in ConnectSandbox only.
 func (sc *Controller) ResumeSandbox(r *http.Request) (web.ApiResponse[struct{}], *web.ApiError) {
 	id := r.PathValue("sandboxID")
@@ -119,21 +117,8 @@ func (sc *Controller) ResumeSandbox(r *http.Request) (web.ApiResponse[struct{}],
 		}
 	}
 
-	// Floor enforcement mirrors ConnectSandbox.
-	effectiveTimeout := request.TimeoutSeconds
-	if !currentEndAt.IsZero() && effectiveTimeout < sc.minResumeTimeout {
-		log.Info("connect-on-paused timeout floor applied",
-			"requestedSeconds", request.TimeoutSeconds,
-			"effectiveSeconds", sc.minResumeTimeout,
-			"reason", "request shorter than --e2b-min-resume-timeout")
-		effectiveTimeout = sc.minResumeTimeout
-	}
-
-	var resumeOpts infra.ResumeOptions
-	if !currentEndAt.IsZero() {
-		realTimeout := sc.buildSetTimeoutOptions(autoPause, time.Now(), effectiveTimeout)
-		resumeOpts.Timeout = &realTimeout
-	}
+	effectiveTimeout := sc.applyResumeFloor(log, request.TimeoutSeconds, true, !currentEndAt.IsZero())
+	resumeOpts := sc.buildResumeOpts(autoPause, time.Now(), effectiveTimeout, !currentEndAt.IsZero())
 	log.Info("resuming sandbox")
 	if err := sc.manager.ResumeSandbox(ctx, sbx, resumeOpts); err != nil {
 		code := http.StatusInternalServerError
@@ -146,23 +131,40 @@ func (sc *Controller) ResumeSandbox(r *http.Request) (web.ApiResponse[struct{}],
 		}
 	}
 
-	// Set the real timeout. ExtendOnly is safe because the placeholder was built
-	// from the same effectiveTimeout; the post-Resume opts here will be
-	// ~resumeDuration later and ExtendOnly extends naturally.
-	if !currentEndAt.IsZero() {
-		opts := sc.buildSetTimeoutOptions(autoPause, time.Now(), effectiveTimeout)
-		log.Info("sandbox resumed, resetting sandbox timeout", "timeout", opts)
-		if _, err := sbx.SaveTimeoutWithPolicy(ctx, opts, timeout.UpdatePolicyExtendOnly); err != nil {
-			return web.ApiResponse[struct{}]{}, &web.ApiError{
-				Message: fmt.Sprintf("Failed to set sandbox timeout: %v", err),
-			}
-		}
-	} else {
-		log.Info("skip resetting timeout for never-timeout sandbox")
+	if apiErr := sc.updateConnectTimeout(ctx, sbx, effectiveTimeout, state, autoPause, currentEndAt); apiErr != nil {
+		return web.ApiResponse[struct{}]{}, apiErr
 	}
 	return web.ApiResponse[struct{}]{
 		Code: http.StatusNoContent,
 	}, nil
+}
+
+// applyResumeFloor bumps `requested` up to sc.minResumeTimeout when the
+// request will trigger Resume on a timed Paused sandbox. The floor prevents
+// the placeholder PauseTime from expiring mid-Resume and triggering an
+// auto-pause race. Never-timeout sandboxes have no PauseTime so the floor
+// is skipped (and would only generate misleading log noise).
+func (sc *Controller) applyResumeFloor(log klog.Logger, requested int, paused, hasDeadline bool) int {
+	if !paused || !hasDeadline || requested >= sc.minResumeTimeout {
+		return requested
+	}
+	log.Info("connect-on-paused timeout floor applied",
+		"requestedSeconds", requested,
+		"effectiveSeconds", sc.minResumeTimeout,
+		"reason", "request shorter than --e2b-min-resume-timeout")
+	return sc.minResumeTimeout
+}
+
+// buildResumeOpts builds ResumeOptions whose placeholder Timeout is written
+// atomically with Spec.Paused=false inside Resume() — closing the auto-pause
+// race. Never-timeout sandboxes (hasDeadline == false) get nil so Resume does
+// not convert them into timed sandboxes.
+func (sc *Controller) buildResumeOpts(autoPause bool, now time.Time, effectiveTimeout int, hasDeadline bool) infra.ResumeOptions {
+	if !hasDeadline {
+		return infra.ResumeOptions{}
+	}
+	placeholder := sc.buildSetTimeoutOptions(autoPause, now, effectiveTimeout)
+	return infra.ResumeOptions{Timeout: &placeholder}
 }
 
 func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.Sandbox], *web.ApiError) {
@@ -180,42 +182,22 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 	if apiErr != nil {
 		return web.ApiResponse[*models.Sandbox]{}, apiErr
 	}
-	// `state` is intentionally the pre-connect observation.
-	// We only enforce the extend-only guard for sandboxes that were already
-	// running when Connect was called. Paused->resume requests apply the
-	// requested timeout (post-floor) atomically inside Resume.
+	// `state` is the pre-connect observation: the extend-only guard at
+	// updateConnectTimeout applies to sandboxes that were already running,
+	// while Paused→resume requests apply the requested timeout (post-floor)
+	// atomically inside Resume.
 	state, pauseResumeReason := sbx.GetState()
 	autoPause, currentEndAt := ParseTimeout(sbx)
 
-	// Floor enforcement: requests that will trigger Resume on a timed Paused
-	// sandbox must have an effective timeout long enough to outlast the
-	// Resume wall-clock duration; otherwise the placeholder PauseTime expires
-	// mid-Resume and the controller auto-pauses the in-transition sandbox.
-	// Never-timeout sandboxes (currentEndAt zero) have no PauseTime so no
-	// race exists; the floor would only generate misleading log noise. See
-	// docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
-	effectiveTimeout := request.TimeoutSeconds
-	if state == v1alpha1.SandboxStatePaused && !currentEndAt.IsZero() &&
-		effectiveTimeout < sc.minResumeTimeout {
-		log.Info("connect-on-paused timeout floor applied",
-			"requestedSeconds", request.TimeoutSeconds,
-			"effectiveSeconds", sc.minResumeTimeout,
-			"reason", "request shorter than --e2b-min-resume-timeout")
-		effectiveTimeout = sc.minResumeTimeout
-	}
+	paused := state == v1alpha1.SandboxStatePaused
+	effectiveTimeout := sc.applyResumeFloor(log, request.TimeoutSeconds, paused, !currentEndAt.IsZero())
 
-	// Step 1: Resuming the sandbox if it is paused, atomically writing the
+	// Step 1: Resume the sandbox if it is paused, atomically writing the
 	// placeholder timeout for timed sandboxes.
 	statusCode := http.StatusOK
-	if state == v1alpha1.SandboxStatePaused {
+	if paused {
 		log.Info("sandbox is paused, will resume it", "reason", pauseResumeReason)
-		var resumeOpts infra.ResumeOptions
-		if !currentEndAt.IsZero() {
-			realTimeout := sc.buildSetTimeoutOptions(autoPause, time.Now(), effectiveTimeout)
-			resumeOpts.Timeout = &realTimeout
-		}
-		// Never-timeout sandbox: leave resumeOpts.Timeout nil. Writing a
-		// derived placeholder would convert it into a timed sandbox.
+		resumeOpts := sc.buildResumeOpts(autoPause, time.Now(), effectiveTimeout, !currentEndAt.IsZero())
 		if err := sc.manager.ResumeSandbox(ctx, sbx, resumeOpts); err != nil {
 			log.Error(err, "failed to resume sandbox")
 			code := http.StatusInternalServerError
@@ -233,8 +215,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 		log.Info("sandbox is not paused, skip resuming", "state", state, "reason", pauseResumeReason)
 	}
 
-	// Step 2: Update the sandbox timeout with the effective (post-floor)
-	// value. updateConnectTimeout short-circuits on never-timeout sandboxes.
+	// Step 2: Update the sandbox timeout with the effective (post-floor) value.
 	log.Info("updating sandbox timeout")
 	if err := sc.updateConnectTimeout(ctx, sbx, effectiveTimeout, state, autoPause, currentEndAt); err != nil {
 		log.Error(err, "failed to update sandbox timeout")
@@ -248,18 +229,13 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 	}, nil
 }
 
-// updateConnectTimeout updates the sandbox timeout after a Connect or Resume.
-//
-// Always uses UpdatePolicyExtendOnly: the placeholder written by Resume()
-// uses the same buildSetTimeoutOptions formula as `opts` below, differing
-// only by the elapsed Resume wall-clock duration. ExtendOnly's monotonic
-// "later wins" semantics absorb that gap (extending the placeholder to the
-// post-Resume value) and concurrent-writer races (longer timeout wins).
-// See docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
+// updateConnectTimeout writes the post-Resume / running-sandbox timeout under
+// ExtendOnly so the placeholder written by Resume() naturally extends to the
+// post-Resume value, and concurrent-writer races resolve to the longer
+// timeout. Short-circuits for never-timeout sandboxes.
 func (sc *Controller) updateConnectTimeout(ctx context.Context, sbx infra.Sandbox, timeoutSeconds int, preConnectState string, autoPause bool, currentEndAt time.Time) *web.ApiError {
 	log := klog.FromContext(ctx).WithValues("sandboxID", sbx.GetSandboxID())
 
-	// Sandboxes without endAt are never-timeout; their timeout must not change.
 	if currentEndAt.IsZero() {
 		log.Info("skip resetting timeout for never-timeout sandbox")
 		return nil

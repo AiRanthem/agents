@@ -1461,12 +1461,10 @@ func TestSandbox_ResumePreservesTimeoutOnError(t *testing.T) {
 	assert.WithinDuration(t, pauseTime, updatedSbx.Spec.PauseTime.Time, time.Second)
 }
 
-// TestSandbox_ResumeMutatorAtomicity verifies that the Resume mutator
-// writes Spec.Paused = false AND the placeholder timeout fields in the
-// SAME Update payload, regardless of the timeout shape supplied via
-// ResumeOptions.Timeout. This is the regression test for the
-// auto-pause / Resume race documented in
-// docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
+// TestSandbox_ResumeMutatorAtomicity verifies Resume() writes Spec.Paused=false
+// and the placeholder timeout in the same Update payload across timeout
+// shapes (real / nil / never-timeout / pausetime-only) and across the
+// winner/loser branches of the first-writer-wins guard.
 func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 	utils.InitLogOutput()
 
@@ -1542,16 +1540,11 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Resume() early-returns at L376-380 when Status.Conditions[Ready]
-			// is already True ("sandbox is already resumed"). For winner cases
-			// (initialPaused=true) we need the mutator to actually run, so
-			// seed Phase=Paused + ConditionPaused=True (required by
-			// IsSandboxResumable for a Paused-phase sandbox) and flip to
-			// Ready=True via AfterFunc to release the resumeTask.Wait.
-			// For loser cases (initialPaused=false) Spec.Paused is already
-			// false; we seed Phase=Running + ConditionReady=True so that
-			// Resume early-returns before retryUpdate runs — exactly the
-			// behavior we want to assert (no Update issued).
+			// Winners (initialPaused=true): Phase=Paused + ConditionPaused so
+			// IsSandboxResumable passes and the mutator runs (released by the
+			// Ready-flip AfterFunc below). Losers (initialPaused=false):
+			// Phase=Running + ConditionReady so Resume() hits the
+			// "sandbox is already resumed" early-return before retryUpdate.
 			phase := v1alpha1.SandboxPaused
 			conds := []metav1.Condition{
 				{Type: string(v1alpha1.SandboxConditionPaused), Status: metav1.ConditionTrue, Reason: "Paused"},
@@ -1826,8 +1819,10 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 				resumeCtx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 				defer cancel()
 				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &resumeTimeout})
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "object is not satisfied during double check")
+				require.ErrorIs(t, err, cacheutils.ErrWaitNotSatisfied)
+				var werr *cacheutils.WaitNotSatisfiedError
+				require.ErrorAs(t, err, &werr)
+				assert.True(t, werr.DuringDoubleCheck, "expected double-check failure")
 			},
 		},
 		{
@@ -1853,8 +1848,10 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 					client:   interceptedClient,
 				})
 				err := s.Resume(resumeCtx, infra.ResumeOptions{Timeout: &resumeTimeout})
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "object is not satisfied during double check")
+				require.ErrorIs(t, err, cacheutils.ErrWaitNotSatisfied)
+				var werr *cacheutils.WaitNotSatisfiedError
+				require.ErrorAs(t, err, &werr)
+				assert.True(t, werr.DuringDoubleCheck, "expected double-check failure")
 			},
 		},
 		{

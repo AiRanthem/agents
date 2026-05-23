@@ -853,17 +853,64 @@ func TestUpdateConnectTimeout(t *testing.T) {
 	}
 }
 
-// TestConnectSandbox_ResumeFloorAndPlaceholder verifies the new behavior
-// from docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md:
-//   - Paused timed sandbox + request < floor: effective timeout is bumped
-//     to minResumeTimeout; the placeholder lands atomically with
-//     Spec.Paused=false; the final EndAt reflects floor + ~Resume duration.
-//   - Paused timed sandbox + request >= floor: no bump; placeholder uses
-//     request value; final EndAt reflects request.
-//   - Paused never-timeout sandbox: ResumeOptions.Timeout is nil (verified
-//     by asserting Spec.PauseTime / Spec.ShutdownTime stay nil during and
-//     after Connect); floor not applied.
-//   - Running sandbox: floor not applied; Spec.Paused never changes.
+// pickPlaceholderDeadline returns the spec field that buildSetTimeoutOptions
+// populates for a (autoPause) sandbox: PauseTime when auto-pause is enabled,
+// ShutdownTime otherwise.
+func pickPlaceholderDeadline(sbx *agentsv1alpha1.Sandbox, autoPause bool) (*metav1.Time, string) {
+	if autoPause {
+		return sbx.Spec.PauseTime, "PauseTime"
+	}
+	return sbx.Spec.ShutdownTime, "ShutdownTime"
+}
+
+// placeholderAssertion returns the hook the Resume-wait observer fires when
+// it sees Spec.Paused=false. At that instant the Resume mutator has just
+// committed and the e2b handler is still blocked inside Resume's Wait, so the
+// observed payload is the atomic placeholder — proving Resume() wrote
+// Timeout and Spec.Paused=false in the same Update. After asserting the
+// placeholder shape, the hook releases the Wait by flipping Status to Running.
+func placeholderAssertion(beforeT time.Time, neverTimeout, autoPause bool, wantEffective int) func(*testing.T, client.Client, *agentsv1alpha1.Sandbox) {
+	return func(t *testing.T, c client.Client, sbx *agentsv1alpha1.Sandbox) {
+		if neverTimeout {
+			assert.Nil(t, sbx.Spec.PauseTime, "never-timeout sandbox must retain nil PauseTime through Resume")
+			assert.Nil(t, sbx.Spec.ShutdownTime, "never-timeout sandbox must retain nil ShutdownTime through Resume")
+		} else {
+			deadline, field := pickPlaceholderDeadline(sbx, autoPause)
+			if assert.NotNilf(t, deadline, "placeholder %s must be set in the same Update as Paused=false", field) {
+				expectMin := beforeT.Add(time.Duration(wantEffective) * time.Second).Add(-2 * time.Second)
+				expectMax := beforeT.Add(time.Duration(wantEffective) * time.Second).Add(2 * time.Second)
+				assert.False(t, deadline.Time.Before(expectMin),
+					"placeholder %s %s must reflect effectiveTimeout window (>= %s)", field, deadline, expectMin)
+				assert.False(t, deadline.Time.After(expectMax),
+					"placeholder %s %s must reflect effectiveTimeout window (<= %s, before post-Resume slide)", field, deadline, expectMax)
+			}
+		}
+		DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, "", metav1.ConditionTrue)(t, c, sbx)
+	}
+}
+
+// assertFinalDeadline verifies the persisted deadline is bounded by:
+//
+//	beforeT + wantEffective  <= deadline <= beforeT + wantEffective + 30s
+//
+// The lower bound is the placeholder written at Resume entry; the upper
+// bound is the post-Resume ExtendOnly slide (≈ Resume wall-clock duration,
+// with 30s of slack for goroutine scheduling on the fake client).
+func assertFinalDeadline(t *testing.T, final *agentsv1alpha1.Sandbox, autoPause bool, beforeT time.Time, wantEffective int) {
+	t.Helper()
+	expectMin := beforeT.Add(time.Duration(wantEffective) * time.Second).Truncate(time.Second)
+	expectMax := beforeT.Add(time.Duration(wantEffective+30) * time.Second)
+	deadline, _ := pickPlaceholderDeadline(final, autoPause)
+	require.NotNil(t, deadline, "timed sandbox must have the buildSetTimeoutOptions-selected deadline (autoPause=%v)", autoPause)
+	assert.True(t, !deadline.Time.Before(expectMin),
+		"deadline %s must be >= expected min %s (effective=%ds)", deadline, expectMin, wantEffective)
+	assert.True(t, !deadline.Time.After(expectMax),
+		"deadline %s must be <= expected max %s (effective=%ds + ~Resume duration)", deadline, expectMax, wantEffective)
+}
+
+// TestConnectSandbox_ResumeFloorAndPlaceholder covers the four Connect floor
+// + atomic-placeholder scenarios: below-floor / above-floor / never-timeout
+// for paused sandboxes, plus the running case where the floor must not fire.
 func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 	const minResume = 120
 	templateName := "test-template-floor-connect"
@@ -922,43 +969,13 @@ func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 				pauseSandboxHelper(t, controller, fc, sandboxID, false, false, user)
 			}
 
-			// Drive Status back to Running so Resume's Wait completes — and
-			// AT THAT INSTANT assert atomicity: when waitForResumeUpdate
-			// observes Spec.Paused=false AND the Resume wait hook entry, the
-			// Resume mutator has just committed; the post-Resume
-			// updateConnectTimeout has not run yet (e2b handler is still
-			// blocked inside Resume's Wait). Observing the placeholder window
-			// here proves the handler passed Timeout into Resume().
+			// beforeConnect must be sampled BEFORE the goroutine launches: the
+			// placeholder assertion compares Spec.PauseTime/ShutdownTime
+			// against (beforeConnect + wantEffective).
 			beforeConnect := time.Now()
 			if tc.paused {
-				placeholderAssertion := func(t *testing.T, c client.Client, sbx *agentsv1alpha1.Sandbox) {
-					if tc.neverTimeout {
-						assert.Nil(t, sbx.Spec.PauseTime, "never-timeout sandbox must retain nil PauseTime through Resume")
-						assert.Nil(t, sbx.Spec.ShutdownTime, "never-timeout sandbox must retain nil ShutdownTime through Resume")
-					} else if tc.autoPause {
-						if assert.NotNil(t, sbx.Spec.PauseTime, "auto-pause placeholder PauseTime must be set in the same Update as Paused=false") {
-							expectMin := beforeConnect.Add(time.Duration(tc.wantEffective) * time.Second).Add(-2 * time.Second)
-							expectMax := beforeConnect.Add(time.Duration(tc.wantEffective) * time.Second).Add(2 * time.Second)
-							assert.False(t, sbx.Spec.PauseTime.Time.Before(expectMin),
-								"placeholder PauseTime %s must reflect effectiveTimeout window (>= %s)", sbx.Spec.PauseTime, expectMin)
-							assert.False(t, sbx.Spec.PauseTime.Time.After(expectMax),
-								"placeholder PauseTime %s must reflect effectiveTimeout window (<= %s, before post-Resume slide)", sbx.Spec.PauseTime, expectMax)
-						}
-					} else {
-						// Non-auto-pause: placeholder lives in ShutdownTime.
-						if assert.NotNil(t, sbx.Spec.ShutdownTime, "non-auto-pause placeholder ShutdownTime must be set in the same Update as Paused=false") {
-							expectMin := beforeConnect.Add(time.Duration(tc.wantEffective) * time.Second).Add(-2 * time.Second)
-							expectMax := beforeConnect.Add(time.Duration(tc.wantEffective) * time.Second).Add(2 * time.Second)
-							assert.False(t, sbx.Spec.ShutdownTime.Time.Before(expectMin),
-								"placeholder ShutdownTime %s must reflect effectiveTimeout window (>= %s)", sbx.Spec.ShutdownTime, expectMin)
-							assert.False(t, sbx.Spec.ShutdownTime.Time.After(expectMax),
-								"placeholder ShutdownTime %s must reflect effectiveTimeout window (<= %s, before post-Resume slide)", sbx.Spec.ShutdownTime, expectMax)
-						}
-					}
-					// Now release the Resume wait.
-					DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, "", metav1.ConditionTrue)(t, c, sbx)
-				}
-				go UpdateSandboxWhen(t, fc, sandboxID, waitForResumeUpdate(controller, true), placeholderAssertion)
+				hook := placeholderAssertion(beforeConnect, tc.neverTimeout, tc.autoPause, tc.wantEffective)
+				go UpdateSandboxWhen(t, fc, sandboxID, waitForResumeUpdate(controller, true), hook)
 			}
 
 			resp, apiErr := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
@@ -967,8 +984,6 @@ func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 			require.Nil(t, apiErr)
 			assert.Equal(t, tc.wantStatus, resp.Code)
 
-			// Verify the persisted state. sandboxID encodes namespace--name; use
-			// the helper rather than the empty controller.sandboxNamespace.
 			final := GetSandbox(t, sandboxID, fc)
 			assert.False(t, final.Spec.Paused, "Spec.Paused must be false after Connect on Paused")
 
@@ -977,46 +992,22 @@ func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 				assert.Nil(t, final.Spec.ShutdownTime, "never-timeout sandbox must retain nil ShutdownTime")
 				return
 			}
-
-			// For the running case, the floor is skipped and no Resume occurs.
+			// Running case: the floor is skipped and no Resume occurs;
 			// updateConnectTimeout under ExtendOnly preserves the pre-existing
-			// (create-time) deadline, so the placeholder-window bound below
-			// doesn't apply. The "floor not applied" intent is fully covered
-			// by tc.wantStatus == StatusOK above (a Resume would yield 201).
+			// create-time deadline. "Floor not applied" is already covered by
+			// wantStatus == StatusOK (a Resume would yield 201).
 			if !tc.paused {
 				return
 			}
-
-			// The placeholder is written at Resume-entry; the post-Resume
-			// ExtendOnly slides it forward by ~Resume duration. So the final
-			// value is bounded:
-			//     >= beforeConnect + wantEffective
-			//     <= beforeConnect + wantEffective + resumeBudget (say 30s)
-			// metav1.Time persists at second-level precision; truncate
-			// expectMin down so the comparison is at the same precision.
-			expectMin := beforeConnect.Add(time.Duration(tc.wantEffective) * time.Second).Truncate(time.Second)
-			expectMax := beforeConnect.Add(time.Duration(tc.wantEffective+30) * time.Second)
-			// Pick the field buildSetTimeoutOptions populates for this case.
-			var deadline *metav1.Time
-			if tc.autoPause {
-				deadline = final.Spec.PauseTime
-			} else {
-				deadline = final.Spec.ShutdownTime
-			}
-			require.NotNil(t, deadline, "timed sandbox must have the buildSetTimeoutOptions-selected deadline (autoPause=%v)", tc.autoPause)
-			assert.True(t, !deadline.Time.Before(expectMin),
-				"deadline %s must be >= expected min %s (effective=%ds)", deadline, expectMin, tc.wantEffective)
-			assert.True(t, !deadline.Time.After(expectMax),
-				"deadline %s must be <= expected max %s (effective=%ds + ~Resume duration)", deadline, expectMax, tc.wantEffective)
+			assertFinalDeadline(t, final, tc.autoPause, beforeConnect, tc.wantEffective)
 		})
 	}
 }
 
-// TestResumeSandbox_ResumeFloorAndPlaceholder mirrors the above test for the
-// legacy ResumeSandbox handler (old SDK path). Same setup, same assertions,
-// calls controller.ResumeSandbox instead of ConnectSandbox. Only paused-*
-// cases are meaningful (legacy ResumeSandbox returns 409 on non-paused
-// sandboxes). Status code differs: success is StatusNoContent.
+// TestResumeSandbox_ResumeFloorAndPlaceholder mirrors
+// TestConnectSandbox_ResumeFloorAndPlaceholder for the legacy ResumeSandbox
+// handler. Non-paused cases are omitted (legacy returns 409). Status code
+// is StatusNoContent.
 func TestResumeSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 	const minResume = 120
 	templateName := "test-template-floor-resume"
@@ -1065,32 +1056,8 @@ func TestResumeSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 			pauseSandboxHelper(t, controller, fc, sandboxID, false, false, user)
 
 			beforeResume := time.Now()
-			placeholderAssertion := func(t *testing.T, c client.Client, sbx *agentsv1alpha1.Sandbox) {
-				if tc.neverTimeout {
-					assert.Nil(t, sbx.Spec.PauseTime, "never-timeout sandbox must retain nil PauseTime through Resume")
-					assert.Nil(t, sbx.Spec.ShutdownTime, "never-timeout sandbox must retain nil ShutdownTime through Resume")
-				} else if tc.autoPause {
-					if assert.NotNil(t, sbx.Spec.PauseTime, "auto-pause placeholder PauseTime must be set in the same Update as Paused=false") {
-						expectMin := beforeResume.Add(time.Duration(tc.wantEffective) * time.Second).Add(-2 * time.Second)
-						expectMax := beforeResume.Add(time.Duration(tc.wantEffective) * time.Second).Add(2 * time.Second)
-						assert.False(t, sbx.Spec.PauseTime.Time.Before(expectMin),
-							"placeholder PauseTime %s must reflect effectiveTimeout window (>= %s)", sbx.Spec.PauseTime, expectMin)
-						assert.False(t, sbx.Spec.PauseTime.Time.After(expectMax),
-							"placeholder PauseTime %s must reflect effectiveTimeout window (<= %s, before post-Resume slide)", sbx.Spec.PauseTime, expectMax)
-					}
-				} else {
-					if assert.NotNil(t, sbx.Spec.ShutdownTime, "non-auto-pause placeholder ShutdownTime must be set in the same Update as Paused=false") {
-						expectMin := beforeResume.Add(time.Duration(tc.wantEffective) * time.Second).Add(-2 * time.Second)
-						expectMax := beforeResume.Add(time.Duration(tc.wantEffective) * time.Second).Add(2 * time.Second)
-						assert.False(t, sbx.Spec.ShutdownTime.Time.Before(expectMin),
-							"placeholder ShutdownTime %s must reflect effectiveTimeout window (>= %s)", sbx.Spec.ShutdownTime, expectMin)
-						assert.False(t, sbx.Spec.ShutdownTime.Time.After(expectMax),
-							"placeholder ShutdownTime %s must reflect effectiveTimeout window (<= %s, before post-Resume slide)", sbx.Spec.ShutdownTime, expectMax)
-					}
-				}
-				DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, "", metav1.ConditionTrue)(t, c, sbx)
-			}
-			go UpdateSandboxWhen(t, fc, sandboxID, waitForResumeUpdate(controller, true), placeholderAssertion)
+			hook := placeholderAssertion(beforeResume, tc.neverTimeout, tc.autoPause, tc.wantEffective)
+			go UpdateSandboxWhen(t, fc, sandboxID, waitForResumeUpdate(controller, true), hook)
 
 			resp, apiErr := controller.ResumeSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
 				TimeoutSeconds: tc.requestTimeout,
@@ -1106,22 +1073,7 @@ func TestResumeSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 				assert.Nil(t, final.Spec.ShutdownTime, "never-timeout sandbox must retain nil ShutdownTime")
 				return
 			}
-
-			// metav1.Time persists at second-level precision; truncate
-			// expectMin down so the comparison is at the same precision.
-			expectMin := beforeResume.Add(time.Duration(tc.wantEffective) * time.Second).Truncate(time.Second)
-			expectMax := beforeResume.Add(time.Duration(tc.wantEffective+30) * time.Second)
-			var deadline *metav1.Time
-			if tc.autoPause {
-				deadline = final.Spec.PauseTime
-			} else {
-				deadline = final.Spec.ShutdownTime
-			}
-			require.NotNil(t, deadline, "timed sandbox must have the buildSetTimeoutOptions-selected deadline (autoPause=%v)", tc.autoPause)
-			assert.True(t, !deadline.Time.Before(expectMin),
-				"deadline %s must be >= expected min %s (effective=%ds)", deadline, expectMin, tc.wantEffective)
-			assert.True(t, !deadline.Time.After(expectMax),
-				"deadline %s must be <= expected max %s (effective=%ds + ~Resume duration)", deadline, expectMax, tc.wantEffective)
+			assertFinalDeadline(t, final, tc.autoPause, beforeResume, tc.wantEffective)
 		})
 	}
 }

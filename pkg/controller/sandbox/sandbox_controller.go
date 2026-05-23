@@ -212,8 +212,8 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		if pauseTimeReached(box.Spec.PauseTime, now) {
 			klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
 			modified := box.DeepCopy()
-			// Optimistic-lock the patch so concurrent writes surface as 409
-			// instead of silently winning a last-writer race.
+			// Optimistic-lock so concurrent writers surface as 409 instead of
+			// silently winning a last-writer race.
 			patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
 			modified.Spec.Paused = true
 			if err := r.Patch(ctx, modified, patch); err != nil {
@@ -223,11 +223,10 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
-		} else {
-			pauseDelta := box.Spec.PauseTime.Sub(now.Time)
-			if requeueAfter == 0 || (pauseDelta > 0 && pauseDelta < requeueAfter) {
-				requeueAfter = pauseDelta
-			}
+		}
+		pauseDelta := box.Spec.PauseTime.Sub(now.Time)
+		if pauseDelta > 0 && (requeueAfter == 0 || pauseDelta < requeueAfter) {
+			requeueAfter = pauseDelta
 		}
 	}
 

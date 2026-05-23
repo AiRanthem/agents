@@ -45,17 +45,11 @@ type PauseOptions struct {
 
 // ResumeOptions configures a Resume operation.
 //
-// Timeout is a placeholder timeout that Resume() writes atomically with
-// Spec.Paused = false. It exists to suppress the controller's auto-pause
-// action during the brief window between Resume returning and the caller
-// writing the real business timeout. nil disables placeholder writing
-// (caller accepts that PauseTime may remain stale until the next write).
-//
-// Production callers should construct Timeout via the same path that
-// builds their post-Resume "real" timeout (i.e., buildSetTimeoutOptions)
-// so the placeholder shares the realTimeout construction — no buffered or
-// inflated intermediate value. See
-// docs/superpowers/specs/2026-05-22-resume-atomic-pausetime-design.md.
+// Timeout, when non-nil, is written atomically with Spec.Paused=false so
+// the controller's auto-pause action cannot fire on the stale PauseTime
+// between Resume returning and the caller writing the real business
+// timeout. Pass nil to skip the atomic write (the caller accepts that
+// PauseTime may remain stale until the next write).
 type ResumeOptions struct {
 	Timeout *timeout.Options
 }
