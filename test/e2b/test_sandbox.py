@@ -4,6 +4,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import version as _pkg_version
 
 import pytest
 from dateutil.tz import tzutc
@@ -11,6 +12,11 @@ from e2b.exceptions import NotFoundException
 from e2b_code_interpreter import Sandbox, SandboxQuery, SandboxState
 
 from utils import list_sandbox, connect_sandbox, run_code_sandbox
+
+# e2b-code-interpreter 2.4.x predates the `lifecycle={"on_timeout": "pause"}`
+# parameter, so auto-pause cannot be requested through that SDK.
+_E2B_CODE_INTERPRETER_VERSION = _pkg_version("e2b-code-interpreter")
+_SDK_LACKS_AUTO_PAUSE = _E2B_CODE_INTERPRETER_VERSION.startswith("2.4.")
 
 
 def _get_sandbox_spec(name: str) -> dict:
@@ -180,6 +186,13 @@ def test_connect_shorter_timeout(sandbox_context):
     assert info_after.end_at == info_before.end_at
 
 
+@pytest.mark.skipif(
+    _SDK_LACKS_AUTO_PAUSE,
+    reason=(
+        f"e2b-code-interpreter {_E2B_CODE_INTERPRETER_VERSION} does not support "
+        "lifecycle={'on_timeout': 'pause'}; auto-pause cannot be exercised."
+    ),
+)
 def test_auto_pause_resume_no_immediate_repause(sandbox_context):
     """Connect after auto-pause must leave the sandbox running through the
     stability window: the Connect path replaces the expired PauseTime with
