@@ -104,7 +104,9 @@ func (sc *Controller) buildPauseTimeoutOptions(sbx infra.Sandbox, now time.Time)
 // - New SDK: calls ConnectSandbox directly.
 // - Old SDK: first calls SetSandboxTimeout; that path returns 500 on this flow, then falls back to ResumeSandbox.
 //
-// The running-sandbox "extend only" guard is intentionally implemented in ConnectSandbox only.
+// The post-Resume timeout write reuses updateConnectTimeout with UpdatePolicyExtendOnly,
+// so the running-sandbox "extend only" semantics apply here as well: a shorter
+// requested timeout never shrinks an existing later deadline.
 //
 // No handler-level state guard is enforced — the infra layer (IsSandboxResumable +
 // first-writer-wins retryUpdate + Ready-cond idempotent short-circuit) is

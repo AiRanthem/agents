@@ -36,7 +36,14 @@ def connect_sandbox(sbx: Sandbox, timeout: Optional[int] = None) -> Sandbox | No
                 return sbx.connect()
         except Exception as e:
             error_msg = str(e)
-            if "sandbox is pausing, please wait a moment and try again" in error_msg:
+            # Server-side pausing-state errors. The legacy phrasing predates
+            # commit a83587ed (#358); the current phrasing comes from
+            # IsSandboxResumable returning "SandboxIsPausing".
+            is_pausing = (
+                "sandbox is pausing, please wait a moment and try again" in error_msg
+                or "sandbox is not resumable, reason: SandboxIsPausing" in error_msg
+            )
+            if is_pausing:
                 if attempt < max_retries - 1:
                     print(f"Sandbox is pausing, waiting {retry_interval}s before retry... (attempt {attempt + 1}/{max_retries})")
                     time.sleep(retry_interval)
