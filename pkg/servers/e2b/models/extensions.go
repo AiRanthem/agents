@@ -58,8 +58,8 @@ const (
 	ExtensionKeyReserveFailedSandboxFor       = v1alpha1.E2BPrefix + "reserve-failed-sandbox-for"
 	ExtensionKeyCreateOnNoStock               = v1alpha1.E2BPrefix + "create-on-no-stock"
 	ExtensionKeyNeverTimeout                  = v1alpha1.E2BPrefix + "never-timeout"
-	ExtensionKeyReturnPodIP                   = v1alpha1.E2BPrefix + "return-pod-ip"
-	MetadataKeyPodIP                          = v1alpha1.E2BPrefix + "pod-ip"
+	ExtensionKeyReturnPodIP                   = v1alpha1.E2BPrefix + "return-sandbox-ip"
+	MetadataKeyPodIP                          = v1alpha1.E2BPrefix + "sandbox-ip"
 )
 
 const (
