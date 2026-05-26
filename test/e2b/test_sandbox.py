@@ -37,8 +37,8 @@ def _parse_rfc3339_utc(s: str) -> datetime:
     return datetime.fromisoformat(s).astimezone(timezone.utc)
 
 
-RETURN_POD_IP_METADATA_KEY = "e2b.agents.kruise.io/return-pod-ip"
-POD_IP_METADATA_KEY = "e2b.agents.kruise.io/pod-ip"
+RETURN_POD_IP_METADATA_KEY = "e2b.agents.kruise.io/return-sandbox-ip"
+POD_IP_METADATA_KEY = "e2b.agents.kruise.io/sandbox-ip"
 
 
 def assert_pod_ip_metadata(info, expected_pod_ip: str | None = None) -> str:
