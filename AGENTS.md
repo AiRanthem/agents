@@ -122,8 +122,8 @@ test/              E2E (Go), E2B (Python) tests
 - Don't delete comments unless outdated
 - New `.go` files need Apache 2.0 license header from `hack/boilerplate.go.txt`
 - Use `Expectations` (`pkg/utils/expectations/`) for slow informer cache issues
-- New APIs/architectural changes need proposal in `docs/proposals/`
 - Ask user when unsure about business logic
 - Always edit the files on your own, never use automation tools or scripts
 - All comments must be in English
 - When creating an `AGENTS.md` for a new submodule, also create a sibling `CLAUDE.md` in the same directory whose sole content is `@./AGENTS.md`
+- When a new spec file (design) is added, put it in the `docs/specs/` directory

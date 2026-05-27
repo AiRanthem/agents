@@ -13,8 +13,7 @@ This design adds per-request dynamic domain resolution while keeping
 `--e2b-domain` as a static override, so single-domain deployments are
 unaffected.
 
-The two deployment shapes the resolver must cover (see
-`docs/best-practices/use-e2b.md`):
+The two deployment shapes the resolver must cover:
 
 | Shape | API host / path | Sandbox URL pattern |
 |---|---|---|
@@ -255,24 +254,12 @@ path to match the shifted index:
   value: --e2b-admin-key=some-api-key
 ```
 
-Operators who still want the previous `localhost` behavior (e.g., the
-port-forward scenario in `use-e2b.md` §4) add their own overlay setting
-`--e2b-domain=localhost`. The documentation update spells this out.
+Operators who still want the previous `localhost` behavior can add their
+own overlay setting `--e2b-domain=localhost`.
 
 **`config/sandbox-manager/ingress_patch.yaml`** — unchanged. It configures
 ingress host names (a deployment-level concern), not the sandbox-manager
 process.
-
-**`docs/best-practices/use-e2b.md`** — update the "E2B_DOMAIN" section to
-describe the new default:
-
-- Without `--e2b-domain`, the response `domain` field follows the inbound
-  request `Host` header (subject to the resolution rules above), and the
-  client and server no longer need to share a `E2B_DOMAIN` env var.
-- Explicitly setting `--e2b-domain` is still useful when (a) the client
-  must reach sandboxes on a different host than the API host, (b) a reverse
-  proxy rewrites the upstream `Host` header to an internal value, or
-  (c) the port-forward scenario in §4 needs to advertise `localhost`.
 
 ### `pkg/proxy` and `pkg/servers/e2b/adapters`
 
@@ -352,9 +339,8 @@ the Controller depends on.
   manifests no longer inject a hard-coded value. Fresh
   `make deploy-sandbox-manager` deployments default to dynamic resolution.
 - Operators currently relying on the patched `--e2b-domain=localhost`
-  default (`use-e2b.md` §4 port-forward scenario) keep working by
-  explicitly setting `--e2b-domain=localhost` in their own overlay; the
-  documentation update spells this out.
+  default keep working by explicitly setting `--e2b-domain=localhost` in
+  their own overlay.
 - Customized-shape `BrowserUse` was previously returning a native-style URL
   even in customized deployments — a latent bug. After this change the
   returned URL matches the actually reachable address. Captured in the
@@ -377,9 +363,7 @@ the Controller depends on.
 6. Update `config/sandbox-manager/deployment.yaml` (drop the args entry)
    and `configuration_patch.yaml` (drop the domain patch, renumber the
    admin-key patch path).
-7. Update `docs/best-practices/use-e2b.md` for the new default and the
-   cases where `--e2b-domain` is still useful.
-8. Add `TestResolveSandboxDomain` and `TestIsCustomizedRequest` in
+7. Add `TestResolveSandboxDomain` and `TestIsCustomizedRequest` in
    `pkg/servers/e2b/sandbox_test.go`.
-9. Add integration test rows in `services_test.go`, `create_test.go`,
+8. Add integration test rows in `services_test.go`, `create_test.go`,
    `pause_resume_test.go`, and `list_test.go` per the table above.
