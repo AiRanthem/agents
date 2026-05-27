@@ -417,7 +417,11 @@ func TestIsCustomizedRequest(t *testing.T) {
 		{"kruise api", "/kruise/api/sandboxes", true},
 		{"kruise sandbox path", "/kruise/abc/3000/foo", true},
 		{"empty path", "", false},
-		{"path starting with kruise text but no slash", "/kruisefoo", false},
+		// Mirrors adapters.E2BAdapter.ChooseAdapter exactly: a bare
+		// strings.HasPrefix on "/kruise" matches "/kruisefoo" too.
+		// Production paths after the route registration always have the
+		// trailing slash, so this case documents the dispatch behavior.
+		{"kruise prefix without slash", "/kruisefoo", true},
 	}
 	sc := &Controller{}
 	for _, tt := range tests {
@@ -512,6 +516,7 @@ func TestResolveSandboxDomain(t *testing.T) {
 		expectError string
 	}{
 		{"static configured wins", "example.com", "api.foo.com", "/sandboxes", "example.com", ""},
+		{"static configured bypasses empty host", "example.com", "", "/sandboxes", "example.com", ""},
 		{"native strip api with port", "", "api.example.com:8443", "/sandboxes", "example.com:8443", ""},
 		{"native strip api no port", "", "api.example.com", "/sandboxes", "example.com", ""},
 		{"native strip uppercase api", "", "API.example.com", "/sandboxes", "example.com", ""},
@@ -546,14 +551,29 @@ func TestResolveSandboxDomain(t *testing.T) {
 }
 
 func TestResolveSandboxDomain_NilAdapter(t *testing.T) {
-	sc := &Controller{requestAdapter: nil}
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/sandboxes", nil)
-	req.Host = "api.example.com"
-	domain, apiErr := sc.resolveSandboxDomain(req)
-	require.NotNil(t, apiErr)
-	assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
-	assert.Contains(t, apiErr.Message, "request adapter not initialized")
-	assert.Empty(t, domain)
+	// Single-row table-driven for consistency with the project's testing
+	// convention. The static-override path already requires a non-nil
+	// adapter only when scDomain == "", so this case is isolated here.
+	tests := []struct {
+		name        string
+		scDomain    string
+		host        string
+		expectError string
+	}{
+		{"nil adapter with empty static domain surfaces 500", "", "api.example.com", "request adapter not initialized"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := &Controller{domain: tt.scDomain, requestAdapter: nil}
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/sandboxes", nil)
+			req.Host = tt.host
+			domain, apiErr := sc.resolveSandboxDomain(req)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, http.StatusInternalServerError, apiErr.Code)
+			assert.Contains(t, apiErr.Message, tt.expectError)
+			assert.Empty(t, domain)
+		})
+	}
 }
 ```
 
@@ -682,12 +702,18 @@ func TestDescribeSandbox_Domain(t *testing.T) {
 			cleanup := CreateSandboxPool(t, controller, templateName, 1)
 			defer cleanup()
 
-			createResp, createErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+			// Setup CreateSandbox needs a non-empty, resolvable Host so that
+			// the dynamic resolver path used in setup does not 500. We use
+			// an explicit api.setup.example.com to avoid any reliance on
+			// NewRequest's implicit Host default.
+			setupReq := NewRequest(t, nil, models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
 					models.ExtensionKeySkipInitRuntime: v1alpha1.True,
 				},
-			}, nil, user))
+			}, nil, user)
+			setupReq.Host = "api.setup.example.com"
+			createResp, createErr := controller.CreateSandbox(setupReq)
 			require.Nil(t, createErr)
 			sandboxID := createResp.Body.SandboxID
 
@@ -769,12 +795,18 @@ git commit -m "feat(e2b): resolve DescribeSandbox response domain from request h
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `pkg/servers/e2b/create_test.go`:
+Append to `pkg/servers/e2b/create_test.go`. The file already imports both `v1alpha1` and `agentsv1alpha1` (same package, two aliases); use `agentsv1alpha1` consistently in the new test since that is what every other CR reference in this file uses.
 
 ```go
 func TestCreateSandbox_Domain(t *testing.T) {
+	type pathMode int
+	const (
+		pathClaim pathMode = iota
+		pathClone
+	)
 	tests := []struct {
 		name        string
+		path        pathMode
 		scDomain    string
 		reqHost     string
 		wantDomain  string
@@ -782,14 +814,24 @@ func TestCreateSandbox_Domain(t *testing.T) {
 		expectError string
 	}{
 		{
-			name:       "dynamic success on claim path",
+			name:       "claim path dynamic success",
+			path:       pathClaim,
 			scDomain:   "",
 			reqHost:    "api.dynamic.example.com",
 			wantDomain: "dynamic.example.com",
 			wantStatus: http.StatusCreated,
 		},
 		{
-			name:        "empty host returns 500 and does not claim",
+			name:        "claim path empty host returns 500 and does not claim",
+			path:        pathClaim,
+			scDomain:    "",
+			reqHost:     "",
+			wantStatus:  http.StatusInternalServerError,
+			expectError: "empty host",
+		},
+		{
+			name:        "clone path empty host returns 500 and does not clone",
+			path:        pathClone,
 			scDomain:    "",
 			reqHost:     "",
 			wantStatus:  http.StatusInternalServerError,
@@ -807,14 +849,37 @@ func TestCreateSandbox_Domain(t *testing.T) {
 				Key:  InitKey,
 				Name: "test-user",
 			}
-			templateName := "create-domain-template"
-			cleanup := CreateSandboxPool(t, controller, templateName, 1)
-			defer cleanup()
+
+			var templateID string
+			switch tt.path {
+			case pathClaim:
+				templateID = "create-domain-template"
+				cleanup := CreateSandboxPool(t, controller, templateID, 1)
+				defer cleanup()
+			case pathClone:
+				templateID = "create-domain-checkpoint"
+				cleanup := CreateCheckpointAndTemplateInNamespace(t, controller,
+					Namespace, templateID, templateID, keys.AdminKeyID.String(),
+					"create-domain-sandbox", "2026-05-27T00:00:00Z")
+				defer cleanup()
+			}
+
+			// Snapshot the existing Sandbox CR list so we can verify the
+			// failure paths leave no new Sandbox behind.
+			preList := &agentsv1alpha1.SandboxList{}
+			require.NoError(t, fc.List(t.Context(), preList))
+			preCount := len(preList.Items)
+			preClaimed := 0
+			for _, sbx := range preList.Items {
+				if sbx.Labels[agentsv1alpha1.LabelSandboxIsClaimed] == agentsv1alpha1.True {
+					preClaimed++
+				}
+			}
 
 			req := NewRequest(t, nil, models.NewSandboxRequest{
-				TemplateID: templateName,
+				TemplateID: templateID,
 				Metadata: map[string]string{
-					models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+					models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
 				},
 			}, nil, user)
 			req.Host = tt.reqHost
@@ -824,16 +889,22 @@ func TestCreateSandbox_Domain(t *testing.T) {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, tt.wantStatus, apiErr.Code)
 				assert.Contains(t, apiErr.Message, tt.expectError)
-				// Verify no sandbox was claimed: pool entries stay unclaimed.
-				sbxList := &v1alpha1.SandboxList{}
-				require.NoError(t, fc.List(t.Context(), sbxList))
-				claimed := 0
-				for _, sbx := range sbxList.Items {
-					if sbx.Labels[v1alpha1.LabelSandboxIsClaimed] == v1alpha1.True {
-						claimed++
+				postList := &agentsv1alpha1.SandboxList{}
+				require.NoError(t, fc.List(t.Context(), postList))
+				// Claim path: total Sandbox count unchanged, no entry flipped
+				// to claimed. Clone path: total Sandbox count unchanged
+				// (clone creates a brand-new Sandbox CR, so a successful
+				// clone would have grown the list).
+				assert.Equal(t, preCount, len(postList.Items),
+					"sandbox list size must be unchanged on failed resolve")
+				postClaimed := 0
+				for _, sbx := range postList.Items {
+					if sbx.Labels[agentsv1alpha1.LabelSandboxIsClaimed] == agentsv1alpha1.True {
+						postClaimed++
 					}
 				}
-				assert.Zero(t, claimed, "no sandbox should be claimed when domain resolution fails")
+				assert.Equal(t, preClaimed, postClaimed,
+					"claimed sandbox count must be unchanged on failed resolve")
 				return
 			}
 			require.Nil(t, apiErr)
@@ -925,7 +996,7 @@ git commit -m "feat(e2b): resolve CreateSandbox response domain before claim/clo
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `pkg/servers/e2b/pause_resume_test.go`:
+Append to `pkg/servers/e2b/pause_resume_test.go`. This file uses the `agentsv1alpha1` alias for the CR types; reuse it. Setup must give the Sandbox a finite initial timeout (600s) so ConnectSandbox's extend-only logic has a real deadline to extend, and the success-path request must use a *larger* timeout (900s) so the extend actually writes — otherwise an extend-only no-op would make the "no mutation on failure" assertion meaningless.
 
 ```go
 func TestConnectSandbox_Domain(t *testing.T) {
@@ -956,26 +1027,33 @@ func TestConnectSandbox_Domain(t *testing.T) {
 			cleanup := CreateSandboxPool(t, controller, templateName, 1)
 			defer cleanup()
 
-			createResp, createErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+			// Setup needs an explicit, resolvable Host so the dynamic
+			// resolver does not 500 during fixture creation. Initial
+			// timeout is 600s so the connect request below (900s) extends
+			// the deadline and bumps ResourceVersion, making the
+			// "no mutation on failure" assertion meaningful.
+			setupReq := NewRequest(t, nil, models.NewSandboxRequest{
 				TemplateID: templateName,
 				Timeout:    600,
 				Metadata: map[string]string{
-					models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+					models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
 				},
-			}, nil, user))
+			}, nil, user)
+			setupReq.Host = "api.setup.example.com"
+			createResp, createErr := controller.CreateSandbox(setupReq)
 			require.Nil(t, createErr)
 			sandboxID := createResp.Body.SandboxID
 
 			// Snapshot all Sandbox resourceVersions to detect any mutation
 			// on the failure path.
-			preList := &v1alpha1.SandboxList{}
+			preList := &agentsv1alpha1.SandboxList{}
 			require.NoError(t, fc.List(t.Context(), preList))
 			preVersions := map[string]string{}
 			for _, sbx := range preList.Items {
 				preVersions[sbx.Name] = sbx.ResourceVersion
 			}
 
-			req := NewRequest(t, nil, models.SetTimeoutRequest{TimeoutSeconds: 300}, map[string]string{
+			req := NewRequest(t, nil, models.SetTimeoutRequest{TimeoutSeconds: 900}, map[string]string{
 				"sandboxID": sandboxID,
 			}, user)
 			req.Host = tt.reqHost
@@ -985,7 +1063,7 @@ func TestConnectSandbox_Domain(t *testing.T) {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, tt.wantStatus, apiErr.Code)
 				assert.Contains(t, apiErr.Message, tt.expectError)
-				postList := &v1alpha1.SandboxList{}
+				postList := &agentsv1alpha1.SandboxList{}
 				require.NoError(t, fc.List(t.Context(), postList))
 				for _, sbx := range postList.Items {
 					assert.Equal(t, preVersions[sbx.Name], sbx.ResourceVersion,
@@ -1073,7 +1151,7 @@ git commit -m "feat(e2b): resolve ConnectSandbox response domain before resume"
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `pkg/servers/e2b/list_test.go`:
+Append to `pkg/servers/e2b/list_test.go`. This file uses the `agentsv1alpha1` alias; reuse it. Setup CreateSandbox requires an explicit Host so the dynamic resolver does not 500 during fixture creation.
 
 ```go
 func TestListSandboxes_Domain(t *testing.T) {
@@ -1091,12 +1169,14 @@ func TestListSandboxes_Domain(t *testing.T) {
 	defer cleanup()
 
 	for i := 0; i < 2; i++ {
-		_, createErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		setupReq := NewRequest(t, nil, models.NewSandboxRequest{
 			TemplateID: templateName,
 			Metadata: map[string]string{
-				models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+				models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
 			},
-		}, nil, user))
+		}, nil, user)
+		setupReq.Host = "api.setup.example.com"
+		_, createErr := controller.CreateSandbox(setupReq)
 		require.Nil(t, createErr)
 	}
 
@@ -1111,7 +1191,7 @@ func TestListSandboxes_Domain(t *testing.T) {
 }
 ```
 
-The test file already imports `keys`, `models`, and `v1alpha1`; ensure `github.com/stretchr/testify/require` is imported (add if missing).
+The test file already imports `keys`, `models`, and `agentsv1alpha1`; ensure `github.com/stretchr/testify/require` is imported (add if missing).
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1461,10 +1541,12 @@ git commit -m "build(manifests): drop --e2b-domain so default deploy uses dynami
 
 ## Task 13: Update `use-e2b.md` for the new default
 
+The current file conflates the client-side `E2B_DOMAIN` env var (read by the E2B SDK to know which host to call) with the server-side `--e2b-domain` flag (used by sandbox-manager to populate the response `domain` field). After this change those two are separate concerns and the doc must reflect that: client `E2B_DOMAIN` is still required so the SDK knows where to send requests; the server `--e2b-domain` becomes an optional override.
+
 **Files:**
 - Modify: `docs/best-practices/use-e2b.md`
 
-- [ ] **Step 1: Rewrite the `E2B_DOMAIN` note**
+- [ ] **Step 1: Rewrite the top-level note**
 
 Edit `docs/best-practices/use-e2b.md`. Find:
 
@@ -1478,53 +1560,151 @@ You can edit the deployment with `kubectl edit deploy -n sandbox-system sandbox-
 Replace with:
 
 ```markdown
-## Important Notes on the `--e2b-domain` Flag
+## Client `E2B_DOMAIN` vs Server `--e2b-domain`
+
+There are two distinct settings:
+
+- **Client-side `E2B_DOMAIN` env var** (read by the E2B SDK): tells the
+  SDK which host to send API requests to. This is still required — the
+  client cannot guess it.
+- **Server-side `--e2b-domain` flag** on sandbox-manager: controls the
+  `domain` field returned in API responses (used by the SDK to build the
+  sandbox-side websocket / HTTP URLs).
 
 By default (`--e2b-domain` unset or empty), sandbox-manager derives the
-response `domain` field from the inbound HTTP `Host` header on every request:
+response `domain` from the inbound HTTP `Host` header on every request:
 
-- Native paths (e.g. `api.example.com/sandboxes`): a leading `api.` segment
-  is stripped and the host is lowercased, yielding `example.com`.
+- Native paths (e.g. `api.example.com/sandboxes`): a leading `api.`
+  segment is stripped and the host is lowercased, yielding `example.com`.
 - Customized paths (e.g. `gateway.example.com/kruise/api/sandboxes`): the
   host is echoed verbatim, yielding `gateway.example.com`.
 
-With this default, the client and server no longer need to share the same
-`E2B_DOMAIN` value — the client controls the response by choosing the Host
-it sends.
-
-Explicitly set `--e2b-domain=<value>` only when:
+The client and server no longer need to share the same `E2B_DOMAIN`
+"source of truth" — the client controls the response by choosing the Host
+it sends. You only need to set `--e2b-domain=<value>` on sandbox-manager
+when one of the following applies:
 
 1. The client must reach sandboxes on a host different from the API host
    (e.g., separate API and data planes).
-2. A reverse proxy rewrites the upstream `Host` header to an internal value
-   that the client cannot reach.
+2. A reverse proxy rewrites the upstream `Host` header to an internal
+   value that the client cannot reach.
 3. You are using the port-forward scenario in §4 below and want responses
-   to advertise `localhost`.
+   to advertise the literal `localhost`.
+
+To set the server-side flag, edit the deployment with
+`kubectl edit deploy -n sandbox-system sandbox-manager` (or add an
+overlay).
 ```
 
-- [ ] **Step 2: Add the port-forward note**
+- [ ] **Step 2: Update §1 "Integration using native protocol"**
 
-In the same file, find the §4 ("Port forward sandbox-manager to local machine") section. After the last step in that section (after the `patch_e2b(https=False)` snippet), append:
+Find the line in §1 that reads:
+
+```
+    # The E2B_DOMAIN env of sandbox-manager container should be set to the same
+    export E2B_DOMAIN=your.domain.com
+```
+
+Replace the comment line so it points at the SDK side rather than implying the server must match:
+
+```
+    # E2B_DOMAIN tells the E2B SDK which host to call. sandbox-manager
+    # defaults to dynamic resolution and does not need a matching
+    # --e2b-domain flag for the native path; the response domain is
+    # derived from the inbound Host.
+    export E2B_DOMAIN=your.domain.com
+```
+
+- [ ] **Step 3: Update §2 "Private protocol HTTPS access from outside cluster"**
+
+Find the analogous comment in §2:
+
+```
+    # The E2B_DOMAIN env of sandbox-manager container should be set to the same
+    export E2B_DOMAIN=your.domain.com
+```
+
+Replace with:
+
+```
+    # E2B_DOMAIN tells the E2B SDK which host to call. sandbox-manager
+    # defaults to dynamic resolution; for customized (/kruise/...) paths
+    # the response domain echoes the inbound Host verbatim.
+    export E2B_DOMAIN=your.domain.com
+```
+
+- [ ] **Step 4: Update §3 "Private protocol in-cluster access"**
+
+Find:
+
+```
+    # The E2B_DOMAIN env of sandbox-manager container should be set to the same
+    export E2B_DOMAIN=sandbox-manager.sandbox-system.svc.cluster.local
+```
+
+Replace with:
+
+```
+    # E2B_DOMAIN tells the E2B SDK which host to call (the in-cluster
+    # service DNS name). sandbox-manager defaults to dynamic resolution.
+    export E2B_DOMAIN=sandbox-manager.sandbox-system.svc.cluster.local
+```
+
+- [ ] **Step 5: Update §4 "Port forward sandbox-manager to local machine"**
+
+Find:
+
+```
+    # The E2B_DOMAIN env of sandbox-manager container should be set to the same
+    export E2B_DOMAIN=localhost
+```
+
+Replace with:
+
+```
+    # E2B_DOMAIN tells the E2B SDK which host to call. For this
+    # port-forward scenario, also set --e2b-domain=localhost on
+    # sandbox-manager (see the note below) so the response domain
+    # is the same literal "localhost" rather than 127.0.0.1.
+    export E2B_DOMAIN=localhost
+```
+
+Then, after the last step in §4 (after the `patch_e2b(https=False)` snippet), append:
 
 ```markdown
-> **Note:** Set `--e2b-domain=localhost` in your kustomization overlay if you
-> want responses to advertise `localhost`. Without it, the dynamic resolver
-> echoes `127.0.0.1` (the port-forwarded Host), which most E2B clients also
-> handle but does not match the historical literal-`localhost` behavior.
+> **Note:** Set `--e2b-domain=localhost` in your kustomization overlay so
+> responses advertise `localhost`. Without that override, the dynamic
+> resolver returns `127.0.0.1` (the port-forwarded Host); most E2B clients
+> tolerate that, but it does not match the historical literal-`localhost`
+> behavior.
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Verify the file no longer claims server/client must match**
+
+```
+grep -n "E2B_DOMAIN env of sandbox-manager container should be set to the same" docs/best-practices/use-e2b.md
+```
+
+Expected: no matches (the four occurrences in §1–§4 should all be replaced).
+
+- [ ] **Step 7: Commit**
 
 ```
 git add docs/best-practices/use-e2b.md
-git commit -m "docs(best-practices): describe new --e2b-domain dynamic default"
+git commit -m "docs(best-practices): split client E2B_DOMAIN from server --e2b-domain"
 ```
 
 ---
 
 ## Task 14: Final verification
 
-- [ ] **Step 1: Run the e2b package test suite**
+> **Important:** Per `AGENTS.md` (`### Multi-Agent Development Limits`),
+> sub-agents must not run `go build`, and reviewer sub-agents must assume
+> unit tests are already passing. This task is therefore reserved for the
+> main agent / final global reviewer. If you are dispatched as a sub-agent,
+> skip this task and report it back to the orchestrator.
+
+- [ ] **Step 1: Run the e2b package test suite (main agent only)**
 
 ```
 go test ./pkg/servers/e2b/... -count=1
@@ -1532,7 +1712,7 @@ go test ./pkg/servers/e2b/... -count=1
 
 Expected: PASS.
 
-- [ ] **Step 2: Run the utils package tests**
+- [ ] **Step 2: Run the utils package tests (main agent only)**
 
 ```
 go test ./pkg/utils/sandbox-manager/ -count=1
@@ -1540,7 +1720,7 @@ go test ./pkg/utils/sandbox-manager/ -count=1
 
 Expected: PASS.
 
-- [ ] **Step 3: Build the sandbox-manager binary**
+- [ ] **Step 3: Build the sandbox-manager binary (main agent only)**
 
 ```
 go build -o /tmp/sandbox-manager-verify ./cmd/sandbox-manager/
