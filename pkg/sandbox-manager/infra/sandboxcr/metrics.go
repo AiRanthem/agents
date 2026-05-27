@@ -30,7 +30,7 @@ var sandboxFallbackTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name:        "sandbox_get_claimed_fallback_total",
 		Help:        "Number of GetClaimedSandbox fallbacks to APIReader, broken down by reason.",
-		ConstLabels: prometheus.Labels{"source": "sandbox-infra"},
+		ConstLabels: prometheus.Labels{"source": "e2b"},
 	},
 	[]string{"namespace", "reason"},
 )

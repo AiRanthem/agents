@@ -371,6 +371,12 @@ func (i *Infra) lookupClaimedSandbox(ctx context.Context, opts infra.GetClaimedS
 		if errors.Is(err, cache.ErrSandboxNotFound) {
 			return false, nil
 		}
+		if isContextError(err) {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			return false, nil
+		}
 		return false, err
 	})
 	if err != nil {
@@ -379,21 +385,32 @@ func (i *Infra) lookupClaimedSandbox(ctx context.Context, opts infra.GetClaimedS
 	return lookup, nil
 }
 
-// decideAPIReaderFallback returns the fallback reason, or "" to keep using the cache.
-// It is only called after lookupClaimedSandbox returns a cache-hit Sandbox.
-func decideAPIReaderFallback(lookup claimedSandboxLookup) string {
-	cacheRV := lookup.sandbox.GetResourceVersion()
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
 
+// isSandboxStale returns the fallback reason, or "" to keep using the cache.
+// It is only called after lookupClaimedSandbox returns a cache-hit Sandbox.
+func isSandboxStale(ctx context.Context, lookup claimedSandboxLookup) bool {
+	cacheRV := lookup.sandbox.GetResourceVersion()
+	var reason string
 	switch {
 	case !managerutils.ResourceVersionExpectationSatisfied(lookup.sandbox):
-		return fallbackReasonRVExpectation
+		reason = fallbackReasonRVExpectation
 	case lookup.hasRoute &&
 		lookup.route.ResourceVersion != "" &&
 		expectations.IsResourceVersionReallyNewer(cacheRV, lookup.route.ResourceVersion):
-		return fallbackReasonCacheLagging
+		reason = fallbackReasonCacheLagging
 	default:
-		return ""
 	}
+	if reason != "" {
+		klog.FromContext(ctx).V(consts.DebugLogLevel).Info("informer cache result requires APIReader fallback",
+			"sandbox", klog.KObj(lookup.sandbox), "reason", reason,
+			"routeRV", lookup.route.ResourceVersion, "cacheRV", cacheRV)
+		sandboxFallbackTotal.WithLabelValues(lookup.sandbox.Namespace, reason).Inc()
+		return true
+	}
+	return false
 }
 
 func (i *Infra) getClaimedSandboxFromAPIReader(ctx context.Context, key client.ObjectKey, sandboxID string) (*v1alpha1.Sandbox, error) {
@@ -411,26 +428,16 @@ func (i *Infra) getClaimedSandboxFromAPIReader(ctx context.Context, key client.O
 }
 
 func (i *Infra) GetClaimedSandbox(ctx context.Context, opts infra.GetClaimedSandboxOptions) (infra.Sandbox, error) {
-	log := klog.FromContext(ctx)
-
 	lookup, err := i.lookupClaimedSandbox(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 
-	fallbackReason := decideAPIReaderFallback(lookup)
-	if fallbackReason == "" {
+	if !isSandboxStale(ctx, lookup) {
 		return AsSandbox(lookup.sandbox, i.Cache), nil
 	}
 
 	key := client.ObjectKey{Namespace: lookup.sandbox.Namespace, Name: lookup.sandbox.Name}
-	cacheRV := lookup.sandbox.GetResourceVersion()
-
-	log.V(consts.DebugLogLevel).Info("informer cache result requires APIReader fallback",
-		"sandboxID", opts.SandboxID, "reason", fallbackReason,
-		"routeRV", lookup.route.ResourceVersion, "cacheRV", cacheRV)
-	sandboxFallbackTotal.WithLabelValues(opts.Namespace, fallbackReason).Inc()
-
 	fresh, err := i.getClaimedSandboxFromAPIReader(ctx, key, opts.SandboxID)
 	if err != nil {
 		return nil, err

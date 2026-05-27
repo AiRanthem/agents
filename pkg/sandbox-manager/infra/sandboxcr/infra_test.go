@@ -364,6 +364,63 @@ func TestInfra_GetClaimedSandbox_CacheMiss_WaitsUntilCacheHit(t *testing.T) {
 	}
 }
 
+func TestInfra_GetClaimedSandbox_SharedContextError_RetriesWhileContextLive(t *testing.T) {
+	tests := []struct {
+		name          string
+		injectedError error
+		expectError   string
+	}{
+		{
+			name:          "shared canceled error",
+			injectedError: context.Canceled,
+		},
+		{
+			name:          "shared deadline error",
+			injectedError: context.DeadlineExceeded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiSbx := makeClaimedSandbox("team-a", "sbx-shared-context-error", "10.0.0.10")
+			id := stateutils.GetSandboxID(apiSbx)
+			stub := &stubAPIReader{objs: map[client.ObjectKey]*v1alpha1.Sandbox{
+				{Namespace: apiSbx.Namespace, Name: apiSbx.Name}: apiSbx,
+			}}
+			retryCache := &retryingClaimedSandboxCache{
+				sandbox:         apiSbx,
+				succeedAfter:    2,
+				transientErrors: []error{tt.injectedError},
+			}
+			options := config.InitOptions(config.SandboxManagerOptions{DisableRouteReconciliation: true})
+			infraInstance := NewInfraBuilder(options).
+				WithCache(retryCache).
+				WithAPIReader(stub).
+				WithProxy(proxy.NewServer(options)).
+				Build().(*Infra)
+
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			defer cancel()
+			got, err := infraInstance.GetClaimedSandbox(ctx, infra.GetClaimedSandboxOptions{
+				Namespace: "team-a",
+				SandboxID: id,
+			})
+
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				assert.Nil(t, got)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, apiSbx.Name, got.GetName())
+			assert.GreaterOrEqual(t, retryCache.getCalls.Load(), int64(2))
+			assert.Equal(t, int64(0), stub.getCalls.Load())
+		})
+	}
+}
+
 func TestInfra_GetClaimedSandbox_CacheMiss_ReturnsContextError(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1499,9 +1556,10 @@ type stubAPIReader struct {
 
 type retryingClaimedSandboxCache struct {
 	infracache.Provider
-	sandbox      *v1alpha1.Sandbox
-	succeedAfter int64
-	getCalls     atomic.Int64
+	sandbox         *v1alpha1.Sandbox
+	succeedAfter    int64
+	transientErrors []error
+	getCalls        atomic.Int64
 }
 
 func (c *retryingClaimedSandboxCache) GetClaimedSandbox(ctx context.Context, _ infracache.GetClaimedSandboxOptions) (*v1alpha1.Sandbox, error) {
@@ -1512,6 +1570,9 @@ func (c *retryingClaimedSandboxCache) GetClaimedSandbox(ctx context.Context, _ i
 	}
 
 	call := c.getCalls.Add(1)
+	if int(call) <= len(c.transientErrors) {
+		return nil, c.transientErrors[call-1]
+	}
 	if c.sandbox != nil && c.succeedAfter > 0 && call >= c.succeedAfter {
 		return c.sandbox.DeepCopy(), nil
 	}

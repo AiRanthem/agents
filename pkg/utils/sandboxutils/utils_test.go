@@ -389,29 +389,29 @@ func TestGetSandboxID(t *testing.T) {
 
 func TestValidateNamespaceForSandboxID(t *testing.T) {
 	tests := []struct {
-		name      string
-		namespace string
-		wantErr   bool
+		name        string
+		namespace   string
+		expectError string
 	}{
-		{name: "standard name", namespace: "team-a", wantErr: false},
-		{name: "single dash", namespace: "team-a-blue", wantErr: false},
-		{name: "empty is allowed (caller decides)", namespace: "", wantErr: false},
-		{name: "double dash rejected", namespace: "team--blue", wantErr: true},
-		{name: "double dash at start", namespace: "--team", wantErr: true},
-		{name: "double dash at end", namespace: "team--", wantErr: true},
-		{name: "triple dash contains double dash", namespace: "a---b", wantErr: true},
+		{name: "standard name", namespace: "team-a", expectError: ""},
+		{name: "single dash", namespace: "team-a-blue", expectError: ""},
+		{name: "empty namespace rejected", namespace: "", expectError: "must not be empty"},
+		{name: "double dash rejected", namespace: "team--blue", expectError: "must not contain"},
+		{name: "double dash at start", namespace: "--team", expectError: "must not contain"},
+		{name: "double dash at end", namespace: "team--", expectError: "must not contain"},
+		{name: "triple dash contains double dash", namespace: "a---b", expectError: "must not contain"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidateNamespaceForSandboxID(tt.namespace)
-			if tt.wantErr {
-				assert.Error(t, err, "expected error for %q", tt.namespace)
-				if err != nil {
-					assert.Contains(t, err.Error(), "must not contain")
-				}
-			} else {
+			if tt.expectError == "" {
 				assert.NoError(t, err, "unexpected error for %q", tt.namespace)
+				return
+			}
+			assert.Error(t, err, "expected error for %q", tt.namespace)
+			if err != nil {
+				assert.Contains(t, err.Error(), tt.expectError)
 			}
 		})
 	}

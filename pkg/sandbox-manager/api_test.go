@@ -946,7 +946,7 @@ func TestSandboxManager_CloneSandbox(t *testing.T) {
 	}
 }
 
-func ParseSandboxID(sandboxID string) (string, string, bool) {
+func parseSandboxID(sandboxID string) (string, string, bool) {
 	namespace, name, ok := strings.Cut(sandboxID, "--")
 	if !ok || namespace == "" || name == "" {
 		return "", "", false
@@ -983,7 +983,7 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 			manager, client := setupTestManager(t)
 
 			if tt.setupRoute {
-				namespace, name, ok := ParseSandboxID(tt.sandboxID)
+				namespace, name, ok := parseSandboxID(tt.sandboxID)
 				require.True(t, ok)
 
 				// Keep the route backed by a real Sandbox so the background route

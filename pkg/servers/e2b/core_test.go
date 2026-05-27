@@ -84,7 +84,6 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 	namespace := "sandbox-system"
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
 
 	// Build infra using the builder pattern (avoids connecting to a real API server).
 	// InitOptions populates defaults (e.g. MaxCreateQPS) that the infra rate limiter

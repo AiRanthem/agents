@@ -144,7 +144,7 @@ func IsControlledBySandboxSet(sbx *agentsv1alpha1.Sandbox) bool {
 }
 
 // sandboxIDSeparator joins namespace and name in a sandbox ID. It is the single source
-// of truth for the encoding used by GetSandboxID / NameFromSandboxID / ParseSandboxID.
+// of truth for the encoding used by util functions
 const sandboxIDSeparator = "--"
 
 // GetSandboxID encodes a sandbox as "<namespace>--<name>". The encoding requires that
@@ -161,6 +161,9 @@ func GetSandboxID(sbx *agentsv1alpha1.Sandbox) string {
 // Callers handling user-supplied namespaces (API key creation, admin team-scoped ops)
 // must reject input early via this check.
 func ValidateNamespaceForSandboxID(namespace string) error {
+	if namespace == "" {
+		return fmt.Errorf("namespace must not be empty")
+	}
 	if strings.Contains(namespace, sandboxIDSeparator) {
 		return fmt.Errorf("namespace %q must not contain %q: this sequence is reserved as the sandbox ID separator", namespace, sandboxIDSeparator)
 	}
