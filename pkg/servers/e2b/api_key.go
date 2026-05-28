@@ -83,7 +83,15 @@ func (sc *Controller) CreateAPIKey(r *http.Request) (web.ApiResponse[*models.Cre
 
 	return web.ApiResponse[*models.CreatedTeamAPIKey]{
 		Code: http.StatusCreated,
-		Body: createdAPIKey,
+		Body: keys.ConvertToE2BCompatableCreatedAPIKey(createdAPIKey),
+	}, nil
+}
+
+func (sc *Controller) GetCompatibleAPIKey(r *http.Request) (web.ApiResponse[*models.CompatibleAPIKey], *web.ApiError) {
+	rawAPIKey := keys.ToStoredRawAPIKey(r.Header.Get(models.HeaderApiKey))
+
+	return web.ApiResponse[*models.CompatibleAPIKey]{
+		Body: &models.CompatibleAPIKey{Key: keys.EncodeForE2BSDK(rawAPIKey)},
 	}, nil
 }
 

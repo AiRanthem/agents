@@ -123,7 +123,7 @@ jobs:
         run: |
           export KUBECONFIG=/home/runner/.kube/config
           export E2B_DOMAIN=localhost
-          export E2B_API_KEY=some-api-key
+          export E2B_API_KEY=e2b_00000000
           if [ "${{ matrix.with_gateway }}" = "true" ]; then
             bash hack/run-e2b-e2e-test.sh --e2b-version 2.8.1 --sdk-version 2.4.1 --with-gateway
           else
