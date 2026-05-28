@@ -83,7 +83,7 @@ func (sc *Controller) CreateAPIKey(r *http.Request) (web.ApiResponse[*models.Cre
 
 	return web.ApiResponse[*models.CreatedTeamAPIKey]{
 		Code: http.StatusCreated,
-		Body: keys.ConvertToE2BCompatableCreatedAPIKey(createdAPIKey),
+		Body: keys.ConvertToE2BCompatibleCreatedAPIKey(createdAPIKey),
 	}, nil
 }
 

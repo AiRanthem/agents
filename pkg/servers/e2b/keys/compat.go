@@ -117,8 +117,8 @@ func ToStoredRawAPIKey(apiKey string) string {
 	return apiKey
 }
 
-// ConvertToE2BCompatableCreatedAPIKey returns a response copy with Key encoded for the E2B SDK.
-func ConvertToE2BCompatableCreatedAPIKey(apiKey *models.CreatedTeamAPIKey) *models.CreatedTeamAPIKey {
+// ConvertToE2BCompatibleCreatedAPIKey returns a response copy with Key encoded for the E2B SDK.
+func ConvertToE2BCompatibleCreatedAPIKey(apiKey *models.CreatedTeamAPIKey) *models.CreatedTeamAPIKey {
 	presented := cloneCreatedTeamAPIKey(apiKey)
 	if presented == nil {
 		return nil

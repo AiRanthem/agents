@@ -135,7 +135,7 @@ func TestPresentCreatedAPIKeyReturnsCopyWithCompatibleKey(t *testing.T) {
 		CreatedBy: &models.TeamUser{ID: uuid.New()},
 	}
 
-	presented := ConvertToE2BCompatableCreatedAPIKey(original)
+	presented := ConvertToE2BCompatibleCreatedAPIKey(original)
 
 	require.NotNil(t, presented)
 	assert.NotSame(t, original, presented)
