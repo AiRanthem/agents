@@ -1,4 +1,4 @@
-name: E2E for E2B SDK - latest
+name: E2E for E2B SDK - sdk v2.7.0 with e2b v2.24.0
 
 on:
   push:
@@ -86,29 +86,28 @@ jobs:
             docker save ${INPLACE_UPDATE_IMG} -o /tmp/docker-images/inplace-update.tar
             echo "Cached inplace-update image"
           fi
-
       - name: Build image
         run: |
-           make docker-build-manager
-           make docker-build-controller
-           make docker-build-runtime
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${CONTROLLER_IMG} || { echo >&2 "kind not installed or error loading image: ${CONTROLLER_IMG}"; exit 1; }
-           docker rmi ${CONTROLLER_IMG}
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${MANAGER_IMG} || { echo >&2 "kind not installed or error loading image: ${MANAGER_IMG}"; exit 1; }
-           docker rmi ${MANAGER_IMG}
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${RUNTIME_IMG} || { echo >&2 "kind not installed or error loading image: ${RUNTIME_IMG}"; exit 1; }
-           docker rmi ${RUNTIME_IMG}
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${CODE_INTERPRETER_IMG} || { echo >&2 "kind not installed or error loading image: ${CODE_INTERPRETER_IMG}"; exit 1; }
-           docker rmi ${CODE_INTERPRETER_IMG}
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${INPLACE_UPDATE_IMG} || { echo >&2 "kind not installed or error loading image: ${INPLACE_UPDATE_IMG}"; exit 1; }
-           docker rmi ${INPLACE_UPDATE_IMG}
+          make docker-build-manager
+          make docker-build-controller
+          make docker-build-runtime
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${CONTROLLER_IMG} || { echo >&2 "kind not installed or error loading image: ${CONTROLLER_IMG}"; exit 1; }
+          docker rmi ${CONTROLLER_IMG}
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${MANAGER_IMG} || { echo >&2 "kind not installed or error loading image: ${MANAGER_IMG}"; exit 1; }
+          docker rmi ${MANAGER_IMG}
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${RUNTIME_IMG} || { echo >&2 "kind not installed or error loading image: ${RUNTIME_IMG}"; exit 1; }
+          docker rmi ${RUNTIME_IMG}
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${CODE_INTERPRETER_IMG} || { echo >&2 "kind not installed or error loading image: ${CODE_INTERPRETER_IMG}"; exit 1; }
+          docker rmi ${CODE_INTERPRETER_IMG}
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${INPLACE_UPDATE_IMG} || { echo >&2 "kind not installed or error loading image: ${INPLACE_UPDATE_IMG}"; exit 1; }
+          docker rmi ${INPLACE_UPDATE_IMG}
 
       - name: Build sandbox-gateway image
         if: matrix.with_gateway
         run: |
-           make docker-build-sandbox-gateway
-           kind load docker-image --name=${KIND_CLUSTER_NAME} ${GATEWAY_IMG} || { echo >&2 "kind not installed or error loading image: ${GATEWAY_IMG}"; exit 1; }
-           docker rmi ${GATEWAY_IMG}
+          make docker-build-sandbox-gateway
+          kind load docker-image --name=${KIND_CLUSTER_NAME} ${GATEWAY_IMG} || { echo >&2 "kind not installed or error loading image: ${GATEWAY_IMG}"; exit 1; }
+          docker rmi ${GATEWAY_IMG}
 
       - name: Install Kruise Agents
         run: |
