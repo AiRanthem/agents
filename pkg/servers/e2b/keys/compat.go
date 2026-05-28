@@ -21,6 +21,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ const (
 	e2bSDKCompatChecksumSalt = "openkruise-agents/e2b-key-compat/v1"
 	e2bSDKCompatLengthSize   = 8
 	e2bSDKCompatChecksumSize = 16
+	e2bSDKCompatHeaderSize   = len(e2bSDKCompatMagic) + len(e2bSDKCompatVersion) + e2bSDKCompatLengthSize
+	e2bSDKCompatMaxRawLength = (math.MaxInt32 - e2bSDKCompatHeaderSize - e2bSDKCompatChecksumSize) / 2
 )
 
 var e2bSDKCompatiblePattern = regexp.MustCompile(`^e2b_[0-9a-f]+$`)
@@ -67,8 +70,7 @@ func DecodeFromE2BSDKCompatible(apiKey string) (string, bool) {
 	}
 
 	payload := strings.TrimPrefix(apiKey, e2bSDKPrefix)
-	headerSize := len(e2bSDKCompatMagic) + len(e2bSDKCompatVersion) + e2bSDKCompatLengthSize
-	minPayloadSize := headerSize + e2bSDKCompatChecksumSize
+	minPayloadSize := e2bSDKCompatHeaderSize + e2bSDKCompatChecksumSize
 	if len(payload) < minPayloadSize {
 		return "", false
 	}
@@ -78,26 +80,20 @@ func DecodeFromE2BSDKCompatible(apiKey string) (string, bool) {
 
 	lengthHexStart := len(e2bSDKCompatMagic) + len(e2bSDKCompatVersion)
 	lengthHexEnd := lengthHexStart + e2bSDKCompatLengthSize
-	rawLength, err := strconv.ParseUint(payload[lengthHexStart:lengthHexEnd], 16, 32)
-	if err != nil {
+	rawLength, ok := parseE2BSDKCompatRawLength(payload[lengthHexStart:lengthHexEnd])
+	if !ok {
 		return "", false
 	}
-	maxInt := int(^uint(0) >> 1)
 	rawHexStart := lengthHexEnd
-	// Guard against int overflow on 32-bit systems: rawHexStart + int(rawLength)*2 + checksumSize must fit in int.
-	// Which is nearly impossible given the 4 GB limit on rawLength, but let's be strict.
-	if rawLength > uint64((maxInt-rawHexStart-e2bSDKCompatChecksumSize)/2) {
-		return "", false
-	}
 
-	rawHexEnd := rawHexStart + int(rawLength)*2
+	rawHexEnd := rawHexStart + rawLength*2
 	checksumEnd := rawHexEnd + e2bSDKCompatChecksumSize
 	if len(payload) != checksumEnd {
 		return "", false
 	}
 
 	rawBytes, err := hex.DecodeString(payload[rawHexStart:rawHexEnd])
-	if err != nil || len(rawBytes) != int(rawLength) {
+	if err != nil || len(rawBytes) != rawLength {
 		return "", false
 	}
 	checksum := e2bSDKCompatChecksum(rawBytes)
@@ -115,6 +111,14 @@ func ToStoredRawAPIKey(apiKey string) string {
 		return rawKey
 	}
 	return apiKey
+}
+
+func parseE2BSDKCompatRawLength(lengthHex string) (int, bool) {
+	rawLength, err := strconv.ParseUint(lengthHex, 16, 31)
+	if err != nil || rawLength > uint64(e2bSDKCompatMaxRawLength) {
+		return 0, false
+	}
+	return int(rawLength), true
 }
 
 // ConvertToE2BCompatibleCreatedAPIKey returns a response copy with Key encoded for the E2B SDK.

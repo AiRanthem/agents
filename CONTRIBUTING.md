@@ -82,7 +82,7 @@ resolution and certificates.
 4. Create a new terminal, and set the environment variables
    ```shell
    export E2B_DOMAIN=localhost
-   export E2B_API_KEY=e2b_00000000 # configured in config/sandbox-manager/configuration_patch.yaml
+   export E2B_API_KEY=some-api-key # configured in config/sandbox-manager/configuration_patch.yaml
    ```
 
 5. Patch the client (refer to this document)

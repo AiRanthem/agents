@@ -103,6 +103,27 @@ func TestDecodeFromE2BSDKCompatibleRejectsInvalidEncoding(t *testing.T) {
 	}
 }
 
+func TestParseE2BSDKCompatRawLength(t *testing.T) {
+	tests := []struct {
+		name       string
+		lengthHex  string
+		wantLength int
+		wantOK     bool
+	}{
+		{name: "valid length", lengthHex: "00000007", wantLength: 7, wantOK: true},
+		{name: "length too large for int safe payload", lengthHex: "40000000", wantOK: false},
+		{name: "invalid hex", lengthHex: "not-hex!", wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLength, ok := parseE2BSDKCompatRawLength(tt.lengthHex)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantLength, gotLength)
+		})
+	}
+}
+
 func TestToStoredRawAPIKey(t *testing.T) {
 	encoded := EncodeForE2BSDK("raw-key")
 	tests := []struct {
