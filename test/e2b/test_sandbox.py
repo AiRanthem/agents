@@ -669,7 +669,7 @@ def test_concurrent_pause_resume_on_running_sandbox(sandbox_context):
 
     def do_resume():
         try:
-            connect_sandbox(sbx)
+            sbx.connect()
         except Exception as e:
             if "409" in str(e) or "conflict" in str(e).lower():
                 print(f"Concurrent resume got expected conflict: {e}")
