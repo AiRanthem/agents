@@ -17,7 +17,6 @@ limitations under the License.
 package e2b
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -49,29 +48,21 @@ func (sc *Controller) ListAPIKeys(r *http.Request) (web.ApiResponse[[]*models.Te
 }
 
 func (sc *Controller) CreateAPIKey(r *http.Request) (web.ApiResponse[*models.CreatedTeamAPIKey], *web.ApiError) {
-	request, ok := GetNewAPIKeyRequestFromContext(r.Context())
+	ctx := r.Context()
+	request, ok := GetNewAPIKeyRequestFromContext(ctx)
 	if !ok {
-		// When CheckCreateAPIKeyPermission middleware is configured, it pre-decodes the request body
-		// and stores it in context. If the middleware is not in the chain (e.g. keys storage is nil),
-		// we fall back to decoding the body directly here. (Which is impossible currently, just in defense for future changes)
-		var decoded models.NewTeamAPIKey
-		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
-			return web.ApiResponse[*models.CreatedTeamAPIKey]{}, &web.ApiError{
-				Message: err.Error(),
-			}
+		// CheckCreateAPIKeyPermission middleware is required but was not in the chain.
+		return web.ApiResponse[*models.CreatedTeamAPIKey]{}, &web.ApiError{
+			Code:    http.StatusInternalServerError,
+			Message: "request not found in context",
 		}
-		request = &decoded
 	}
 
-	ctx := r.Context()
 	user := GetUserFromContext(ctx)
 	if user == nil {
 		return web.ApiResponse[*models.CreatedTeamAPIKey]{}, &web.ApiError{
 			Message: "User not found",
 		}
-	}
-	if apiErr := validateCreateAPIKeyRequest(request); apiErr != nil {
-		return web.ApiResponse[*models.CreatedTeamAPIKey]{}, apiErr
 	}
 
 	createdAPIKey, err := sc.keys.CreateKey(ctx, user, keys.CreateKeyOptions{
