@@ -73,9 +73,10 @@ filter, keeping the original request in flight until the sandbox is Running.
   calls the existing `ConnectSandbox`.
 - **No broadening of the admin key.** The admin key keeps its current behavior; a
   separate, connect-scoped system credential is introduced instead.
-- **No system-key rotation in v1.** The system key is created once on first start and is
-  static thereafter; rotation, re-issue, and credential hardening are deferred to a
-  follow-up PR. The v1 module is intentionally minimal.
+- **No system-key rotation in v1.** The Secret is pre-created by the manifest; the manager
+  populates the key value once on first start and it is static thereafter. Rotation,
+  re-issue, and credential hardening are deferred to a follow-up PR. The v1 module is
+  intentionally minimal.
 - **The manager's built-in ext_proc (`pkg/proxy/ext_proc.go`) does not get
   wake-on-traffic.** Only the standalone sandbox-gateway supports wake. Deployments
   that route exclusively through the manager's native ext_proc proxy mode will not
@@ -251,21 +252,43 @@ only HMAC hashes (the plaintext could not be delivered to the gateway from there
 Secret keystore coalesces a nil team into the admin team. The module owns its own
 dedicated Secret and an in-memory copy of the key.
 
-**V1 scope — intentionally minimal.** On startup the module ensures a dedicated Secret
-**`e2b-system-key-store`** exists and, only when the key is absent, creates a single
-random key (the same create-if-absent `update-secret` pattern the admin key uses, but in
-its own Secret and its own module). The key is created **once on first start and is never
-modified afterward**. Key **rotation, re-issue, and related credential hardening are
-explicitly out of scope for v1** and tracked for a separate follow-up PR; the module is
-intentionally not over-designed for those concerns.
+**V1 scope — intentionally minimal.** The dedicated Secret **`e2b-system-key-store`** is
+**pre-created by the deployment manifest / Helm chart**, not by the manager. On startup the
+module **only**:
 
-The system key is **fail-closed**. Empty or whitespace-only Secret data is treated the
-same as "not ready", never as a usable credential. The manager module keeps retrying the
-ensure/read path until a non-empty key is observed (creating it if absent) and only then
-publishes the key to the auth layer. The gateway also waits and retries its Secret read
-until it obtains a non-empty key before enabling wake calls. This covers startup races
-between the empty manifest Secret, the manager's first-start population, and gateway pod
-startup without ever accepting a blank shared secret.
+1. `Get`s the existing Secret. The module **never creates** the Secret itself.
+2. If the key data entry is **absent, empty, or whitespace-only**, it generates a single
+   random key and writes it back with `Update`/`Patch`.
+3. If the key data is already a non-empty value, it adopts it as-is (idempotent — a restart
+   never rewrites an existing key).
+
+The key is written **once on first start and is never modified afterward**. Key
+**rotation, re-issue, and related credential hardening are explicitly out of scope for v1**
+and tracked for a separate follow-up PR; the module is intentionally not over-designed for
+those concerns. The module therefore needs only `get` + `update`/`patch` on the named
+Secret — **no `create`** verb.
+
+The system key is **fail-closed**:
+
+- **Secret missing** (not pre-created / wrong namespace / RBAC gap): the module does **not**
+  create it. It logs and **retries the `Get`** with backoff, and the auth layer is not
+  enabled until the Secret appears and yields a non-empty key. A blank key is never
+  published.
+- **Secret present but key absent / empty / whitespace-only**: treated as "not ready"; the
+  module writes a random key (step 2) and re-reads.
+- The gateway likewise **waits and retries** its Secret `Get` until it observes a non-empty
+  key before enabling wake calls.
+
+This covers the startup races between the pre-created (initially empty) manifest Secret,
+the manager's first-start population, and gateway pod startup, without ever accepting a
+blank shared secret and without the manager assuming Secret-creation privileges.
+
+**Concurrent manager replicas.** Multiple manager replicas may reach the populate step
+simultaneously on a fresh cluster. The write-back uses an optimistic
+`Get`→generate→`Update` with conflict-retry (resourceVersion precondition, or an equivalent
+`Patch` that no-ops when the key is already set): the first writer wins, and any replica
+that loses the `Update` (409 Conflict) re-`Get`s, observes the now-non-empty key, and
+adopts it instead of overwriting. All replicas converge on the **same** key value.
 
 **Recognition.** The manager loads the key value at startup. `CheckApiKey` compares the
 presented `X-API-KEY` against it (constant-time) before consulting `KeyStorage`; on a
@@ -616,9 +639,12 @@ shrink); the gateway forwards normally.
 ### New files
 
 - `pkg/servers/e2b/keys/systemkey.go` — standalone system-key module (decoupled from the
-  `KeyStorage` backends): ensures the `e2b-system-key-store` Secret, creates the static
-  key once on first start, and exposes the in-memory value for `CheckApiKey`. V1 only;
-  rotation deferred.
+  `KeyStorage` backends): `Get`s the **pre-created** `e2b-system-key-store` Secret (never
+  creates it), populates the key with `Update`/`Patch` only when the data is
+  absent/empty/whitespace, adopts an existing non-empty key as-is, and exposes the
+  in-memory value for `CheckApiKey`. Fail-closed: retries on a missing Secret, never
+  publishes a blank key. Concurrent-replica safe via conflict-retry. V1 only; rotation
+  deferred.
 - `pkg/sandbox-gateway/wake/wake.go` — `wakeAndWait`, the integer-seconds annotation
   parser, the `singleflight.Group`, and the manager E2B HTTP client (system-key header).
 - `pkg/sandbox-gateway/filter/async.go` — async `DecodeHeaders` glue, `completeOnce`,
@@ -656,8 +682,9 @@ shrink); the gateway forwards normally.
   `CheckApiKey` recognizes the in-memory system key and enforces the per-route scope
   whitelist; the connect route registers `AllowSystemKey(SystemAuthConnect)`.
 - `pkg/servers/e2b/core.go` (+ `cmd/sandbox-manager/main.go`) — wire the
-  `keys/systemkey.go` module: ensure the `e2b-system-key-store` Secret on startup and
-  load the key for `CheckApiKey`.
+  `keys/systemkey.go` module: read the pre-created `e2b-system-key-store` Secret on startup,
+  populate the key if empty, and load it for `CheckApiKey` (fail-closed until a non-empty
+  key is observed).
 - `pkg/servers/e2b/models/api_key.go` — `SystemAuth` scope type + `SystemAuthConnect`
   constant; `SystemKeyID`; system principal synthesis helper.
 - `pkg/utils/proxyutils/route.go` — `Route.WakeOnTraffic`; `GetRouteFromSandbox`
@@ -666,13 +693,14 @@ shrink); the gateway forwards normally.
 - `pkg/sandbox-gateway/filter/filter.go` — async wake branch with the wake gate.
 - `pkg/sandbox-gateway/filter/config.go` — manager E2B base URL + system-key source.
 - `cmd/sandbox-gateway/main.go` — init the wake module / config.
-- `config/sandbox-manager/secret.yaml` — declare an empty `e2b-system-key-store` Secret
-  (mirrors the existing empty `e2b-key-store`); the manager's systemkey module populates
-  it on first start.
+- `config/sandbox-manager/secret.yaml` — **pre-create** an empty `e2b-system-key-store`
+  Secret (mirrors the existing empty `e2b-key-store`). This manifest is the **required**
+  creator of the Secret; the manager's systemkey module only populates the key data into it
+  on first start and never creates the Secret itself.
 - `config/sandbox-manager/rbac.yaml` — add `e2b-system-key-store` to the
   `sandbox-manager-secrets` Role `resourceNames` (it already grants
-  `get/list/watch/update/patch` on the named Secrets), so the manager may write the new
-  Secret.
+  `get/list/watch/update/patch` — notably **no `create`** — on the named Secrets), so the
+  manager may `get` and `update`/`patch` the pre-created Secret but cannot create it.
 - `config/sandbox-gateway/rbac.yaml` — add a namespaced Role + RoleBinding (in
   `sandbox-system`) granting the gateway ServiceAccount `get` on the
   `e2b-system-key-store` Secret (`resourceNames`-restricted; v1 reads it via a direct Get
@@ -724,6 +752,26 @@ shrink); the gateway forwards normally.
   backends).
 - Blank presented key and blank in-memory system key are never accepted; manager/gateway
   startup waits/retries until the Secret contains a non-empty key.
+
+### System-key module lifecycle (`pkg/servers/e2b/keys/systemkey_test.go`)
+
+Table-driven, fake client. Asserts the module never issues a `Create` on the Secret.
+
+- **Secret missing**: module does not create it; `Get` returns NotFound → fail-closed,
+  retries, key never published (no key returned to the auth layer). Once a fake Secret is
+  injected mid-retry, the module proceeds to populate/adopt.
+- **Secret present, key data absent**: module generates a random key and `Update`/`Patch`es
+  it back; published key is non-empty.
+- **Secret present, key data empty string `""`**: treated as not-ready → module writes a
+  random key.
+- **Secret present, key data whitespace-only (`" "`, `"\n"`, `"\t"`)**: treated as
+  not-ready → module writes a random key (verify trimming logic).
+- **Secret present, key data already non-empty**: adopted as-is; **no Update issued**
+  (idempotent restart).
+- **Concurrent manager replicas, first-time populate**: two module instances race on an
+  empty pre-created Secret; the optimistic `Update` conflict-retry makes the first writer
+  win and the loser re-`Get`s and adopts the winner's key — both converge on the **same**
+  non-empty value, and exactly one write wins (assert via fake-client conflict injection).
 
 ### `GetClaimedSandbox` AllowAnyOwner (`pkg/sandbox-manager/api_test.go`)
 
