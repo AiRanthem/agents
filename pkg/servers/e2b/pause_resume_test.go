@@ -17,6 +17,7 @@ limitations under the License.
 package e2b
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -329,6 +330,89 @@ func TestConnectSandbox(t *testing.T) {
 				assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second,
 					fmt.Sprintf("expect end at: %s, but got %s", expectEndAt, endAt))
 			}
+		})
+	}
+}
+
+func TestConnectSandbox_SystemCaller_NoToken(t *testing.T) {
+	const defaultTimeoutSeconds = 300
+	templateName := "test-template-system-connect-token"
+	controller, _, teardown := Setup(t)
+	defer teardown()
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		Timeout:    defaultTimeoutSeconds,
+		TemplateID: templateName,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, err)
+
+	req := NewRequest(t, nil, models.SetTimeoutRequest{TimeoutSeconds: defaultTimeoutSeconds}, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, models.NewSystemUser())
+	req = req.WithContext(context.WithValue(req.Context(), allowAnyOwnerCtxKey, true))
+
+	connectResp, apiErr := controller.ConnectSandbox(req)
+	require.Nil(t, apiErr)
+	assert.Equal(t, http.StatusOK, connectResp.Code)
+	assert.Empty(t, connectResp.Body.EnvdAccessToken)
+}
+
+func TestMapConnectResumeError_SystemCaller409NormalCaller400(t *testing.T) {
+	tests := []struct {
+		name           string
+		err            error
+		isSystemCaller bool
+		expectStatus   int
+	}{
+		{
+			name:           "normal caller manager conflict remains bad request",
+			err:            managererrors.NewError(managererrors.ErrorConflict, "resume conflict"),
+			isSystemCaller: false,
+			expectStatus:   http.StatusBadRequest,
+		},
+		{
+			name:           "system caller manager conflict returns conflict",
+			err:            managererrors.NewError(managererrors.ErrorConflict, "resume conflict"),
+			isSystemCaller: true,
+			expectStatus:   http.StatusConflict,
+		},
+		{
+			name:           "normal caller wait task conflict remains internal",
+			err:            fmt.Errorf("resume failed: %w", cacheutils.ErrWaitTaskConflict),
+			isSystemCaller: false,
+			expectStatus:   http.StatusInternalServerError,
+		},
+		{
+			name:           "system caller wait task conflict returns conflict",
+			err:            fmt.Errorf("resume failed: %w", cacheutils.ErrWaitTaskConflict),
+			isSystemCaller: true,
+			expectStatus:   http.StatusConflict,
+		},
+		{
+			name:           "unknown error remains internal",
+			err:            errors.New("resume failed"),
+			isSystemCaller: true,
+			expectStatus:   http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiErr := mapConnectResumeError(tt.err, tt.isSystemCaller)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, tt.expectStatus, apiErr.Code)
+			assert.Contains(t, apiErr.Message, tt.err.Error())
 		})
 	}
 }

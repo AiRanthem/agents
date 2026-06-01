@@ -94,3 +94,32 @@ type ListedTeam struct {
 type UpdateTeamAPIKey struct {
 	Name string `json:"name"`
 }
+
+// SystemKeyID is the UUID assigned to the cluster-wide system credential.
+// It is fixed and well-known so auth code can synthesize the system
+// principal without consulting any storage backend.
+var SystemKeyID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
+// SystemKeyName is the displayable name attached to the system principal.
+const SystemKeyName = "system"
+
+// SystemAuth is a per-route scope tag for the system credential. A route opts
+// into system-key access by registering AllowSystemKey(scopes...).
+type SystemAuth string
+
+const (
+	// SystemAuthConnect grants the system credential the right to invoke
+	// /sandboxes/{id}/connect cross-owner. It is the only scope defined in v1.
+	SystemAuthConnect SystemAuth = "connect"
+)
+
+// NewSystemUser returns the synthesized principal used when the system key is
+// presented. It resolves to the admin team so getNamespaceOfUser yields
+// cluster scope, while the distinct ID lets handlers identify system callers.
+func NewSystemUser() *CreatedTeamAPIKey {
+	return &CreatedTeamAPIKey{
+		ID:   SystemKeyID,
+		Name: SystemKeyName,
+		Team: AdminTeam(),
+	}
+}

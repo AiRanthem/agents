@@ -182,6 +182,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 	ctx := r.Context()
 	log := klog.FromContext(ctx).WithValues("sandboxID", id)
 	log.Info("connecting sandbox")
+	isSystemCaller := AllowAnyOwnerFromContext(ctx)
 
 	request, apiErr := ParseSetTimeoutRequest(r, sc.maxTimeout)
 	if apiErr != nil {
@@ -210,14 +211,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 		resumeOpts := sc.buildResumeOpts(autoPause, time.Now(), effectiveTimeout, !currentEndAt.IsZero())
 		if err := sc.manager.ResumeSandbox(ctx, sbx, resumeOpts); err != nil {
 			log.Error(err, "failed to resume sandbox")
-			code := http.StatusInternalServerError
-			if managererrors.GetErrCode(err) == managererrors.ErrorConflict {
-				code = http.StatusBadRequest
-			}
-			return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
-				Code:    code,
-				Message: fmt.Sprintf("Failed to resume sandbox: %v", err),
-			}
+			return web.ApiResponse[*models.Sandbox]{}, mapConnectResumeError(err, isSystemCaller)
 		}
 		statusCode = http.StatusCreated
 		log.Info("sandbox resumed", "timeout", sbx.GetTimeout())
@@ -233,10 +227,29 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 	}
 	log.Info("sandbox timeout updated")
 
+	accessToken := ""
+	if !isSystemCaller {
+		accessToken = utils.GetAccessToken(sbx)
+	}
 	return web.ApiResponse[*models.Sandbox]{
 		Code: statusCode,
-		Body: sc.convertToE2BSandbox(sbx, utils.GetAccessToken(sbx)),
+		Body: sc.convertToE2BSandbox(sbx, accessToken),
 	}, nil
+}
+
+func mapConnectResumeError(err error, isSystemCaller bool) *web.ApiError {
+	code := http.StatusInternalServerError
+	switch {
+	case isSystemCaller && (managererrors.GetErrCode(err) == managererrors.ErrorConflict ||
+		errors.Is(err, cacheutils.ErrWaitTaskConflict)):
+		code = http.StatusConflict
+	case managererrors.GetErrCode(err) == managererrors.ErrorConflict:
+		code = http.StatusBadRequest
+	}
+	return &web.ApiError{
+		Code:    code,
+		Message: fmt.Sprintf("Failed to resume sandbox: %v", err),
+	}
 }
 
 // updateConnectTimeout writes the post-Resume / running-sandbox timeout under

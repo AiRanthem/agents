@@ -55,7 +55,7 @@ func (sc *Controller) registerRoutes() {
 	RegisterE2BRoute(sc.mux, http.MethodDelete, "/sandboxes/{sandboxID}", sc.DeleteSandbox, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/pause", sc.PauseSandbox, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/resume", sc.ResumeSandbox, sc.CheckApiKey)
-	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/connect", sc.ConnectSandbox, sc.CheckApiKey)
+	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/connect", sc.ConnectSandbox, sc.AllowSystemKey(models.SystemAuthConnect), sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/timeout", sc.SetSandboxTimeout, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/snapshots", sc.CreateSnapshot, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/snapshots", sc.ListSnapshots, sc.CheckApiKey)
@@ -94,20 +94,48 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 	logger := klog.FromContext(ctx)
 	middleWareLog := logger.WithValues("middleware", "CheckApiKey").V(utils.DebugLogLevel)
 	apiKey := r.Header.Get("X-API-KEY")
+
 	var user *models.CreatedTeamAPIKey
 	var ok bool
 	if sc.keys == nil {
 		user = AnonymousUser
-	} else {
-		user, ok = sc.keys.LoadByKey(ctx, apiKey)
-		if !ok {
-			middleWareLog.Info("failed to load key by API-KEY")
+		return sc.authorizeUserForSandbox(ctx, r, logger, middleWareLog, user)
+	}
+
+	if sc.systemKey != nil && sc.systemKey.Match(apiKey) {
+		accepted := acceptedSystemScopesFromContext(ctx)
+		if len(accepted) == 0 {
+			middleWareLog.Info("system key rejected on route that did not opt in")
 			return ctx, &web.ApiError{
-				Code:    http.StatusUnauthorized,
-				Message: fmt.Sprintf("Invalid API Key: %s", apiKey),
+				Code:    http.StatusForbidden,
+				Message: "system key not permitted on this route",
 			}
 		}
+		granted := []models.SystemAuth{models.SystemAuthConnect}
+		if !systemScopesIntersect(accepted, granted) {
+			middleWareLog.Info("system key scope check failed", "accepted", accepted, "granted", granted)
+			return ctx, &web.ApiError{
+				Code:    http.StatusForbidden,
+				Message: "system key scope not permitted on this route",
+			}
+		}
+		user := models.NewSystemUser()
+		ctx = context.WithValue(ctx, allowAnyOwnerCtxKey, true)
+		return context.WithValue(klog.NewContext(ctx, logger.WithValues("user", user.Name)), "user", user), nil
 	}
+
+	user, ok = sc.keys.LoadByKey(ctx, apiKey)
+	if !ok {
+		middleWareLog.Info("failed to load key by API-KEY")
+		return ctx, &web.ApiError{
+			Code:    http.StatusUnauthorized,
+			Message: fmt.Sprintf("Invalid API Key: %s", apiKey),
+		}
+	}
+	return sc.authorizeUserForSandbox(ctx, r, logger, middleWareLog, user)
+}
+
+func (sc *Controller) authorizeUserForSandbox(ctx context.Context, r *http.Request, logger klog.Logger, middleWareLog klog.Logger, user *models.CreatedTeamAPIKey) (context.Context, *web.ApiError) {
 	if sandboxID := r.PathValue("sandboxID"); sandboxID != "" {
 		middleWareLog = middleWareLog.WithValues("sandboxID", sandboxID)
 		owner, ok := sc.manager.GetOwnerOfSandbox(sandboxID)
@@ -131,7 +159,43 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 const (
 	newAPIKeyRequestContextKey = "newAPIKeyRequest"
 	targetAPIKeyContextKey     = "targetAPIKey"
+	systemAuthCtxKey           = "systemAuthAccepted"
+	allowAnyOwnerCtxKey        = "allowAnyOwner"
 )
+
+// AllowSystemKey declares which system-auth scopes are accepted by this route.
+// It must be registered before CheckApiKey so the accepted scopes are visible
+// when the system credential is evaluated.
+func (sc *Controller) AllowSystemKey(scopes ...models.SystemAuth) web.MiddleWare {
+	return func(ctx context.Context, _ *http.Request) (context.Context, *web.ApiError) {
+		accepted := make([]models.SystemAuth, len(scopes))
+		copy(accepted, scopes)
+		return context.WithValue(ctx, systemAuthCtxKey, accepted), nil
+	}
+}
+
+func acceptedSystemScopesFromContext(ctx context.Context) []models.SystemAuth {
+	v, _ := ctx.Value(systemAuthCtxKey).([]models.SystemAuth)
+	return v
+}
+
+// AllowAnyOwnerFromContext reports whether this request was authenticated as
+// the system principal and may skip the sandbox owner equality check.
+func AllowAnyOwnerFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(allowAnyOwnerCtxKey).(bool)
+	return v
+}
+
+func systemScopesIntersect(accepted, granted []models.SystemAuth) bool {
+	for _, a := range accepted {
+		for _, g := range granted {
+			if a == g {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func (sc *Controller) CheckCreateAPIKeyPermission(ctx context.Context, r *http.Request) (context.Context, *web.ApiError) {
 	log := klog.FromContext(ctx).WithValues("middleware", "CheckCreateAPIKeyPermission").V(utils.DebugLogLevel)

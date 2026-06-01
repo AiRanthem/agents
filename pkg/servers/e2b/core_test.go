@@ -63,6 +63,30 @@ var TestServerPort = 9999
 var Namespace = models.AdminTeamName
 var InitKey = "admin-987654321"
 
+func TestInitSystemKey_AuthDisabled(t *testing.T) {
+	cache, _, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	controller := &Controller{cache: cache, keyCfg: nil}
+
+	controller.initSystemKey()
+
+	assert.Nil(t, controller.systemKey)
+}
+
+func TestInitSystemKey_AuthEnabled(t *testing.T) {
+	cache, _, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	controller := &Controller{
+		cache:           cache,
+		systemNamespace: "sandbox-system",
+		keyCfg:          &keys.Config{},
+	}
+
+	controller.initSystemKey()
+
+	assert.NotNil(t, controller.systemKey)
+}
+
 func CreateSandboxWithStatus(t *testing.T, c ctrlclient.Client, sbx *agentsv1alpha1.Sandbox) {
 	t.Helper()
 	ctx := t.Context()
@@ -137,6 +161,16 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 	}
 	require.NoError(t, fc.Create(t.Context(), secret))
 
+	systemSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      keys.SystemKeySecretName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{},
+		Type: corev1.SecretTypeOpaque,
+	}
+	require.NoError(t, fc.Create(t.Context(), systemSecret))
+
 	proxyServer := proxy.NewServer(opts)
 	infraInstance := sandboxcr.NewInfraBuilder(opts).
 		WithCache(cache).
@@ -160,6 +194,7 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 	controller.cache = cache
 	controller.manager = sandboxManager
 	controller.storageRegistry = storages.NewStorageProvider()
+	controller.systemKey = keys.NewSystemKey(fc, fc, namespace)
 	controller.registerRoutes()
 
 	require.NoError(t, controller.initKeyStorage(t.Context()))
