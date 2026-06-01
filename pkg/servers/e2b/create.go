@@ -38,6 +38,25 @@ import (
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
+// noServerTimeout is used when the server should not impose its own deadline on
+// the claim/clone/wait-ready phases of CreateSandbox. The operation is then
+// bounded only by the client request context (cancellation). It is a far-future
+// duration rather than a true infinity so that existing timeout handling
+// (context deadlines, retry step counts, wait-ready polling) keeps working
+// unchanged. ~100 years is indistinguishable from unlimited for any real
+// request and stays well within time.Duration's int64 range (max ~292 years).
+const noServerTimeout = 100 * 365 * 24 * time.Hour
+
+// resolveServerTimeout maps an extension-provided seconds value to a server-side
+// timeout. A positive value yields a finite timeout; an absent (zero) or
+// non-positive value yields noServerTimeout.
+func resolveServerTimeout(seconds int) time.Duration {
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return noServerTimeout
+}
+
 // CreateSandbox allocates a Pod as a new sandbox
 func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sandbox], *web.ApiError) {
 	ctx := r.Context()
@@ -85,7 +104,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		Namespace:    sc.getNamespaceOfUser(user),
 		Template:     request.TemplateID,
 		User:         user.ID.String(),
-		ClaimTimeout: time.Duration(request.Extensions.TimeoutSeconds) * time.Second,
+		ClaimTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
 			// record the basic csi mount persistent volume config to sandbox
@@ -114,9 +133,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		}
 	}
 
-	if request.Extensions.WaitReadySeconds > 0 {
-		opts.WaitReadyTimeout = time.Duration(request.Extensions.WaitReadySeconds) * time.Second
-	}
+	opts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
 
 	if len(request.Extensions.CSIMount.MountConfigs) != 0 {
 		csiMountOptions := make([]config.MountConfig, 0, len(request.Extensions.CSIMount.MountConfigs))
@@ -169,15 +186,13 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 		Namespace:    sc.getNamespaceOfUser(user),
 		User:         user.ID.String(),
 		CheckPointID: request.TemplateID,
-		CloneTimeout: time.Duration(request.Extensions.TimeoutSeconds) * time.Second,
+		CloneTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
 		},
 		ReserveFailedSandboxFor: request.Extensions.ReserveFailedSandboxFor,
 	}
-	if request.Extensions.WaitReadySeconds > 0 {
-		opts.WaitReadyTimeout = time.Duration(request.Extensions.WaitReadySeconds) * time.Second
-	}
+	opts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
 
 	if len(request.Extensions.CSIMount.MountConfigs) != 0 {
 		csiMountOptions := make([]config.MountConfig, 0, len(request.Extensions.CSIMount.MountConfigs))

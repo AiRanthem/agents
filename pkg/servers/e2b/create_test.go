@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +37,34 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
+
+// TestResolveServerTimeout verifies that a positive seconds value yields a
+// finite timeout, while an absent (zero) or non-positive value yields
+// noServerTimeout, leaving the operation bounded only by the client context.
+func TestResolveServerTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		seconds  int
+		expected time.Duration
+	}{
+		{
+			name:     "absent or non-positive yields no server timeout",
+			seconds:  0,
+			expected: noServerTimeout,
+		},
+		{
+			name:     "positive yields finite timeout",
+			seconds:  30,
+			expected: 30 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, resolveServerTimeout(tt.seconds))
+		})
+	}
+}
 
 // TestCsiMountOptionsConfigRecord tests the csiMountOptionsConfigRecord function
 func TestCsiMountOptionsConfigRecord(t *testing.T) {
@@ -378,7 +407,6 @@ func TestCreateSandboxWithClone_CSIMount(t *testing.T) {
 		})
 	}
 }
-
 
 func TestCreateSandboxWithClone_InplaceUpdateRejected(t *testing.T) {
 	ctrl := &Controller{}
