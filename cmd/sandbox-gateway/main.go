@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 	envoyhttp "github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/http"
@@ -33,9 +34,14 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-gateway/controller"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/filter"
 	peerserver "github.com/openkruise/agents/pkg/sandbox-gateway/server"
+	"github.com/openkruise/agents/pkg/sandbox-gateway/wake"
 )
 
 func init() {
+	ctx := context.Background()
+	client := mustGatewayClient()
+	registerWaker(ctx, client)
+
 	envoyhttp.RegisterHttpFilterFactoryAndConfigParser(
 		"sandbox-gateway",
 		filter.FilterFactory,
@@ -50,25 +56,6 @@ func init() {
 
 	// Start the peer server for handling route synchronization from other peers
 	go func() {
-		ctx := context.Background()
-
-		// Get Kubernetes config
-		cfg, err := rest.InClusterConfig()
-		if err != nil {
-			api.LogErrorf("failed to get in-cluster config: %v", err)
-			os.Exit(1)
-		}
-
-		// Create controller-runtime client for peer discovery
-		scheme := runtime.NewScheme()
-		utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-		utilruntime.Must(agentsv1alpha1.AddToScheme(scheme))
-		client, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
-		if err != nil {
-			api.LogErrorf("failed to create controller-runtime client: %v", err)
-			os.Exit(1)
-		}
-
 		peerServer := peerserver.NewServer(client, proxy.SystemPort)
 		if err := peerServer.Start(ctx); err != nil {
 			api.LogErrorf("failed to start peer server: %v", err)
@@ -78,3 +65,49 @@ func init() {
 }
 
 func main() {}
+
+func mustGatewayClient() ctrlclient.Client {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		api.LogErrorf("failed to get in-cluster config: %v", err)
+		os.Exit(1)
+	}
+
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(agentsv1alpha1.AddToScheme(scheme))
+	client, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
+	if err != nil {
+		api.LogErrorf("failed to create controller-runtime client: %v", err)
+		os.Exit(1)
+	}
+	return client
+}
+
+func registerWaker(ctx context.Context, client ctrlclient.Client) {
+	baseURL := os.Getenv(filter.EnvManagerE2BBaseURL)
+	if baseURL == "" {
+		api.LogErrorf("%s must be set for sandbox-gateway wake-on-traffic", filter.EnvManagerE2BBaseURL)
+		os.Exit(1)
+	}
+	namespace := os.Getenv(peerserver.EnvNamespace)
+	if namespace == "" {
+		namespace = filter.DefaultSystemNamespace
+	}
+	reader := &wake.SystemKeyReader{
+		Reader:    client,
+		Namespace: namespace,
+		Backoff:   5 * time.Second,
+	}
+	key, err := reader.EnsureKey(ctx)
+	if err != nil {
+		api.LogErrorf("failed to read gateway system key: %v", err)
+		os.Exit(1)
+	}
+	connectClient, err := wake.NewConnectClient(baseURL, key, nil)
+	if err != nil {
+		api.LogErrorf("failed to create gateway wake client: %v", err)
+		os.Exit(1)
+	}
+	filter.RegisterWaker(wake.NewWaker(connectClient))
+}
