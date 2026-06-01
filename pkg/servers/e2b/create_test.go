@@ -226,6 +226,75 @@ func TestCsiMountOptionsConfigRecord(t *testing.T) {
 	}
 }
 
+func TestBasicSandboxCreateModifier_WakeOnTraffic(t *testing.T) {
+	tests := []struct {
+		name          string
+		request       models.NewSandboxRequest
+		expectAnnoVal string
+	}{
+		{
+			name: "autoResume nil writes no annotation",
+			request: models.NewSandboxRequest{
+				TemplateID: "tpl",
+				Timeout:    300,
+			},
+			expectAnnoVal: "",
+		},
+		{
+			name: "autoResume disabled writes no annotation",
+			request: models.NewSandboxRequest{
+				TemplateID: "tpl",
+				Timeout:    300,
+				AutoResume: &models.AutoResumeConfig{Enabled: false},
+			},
+			expectAnnoVal: "",
+		},
+		{
+			name: "autoResume enabled with finite timeout writes timeout:<seconds>",
+			request: models.NewSandboxRequest{
+				TemplateID: "tpl",
+				Timeout:    300,
+				AutoResume: &models.AutoResumeConfig{Enabled: true},
+			},
+			expectAnnoVal: "timeout:300",
+		},
+		{
+			name: "autoResume enabled with never-timeout writes timeout:never",
+			request: models.NewSandboxRequest{
+				TemplateID: "tpl",
+				Timeout:    300,
+				AutoResume: &models.AutoResumeConfig{Enabled: true},
+				Extensions: models.NewSandboxRequestExtension{
+					NeverTimeout: true,
+				},
+			},
+			expectAnnoVal: "timeout:never",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSbx := &sandboxcr.Sandbox{
+				Sandbox: &agentsv1alpha1.Sandbox{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "test-sandbox",
+						Namespace: "default",
+					},
+				},
+			}
+			ctrl := &Controller{maxTimeout: 86400}
+			ctrl.basicSandboxCreateModifier(context.Background(), mockSbx, tt.request)
+
+			if tt.expectAnnoVal == "" {
+				assert.NotContains(t, mockSbx.GetAnnotations(), agentsv1alpha1.AnnotationWakeOnTraffic)
+			} else {
+				got := mockSbx.GetAnnotations()[agentsv1alpha1.AnnotationWakeOnTraffic]
+				assert.Equal(t, tt.expectAnnoVal, got)
+			}
+		})
+	}
+}
+
 func TestCreateSandboxWithClaim_CSIMount(t *testing.T) {
 	tests := []struct {
 		name               string

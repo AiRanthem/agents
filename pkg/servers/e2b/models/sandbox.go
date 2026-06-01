@@ -56,8 +56,19 @@ type NewSandboxRequest struct {
 	Secure     bool              `json:"secure,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 	EnvVars    EnvVars           `json:"envVars,omitempty"`
+	AutoResume *AutoResumeConfig `json:"autoResume,omitempty"`
 
 	Extensions NewSandboxRequestExtension `json:"-"`
+}
+
+// AutoResumeConfig is the E2B-compatible auto-resume configuration sent at
+// sandbox-create time. When Enabled is true, the manager records the
+// wake-on-traffic configuration on the Sandbox CR via the
+// agents.kruise.io/wake-on-traffic annotation; nil or {Enabled:false} leaves
+// the sandbox without wake-on-traffic. The pointer keeps "field absent" and
+// "{enabled: false}" distinguishable, matching the upstream E2B nullable shape.
+type AutoResumeConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type NewSandboxRequestExtension struct {

@@ -313,6 +313,13 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	if request.Extensions.ReturnPodIP {
 		annotations[models.ExtensionKeyReturnPodIP] = agentsv1alpha1.True
 	}
+	if request.AutoResume != nil && request.AutoResume.Enabled {
+		wakeValue := "timeout:never"
+		if !request.Extensions.NeverTimeout {
+			wakeValue = fmt.Sprintf("timeout:%d", request.Timeout)
+		}
+		annotations[agentsv1alpha1.AnnotationWakeOnTraffic] = wakeValue
+	}
 	sbx.SetAnnotations(annotations)
 
 	// propagate labels to sandbox

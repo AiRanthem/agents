@@ -21,6 +21,12 @@ package v1alpha1
 const (
 	AnnotationRuntimeURL         = InternalPrefix + "runtime-url"
 	AnnotationRuntimeAccessToken = InternalPrefix + "runtime-access-token"
+	// AnnotationWakeOnTraffic encodes the per-sandbox wake-on-traffic configuration.
+	// Format: "timeout:<positive int seconds>" or "timeout:never". Absence disables wake.
+	// Written by E2B create when autoResume.enabled is set, and re-synced by E2B set-timeout.
+	// Only the manager itself or a cluster admin via kubectl can set this key (the
+	// agents.kruise.io/ prefix is on E2B's metadata blacklist).
+	AnnotationWakeOnTraffic = InternalPrefix + "wake-on-traffic"
 )
 
 // E2B annotations
