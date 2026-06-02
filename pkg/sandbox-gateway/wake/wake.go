@@ -28,6 +28,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 var (
@@ -37,6 +38,13 @@ var (
 	ErrWakeFailed      = errors.New("wake failed")
 	ErrTransport       = errors.New("wake transport error")
 )
+
+// neverWakeConnectTimeoutSeconds is the placeholder timeout the gateway sends to
+// /connect for a "timeout:never" sandbox. Never-timeout sandboxes keep a zero
+// deadline through pause, so the manager's connect handler ignores this value
+// (currentEndAt.IsZero()); we only send a positive number because the connect
+// API rejects timeouts <= 0.
+const neverWakeConnectTimeoutSeconds = 1
 
 type Connector interface {
 	Connect(ctx context.Context, sandboxID string, timeoutSeconds int) (int, error)
@@ -67,9 +75,13 @@ func NewWaker(connector Connector) *Waker {
 }
 
 func (w *Waker) WakeAndWait(filterCtx context.Context, sandboxID string, annotation string) error {
-	timeoutSeconds, enabled := ParseAnnotation(annotation)
+	cfg, enabled := timeoututils.ParseWakeOnTraffic(annotation)
 	if !enabled {
 		return ErrWakeDisabled
+	}
+	timeoutSeconds := cfg.TimeoutSeconds
+	if cfg.Never {
+		timeoutSeconds = neverWakeConnectTimeoutSeconds
 	}
 
 	for {

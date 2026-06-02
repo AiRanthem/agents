@@ -31,6 +31,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/wake"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 var logger *zap.Logger
@@ -110,7 +111,7 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		return api.LocalReply
 	}
 
-	_, wakeEnabled := wake.ParseAnnotation(route.WakeOnTraffic)
+	_, wakeEnabled := timeoututils.ParseWakeOnTraffic(route.WakeOnTraffic)
 	if route.State == agentsv1alpha1.SandboxStatePaused && route.WakeOnTraffic != "" && wakeEnabled && f.waker != nil {
 		for k, v := range extraHeaders {
 			header.Set(k, v)
