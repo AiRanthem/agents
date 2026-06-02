@@ -271,6 +271,13 @@ func (sc *Controller) parseCreateSandboxRequest(r *http.Request) (models.NewSand
 		}
 	}
 
+	if request.AutoResume != nil && request.AutoResume.Enabled && !request.AutoPause {
+		return request, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: "autoResume requires autoPause to be enabled",
+		}
+	}
+
 	return request, nil
 }
 

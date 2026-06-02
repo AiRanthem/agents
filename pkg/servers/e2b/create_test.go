@@ -573,3 +573,44 @@ func TestParseCreateSandboxRequest(t *testing.T) {
 		assert.Contains(t, apiErr.Message, "timeout should between")
 	})
 }
+
+func TestParseCreateSandboxRequest_AutoResumeRequiresAutoPause(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		expectError string
+	}{
+		{
+			name:        "autoResume enabled without autoPause is rejected",
+			body:        `{"templateID":"t","timeout":300,"autoResume":{"enabled":true}}`,
+			expectError: "autoResume requires autoPause",
+		},
+		{
+			name: "autoResume enabled with autoPause is allowed",
+			body: `{"templateID":"t","timeout":300,"autoPause":true,"autoResume":{"enabled":true}}`,
+		},
+		{
+			name: "autoResume disabled without autoPause is allowed",
+			body: `{"templateID":"t","timeout":300,"autoResume":{"enabled":false}}`,
+		},
+		{
+			name: "autoResume absent is allowed",
+			body: `{"templateID":"t","timeout":300}`,
+		},
+	}
+
+	sc := &Controller{maxTimeout: 86400}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/sandboxes", strings.NewReader(tt.body))
+			_, apiErr := sc.parseCreateSandboxRequest(req)
+			if tt.expectError != "" {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+				assert.Contains(t, apiErr.Message, tt.expectError)
+			} else {
+				assert.Nil(t, apiErr)
+			}
+		})
+	}
+}
