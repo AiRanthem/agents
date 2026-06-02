@@ -37,6 +37,13 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-gateway/wake"
 )
 
+// systemKeyEnsureTimeout bounds the blocking initial read of the system-key
+// Secret during package init. If the Secret is not populated within this window
+// (e.g. the manager is down), the gateway exits so the pod restarts and the
+// failure is visible, instead of init() blocking forever and never registering
+// the Envoy filter factory.
+const systemKeyEnsureTimeout = 2 * time.Minute
+
 func init() {
 	ctx := context.Background()
 	client := mustGatewayClient()
@@ -99,9 +106,11 @@ func registerWaker(ctx context.Context, client ctrlclient.Client) {
 		Namespace: namespace,
 		Backoff:   5 * time.Second,
 	}
-	key, err := reader.WaitForKey(ctx)
+	ensureCtx, cancel := context.WithTimeout(ctx, systemKeyEnsureTimeout)
+	defer cancel()
+	key, err := reader.WaitForKey(ensureCtx)
 	if err != nil {
-		api.LogErrorf("failed to read gateway system key: %v", err)
+		api.LogErrorf("failed to read gateway system key within %s: %v", systemKeyEnsureTimeout, err)
 		os.Exit(1)
 	}
 	connectClient, err := wake.NewConnectClient(baseURL, key, nil)
