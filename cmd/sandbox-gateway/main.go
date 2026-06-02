@@ -99,7 +99,7 @@ func registerWaker(ctx context.Context, client ctrlclient.Client) {
 		Namespace: namespace,
 		Backoff:   5 * time.Second,
 	}
-	key, err := reader.EnsureKey(ctx)
+	key, err := reader.WaitForKey(ctx)
 	if err != nil {
 		api.LogErrorf("failed to read gateway system key: %v", err)
 		os.Exit(1)

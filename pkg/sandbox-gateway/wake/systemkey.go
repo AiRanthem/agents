@@ -40,7 +40,10 @@ type SystemKeyReader struct {
 	Backoff   time.Duration
 }
 
-func (r *SystemKeyReader) EnsureKey(ctx context.Context) (string, error) {
+// WaitForKey blocks until the pre-created system-key Secret yields a non-empty
+// key, then returns it. It is strictly read-only: it only ever issues Get and
+// never creates or populates the Secret (only the manager populates it).
+func (r *SystemKeyReader) WaitForKey(ctx context.Context) (string, error) {
 	backoff := r.Backoff
 	if backoff <= 0 {
 		backoff = 5 * time.Second

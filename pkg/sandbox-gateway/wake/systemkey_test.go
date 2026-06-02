@@ -33,7 +33,7 @@ import (
 
 const testNamespace = "sandbox-system"
 
-func TestSystemKeyReader_EnsureKey(t *testing.T) {
+func TestSystemKeyReader_WaitForKey(t *testing.T) {
 	tests := []struct {
 		name      string
 		secret    *corev1.Secret
@@ -53,7 +53,7 @@ func TestSystemKeyReader_EnsureKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := &SystemKeyReader{Reader: fakeClient(t, tt.secret), Namespace: testNamespace, Backoff: time.Millisecond}
 
-			key, err := reader.EnsureKey(context.Background())
+			key, err := reader.WaitForKey(context.Background())
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectKey, key)
@@ -61,7 +61,7 @@ func TestSystemKeyReader_EnsureKey(t *testing.T) {
 	}
 }
 
-func TestSystemKeyReader_EnsureKeyRetriesUntilReady(t *testing.T) {
+func TestSystemKeyReader_WaitForKeyRetriesUntilReady(t *testing.T) {
 	fc := fakeClient(t)
 	reader := &SystemKeyReader{Reader: fc, Namespace: testNamespace, Backoff: time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -69,7 +69,7 @@ func TestSystemKeyReader_EnsureKeyRetriesUntilReady(t *testing.T) {
 	result := make(chan string, 1)
 	errs := make(chan error, 1)
 	go func() {
-		key, err := reader.EnsureKey(ctx)
+		key, err := reader.WaitForKey(ctx)
 		if err != nil {
 			errs <- err
 			return
@@ -98,16 +98,19 @@ func TestSystemKeyReader_EnsureKeyRetriesUntilReady(t *testing.T) {
 	}
 }
 
-func TestSystemKeyReader_EnsureKeyNeverWrites(t *testing.T) {
+func TestSystemKeyReader_WaitForKeyHonorsDeadline(t *testing.T) {
 	reader := &SystemKeyReader{
 		Reader:    readOnlyMissingClient{},
 		Namespace: testNamespace,
 		Backoff:   time.Millisecond,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	_, err := reader.EnsureKey(ctx)
+	// readOnlyMissingClient implements only Reader (Get/List): WaitForKey returning
+	// DeadlineExceeded rather than panicking confirms it issues only Get and never
+	// attempts a Create/Update.
+	_, err := reader.WaitForKey(ctx)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
