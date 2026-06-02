@@ -110,8 +110,8 @@ const AnnotationWakeOnTraffic = InternalPrefix + "wake-on-traffic"
 The payload is **integer seconds**, not a `time.Duration` string, because the E2B
 connect/set-timeout request model is `timeout` in integer seconds
 (`models.SetTimeoutRequest.TimeoutSeconds int`). Storing seconds keeps the annotation,
-the create/set-timeout writers, and the gateway parser all on the same integer
-type with no rounding ambiguity.
+the create/set-timeout writers, and the shared `pkg/utils/timeout` codec all on the same
+integer type with no rounding ambiguity.
 
 Value grammar:
 
@@ -122,7 +122,9 @@ Value grammar:
 | `"timeout:<positive integer>"` (seconds, e.g. `"timeout:300"`, `"timeout:9000"`) | enabled; on wake the gateway asks `ConnectSandbox` to restore this many seconds (floored to `--e2b-min-resume-timeout`) |
 | anything else | invalid; gateway treats it as not-enabled and falls back to 502 |
 
-Parser rules (the parser lives on the gateway side):
+Parser rules (the grammar is encoded/decoded by a single shared codec in
+`pkg/utils/timeout`, used by both the manager-side writers and the gateway-side reader;
+see Code Impact):
 
 - `never` is matched literally (case-sensitive); no surrounding whitespace tolerated.
 - Otherwise `strconv.Atoi` the payload and require `> 0`. Reject non-numeric, `0`,
@@ -161,18 +163,17 @@ flatten the SDK-side `lifecycle` wrapper to this wire shape before sending.
 
 ```go
 if request.AutoResume != nil && request.AutoResume.Enabled {
-    payload := "timeout:never"
-    if !request.Extensions.NeverTimeout {
-        payload = fmt.Sprintf("timeout:%d", request.Timeout) // integer seconds
-    }
-    sbx.SetAnnotation(v1alpha1.AnnotationWakeOnTraffic, payload)
+    // FormatWakeOnTraffic encodes "timeout:never" when NeverTimeout, else
+    // "timeout:<seconds>" — the only writer of the annotation grammar.
+    sbx.SetAnnotation(v1alpha1.AnnotationWakeOnTraffic,
+        timeout.FormatWakeOnTraffic(request.Extensions.NeverTimeout, request.Timeout))
 }
 ```
 
-`autoPause` and `autoResume.enabled` are orthogonal. `autoPause=false` +
-`autoResume.enabled=true` is legal: the sandbox is deleted on timeout in the
-auto-shutdown path, but a manual pause leaves the sandbox alive and wake-on-traffic
-restores it.
+`autoResume.enabled=true` requires `autoPause=true`. With `autoPause=false`, timeout
+uses the auto-shutdown path and deletes the sandbox instead of preserving a paused
+sandbox for later traffic wake, so the create request is rejected with `400 Bad Request`
+when `autoResume.enabled=true` is sent without `autoPause=true`.
 
 ### Annotation duration sync on set-timeout
 
@@ -300,7 +301,10 @@ or accept a blank in-memory system key.
 
 **Gateway delivery.** The gateway reads the same `e2b-system-key-store` Secret. V1 reads
 it once at startup after the non-empty-key wait succeeds; any re-read on rotation is part
-of the deferred rotation work above.
+of the deferred rotation work above. The gateway path is **strictly read-only** — it issues
+only `Get` and never creates or populates the Secret; only the manager populates it
+(preserving sole-first-writer-wins). The gateway's read method is named to make this
+read-only contract explicit and is distinct from the manager's populate path.
 
 **`AllowSystemKey(auths ...SystemAuth)` middleware (new).** Declarative and per-route.
 It writes the route's accepted system scopes into the request context. It is
@@ -371,8 +375,8 @@ HTTP calls to the manager).
 
 `proxyutils.Route` (`pkg/utils/proxyutils/route.go`) gains a single field:
 
-- `WakeOnTraffic string` — the raw annotation value verbatim; the gateway parses it on
-  the wake path.
+- `WakeOnTraffic string` — the raw annotation value verbatim; the gateway decodes it via
+  the shared `pkg/utils/timeout` codec on the wake path.
 
 No `Pausable`/`Resumable` pre-filter field is added. Whether a paused-looking sandbox
 is actually resumable depends on `Status.Phase` + conditions that change rapidly and
@@ -645,8 +649,16 @@ shrink); the gateway forwards normally.
   in-memory value for `CheckApiKey`. Fail-closed: retries on a missing Secret, never
   publishes a blank key. Concurrent-replica safe via conflict-retry. V1 only; rotation
   deferred.
-- `pkg/sandbox-gateway/wake/wake.go` — `wakeAndWait`, the integer-seconds annotation
-  parser, the `singleflight.Group`, and the manager E2B HTTP client (system-key header).
+- `pkg/utils/timeout/wakeontraffic.go` — the shared wake-on-traffic annotation codec
+  (`WakeOnTrafficConfig`, `FormatWakeOnTraffic`, `ParseWakeOnTraffic`): the single source of
+  truth for the `timeout:<seconds>` / `timeout:never` grammar, used by the manager
+  create / set-timeout writers and the gateway reader. Lives next to the timeout utilities
+  to avoid a manager↔gateway package dependency and to keep the payload grammar with the
+  timeout types.
+- `pkg/sandbox-gateway/wake/wake.go` — `wakeAndWait`, the `singleflight.Group`, and the
+  manager E2B HTTP client (system-key header). The annotation grammar is decoded via the
+  shared `pkg/utils/timeout` codec, not a gateway-local parser; `timeout:never` maps to a
+  named placeholder (`neverWakeConnectTimeoutSeconds = 1`).
 - `pkg/sandbox-gateway/filter/async.go` — async `DecodeHeaders` glue, `completeOnce`,
   `OnDestroy` integration.
 
@@ -730,7 +742,7 @@ shrink); the gateway forwards normally.
 
 ## Test Plan
 
-### Annotation parser (gateway side, `pkg/sandbox-gateway/wake/wake_test.go`)
+### Annotation codec (`pkg/utils/timeout/wakeontraffic_test.go`)
 
 - Disabled: annotation absent.
 - Never: exact `"timeout:never"`.
@@ -793,8 +805,9 @@ Table-driven, fake client. Asserts the module never issues a `Create` on the Sec
 
 ### E2B handler annotation sync (`create_test.go`, `pause_resume_test.go`, `timeout_test.go`)
 
-- Create `autoResume.enabled=true` + finite Timeout → annotation `"timeout:<seconds>"`.
-- Create `autoResume.enabled=true` + `never-timeout` extension → `"timeout:never"`.
+- Create `autoPause=true` + `autoResume.enabled=true` + finite Timeout → annotation `"timeout:<seconds>"`.
+- Create `autoPause=true` + `autoResume.enabled=true` + `never-timeout` extension → `"timeout:never"`.
+- Create `autoResume.enabled=true` without `autoPause=true` → `400 Bad Request`.
 - Create `autoResume=nil` / `enabled=false` → no annotation.
 - Connect path never populates `SetAnnotations` (with or without the wake annotation).
 - Connect with annotation, paused→resumed, timeout=600 → timeout is applied/restored,
@@ -852,7 +865,7 @@ Table-driven, fake client. Asserts the module never issues a `Create` on the Sec
 A single happy-path integration test under the existing suite:
 
 - Bootstrap manager + gateway controller + sandbox controller stubs.
-- Create sandbox with `autoResume.enabled=true`, `timeout=60`.
+- Create sandbox with `autoPause=true`, `autoResume.enabled=true`, `timeout=60`.
 - Pause via E2B handler.
 - Send a request through the gateway filter.
 - Assert: filter returns `api.Running`, eventually Continue; Sandbox CR has
@@ -877,6 +890,10 @@ follow-up.
 - **Wake metrics** — gateway-side counters for coalesced calls and retry rounds are
   deferred (the gateway exposes Envoy admin stats on `:9090` while controller-runtime
   Go metrics are disabled to avoid a port conflict).
-- **Future per-call auth hardening** — the system key is a shared secret; if hostile
-  co-tenancy later demands it, the system credential could be replaced with an
-  SA-token + TokenReview check on the connect route. Out of scope for v1.
+- **System-key scope (review #8) — v1-accepted, narrowing deferred to v2.** The system
+  principal resolves to cluster scope (it can connect to any sandbox in any namespace). v1
+  accepts this because the scope is **connect-only** and system callers never receive an
+  envd access token, bounding the blast radius to "wake any sandbox" (no delete / list /
+  pause / create, no token exfil). If hostile co-tenancy later demands a narrower principal,
+  replace the shared secret with a per-namespace key or an SA-token + `TokenReview` check on
+  the connect route. Out of scope for v1.
