@@ -240,6 +240,8 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 func mapConnectResumeError(err error, isSystemCaller bool) *web.ApiError {
 	code := http.StatusInternalServerError
 	switch {
+	case apierrors.IsNotFound(err):
+		code = http.StatusNotFound
 	case isSystemCaller && (managererrors.GetErrCode(err) == managererrors.ErrorConflict ||
 		errors.Is(err, cacheutils.ErrWaitTaskConflict)):
 		code = http.StatusConflict

@@ -43,6 +43,29 @@ type waitHooksCache interface {
 	GetWaitHooks() *sync.Map
 }
 
+func TestMapConnectResumeError(t *testing.T) {
+	gvr := schema.GroupResource{Resource: "sandboxes"}
+	tests := []struct {
+		name         string
+		err          error
+		isSystem     bool
+		expectStatus int
+	}{
+		{name: "not found maps to 404", err: apierrors.NewNotFound(gvr, "sbx"), isSystem: false, expectStatus: http.StatusNotFound},
+		{name: "not found maps to 404 for system caller", err: apierrors.NewNotFound(gvr, "sbx"), isSystem: true, expectStatus: http.StatusNotFound},
+		{name: "conflict non-system maps to 400", err: managererrors.NewError(managererrors.ErrorConflict, "conflict"), isSystem: false, expectStatus: http.StatusBadRequest},
+		{name: "conflict system maps to 409", err: managererrors.NewError(managererrors.ErrorConflict, "conflict"), isSystem: true, expectStatus: http.StatusConflict},
+		{name: "other maps to 500", err: errors.New("boom"), isSystem: false, expectStatus: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiErr := mapConnectResumeError(tt.err, tt.isSystem)
+			assert.Equal(t, tt.expectStatus, apiErr.Code)
+		})
+	}
+}
+
 func TestPauseSandbox(t *testing.T) {
 	templateName := "test-template"
 	controller, fc, teardown := Setup(t)
