@@ -198,8 +198,8 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
 		},
 		ReserveFailedSandboxFor: request.Extensions.ReserveFailedSandboxFor,
-		Name:         request.Extensions.Name,
-		GenerateName: request.Extensions.GenerateName,
+		Name:                    request.Extensions.Name,
+		GenerateName:            request.Extensions.GenerateName,
 	}
 	opts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
 
