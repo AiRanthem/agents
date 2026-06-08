@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -39,13 +40,10 @@ import (
 )
 
 var (
-	KeySecretName    = "e2b-key-store"
-	AdminKeyID       uuid.UUID
-	generateUUID     = uuid.New
-	marshalAPIKey    = json.Marshal
-	newRefreshTicker = func() *time.Ticker {
-		return time.NewTicker(10 * time.Minute)
-	}
+	KeySecretName = "e2b-key-store"
+	AdminKeyID    uuid.UUID
+	generateUUID  = uuid.New
+	marshalAPIKey = json.Marshal
 )
 
 func init() {
@@ -66,6 +64,8 @@ type secretKeyStorage struct {
 	stop     chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	refreshC chan struct{}
+	wg       sync.WaitGroup
 
 	idxByKey  sync.Map
 	idxByID   sync.Map
@@ -81,6 +81,7 @@ func NewSecretKeyStorage(client client.Client, apiReader client.Reader, cache ct
 		Cache:     cache,
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
+		refreshC:  make(chan struct{}, 1),
 	}
 }
 
@@ -158,32 +159,80 @@ func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) er
 	return nil
 }
 
-func (k *secretKeyStorage) Run() {
-	// Capture newRefreshTicker synchronously in the calling goroutine to avoid
-	// a data race between the background goroutine reading newRefreshTicker and
-	// test cleanup code writing to it after the test function returns.
-	tickerFactory := newRefreshTicker
-	go func() {
-		defer close(k.done)
-		ticker := tickerFactory()
-		ctx := logs.NewContext()
-		log := klog.FromContext(ctx)
-		for {
-			select {
-			case <-ticker.C:
-				if err := k.refresh(ctx, k.Client); err != nil {
-					log.Error(err, "failed to refresh key store")
-				}
-			case <-k.stop:
-				ticker.Stop()
-				log.Info("api-key refreshing stopped")
-				return
+func (k *secretKeyStorage) triggerRefresh() {
+	select {
+	case k.refreshC <- struct{}{}:
+	default:
+	}
+}
+
+func (k *secretKeyStorage) refreshWorker(ctx context.Context) {
+	defer k.wg.Done()
+	log := klog.FromContext(ctx)
+	for {
+		select {
+		case <-k.refreshC:
+			if err := k.refresh(ctx, k.Client); err != nil {
+				log.Error(err, "failed to refresh key store")
 			}
+		case <-k.stop:
+			return
 		}
+	}
+}
+
+func (k *secretKeyStorage) onSecretEvent(obj any) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		if t, isTombstone := obj.(toolscache.DeletedFinalStateUnknown); isTombstone {
+			secret, ok = t.Obj.(*corev1.Secret)
+		}
+		if !ok {
+			return
+		}
+	}
+	if secret.Namespace != k.Namespace || secret.Name != KeySecretName {
+		return
+	}
+	k.triggerRefresh()
+}
+
+func (k *secretKeyStorage) Run() {
+	ctx := logs.NewContext()
+	log := klog.FromContext(ctx)
+
+	informer, err := k.Cache.GetInformer(ctx, &corev1.Secret{})
+	if err != nil {
+		log.Error(err, "failed to get Secret informer; key store will not refresh")
+		close(k.done)
+		return
+	}
+
+	reg, err := informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc:    k.onSecretEvent,
+		UpdateFunc: func(_, newObj any) { k.onSecretEvent(newObj) },
+		DeleteFunc: k.onSecretEvent,
+	})
+	if err != nil {
+		log.Error(err, "failed to register Secret event handler")
+		close(k.done)
+		return
+	}
+
+	k.wg.Add(1)
+	go k.refreshWorker(ctx)
+
+	go func() {
+		<-k.stop
+		if removeErr := informer.RemoveEventHandler(reg); removeErr != nil {
+			log.Error(removeErr, "failed to remove Secret event handler")
+		}
+		k.wg.Wait()
+		close(k.done)
 	}()
 }
 
-// Stop signals the background refresh goroutine to exit and waits for it to finish.
+// Stop signals the background refresh worker to exit and waits for it to finish.
 func (k *secretKeyStorage) Stop() {
 	k.stopOnce.Do(func() {
 		close(k.stop)

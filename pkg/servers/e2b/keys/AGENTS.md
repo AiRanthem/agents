@@ -7,6 +7,26 @@ This directory owns E2B API-key persistence behind the `KeyStorage` interface. K
 - `secretKeyStorage` is the compatibility baseline for API behavior.
 - `mysqlKeyStorage` is the database backend. Keep the concrete type unexported; expose it only through `KeyStorage` and `NewKeyStorage`.
 
+## Secret Backend Refresh Semantics
+
+`secretKeyStorage` keeps its in-memory indexes in sync with the backing
+`e2b-key-store` Secret via an informer event handler installed on the shared
+`pkg/cache.Cache`. There is no periodic poller. Cross-replica propagation
+delay for key create/delete is bounded by informer push latency (typically
+sub-second).
+
+- `Config.Cache` is required for secret mode and is validated in
+  `NewKeyStorage`. `NewSecretKeyStorage` itself does not validate, allowing
+  unit tests to construct the storage without a cache as long as they do not
+  call `Run()`.
+- `Run()` registers the handler and starts a single-worker goroutine that
+  drains a coalescing channel and calls `refresh()` against the cached
+  client. `Stop()` removes the handler and waits for the worker to exit.
+- Cross-replica visibility (including the historical `retryCreateKey` case
+  where a retry re-reads a Secret revision containing concurrent writes
+  from another replica) is healed by the next informer event reaching the
+  affected replica — typically within a few hundred milliseconds.
+
 ## Interface And Callers
 
 - Keep `KeyStorage` signatures in sync with current callers in `pkg/servers/e2b/api_key.go` and `pkg/servers/e2b/routes.go`.

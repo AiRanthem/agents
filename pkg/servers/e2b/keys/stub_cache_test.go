@@ -32,6 +32,7 @@ import (
 type stubCache struct {
 	ctrlcache.Cache // nil-embedded; methods we don't override panic
 	informer        *stubInformer
+	getInformerErr  error
 }
 
 func newStubCache() *stubCache {
@@ -39,6 +40,9 @@ func newStubCache() *stubCache {
 }
 
 func (s *stubCache) GetInformer(_ context.Context, _ client.Object, _ ...ctrlcache.InformerGetOption) (ctrlcache.Informer, error) {
+	if s.getInformerErr != nil {
+		return nil, s.getInformerErr
+	}
 	return s.informer, nil
 }
 
@@ -48,14 +52,19 @@ func (s *stubCache) GetInformer(_ context.Context, _ client.Object, _ ...ctrlcac
 type stubInformer struct {
 	ctrlcache.Informer
 
-	mu      sync.Mutex
-	handler toolscache.ResourceEventHandler
-	removed bool
+	mu        sync.Mutex
+	handler   toolscache.ResourceEventHandler
+	removed   bool
+	addErr    error
+	removeErr error
 }
 
 func (s *stubInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.addErr != nil {
+		return nil, s.addErr
+	}
 	s.handler = handler
 	return stubReg{}, nil
 }
@@ -65,7 +74,7 @@ func (s *stubInformer) RemoveEventHandler(_ toolscache.ResourceEventHandlerRegis
 	defer s.mu.Unlock()
 	s.removed = true
 	s.handler = nil
-	return nil
+	return s.removeErr
 }
 
 func (s *stubInformer) currentHandler() toolscache.ResourceEventHandler {
