@@ -139,7 +139,7 @@ func (sc *Controller) checkUserApiKey(ctx context.Context, r *http.Request, logg
 		mwLog.Info("failed to load key by API-KEY")
 		return ctx, &web.ApiError{
 			Code:    http.StatusUnauthorized,
-			Message: fmt.Sprintf("Invalid API Key: %s", apiKey),
+			Message: "Invalid API Key",
 		}
 	}
 	return sc.authorizeUserForSandbox(ctx, r, logger, mwLog, user)
