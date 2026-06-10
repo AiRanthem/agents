@@ -26,7 +26,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -339,19 +338,6 @@ func (c *Cache) ListSandboxesInPool(ctx context.Context, opts ListSandboxesInPoo
 		return nil, err
 	}
 	return resultVal.([]*agentsv1alpha1.Sandbox), nil
-}
-
-// refreshCheckpoint retrieves the latest Checkpoint from cache.
-func (c *Cache) refreshCheckpoint(ctx context.Context, cp *agentsv1alpha1.Checkpoint) (*agentsv1alpha1.Checkpoint, error) {
-	fresh := &agentsv1alpha1.Checkpoint{}
-	err := c.client.Get(ctx, types.NamespacedName{Namespace: cp.Namespace, Name: cp.Name}, fresh)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return nil, fmt.Errorf("checkpoint %s not found in cache", cp.Name)
-		}
-		return nil, fmt.Errorf("failed to get checkpoint %s from cache: %w", cp.Name, err)
-	}
-	return fresh, nil
 }
 
 // GetSandboxController returns the sandbox custom reconciler for external handler registration.

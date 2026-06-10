@@ -43,7 +43,12 @@ func (c *Cache) SandboxUpdateFunc(ctx context.Context) cacheutils.UpdateFunc[*ag
 
 func (c *Cache) CheckpointUpdateFunc(ctx context.Context) cacheutils.UpdateFunc[*agentsv1alpha1.Checkpoint] {
 	return func(cp *agentsv1alpha1.Checkpoint) (*agentsv1alpha1.Checkpoint, error) {
-		return c.refreshCheckpoint(ctx, cp)
+		key := types.NamespacedName{Namespace: cp.Namespace, Name: cp.Name}
+		got := &agentsv1alpha1.Checkpoint{}
+		if err := utils.GetFromInformerOrApiServer(ctx, got, key, c.client, c.reader); err != nil {
+			return nil, err
+		}
+		return got, nil
 	}
 }
 
