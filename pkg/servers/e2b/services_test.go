@@ -759,6 +759,77 @@ func TestCreateSandboxRetentionSemantics(t *testing.T) {
 	}
 }
 
+func TestPausedSandboxRetentionLifecycle(t *testing.T) {
+	controller, client, teardown := Setup(t)
+	defer teardown()
+	user := &models.CreatedTeamAPIKey{ID: keys.AdminKeyID, Key: InitKey, Name: "admin"}
+	templateName := "paused-retention-lifecycle"
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		AutoPause:  true,
+		Timeout:    300,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime:         v1alpha1.True,
+			models.ExtensionKeyReservePausedSandboxFor: "1h",
+		},
+	}, nil, user))
+	require.Nil(t, apiErr)
+	sbx := GetSandbox(t, createResp.Body.SandboxID, client)
+	require.NotNil(t, sbx.Spec.PauseTime)
+	require.NotNil(t, sbx.Spec.ShutdownTime)
+	assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(time.Hour), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+
+	connectResp, apiErr := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 600,
+	}, map[string]string{"sandboxID": createResp.Body.SandboxID}, user))
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, connectResp.Code)
+	sbx = GetSandbox(t, createResp.Body.SandboxID, client)
+	require.NotNil(t, sbx.Spec.PauseTime)
+	require.NotNil(t, sbx.Spec.ShutdownTime)
+	assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(time.Hour), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+
+	beforeAutoPause := time.Now()
+	sbx.Spec.PauseTime = &metav1.Time{Time: beforeAutoPause.Add(-time.Minute)}
+	shutdownAfterAutoPause := metav1.NewTime(beforeAutoPause.Add(time.Hour))
+	sbx.Spec.ShutdownTime = &shutdownAfterAutoPause
+	sbx.Spec.Paused = true
+	require.NoError(t, client.Update(t.Context(), sbx))
+	DoSetSandboxStatus(v1alpha1.SandboxPaused, metav1.ConditionTrue, metav1.ConditionFalse)(t, client, sbx.DeepCopy())
+
+	sbx = GetSandbox(t, createResp.Body.SandboxID, client)
+	require.True(t, sbx.Spec.Paused)
+	assert.Equal(t, v1alpha1.SandboxPaused, sbx.Status.Phase)
+	assert.WithinDuration(t, beforeAutoPause.Add(time.Hour), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+
+	EnableWaitSim(t, controller, createResp.Body.SandboxID)
+	go UpdateSandboxWhen(t, client, createResp.Body.SandboxID, func(s *v1alpha1.Sandbox) bool {
+		return !s.Spec.Paused
+	}, DoSetSandboxStatus(v1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+	_, apiErr = controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 900,
+	}, map[string]string{"sandboxID": createResp.Body.SandboxID}, user))
+	require.Nil(t, apiErr)
+	sbx = GetSandbox(t, createResp.Body.SandboxID, client)
+	assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(time.Hour), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+
+	req := NewRequest(t, nil, nil, map[string]string{"sandboxID": createResp.Body.SandboxID}, user)
+	req.Header.Set(models.ExtensionHeaderReservePausedSandboxFor, "30m")
+	go UpdateSandboxWhen(t, client, createResp.Body.SandboxID, func(s *v1alpha1.Sandbox) bool {
+		return s.Spec.Paused
+	}, DoSetSandboxStatus(v1alpha1.SandboxPaused, metav1.ConditionTrue, metav1.ConditionFalse))
+	beforeManualPause := time.Now()
+	_, apiErr = controller.PauseSandbox(req)
+	require.Nil(t, apiErr)
+	sbx = GetSandbox(t, createResp.Body.SandboxID, client)
+	assert.Equal(t, "30m", sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+	assert.WithinDuration(t, beforeManualPause.Add(30*time.Minute), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+	assert.WithinDuration(t, beforeManualPause.Add(30*time.Minute), sbx.Spec.PauseTime.Time, 5*time.Second)
+}
+
 // CreateCheckpointAndTemplate creates a Checkpoint with associated SandboxTemplate for clone tests
 func CreateCheckpointAndTemplate(t *testing.T, controller *Controller, checkpointID string) func() {
 	tmpl := v1alpha1.EmbeddedSandboxTemplate{
@@ -1434,7 +1505,7 @@ func TestAutoPause(t *testing.T) {
 	timeoutSeconds := 300
 	now := time.Now()
 	timeoutTime := now.Add(time.Duration(timeoutSeconds) * time.Second)
-	timeoutAfterPaused := now.AddDate(1000, 0, 0)
+	timeoutAfterPaused := now.Add(timeout.DefaultReservePausedSandboxFor)
 	templateName := "auto-pause"
 	user := &models.CreatedTeamAPIKey{
 		ID:   keys.AdminKeyID,
