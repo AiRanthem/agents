@@ -62,7 +62,8 @@ type TimeoutUpdateResult struct {
 }
 
 type PauseOptions struct {
-	Timeout *timeout.Options
+	Timeout          *timeout.Options
+	ReservePausedFor *string
 }
 
 // ResumeOptions configures a Resume operation.
@@ -73,7 +74,8 @@ type PauseOptions struct {
 // timeout. Pass nil to skip the atomic write (the caller accepts that
 // PauseTime may remain stale until the next write).
 type ResumeOptions struct {
-	Timeout *timeout.Options
+	Timeout          *timeout.Options
+	ReservePausedFor *string
 }
 
 type HasTemplateOptions struct {
@@ -142,7 +144,7 @@ type Sandbox interface {
 	SetPodLabels(labels map[string]string)
 	GetPodLabels() map[string]string
 	SetTimeout(opts timeout.Options)
-	SaveTimeoutWithPolicy(ctx context.Context, opts timeout.Options, policy timeout.UpdatePolicy) (TimeoutUpdateResult, error)
+	SaveTimeoutWithPolicy(ctx context.Context, opts SaveTimeoutOptions) (TimeoutUpdateResult, error)
 	GetTimeout() timeout.Options
 	GetClaimTime() (time.Time, error)
 	Kill(ctx context.Context) error                                                                     // Delete the Sandbox resource

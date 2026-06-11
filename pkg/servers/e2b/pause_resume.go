@@ -257,7 +257,10 @@ func (sc *Controller) updateConnectTimeout(ctx context.Context, sbx infra.Sandbo
 	log.Info("saving timeout to sandbox", "timeout", opts, "currentEndAt", currentEndAt,
 		"requestedEndAt", TimeAfterSeconds(now, timeoutSeconds), "requestedTimeoutSeconds", timeoutSeconds,
 		"policy", timeout.UpdatePolicyExtendOnly, "preConnectState", preConnectState)
-	result, err := sbx.SaveTimeoutWithPolicy(ctx, opts, timeout.UpdatePolicyExtendOnly)
+	result, err := sbx.SaveTimeoutWithPolicy(ctx, infra.SaveTimeoutOptions{
+		Timeout: opts,
+		Policy:  timeout.UpdatePolicyExtendOnly,
+	})
 	if err != nil {
 		return &web.ApiError{
 			Message: fmt.Sprintf("Failed to set sandbox timeout: %v", err),
