@@ -44,7 +44,12 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 	if apiErr != nil {
 		return web.ApiResponse[struct{}]{}, apiErr
 	}
-	retention, reservePausedFor, apiErr := resolveManualPauseRetention(ctx, sbx, r.Header.Get(models.ExtensionHeaderReservePausedSandboxFor))
+	headerValues := r.Header.Values(models.ExtensionHeaderReservePausedSandboxFor)
+	headerValue := ""
+	if len(headerValues) > 0 {
+		headerValue = headerValues[0]
+	}
+	retention, reservePausedFor, apiErr := resolveManualPauseRetention(ctx, sbx, headerValue, len(headerValues) > 0)
 	if apiErr != nil {
 		return web.ApiResponse[struct{}]{}, apiErr
 	}
@@ -89,9 +94,9 @@ func resumeSandboxErrorCode(err error) int {
 	return http.StatusInternalServerError
 }
 
-func resolveManualPauseRetention(ctx context.Context, sbx infra.Sandbox, headerValue string) (time.Duration, *string, *web.ApiError) {
+func resolveManualPauseRetention(ctx context.Context, sbx infra.Sandbox, headerValue string, headerPresent bool) (time.Duration, *string, *web.ApiError) {
 	log := klog.FromContext(ctx).WithValues("sandboxID", sbx.GetSandboxID())
-	if headerValue != "" {
+	if headerPresent {
 		retention, err := timeout.ParseReservePausedSandboxFor(headerValue)
 		if err != nil {
 			return 0, nil, &web.ApiError{
