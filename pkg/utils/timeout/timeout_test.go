@@ -103,17 +103,52 @@ func TestResolveReservePausedSandboxForAnnotation(t *testing.T) {
 }
 
 func TestBuildAutoPauseOptionsUsesPausedRetention(t *testing.T) {
-	now := time.Date(2026, time.June, 11, 10, 0, 0, 123, time.UTC)
-	got := BuildAutoPauseOptions(now, 5*time.Minute, 2*time.Hour)
-	wantPause := NormalizeTime(now.Add(5 * time.Minute))
-	assert.Equal(t, wantPause, got.PauseTime)
-	assert.Equal(t, NormalizeTime(wantPause.Add(2*time.Hour)), got.ShutdownTime)
+	tests := []struct {
+		name             string
+		now              time.Time
+		requestedTimeout time.Duration
+		pausedRetention  time.Duration
+		wantPause        time.Time
+		wantShutdown     time.Time
+	}{
+		{
+			name:             "uses paused retention",
+			now:              time.Date(2026, time.June, 11, 10, 0, 0, 123, time.UTC),
+			requestedTimeout: 5 * time.Minute,
+			pausedRetention:  2 * time.Hour,
+			wantPause:        time.Date(2026, time.June, 11, 10, 5, 0, 0, time.UTC),
+			wantShutdown:     time.Date(2026, time.June, 11, 12, 5, 0, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BuildAutoPauseOptions(tt.now, tt.requestedTimeout, tt.pausedRetention)
+			assert.Equal(t, tt.wantPause, got.PauseTime)
+			assert.Equal(t, tt.wantShutdown, got.ShutdownTime)
+		})
+	}
 }
 
 func TestPausedShutdownTime(t *testing.T) {
-	now := time.Date(2026, time.June, 11, 10, 0, 0, 123, time.UTC)
-	got := PausedShutdownTime(now, 30*time.Minute)
-	assert.Equal(t, NormalizeTime(now.Add(30*time.Minute)), got)
+	tests := []struct {
+		name            string
+		anchor          time.Time
+		pausedRetention time.Duration
+		want            time.Time
+	}{
+		{
+			name:            "adds paused retention",
+			anchor:          time.Date(2026, time.June, 11, 10, 0, 0, 123, time.UTC),
+			pausedRetention: 30 * time.Minute,
+			want:            time.Date(2026, time.June, 11, 10, 30, 0, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := PausedShutdownTime(tt.anchor, tt.pausedRetention)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestGetTimeoutFromSandbox(t *testing.T) {
