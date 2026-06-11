@@ -1434,7 +1434,6 @@ func TestAutoPause(t *testing.T) {
 	timeoutSeconds := 300
 	now := time.Now()
 	timeoutTime := now.Add(time.Duration(timeoutSeconds) * time.Second)
-	maxTimeoutTime := now.Add(time.Duration(models.DefaultMaxTimeout) * time.Second)
 	timeoutAfterPaused := now.AddDate(1000, 0, 0)
 	templateName := "auto-pause"
 	user := &models.CreatedTeamAPIKey{
@@ -1503,8 +1502,8 @@ func TestAutoPause(t *testing.T) {
 					assert.WithinDuration(t, sbx.Spec.PauseTime.Time, timeoutTime, 5*time.Second)
 				}
 				assert.NotNil(t, sbx.Spec.ShutdownTime)
-				if sbx.Spec.ShutdownTime != nil {
-					assert.WithinDuration(t, sbx.Spec.ShutdownTime.Time, maxTimeoutTime, 5*time.Second)
+				if sbx.Spec.PauseTime != nil && sbx.Spec.ShutdownTime != nil {
+					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 				}
 			},
 		},

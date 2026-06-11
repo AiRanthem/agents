@@ -80,12 +80,9 @@ func (sc *Controller) DeleteSandbox(r *http.Request) (web.ApiResponse[struct{}],
 	}, nil
 }
 
-func (sc *Controller) buildSetTimeoutOptions(autoPause bool, now time.Time, timeoutSeconds int) timeout.Options {
+func (sc *Controller) buildSetTimeoutOptions(autoPause bool, now time.Time, timeoutSeconds int, pausedRetention time.Duration) timeout.Options {
 	if autoPause {
-		return timeout.Options{
-			PauseTime:    TimeAfterSeconds(now, timeoutSeconds),
-			ShutdownTime: TimeAfterSeconds(now, sc.maxTimeout),
-		}
+		return timeout.BuildAutoPauseOptions(now, time.Duration(timeoutSeconds)*time.Second, pausedRetention)
 	}
 	return timeout.Options{
 		ShutdownTime: TimeAfterSeconds(now, timeoutSeconds),

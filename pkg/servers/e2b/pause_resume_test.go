@@ -35,6 +35,7 @@ import (
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -421,6 +422,54 @@ func TestConnectSandboxRunningTimeoutGuard(t *testing.T) {
 	}
 }
 
+func TestConnectSandboxExtendOnlySkipDoesNotBackfillReservePausedAnnotation(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+
+	templateName := "test-connect-extend-only-skip-no-retention-backfill"
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		AutoPause:  true,
+		Timeout:    600,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, err)
+	require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+
+	before := GetSandbox(t, createResp.Body.SandboxID, fc)
+	require.NotNil(t, before.Spec.PauseTime)
+	require.NotNil(t, before.Spec.ShutdownTime)
+	delete(before.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+	require.NoError(t, fc.Update(t.Context(), before))
+	pauseBefore := before.Spec.PauseTime.Time
+	shutdownBefore := before.Spec.ShutdownTime.Time
+
+	connectResp, apiErr := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 300,
+	}, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, user))
+	require.Nil(t, apiErr)
+	assert.Equal(t, http.StatusOK, connectResp.Code)
+
+	after := GetSandbox(t, createResp.Body.SandboxID, fc)
+	require.NotNil(t, after.Spec.PauseTime)
+	require.NotNil(t, after.Spec.ShutdownTime)
+	assert.WithinDuration(t, pauseBefore, after.Spec.PauseTime.Time, time.Second)
+	assert.WithinDuration(t, shutdownBefore, after.Spec.ShutdownTime.Time, time.Second)
+	assert.NotContains(t, after.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+}
+
 func TestConnectSandboxConcurrentPausedTimeouts(t *testing.T) {
 	user := &models.CreatedTeamAPIKey{
 		ID:   keys.AdminKeyID,
@@ -532,6 +581,57 @@ func TestConnectSandboxConcurrentPausedTimeouts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResumeSandboxBackfillsReservePausedAnnotationWithPlaceholder(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+
+	templateName := "test-resume-placeholder-retention-backfill"
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		AutoPause:  true,
+		Timeout:    300,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, err)
+	require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+
+	sbx := GetSandbox(t, createResp.Body.SandboxID, fc)
+	delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+	require.NoError(t, fc.Update(t.Context(), sbx))
+
+	EnableWaitSim(t, controller, createResp.Body.SandboxID)
+	pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, false, false, user)
+
+	go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
+		return sbx.Spec.Paused == false
+	}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+
+	beforeResume := time.Now()
+	_, apiErr := controller.ResumeSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 600,
+	}, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, user))
+	require.Nil(t, apiErr)
+
+	after := GetSandbox(t, createResp.Body.SandboxID, fc)
+	assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+	require.NotNil(t, after.Spec.PauseTime)
+	require.NotNil(t, after.Spec.ShutdownTime)
+	assert.WithinDuration(t, beforeResume.Add(600*time.Second), after.Spec.PauseTime.Time, 5*time.Second)
+	assert.WithinDuration(t, after.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), after.Spec.ShutdownTime.Time, 5*time.Second)
 }
 
 func TestPauseSandboxErrorCode(t *testing.T) {
@@ -860,11 +960,11 @@ func TestUpdateConnectTimeout(t *testing.T) {
 			if tt.expectUpdated {
 				expectedEndAt := beforeCall.Add(time.Duration(tt.timeoutSeconds) * time.Second)
 				if tt.autoPause {
-					// For auto-pause: ShutdownTime = now + maxTimeout, PauseTime = now + timeoutSeconds
+					// For auto-pause: ShutdownTime follows the persisted paused retention from PauseTime.
 					require.NotNil(t, updatedSbx.Spec.ShutdownTime)
-					assert.WithinDuration(t, beforeCall.Add(time.Duration(controller.maxTimeout)*time.Second),
+					assert.WithinDuration(t, expectedEndAt.Add(timeoututils.DefaultReservePausedSandboxFor),
 						updatedSbx.Spec.ShutdownTime.Time, 5*time.Second,
-						"ShutdownTime should be maxTimeout from call time")
+						"ShutdownTime should be PauseTime plus default paused retention")
 					require.NotNil(t, updatedSbx.Spec.PauseTime)
 					assert.WithinDuration(t, expectedEndAt, updatedSbx.Spec.PauseTime.Time, 5*time.Second,
 						"PauseTime should be updated to requested timeout")
