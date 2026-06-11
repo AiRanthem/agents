@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -653,6 +654,107 @@ func TestCreateSandboxSkipsAccessTokenWhenInitRuntimeIsSkipped(t *testing.T) {
 
 			sbx := GetSandbox(t, resp.Body.SandboxID, fc)
 			assert.NotContains(t, sbx.Annotations, v1alpha1.AnnotationRuntimeAccessToken)
+		})
+	}
+}
+
+func TestCreateSandboxRetentionSemantics(t *testing.T) {
+	controller, client, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "test-user",
+	}
+
+	tests := []struct {
+		name             string
+		metadata         map[string]string
+		autoPause        bool
+		neverTimeout     bool
+		wantAnnotation   string
+		wantShutdownFrom func(pauseTime time.Time) time.Time
+		expectCreateErr  string
+	}{
+		{
+			name: "default retention persisted when metadata absent",
+			metadata: map[string]string{
+				models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+			},
+			autoPause:      true,
+			wantAnnotation: timeout.ReservePausedSandboxForDefaultValue,
+			wantShutdownFrom: func(pauseTime time.Time) time.Time {
+				return pauseTime.Add(timeout.DefaultReservePausedSandboxFor)
+			},
+		},
+		{
+			name: "custom retention persisted",
+			metadata: map[string]string{
+				models.ExtensionKeySkipInitRuntime:         v1alpha1.True,
+				models.ExtensionKeyReservePausedSandboxFor: "240h",
+			},
+			autoPause:      true,
+			wantAnnotation: "240h",
+			wantShutdownFrom: func(pauseTime time.Time) time.Time {
+				return pauseTime.Add(240 * time.Hour)
+			},
+		},
+		{
+			name: "never timeout persists annotation but leaves deadlines nil",
+			metadata: map[string]string{
+				models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+				models.ExtensionKeyNeverTimeout:    v1alpha1.True,
+			},
+			autoPause:      true,
+			neverTimeout:   true,
+			wantAnnotation: timeout.ReservePausedSandboxForDefaultValue,
+		},
+		{
+			name: "invalid retention metadata returns bad request",
+			metadata: map[string]string{
+				models.ExtensionKeyReservePausedSandboxFor: "0s",
+			},
+			expectCreateErr: "Bad extension param",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templateName := fmt.Sprintf("retention-semantics-%d", i)
+			if tt.expectCreateErr == "" {
+				cleanup := CreateSandboxPool(t, controller, templateName, 1)
+				defer cleanup()
+			}
+
+			createResp, apiError := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+				TemplateID: templateName,
+				AutoPause:  tt.autoPause,
+				Timeout:    300,
+				Metadata:   maps.Clone(tt.metadata),
+			}, nil, user))
+
+			if tt.expectCreateErr != "" {
+				require.NotNil(t, apiError)
+				assert.Contains(t, apiError.Message, tt.expectCreateErr)
+				return
+			}
+
+			require.Nil(t, apiError)
+			require.NotNil(t, createResp.Body)
+
+			sbx := GetSandbox(t, createResp.Body.SandboxID, client)
+			assert.Equal(t, tt.wantAnnotation, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+			assert.NotContains(t, createResp.Body.Metadata, v1alpha1.AnnotationReservePausedSandboxFor)
+			assert.NotContains(t, createResp.Body.Metadata, models.ExtensionKeyReservePausedSandboxFor)
+			if tt.neverTimeout {
+				assert.Nil(t, sbx.Spec.PauseTime)
+				assert.Nil(t, sbx.Spec.ShutdownTime)
+			} else if tt.autoPause {
+				require.NotNil(t, sbx.Spec.PauseTime)
+				require.NotNil(t, sbx.Spec.ShutdownTime)
+				assert.WithinDuration(t, tt.wantShutdownFrom(sbx.Spec.PauseTime.Time), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+			}
 		})
 	}
 }
@@ -1381,8 +1483,8 @@ func TestAutoPause(t *testing.T) {
 					assert.WithinDuration(t, sbx.Spec.PauseTime.Time, timeoutTime, 5*time.Second)
 				}
 				assert.NotNil(t, sbx.Spec.ShutdownTime)
-				if sbx.Spec.ShutdownTime != nil {
-					assert.WithinDuration(t, sbx.Spec.ShutdownTime.Time, maxTimeoutTime, 5*time.Second)
+				if sbx.Spec.PauseTime != nil && sbx.Spec.ShutdownTime != nil {
+					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 				}
 			},
 			pauseChecker: func(t *testing.T, sbx *v1alpha1.Sandbox) {
