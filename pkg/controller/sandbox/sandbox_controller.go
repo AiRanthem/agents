@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,6 +46,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 func init() {
@@ -88,6 +90,7 @@ func Add(mgr manager.Manager, metricsCleanup Enqueuer) error {
 		}),
 		rateLimiter:    rateLimiter,
 		metricsCleanup: metricsCleanup,
+		recorder:       recorder,
 	}).SetupWithManager(mgr)
 	if err != nil {
 		return err
@@ -104,6 +107,7 @@ type SandboxReconciler struct {
 	rateLimiter       *core.RateLimiter
 	checkpointControl *core.CheckpointControl
 	metricsCleanup    Enqueuer
+	recorder          record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
@@ -243,6 +247,22 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 			// silently winning a last-writer race.
 			patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
 			modified.Spec.Paused = true
+			if raw, ok := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok && box.Spec.ShutdownTime != nil {
+				retention, parseErr := timeoututils.ParseReservePausedSandboxFor(raw)
+				if parseErr != nil {
+					klog.ErrorS(parseErr, "invalid reserve paused sandbox annotation, skip shutdown recalculation",
+						"sandbox", klog.KObj(box),
+						"annotation", agentsv1alpha1.AnnotationReservePausedSandboxFor,
+						"value", raw)
+					if r.recorder != nil {
+						r.recorder.Eventf(box, corev1.EventTypeWarning, "InvalidReservePausedSandboxFor",
+							"Invalid %s=%q: %v", agentsv1alpha1.AnnotationReservePausedSandboxFor, raw, parseErr)
+					}
+				} else {
+					shutdownTime := metav1.NewTime(timeoututils.PausedShutdownTime(now.Time, retention))
+					modified.Spec.ShutdownTime = &shutdownTime
+				}
+			}
 			if err := r.Patch(ctx, modified, patch); err != nil {
 				if errors.IsConflict(err) {
 					return ctrl.Result{Requeue: true}, nil

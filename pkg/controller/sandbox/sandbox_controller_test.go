@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -45,6 +47,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 func TestAdd_FeatureGateDisabled(t *testing.T) {
@@ -1195,6 +1198,200 @@ func TestSandboxReconciler_AutoPauseBranch(t *testing.T) {
 				if tt.sandbox.Spec.ShutdownTime != nil &&
 					(updated.Spec.ShutdownTime == nil || !updated.Spec.ShutdownTime.Time.Equal(tt.sandbox.Spec.ShutdownTime.Time)) {
 					t.Fatalf("expected Spec.ShutdownTime unchanged at %v, got %v", tt.sandbox.Spec.ShutdownTime, updated.Spec.ShutdownTime)
+				}
+			}
+		})
+	}
+}
+
+func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = agentsv1alpha1.AddToScheme(scheme)
+
+	now := time.Now().Add(-time.Minute)
+	tests := []struct {
+		name                 string
+		annotationValue      *string
+		initialShutdown      *metav1.Time
+		injectPatchConflict  bool
+		expectPaused         bool
+		expectRequeue        bool
+		expectShutdownChange bool
+		expectEvent          string
+	}{
+		{
+			name:                 "default annotation recalculates shutdown",
+			annotationValue:      ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
+			expectPaused:         true,
+			expectShutdownChange: true,
+		},
+		{
+			name:                 "custom annotation recalculates shutdown",
+			annotationValue:      ptr.To("30m"),
+			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
+			expectPaused:         true,
+			expectShutdownChange: true,
+		},
+		{
+			name:                 "no annotation keeps existing CRD behavior",
+			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
+			expectPaused:         true,
+			expectShutdownChange: false,
+		},
+		{
+			name:                 "annotation with nil shutdown preserves never-timeout",
+			annotationValue:      ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			initialShutdown:      nil,
+			expectPaused:         true,
+			expectShutdownChange: false,
+		},
+		{
+			name:                 "invalid annotation patches paused and records warning",
+			annotationValue:      ptr.To("forever"),
+			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
+			expectPaused:         true,
+			expectShutdownChange: false,
+			expectEvent:          "InvalidReservePausedSandboxFor",
+		},
+		{
+			name:                "patch conflict requeues and leaves spec unchanged",
+			annotationValue:     ptr.To("30m"),
+			initialShutdown:     ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
+			injectPatchConflict: true,
+			expectPaused:        false,
+			expectRequeue:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			annotations := map[string]string{}
+			if tt.annotationValue != nil {
+				annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.annotationValue
+			}
+			sandbox := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            "auto-pause-retention",
+					Namespace:       "default",
+					Finalizers:      []string{core.SandboxFinalizer},
+					ResourceVersion: "42",
+					Annotations:     annotations,
+				},
+				Spec: agentsv1alpha1.SandboxSpec{
+					Paused:       false,
+					PauseTime:    &metav1.Time{Time: now},
+					ShutdownTime: tt.initialShutdown,
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "test", Image: "nginx"}}},
+						},
+					},
+				},
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue},
+					},
+				},
+			}
+
+			autoPausePatches := 0
+			optimisticLockSeen := false
+			var autoPausePatchData []byte
+			fakeRecorder := record.NewFakeRecorder(100)
+			cli := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&agentsv1alpha1.Sandbox{}).
+				WithObjects(sandbox).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						if _, ok := obj.(*agentsv1alpha1.Sandbox); ok {
+							patchData, err := patch.Data(obj)
+							require.NoError(t, err, "failed to render sandbox patch")
+							if bytes.Contains(patchData, []byte(`"spec":`)) && bytes.Contains(patchData, []byte(`"paused":true`)) {
+								if bytes.Contains(patchData, []byte(`"resourceVersion"`)) {
+									optimisticLockSeen = true
+								}
+								autoPausePatchData = append([]byte(nil), patchData...)
+								autoPausePatches++
+								if tt.injectPatchConflict {
+									return apierrors.NewConflict(schema.GroupResource{Group: agentsv1alpha1.GroupVersion.Group, Resource: "sandboxes"}, sandbox.Name, fmt.Errorf("simulated conflict"))
+								}
+							}
+						}
+						return c.Patch(ctx, obj, patch, opts...)
+					},
+				}).
+				Build()
+			rl := core.NewRateLimiter()
+			reconciler := &SandboxReconciler{
+				Client: cli,
+				Scheme: scheme,
+				controls: core.NewSandboxControl(core.SandboxControlArgs{
+					Client:      cli,
+					Recorder:    fakeRecorder,
+					RateLimiter: rl,
+					PodControl:  core.NewPodControl(cli, fakeRecorder, core.GeneratePodFromSandbox),
+				}),
+				checkpointControl: core.NewCheckpointControl(cli, fakeRecorder),
+				rateLimiter:       rl,
+				recorder:          fakeRecorder,
+			}
+
+			req := ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: sandbox.Name, Namespace: sandbox.Namespace},
+			}
+			result, err := reconciler.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.expectRequeue, result.Requeue)
+			require.Equal(t, 1, autoPausePatches, "expected one auto-pause patch")
+			assert.True(t, optimisticLockSeen, "expected auto-pause patch to include optimistic-lock resourceVersion")
+			if tt.expectShutdownChange {
+				assert.Contains(t, string(autoPausePatchData), "shutdownTime")
+			} else if !tt.injectPatchConflict {
+				assert.NotContains(t, string(autoPausePatchData), "shutdownTime")
+			}
+
+			updated := &agentsv1alpha1.Sandbox{}
+			require.NoError(t, cli.Get(context.TODO(), req.NamespacedName, updated))
+			assert.Equal(t, tt.expectPaused, updated.Spec.Paused)
+			if tt.annotationValue != nil {
+				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+			}
+
+			if tt.injectPatchConflict {
+				assert.False(t, updated.Spec.Paused)
+				if tt.initialShutdown == nil {
+					assert.Nil(t, updated.Spec.ShutdownTime)
+				} else {
+					require.NotNil(t, updated.Spec.ShutdownTime)
+					assert.True(t, timeout.NormalizeTime(updated.Spec.ShutdownTime.Time).Equal(timeout.NormalizeTime(tt.initialShutdown.Time)))
+				}
+				return
+			}
+
+			if tt.expectShutdownChange {
+				require.NotNil(t, updated.Spec.ShutdownTime)
+				retention := timeout.DefaultReservePausedSandboxFor
+				if tt.annotationValue != nil && *tt.annotationValue == "30m" {
+					retention = 30 * time.Minute
+				}
+				assert.WithinDuration(t, time.Now().Add(retention), updated.Spec.ShutdownTime.Time, 5*time.Second)
+			} else if tt.initialShutdown == nil {
+				assert.Nil(t, updated.Spec.ShutdownTime)
+			} else {
+				require.NotNil(t, updated.Spec.ShutdownTime)
+				assert.True(t, timeout.NormalizeTime(updated.Spec.ShutdownTime.Time).Equal(timeout.NormalizeTime(tt.initialShutdown.Time)))
+			}
+
+			if tt.expectEvent != "" {
+				select {
+				case event := <-fakeRecorder.Events:
+					assert.Contains(t, event, tt.expectEvent)
+				case <-time.After(time.Second):
+					t.Fatalf("expected warning event %q", tt.expectEvent)
 				}
 			}
 		})
@@ -2869,7 +3066,7 @@ func TestReconcile_SandboxNotFoundCleanup(t *testing.T) {
 		}),
 		checkpointControl: core.NewCheckpointControl(fakeClient, fakeRecorder),
 		rateLimiter:       rl,
-		metricsCleanup: &fakeEnqueuer{},
+		metricsCleanup:    &fakeEnqueuer{},
 	}
 
 	// Set up expectations for a sandbox that will not be found
