@@ -44,9 +44,14 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 	if apiErr != nil {
 		return web.ApiResponse[struct{}]{}, apiErr
 	}
-	timeoutOptions := sc.buildPauseTimeoutOptions(sbx, time.Now())
+	retention, reservePausedFor, apiErr := resolveManualPauseRetention(ctx, sbx, r.Header.Get(models.ExtensionHeaderReservePausedSandboxFor))
+	if apiErr != nil {
+		return web.ApiResponse[struct{}]{}, apiErr
+	}
+	timeoutOptions := sc.buildPauseTimeoutOptions(sbx, time.Now(), retention)
 	if err := sc.manager.PauseSandbox(ctx, sbx, infra.PauseOptions{
-		Timeout: &timeoutOptions,
+		Timeout:          &timeoutOptions,
+		ReservePausedFor: reservePausedFor,
 	}); err != nil {
 		return web.ApiResponse[struct{}]{}, &web.ApiError{
 			Code:    pauseSandboxErrorCode(err),
@@ -84,12 +89,38 @@ func resumeSandboxErrorCode(err error) int {
 	return http.StatusInternalServerError
 }
 
-func (sc *Controller) buildPauseTimeoutOptions(sbx infra.Sandbox, now time.Time) timeout.Options {
+func resolveManualPauseRetention(ctx context.Context, sbx infra.Sandbox, headerValue string) (time.Duration, *string, *web.ApiError) {
+	log := klog.FromContext(ctx).WithValues("sandboxID", sbx.GetSandboxID())
+	if headerValue != "" {
+		retention, err := timeout.ParseReservePausedSandboxFor(headerValue)
+		if err != nil {
+			return 0, nil, &web.ApiError{
+				Code:    http.StatusBadRequest,
+				Message: fmt.Sprintf("Bad extension param: %s", err.Error()),
+			}
+		}
+		return retention, &headerValue, nil
+	}
+
+	retention, managed, err := timeout.ResolveReservePausedSandboxForAnnotation(sbx.GetAnnotations())
+	if err != nil {
+		log.Error(err, "invalid persisted reserve paused sandbox annotation, using default",
+			"annotation", v1alpha1.AnnotationReservePausedSandboxFor,
+			"value", sbx.GetAnnotations()[v1alpha1.AnnotationReservePausedSandboxFor])
+		return timeout.DefaultReservePausedSandboxFor, nil, nil
+	}
+	if managed {
+		return retention, nil, nil
+	}
+	value := timeout.ReservePausedSandboxForDefaultValue
+	return timeout.DefaultReservePausedSandboxFor, &value, nil
+}
+
+func (sc *Controller) buildPauseTimeoutOptions(sbx infra.Sandbox, now time.Time, pausedRetention time.Duration) timeout.Options {
 	opts := sbx.GetTimeout()
 	// Only set timeout if the sandbox has a timeout configured (not never-timeout)
 	if !opts.ShutdownTime.IsZero() {
-		// Paused sandboxes are kept indefinitely — there is no automatic deletion or time-to-live limit
-		endAt := now.AddDate(1000, 0, 0)
+		endAt := timeout.PausedShutdownTime(now, pausedRetention)
 		opts.ShutdownTime = endAt
 		if !opts.PauseTime.IsZero() {
 			opts.PauseTime = endAt

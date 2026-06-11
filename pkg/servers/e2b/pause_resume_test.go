@@ -89,8 +89,168 @@ func TestPauseSandbox(t *testing.T) {
 	assert.Equal(t, models.SandboxStatePaused, describeResp.Body.State)
 	endAt, parseErr := time.Parse(time.RFC3339, describeResp.Body.EndAt)
 	assert.NoError(t, parseErr)
-	expectEndAt := start.AddDate(1000, 0, 0)
+	expectEndAt := start.Add(timeoututils.DefaultReservePausedSandboxFor)
 	assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second, "expect end at: %s, but got %s", expectEndAt, endAt)
+}
+
+func TestPauseSandboxManualRetention(t *testing.T) {
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+	tests := []struct {
+		name              string
+		headerValue       string
+		initialAnnotation *string
+		neverTimeout      bool
+		alreadyPaused     bool
+		expectStatus      int
+		expectMessage     string
+		expectAnnotation  string
+		expectDirtyValue  bool
+		expectShutdown    func(now time.Time) time.Time
+	}{
+		{
+			name:             "no header no annotation uses default and persists default",
+			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+			expectShutdown: func(now time.Time) time.Time {
+				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+			},
+		},
+		{
+			name:             "header default uses default and persists default",
+			headerValue:      timeoututils.ReservePausedSandboxForDefaultValue,
+			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+			expectShutdown: func(now time.Time) time.Time {
+				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+			},
+		},
+		{
+			name:             "header duration uses duration and persists it",
+			headerValue:      "1h",
+			expectAnnotation: "1h",
+			expectShutdown: func(now time.Time) time.Time {
+				return now.Add(time.Hour)
+			},
+		},
+		{
+			name:          "invalid header returns bad request",
+			headerValue:   "0s",
+			expectStatus:  http.StatusBadRequest,
+			expectMessage: "Bad extension param",
+		},
+		{
+			name:              "invalid annotation fails open and preserves dirty annotation",
+			initialAnnotation: stringPtr("forever"),
+			expectAnnotation:  "forever",
+			expectDirtyValue:  true,
+			expectShutdown: func(now time.Time) time.Time {
+				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+			},
+		},
+		{
+			name:              "valid header overrides invalid annotation",
+			headerValue:       "30m",
+			initialAnnotation: stringPtr("forever"),
+			expectAnnotation:  "30m",
+			expectShutdown: func(now time.Time) time.Time {
+				return now.Add(30 * time.Minute)
+			},
+		},
+		{
+			name:             "never timeout pause does not set deadline",
+			neverTimeout:     true,
+			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+		},
+		{
+			name:              "already paused keeps first writer annotation",
+			headerValue:       "1h",
+			initialAnnotation: stringPtr(timeoututils.ReservePausedSandboxForDefaultValue),
+			alreadyPaused:     true,
+			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller, fc, teardown := Setup(t)
+			defer teardown()
+			templateName := "test-template-manual-retention"
+			cleanup := CreateSandboxPool(t, controller, templateName, 1)
+			defer cleanup()
+
+			request := models.NewSandboxRequest{
+				TemplateID: templateName,
+				Timeout:    600,
+				Metadata: map[string]string{
+					models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+				},
+			}
+			if tt.neverTimeout {
+				request.Metadata[models.ExtensionKeyNeverTimeout] = agentsv1alpha1.True
+			}
+			createResp, err := controller.CreateSandbox(NewRequest(t, nil, request, nil, user))
+			require.Nil(t, err)
+			require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+			sandboxID := createResp.Body.SandboxID
+
+			sbx := GetSandbox(t, sandboxID, fc)
+			if sbx.Annotations == nil {
+				sbx.Annotations = map[string]string{}
+			}
+			if tt.initialAnnotation != nil {
+				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.initialAnnotation
+			} else {
+				delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+			}
+			if tt.alreadyPaused {
+				sbx.Spec.Paused = true
+			}
+			require.NoError(t, fc.Update(t.Context(), sbx))
+
+			EnableWaitSim(t, controller, sandboxID)
+			if tt.alreadyPaused {
+				UpdateSandboxWhen(t, fc, sandboxID, Immediately,
+					DoSetSandboxStatus(agentsv1alpha1.SandboxPaused, metav1.ConditionTrue, metav1.ConditionFalse))
+			} else if tt.expectStatus == 0 {
+				go UpdateSandboxWhen(t, fc, sandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
+					return sbx.Spec.Paused == true
+				}, DoSetSandboxStatus(agentsv1alpha1.SandboxPaused, metav1.ConditionTrue, metav1.ConditionFalse))
+			}
+
+			req := NewRequest(t, nil, nil, map[string]string{"sandboxID": sandboxID}, user)
+			if tt.headerValue != "" {
+				req.Header.Set(models.ExtensionHeaderReservePausedSandboxFor, tt.headerValue)
+			}
+			beforePause := time.Now()
+			_, apiErr := controller.PauseSandbox(req)
+			if tt.expectStatus != 0 {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, tt.expectStatus, apiErr.Code)
+				assert.Contains(t, apiErr.Message, tt.expectMessage)
+				return
+			}
+			require.Nil(t, apiErr)
+
+			updated := GetSandbox(t, sandboxID, fc)
+			assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+			if tt.expectDirtyValue {
+				assert.Equal(t, *tt.initialAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+			}
+			if tt.neverTimeout {
+				assert.Nil(t, updated.Spec.PauseTime)
+				assert.Nil(t, updated.Spec.ShutdownTime)
+			} else if tt.expectShutdown != nil && !tt.alreadyPaused {
+				require.NotNil(t, updated.Spec.ShutdownTime)
+				assert.WithinDuration(t, tt.expectShutdown(beforePause), updated.Spec.ShutdownTime.Time, 5*time.Second)
+			}
+		})
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func TestPauseSandboxConflict(t *testing.T) {
