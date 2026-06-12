@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,9 +43,11 @@ import (
 	"github.com/openkruise/agents/pkg/controller/sandbox/core"
 	"github.com/openkruise/agents/pkg/discovery"
 	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/pausedretention"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 func init() {
@@ -88,6 +91,7 @@ func Add(mgr manager.Manager, metricsCleanup Enqueuer) error {
 		}),
 		rateLimiter:    rateLimiter,
 		metricsCleanup: metricsCleanup,
+		recorder:       recorder,
 	}).SetupWithManager(mgr)
 	if err != nil {
 		return err
@@ -104,6 +108,7 @@ type SandboxReconciler struct {
 	rateLimiter       *core.RateLimiter
 	checkpointControl *core.CheckpointControl
 	metricsCleanup    Enqueuer
+	recorder          record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
@@ -225,37 +230,17 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		return reconcile.Result{}, err
 	}
 
-	// Check ShutdownTime and PauseTime
+	// Handle timeout-based lifecycle: pause and shutdown.
 	now := metav1.Now()
 	var requeueAfter time.Duration
-	if box.Spec.ShutdownTime != nil && box.DeletionTimestamp == nil {
-		if box.Spec.ShutdownTime.Before(&now) {
-			klog.InfoS("sandbox shutdown time reached, will be deleted", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
-			return ctrl.Result{}, r.Delete(ctx, box)
-		}
-		requeueAfter = box.Spec.ShutdownTime.Sub(now.Time)
+
+	if result, done, shutdownErr := r.handleShutdownTimeout(ctx, box, now); done {
+		return result, shutdownErr
 	}
-	if box.Spec.PauseTime != nil && !box.Spec.Paused {
-		if pauseTimeReached(box.Spec.PauseTime, now) {
-			klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
-			modified := box.DeepCopy()
-			// Optimistic-lock so concurrent writers surface as 409 instead of
-			// silently winning a last-writer race.
-			patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
-			modified.Spec.Paused = true
-			if err := r.Patch(ctx, modified, patch); err != nil {
-				if errors.IsConflict(err) {
-					return ctrl.Result{Requeue: true}, nil
-				}
-				return ctrl.Result{}, err
-			}
-			return ctrl.Result{}, nil
-		}
-		pauseDelta := box.Spec.PauseTime.Sub(now.Time)
-		if pauseDelta > 0 && (requeueAfter == 0 || pauseDelta < requeueAfter) {
-			requeueAfter = pauseDelta
-		}
+	if result, done, pauseErr := r.handlePauseTimeout(ctx, box, now); done {
+		return result, pauseErr
 	}
+	requeueAfter = r.calcTimeoutRequeue(box, now)
 
 	// calculate sandbox status
 	var shouldRequeue bool
@@ -518,4 +503,108 @@ func (r *SandboxReconciler) ensureVolumeClaimTemplates(ctx context.Context, box 
 	}
 
 	return nil
+}
+
+// handlePauseTimeout triggers auto-pause when PauseTime has been reached.
+// It returns (result, true, err) when the caller should return immediately,
+// or (_, false, nil) when reconciliation should continue.
+func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv1alpha1.Sandbox, now metav1.Time) (ctrl.Result, bool, error) {
+	if box.Spec.PauseTime == nil || box.Spec.Paused {
+		return ctrl.Result{}, false, nil
+	}
+	if !pauseTimeReached(box.Spec.PauseTime, now) {
+		return ctrl.Result{}, false, nil
+	}
+
+	klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
+	modified := box.DeepCopy()
+	// Optimistic-lock so concurrent writers surface as 409 instead of
+	// silently winning a last-writer race.
+	patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
+	modified.Spec.Paused = true
+
+	// If the sandbox has a paused-retention policy, extend ShutdownTime so the
+	// sandbox is preserved for the configured duration after being paused.
+	if raw, ok := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok {
+		retention := r.resolveRetentionOrDefault(box, raw)
+		if box.Spec.ShutdownTime != nil {
+			newShutdown := metav1.NewTime(pausedretention.PausedShutdownTime(now.Time, retention))
+			modified.Spec.ShutdownTime = &newShutdown
+			// Clear PauseTime to the same value so it won't re-trigger on the next reconcile.
+			modified.Spec.PauseTime = &newShutdown
+		}
+	}
+
+	if err := r.Patch(ctx, modified, patch); err != nil {
+		if errors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, true, nil
+		}
+		return ctrl.Result{}, true, err
+	}
+	return ctrl.Result{}, true, nil
+}
+
+// handleShutdownTimeout deletes the sandbox when ShutdownTime has been reached.
+// When a paused-retention annotation is present, the shutdown is deferred until
+// after pause has had a chance to execute (pause extends ShutdownTime).
+func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agentsv1alpha1.Sandbox, now metav1.Time) (ctrl.Result, bool, error) {
+	if box.Spec.ShutdownTime == nil || !box.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, false, nil
+	}
+	if !box.Spec.ShutdownTime.Before(&now) {
+		return ctrl.Result{}, false, nil
+	}
+
+	// When the paused-retention annotation is present, the sandbox has not
+	// yet paused, AND PauseTime has already been reached, skip deletion —
+	// handlePauseTimeout will fire in this same reconcile, pause the sandbox,
+	// and extend ShutdownTime.
+	// We only skip when pauseTimeReached so that handlePauseTimeout can
+	// actually act in the same loop. If PauseTime is nil or still in the
+	// future, we must proceed with deletion.
+	if _, hasRetention := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; hasRetention &&
+		!box.Spec.Paused &&
+		pauseTimeReached(box.Spec.PauseTime, now) {
+		return ctrl.Result{}, false, nil
+	}
+
+	klog.InfoS("sandbox shutdown time reached, deleting", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
+	return ctrl.Result{}, true, r.Delete(ctx, box)
+}
+
+// calcTimeoutRequeue returns the nearest requeue duration based on pending
+// PauseTime and ShutdownTime that have not yet been reached.
+func (r *SandboxReconciler) calcTimeoutRequeue(box *agentsv1alpha1.Sandbox, now metav1.Time) time.Duration {
+	var requeueAfter time.Duration
+	if box.Spec.PauseTime != nil && !box.Spec.Paused {
+		if delta := box.Spec.PauseTime.Sub(now.Time); delta > 0 {
+			requeueAfter = delta
+		}
+	}
+	if box.Spec.ShutdownTime != nil && box.DeletionTimestamp.IsZero() {
+		if delta := box.Spec.ShutdownTime.Sub(now.Time); delta > 0 && (requeueAfter == 0 || delta < requeueAfter) {
+			requeueAfter = delta
+		}
+	}
+	return requeueAfter
+}
+
+// resolveRetentionOrDefault parses the paused-retention annotation value.
+// On parse failure, it logs a warning, emits an event, and returns the default
+// retention duration without mutating the annotation.
+func (r *SandboxReconciler) resolveRetentionOrDefault(box *agentsv1alpha1.Sandbox, raw string) time.Duration {
+	retention, err := pausedretention.ParseReservePausedSandboxFor(raw)
+	if err == nil {
+		return retention
+	}
+
+	klog.ErrorS(err, "invalid reserve paused sandbox annotation, using default",
+		"sandbox", klog.KObj(box),
+		"annotation", agentsv1alpha1.AnnotationReservePausedSandboxFor,
+		"value", raw)
+	if r.recorder != nil {
+		r.recorder.Eventf(box, corev1.EventTypeWarning, "InvalidReservePausedSandboxFor",
+			"Invalid %s=%q: %v", agentsv1alpha1.AnnotationReservePausedSandboxFor, raw, err)
+	}
+	return timeoututils.DefaultReservePausedSandboxFor
 }

@@ -48,6 +48,7 @@ import (
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/cache/controllers"
+	"github.com/openkruise/agents/pkg/pausedretention"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
@@ -182,7 +183,10 @@ func TestSandbox_SaveTimeoutWithPolicy(t *testing.T) {
 				return err == nil
 			}, time.Second, 10*time.Millisecond)
 
-			result, err := sandbox.SaveTimeoutWithPolicy(t.Context(), tt.requested, tt.policy)
+			result, err := sandbox.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+				Timeout: tt.requested,
+				Policy:  tt.policy,
+			})
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
@@ -195,6 +199,151 @@ func TestSandbox_SaveTimeoutWithPolicy(t *testing.T) {
 			var updated v1alpha1.Sandbox
 			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}, &updated))
 			assert.True(t, timeout.Equal(tt.expectTimeout, timeout.GetTimeoutFromSandbox(&updated)))
+		})
+	}
+}
+
+func TestSandbox_SaveTimeoutWithPolicyReservePausedFor(t *testing.T) {
+	base := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
+	defaultValue := timeout.ReservePausedSandboxForDefaultValue
+	tests := []struct {
+		name           string
+		current        timeout.Options
+		requested      timeout.Options
+		policy         timeout.UpdatePolicy
+		initialValue   string
+		reserveValue   *string
+		expectUpdated  bool
+		expectValue    string
+		expectValueSet bool
+	}{
+		{
+			name:           "always accepted writes annotation",
+			current:        timeout.Options{ShutdownTime: base.Add(time.Hour)},
+			requested:      timeout.Options{ShutdownTime: base.Add(2 * time.Hour)},
+			policy:         timeout.UpdatePolicyAlways,
+			reserveValue:   &defaultValue,
+			expectUpdated:  true,
+			expectValue:    defaultValue,
+			expectValueSet: true,
+		},
+		{
+			name:           "extend only skip does not backfill annotation",
+			current:        timeout.Options{PauseTime: base.Add(2 * time.Hour), ShutdownTime: base.Add(3 * time.Hour)},
+			requested:      timeout.Options{PauseTime: base.Add(time.Hour), ShutdownTime: base.Add(2 * time.Hour)},
+			policy:         timeout.UpdatePolicyExtendOnly,
+			reserveValue:   &defaultValue,
+			expectUpdated:  false,
+			expectValueSet: false,
+		},
+		{
+			name:           "always skip on equal timeout does not backfill annotation",
+			current:        timeout.Options{ShutdownTime: base.Add(time.Hour)},
+			requested:      timeout.Options{ShutdownTime: base.Add(time.Hour)},
+			policy:         timeout.UpdatePolicyAlways,
+			reserveValue:   &defaultValue,
+			expectUpdated:  false,
+			expectValueSet: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			infraInstance, fc := NewTestInfra(t)
+			sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+			setTimeout(sbx, tt.current)
+			if tt.initialValue != "" {
+				sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor] = tt.initialValue
+			}
+			CreateSandboxWithStatus(t, fc, sbx)
+
+			var sandbox infra.Sandbox
+			require.Eventually(t, func() bool {
+				var err error
+				sandbox, err = infraInstance.GetClaimedSandbox(t.Context(), infra.GetClaimedSandboxOptions{
+					SandboxID: utils.GetSandboxID(sbx),
+					Namespace: sbx.Namespace,
+				})
+				return err == nil
+			}, time.Second, 10*time.Millisecond)
+
+			result, err := sandbox.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+				Timeout:          tt.requested,
+				Policy:           tt.policy,
+				ReservePausedFor: tt.reserveValue,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectUpdated, result.Updated)
+
+			var updated v1alpha1.Sandbox
+			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}, &updated))
+			gotValue, gotSet := updated.Annotations[v1alpha1.AnnotationReservePausedSandboxFor]
+			assert.Equal(t, tt.expectValueSet, gotSet)
+			if tt.expectValueSet {
+				assert.Equal(t, tt.expectValue, gotValue)
+			}
+		})
+	}
+}
+
+func TestSandbox_SaveTimeoutWithPolicyTimeoutResolverUsesConflictFreshObject(t *testing.T) {
+	tests := []struct {
+		name           string
+		freshValue     string
+		freshRetention time.Duration
+	}{
+		{name: "resolver uses fresh object after conflict", freshValue: "30m", freshRetention: 30 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC)
+			requestedTimeout := time.Hour
+			staleRetention := timeout.DefaultReservePausedSandboxFor
+
+			sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+			setTimeout(sbx, pausedretention.BuildAutoPauseOptions(base, requestedTimeout, staleRetention))
+			key := types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}
+
+			var returnedConflict atomic.Bool
+			provider, fc := newRetryUpdateTestCache(t, sbx, sbx, func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if returnedConflict.CompareAndSwap(false, true) {
+					latest := &v1alpha1.Sandbox{}
+					require.NoError(t, c.Get(ctx, key, latest))
+					if latest.Annotations == nil {
+						latest.Annotations = map[string]string{}
+					}
+					latest.Annotations[v1alpha1.AnnotationReservePausedSandboxFor] = tt.freshValue
+					require.NoError(t, c.Update(ctx, latest))
+					return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "sandboxes"}, sbx.Name, errors.New("simulated conflict"))
+				}
+				return c.Update(ctx, obj, opts...)
+			})
+
+			sandbox := AsSandbox(sbx.DeepCopy(), provider)
+			var resolverSawFresh atomic.Bool
+			result, err := sandbox.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+				Policy: timeout.UpdatePolicyAlways,
+				TimeoutResolver: func(fresh infra.Sandbox) (timeout.Options, *string, error) {
+					retention, managed, resolveErr := pausedretention.ResolveReservePausedSandboxForAnnotation(fresh.GetAnnotations())
+					if resolveErr != nil {
+						return timeout.Options{}, nil, resolveErr
+					}
+					if managed && retention == tt.freshRetention {
+						resolverSawFresh.Store(true)
+					}
+					return pausedretention.BuildAutoPauseOptions(base, requestedTimeout, retention), nil, nil
+				},
+			})
+			require.NoError(t, err)
+			assert.True(t, result.Updated)
+			assert.True(t, resolverSawFresh.Load(), "timeout resolver must run against the fresh retry object")
+
+			final := &v1alpha1.Sandbox{}
+			require.NoError(t, fc.Get(t.Context(), key, final))
+			assert.Equal(t, tt.freshValue, final.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+			require.NotNil(t, final.Spec.PauseTime)
+			require.NotNil(t, final.Spec.ShutdownTime)
+			assert.WithinDuration(t, final.Spec.PauseTime.Time.Add(tt.freshRetention), final.Spec.ShutdownTime.Time, time.Second)
 		})
 	}
 }
@@ -284,11 +433,17 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 
 	results := make(chan saveResult, 2)
 	go func() {
-		result, saveErr := sandboxA.SaveTimeoutWithPolicy(t.Context(), requested, timeout.UpdatePolicyAlways)
+		result, saveErr := sandboxA.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+			Timeout: requested,
+			Policy:  timeout.UpdatePolicyAlways,
+		})
 		results <- saveResult{result: result, err: saveErr}
 	}()
 	go func() {
-		result, saveErr := sandboxB.SaveTimeoutWithPolicy(t.Context(), requested, timeout.UpdatePolicyAlways)
+		result, saveErr := sandboxB.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+			Timeout: requested,
+			Policy:  timeout.UpdatePolicyAlways,
+		})
 		results <- saveResult{result: result, err: saveErr}
 	}()
 
