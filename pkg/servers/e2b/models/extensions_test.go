@@ -462,11 +462,26 @@ func TestParseExtensions(t *testing.T) {
 				}
 			} else {
 				require.NoError(t, err)
-				assert.EqualValues(t, tt.expectExtension, req.Extensions)
+				assert.EqualValues(t, withExpectedReservePausedSandboxRetention(t, tt.expectExtension), req.Extensions)
 				assert.Empty(t, req.Metadata)
 			}
 		})
 	}
+}
+
+func withExpectedReservePausedSandboxRetention(t *testing.T, extension NewSandboxRequestExtension) NewSandboxRequestExtension {
+	t.Helper()
+	if extension.ReservePausedSandboxFor == "" || extension.ReservePausedSandboxRetention != 0 {
+		return extension
+	}
+	if extension.ReservePausedSandboxFor == timeout.ReservePausedSandboxForDefaultValue {
+		extension.ReservePausedSandboxRetention = timeout.DefaultReservePausedSandboxFor
+		return extension
+	}
+	retention, err := time.ParseDuration(extension.ReservePausedSandboxFor)
+	require.NoError(t, err)
+	extension.ReservePausedSandboxRetention = retention
+	return extension
 }
 
 func TestParseAndRemoveQuantity(t *testing.T) {

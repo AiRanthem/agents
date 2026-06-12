@@ -220,13 +220,13 @@ func TestSetTimeout(t *testing.T) {
 			},
 		},
 		{
-			name:              "set-timeout auto-pause invalid annotation fails open and preserves dirty value",
+			name:              "set-timeout auto-pause invalid annotation fails open and backfills default",
 			phase:             v1alpha1.SandboxRunning,
 			autoPause:         true,
 			timeout:           600,
 			initialAnnotation: "forever",
 			checker: func(t *testing.T, sbx *v1alpha1.Sandbox, timeout time.Duration) {
-				assert.Equal(t, "forever", sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+				assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
 				require.NotNil(t, sbx.Spec.PauseTime)
 				require.NotNil(t, sbx.Spec.ShutdownTime)
 				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)

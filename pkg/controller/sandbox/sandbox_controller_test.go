@@ -1213,6 +1213,7 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 	tests := []struct {
 		name                 string
 		annotationValue      *string
+		expectAnnotation     string
 		initialShutdown      *metav1.Time
 		injectPatchConflict  bool
 		expectPaused         bool
@@ -1235,6 +1236,13 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			expectShutdownChange: true,
 		},
 		{
+			name:                 "expired shutdown still auto-pauses before deletion",
+			annotationValue:      ptr.To("30m"),
+			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(-time.Second))),
+			expectPaused:         true,
+			expectShutdownChange: true,
+		},
+		{
 			name:                 "no annotation keeps existing CRD behavior",
 			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
 			expectPaused:         true,
@@ -1248,11 +1256,12 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			expectShutdownChange: false,
 		},
 		{
-			name:                 "invalid annotation patches paused and records warning",
+			name:                 "invalid annotation patches paused, backfills default, and records warning",
 			annotationValue:      ptr.To("forever"),
+			expectAnnotation:     timeout.ReservePausedSandboxForDefaultValue,
 			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
 			expectPaused:         true,
-			expectShutdownChange: false,
+			expectShutdownChange: true,
 			expectEvent:          "InvalidReservePausedSandboxFor",
 		},
 		{
@@ -1356,7 +1365,9 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			updated := &agentsv1alpha1.Sandbox{}
 			require.NoError(t, cli.Get(context.TODO(), req.NamespacedName, updated))
 			assert.Equal(t, tt.expectPaused, updated.Spec.Paused)
-			if tt.annotationValue != nil {
+			if tt.expectAnnotation != "" {
+				assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+			} else if tt.annotationValue != nil {
 				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
 			}
 

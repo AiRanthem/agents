@@ -105,7 +105,7 @@ func (r *NewSandboxRequest) parseCommonExtensions() error {
 	} else if r.Metadata[ExtensionKeyReserveFailedSandbox] == v1alpha1.True {
 		r.Extensions.ReserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
 	}
-	r.Extensions.ReservePausedSandboxFor, err = r.parseAndRemoveReservePausedSandboxRetention()
+	r.Extensions.ReservePausedSandboxFor, r.Extensions.ReservePausedSandboxRetention, err = r.parseAndRemoveReservePausedSandboxRetention()
 	if err != nil {
 		return err
 	}
@@ -311,16 +311,17 @@ func (r *NewSandboxRequest) parseAndRemoveReserveFailedSandboxFor() (*time.Durat
 	return &duration, true, nil
 }
 
-func (r *NewSandboxRequest) parseAndRemoveReservePausedSandboxRetention() (string, error) {
+func (r *NewSandboxRequest) parseAndRemoveReservePausedSandboxRetention() (string, time.Duration, error) {
 	raw, ok := r.Metadata[ExtensionKeyReservePausedSandboxFor]
 	if !ok {
-		return timeout.ReservePausedSandboxForDefaultValue, nil
+		return timeout.ReservePausedSandboxForDefaultValue, timeout.DefaultReservePausedSandboxFor, nil
 	}
 	defer delete(r.Metadata, ExtensionKeyReservePausedSandboxFor)
-	if _, err := timeout.ParseReservePausedSandboxFor(raw); err != nil {
-		return "", err
+	retention, err := timeout.ParseReservePausedSandboxFor(raw)
+	if err != nil {
+		return "", 0, err
 	}
-	return raw, nil
+	return raw, retention, nil
 }
 
 func (r *NewSandboxRequest) parseAndRemoveQuantity(key string) (resource.Quantity, bool, error) {

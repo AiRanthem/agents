@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/utils/timeout"
@@ -61,9 +62,15 @@ type TimeoutUpdateResult struct {
 	Updated bool
 }
 
+// TimeoutResolver builds timeout options inside infra retry mutators from the
+// fresh Sandbox object being updated. The returned annotation value is written
+// only when non-nil.
+type TimeoutResolver func(sbx *agentsv1alpha1.Sandbox) (timeout.Options, *string, error)
+
 type PauseOptions struct {
 	Timeout          *timeout.Options
 	ReservePausedFor *string
+	TimeoutResolver  TimeoutResolver
 }
 
 // ResumeOptions configures a Resume operation.
@@ -76,6 +83,7 @@ type PauseOptions struct {
 type ResumeOptions struct {
 	Timeout          *timeout.Options
 	ReservePausedFor *string
+	TimeoutResolver  TimeoutResolver
 }
 
 type HasTemplateOptions struct {

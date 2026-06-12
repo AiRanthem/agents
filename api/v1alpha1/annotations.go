@@ -19,8 +19,9 @@ package v1alpha1
 // common SandboxSet annotations
 
 const (
-	AnnotationRuntimeURL              = InternalPrefix + "runtime-url"
-	AnnotationRuntimeAccessToken      = InternalPrefix + "runtime-access-token"
+	AnnotationRuntimeURL         = InternalPrefix + "runtime-url"
+	AnnotationRuntimeAccessToken = InternalPrefix + "runtime-access-token"
+	// AnnotationReservePausedSandboxFor stores the internal paused-retention policy parsed by pkg/utils/timeout.
 	AnnotationReservePausedSandboxFor = InternalPrefix + "reserve-paused-sandbox-for"
 
 	// AnnotationCleanupCandidate marks an auto-materialised SandboxTemplate as a

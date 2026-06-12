@@ -110,7 +110,6 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 		expectStatus      int
 		expectMessage     string
 		expectAnnotation  string
-		expectDirtyValue  bool
 		expectShutdown    func(now time.Time) time.Time
 	}{
 		{
@@ -160,10 +159,9 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 			},
 		},
 		{
-			name:              "invalid annotation fails open and preserves dirty annotation",
+			name:              "invalid annotation fails open and backfills default",
 			initialAnnotation: stringPtr("forever"),
-			expectAnnotation:  "forever",
-			expectDirtyValue:  true,
+			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
 			expectShutdown: func(now time.Time) time.Time {
 				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
 			},
@@ -278,9 +276,6 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 
 			updated := GetSandbox(t, sandboxID, fc)
 			assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
-			if tt.expectDirtyValue {
-				assert.Equal(t, *tt.initialAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
-			}
 			if tt.neverTimeout {
 				assert.Nil(t, updated.Spec.PauseTime)
 				assert.Nil(t, updated.Spec.ShutdownTime)
@@ -1070,13 +1065,15 @@ func TestUpdateConnectTimeout(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		initialTimeout  int
-		timeoutSeconds  int
-		preConnectState string
-		autoPause       bool
-		neverTimeout    bool // override currentEndAt to zero
-		expectUpdated   bool
+		name              string
+		initialTimeout    int
+		timeoutSeconds    int
+		preConnectState   string
+		autoPause         bool
+		neverTimeout      bool // override currentEndAt to zero
+		initialAnnotation *string
+		expectAnnotation  string
+		expectUpdated     bool
 	}{
 		{
 			name:            "never-timeout is skipped",
@@ -1131,6 +1128,16 @@ func TestUpdateConnectTimeout(t *testing.T) {
 			expectUpdated:   true,
 		},
 		{
+			name:              "running sandbox with auto-pause, invalid annotation backfills default on accepted update",
+			initialTimeout:    300,
+			timeoutSeconds:    600,
+			preConnectState:   agentsv1alpha1.SandboxStateRunning,
+			autoPause:         true,
+			initialAnnotation: stringPtr("forever"),
+			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
+			expectUpdated:     true,
+		},
+		{
 			name:            "running sandbox with auto-pause, equal timeout updates",
 			initialTimeout:  300,
 			timeoutSeconds:  300,
@@ -1158,6 +1165,15 @@ func TestUpdateConnectTimeout(t *testing.T) {
 			}, nil, user))
 			require.Nil(t, err)
 			require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+
+			if tt.initialAnnotation != nil {
+				sbx := GetSandbox(t, createResp.Body.SandboxID, fc)
+				if sbx.Annotations == nil {
+					sbx.Annotations = map[string]string{}
+				}
+				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.initialAnnotation
+				require.NoError(t, fc.Update(t.Context(), sbx))
+			}
 
 			req := NewRequest(t, nil, nil, map[string]string{
 				"sandboxID": createResp.Body.SandboxID,
@@ -1189,6 +1205,9 @@ func TestUpdateConnectTimeout(t *testing.T) {
 					require.NotNil(t, updatedSbx.Spec.PauseTime)
 					assert.WithinDuration(t, expectedEndAt, updatedSbx.Spec.PauseTime.Time, 5*time.Second,
 						"PauseTime should be updated to requested timeout")
+					if tt.expectAnnotation != "" {
+						assert.Equal(t, tt.expectAnnotation, updatedSbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+					}
 				} else {
 					require.NotNil(t, updatedSbx.Spec.ShutdownTime)
 					assert.WithinDuration(t, expectedEndAt, updatedSbx.Spec.ShutdownTime.Time, 5*time.Second,

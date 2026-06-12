@@ -232,13 +232,6 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	// Check ShutdownTime and PauseTime
 	now := metav1.Now()
 	var requeueAfter time.Duration
-	if box.Spec.ShutdownTime != nil && box.DeletionTimestamp == nil {
-		if box.Spec.ShutdownTime.Before(&now) {
-			klog.InfoS("sandbox shutdown time reached, will be deleted", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
-			return ctrl.Result{}, r.Delete(ctx, box)
-		}
-		requeueAfter = box.Spec.ShutdownTime.Sub(now.Time)
-	}
 	if box.Spec.PauseTime != nil && !box.Spec.Paused {
 		if pauseTimeReached(box.Spec.PauseTime, now) {
 			klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
@@ -247,10 +240,11 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 			// silently winning a last-writer race.
 			patch := client.MergeFromWithOptions(box, client.MergeFromWithOptimisticLock{})
 			modified.Spec.Paused = true
-			if raw, ok := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok && box.Spec.ShutdownTime != nil {
+			if raw, ok := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok {
+				// This annotation is the internal sandbox lifecycle contract; API layers translate external inputs into it.
 				retention, parseErr := timeoututils.ParseReservePausedSandboxFor(raw)
 				if parseErr != nil {
-					klog.ErrorS(parseErr, "invalid reserve paused sandbox annotation, skip shutdown recalculation",
+					klog.ErrorS(parseErr, "invalid reserve paused sandbox annotation, using default and backfilling default",
 						"sandbox", klog.KObj(box),
 						"annotation", agentsv1alpha1.AnnotationReservePausedSandboxFor,
 						"value", raw)
@@ -258,7 +252,13 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 						r.recorder.Eventf(box, corev1.EventTypeWarning, "InvalidReservePausedSandboxFor",
 							"Invalid %s=%q: %v", agentsv1alpha1.AnnotationReservePausedSandboxFor, raw, parseErr)
 					}
-				} else {
+					retention = timeoututils.DefaultReservePausedSandboxFor
+					if modified.Annotations == nil {
+						modified.Annotations = map[string]string{}
+					}
+					modified.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = timeoututils.ReservePausedSandboxForDefaultValue
+				}
+				if box.Spec.ShutdownTime != nil {
 					shutdownTime := metav1.NewTime(timeoututils.PausedShutdownTime(now.Time, retention))
 					modified.Spec.ShutdownTime = &shutdownTime
 				}
@@ -274,6 +274,16 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		pauseDelta := box.Spec.PauseTime.Sub(now.Time)
 		if pauseDelta > 0 && (requeueAfter == 0 || pauseDelta < requeueAfter) {
 			requeueAfter = pauseDelta
+		}
+	}
+	if box.Spec.ShutdownTime != nil && box.DeletionTimestamp == nil {
+		if box.Spec.ShutdownTime.Before(&now) {
+			klog.InfoS("sandbox shutdown time reached, will be deleted", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
+			return ctrl.Result{}, r.Delete(ctx, box)
+		}
+		shutdownDelta := box.Spec.ShutdownTime.Sub(now.Time)
+		if shutdownDelta > 0 && (requeueAfter == 0 || shutdownDelta < requeueAfter) {
+			requeueAfter = shutdownDelta
 		}
 	}
 

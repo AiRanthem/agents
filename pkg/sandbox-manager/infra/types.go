@@ -43,6 +43,7 @@ type SaveTimeoutOptions struct {
 	Timeout          timeout.Options
 	Policy           timeout.UpdatePolicy
 	ReservePausedFor *string
+	TimeoutResolver  TimeoutResolver
 }
 
 type ClaimSandboxOptions struct {

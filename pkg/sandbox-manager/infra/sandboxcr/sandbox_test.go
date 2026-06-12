@@ -284,6 +284,59 @@ func TestSandbox_SaveTimeoutWithPolicyReservePausedFor(t *testing.T) {
 	}
 }
 
+func TestSandbox_SaveTimeoutWithPolicyTimeoutResolverUsesConflictFreshObject(t *testing.T) {
+	base := time.Date(2026, 6, 11, 11, 0, 0, 0, time.UTC)
+	requestedTimeout := time.Hour
+	staleRetention := timeout.DefaultReservePausedSandboxFor
+	freshRetention := 30 * time.Minute
+	freshValue := "30m"
+
+	sbx := createTestSandboxWithDefaults("test-sandbox", "default")
+	setTimeout(sbx, timeout.BuildAutoPauseOptions(base, requestedTimeout, staleRetention))
+	key := types.NamespacedName{Namespace: sbx.Namespace, Name: sbx.Name}
+
+	var returnedConflict atomic.Bool
+	provider, fc := newRetryUpdateTestCache(t, sbx, sbx, func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if returnedConflict.CompareAndSwap(false, true) {
+			latest := &v1alpha1.Sandbox{}
+			require.NoError(t, c.Get(ctx, key, latest))
+			if latest.Annotations == nil {
+				latest.Annotations = map[string]string{}
+			}
+			latest.Annotations[v1alpha1.AnnotationReservePausedSandboxFor] = freshValue
+			require.NoError(t, c.Update(ctx, latest))
+			return apierrors.NewConflict(schema.GroupResource{Group: v1alpha1.GroupVersion.Group, Resource: "sandboxes"}, sbx.Name, errors.New("simulated conflict"))
+		}
+		return c.Update(ctx, obj, opts...)
+	})
+
+	sandbox := AsSandbox(sbx.DeepCopy(), provider)
+	var resolverSawFresh atomic.Bool
+	result, err := sandbox.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
+		Policy: timeout.UpdatePolicyAlways,
+		TimeoutResolver: func(fresh *v1alpha1.Sandbox) (timeout.Options, *string, error) {
+			retention, managed, resolveErr := timeout.ResolveReservePausedSandboxForAnnotation(fresh.Annotations)
+			if resolveErr != nil {
+				return timeout.Options{}, nil, resolveErr
+			}
+			if managed && retention == freshRetention {
+				resolverSawFresh.Store(true)
+			}
+			return timeout.BuildAutoPauseOptions(base, requestedTimeout, retention), nil, nil
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, result.Updated)
+	assert.True(t, resolverSawFresh.Load(), "timeout resolver must run against the fresh retry object")
+
+	final := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), key, final))
+	assert.Equal(t, freshValue, final.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+	require.NotNil(t, final.Spec.PauseTime)
+	require.NotNil(t, final.Spec.ShutdownTime)
+	assert.WithinDuration(t, final.Spec.PauseTime.Time.Add(freshRetention), final.Spec.ShutdownTime.Time, time.Second)
+}
+
 //goland:noinspection GoDeprecation
 func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	scheme := k8sruntime.NewScheme()

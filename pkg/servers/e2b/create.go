@@ -281,12 +281,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	timeoutOptions := timeout.Options{}
 	if !request.Extensions.NeverTimeout {
 		if request.AutoPause {
-			retention, err := timeout.ParseReservePausedSandboxFor(request.Extensions.ReservePausedSandboxFor)
-			if err != nil {
-				log.Error(err, "validated reserve paused sandbox retention became invalid", "value", request.Extensions.ReservePausedSandboxFor)
-				retention = timeout.DefaultReservePausedSandboxFor
-			}
-			timeoutOptions = timeout.BuildAutoPauseOptions(now, time.Duration(request.Timeout)*time.Second, retention)
+			timeoutOptions = timeout.BuildAutoPauseOptions(now, time.Duration(request.Timeout)*time.Second, request.Extensions.ReservePausedSandboxRetention)
 		} else {
 			timeoutOptions.ShutdownTime = TimeAfterSeconds(now, request.Timeout)
 		}
