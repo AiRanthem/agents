@@ -28,8 +28,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
@@ -38,14 +40,13 @@ import (
 )
 
 var (
-	KeySecretName    = "e2b-key-store"
-	AdminKeyID       uuid.UUID
-	generateUUID     = uuid.New
-	marshalAPIKey    = json.Marshal
-	newRefreshTicker = func() *time.Ticker {
-		return time.NewTicker(10 * time.Minute)
-	}
+	KeySecretName = "e2b-key-store"
+	AdminKeyID    uuid.UUID
+	generateUUID  = uuid.New
+	marshalAPIKey = json.Marshal
 )
+
+const secretKeyStorageRefreshInterval = 10 * time.Minute
 
 func init() {
 	AdminKeyID = uuid.MustParse("550e8400-e29b-41d4-a716-446655440000") // no means, just a const
@@ -60,23 +61,32 @@ type secretKeyStorage struct {
 	Client client.Client
 	// APIReader is used for reading secrets before cache is started (e.g., during Init).
 	APIReader client.Reader
-	stop      chan struct{}
-	done      chan struct{}
-	stopOnce  sync.Once
+	Cache     ctrlcache.Cache
+
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	refreshC chan struct{}
+	wg       sync.WaitGroup
+
+	refreshInterval time.Duration
 
 	idxByKey  sync.Map
 	idxByID   sync.Map
 	idxByTeam sync.Map // teamName -> *models.Team
 }
 
-func NewSecretKeyStorage(client client.Client, apiReader client.Reader, namespace, adminKey string) KeyStorage {
+func NewSecretKeyStorage(client client.Client, apiReader client.Reader, cache ctrlcache.Cache, namespace, adminKey string) KeyStorage {
 	return &secretKeyStorage{
-		Namespace: namespace,
-		AdminKey:  adminKey,
-		Client:    client,
-		APIReader: apiReader,
-		stop:      make(chan struct{}),
-		done:      make(chan struct{}),
+		Namespace:       namespace,
+		AdminKey:        adminKey,
+		Client:          client,
+		APIReader:       apiReader,
+		Cache:           cache,
+		stop:            make(chan struct{}),
+		done:            make(chan struct{}),
+		refreshC:        make(chan struct{}, 1),
+		refreshInterval: secretKeyStorageRefreshInterval,
 	}
 }
 
@@ -116,6 +126,11 @@ func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) er
 	if err := reader.Get(ctx, client.ObjectKey{Namespace: k.Namespace, Name: KeySecretName}, secret); err != nil {
 		return err
 	}
+	// refresh is the only path that mutates the in-memory indexes. CreateKey
+	// and DeleteKey intentionally only update the Secret and then wait for an
+	// informer-backed refresh to publish the change locally. Mixing writer-side
+	// index updates with queued stale informer refreshes can briefly revoke a
+	// newly created key or restore a newly deleted key on the auth path.
 	var ids, keys, teamNames = sets.NewString(), sets.NewString(), sets.NewString()
 	for id, bytes := range secret.Data {
 		var apiKey models.CreatedTeamAPIKey
@@ -154,32 +169,93 @@ func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) er
 	return nil
 }
 
-func (k *secretKeyStorage) Run() {
-	// Capture newRefreshTicker synchronously in the calling goroutine to avoid
-	// a data race between the background goroutine reading newRefreshTicker and
-	// test cleanup code writing to it after the test function returns.
-	tickerFactory := newRefreshTicker
-	go func() {
-		defer close(k.done)
-		ticker := tickerFactory()
-		ctx := logs.NewContext()
-		log := klog.FromContext(ctx)
-		for {
-			select {
-			case <-ticker.C:
-				if err := k.refresh(ctx, k.Client); err != nil {
-					log.Error(err, "failed to refresh key store")
-				}
-			case <-k.stop:
-				ticker.Stop()
-				log.Info("api-key refreshing stopped")
-				return
+// triggerRefresh uses refreshC, which is a buffered channel (cap=1), to coalesce refresh signals.
+// Multiple events between refresh cycles are collapsed into a single refresh,
+// preventing redundant Secret reads when the informer delivers a burst of events.
+func (k *secretKeyStorage) triggerRefresh() {
+	select {
+	case k.refreshC <- struct{}{}:
+	default:
+	}
+}
+
+func (k *secretKeyStorage) refreshWorker(ctx context.Context) {
+	defer k.wg.Done()
+	log := klog.FromContext(ctx)
+	refreshInterval := k.refreshInterval
+	if refreshInterval <= 0 {
+		refreshInterval = secretKeyStorageRefreshInterval
+	}
+	ticker := time.NewTicker(refreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-k.refreshC:
+			if err := k.refresh(ctx, k.Client); err != nil {
+				log.Error(err, "failed to refresh key store")
 			}
+		case <-ticker.C:
+			if err := k.refresh(ctx, k.Client); err != nil {
+				log.Error(err, "failed to refresh key store")
+			}
+		case <-k.stop:
+			return
 		}
+	}
+}
+
+func (k *secretKeyStorage) onSecretEvent(obj any) {
+	secret, ok := obj.(*corev1.Secret)
+	if !ok {
+		if t, isTombstone := obj.(toolscache.DeletedFinalStateUnknown); isTombstone {
+			secret, ok = t.Obj.(*corev1.Secret)
+		}
+		if !ok {
+			return
+		}
+	}
+	if secret.Namespace != k.Namespace || secret.Name != KeySecretName {
+		return
+	}
+	k.triggerRefresh()
+}
+
+func (k *secretKeyStorage) Run() {
+	ctx := logs.NewContext()
+	log := klog.FromContext(ctx)
+
+	informer, err := k.Cache.GetInformer(ctx, &corev1.Secret{})
+	if err != nil {
+		log.Error(err, "failed to get Secret informer; key store will not refresh")
+		close(k.done)
+		return
+	}
+
+	reg, err := informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc:    k.onSecretEvent,
+		UpdateFunc: func(_, newObj any) { k.onSecretEvent(newObj) },
+		DeleteFunc: k.onSecretEvent,
+	})
+	if err != nil {
+		log.Error(err, "failed to register Secret event handler")
+		close(k.done)
+		return
+	}
+
+	k.wg.Add(1)
+	go k.refreshWorker(ctx)
+
+	go func() {
+		<-k.stop
+		if removeErr := informer.RemoveEventHandler(reg); removeErr != nil {
+			log.Error(removeErr, "failed to remove Secret event handler")
+		}
+		k.wg.Wait()
+		close(k.done)
 	}()
 }
 
-// Stop signals the background refresh goroutine to exit and waits for it to finish.
+// Stop signals the background refresh worker to exit and waits for it to finish.
 func (k *secretKeyStorage) Stop() {
 	k.stopOnce.Do(func() {
 		close(k.stop)
@@ -349,7 +425,6 @@ func (k *secretKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTea
 		log.Error(err, "failed to update api-key")
 		return nil, err
 	}
-	k.storeKey(createdKey)
 	return createdKey, nil
 }
 
@@ -364,8 +439,6 @@ func (k *secretKeyStorage) DeleteKey(ctx context.Context, key *models.CreatedTea
 	if err != nil {
 		return err
 	}
-	k.idxByKey.Delete(key.Key)
-	k.idxByID.Delete(key.ID.String())
 	return nil
 }
 
