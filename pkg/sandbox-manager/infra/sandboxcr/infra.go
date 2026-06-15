@@ -28,7 +28,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -123,6 +122,19 @@ func (i *Infra) Stop(ctx context.Context) {
 	i.Cache.Stop(ctx)
 }
 
+// createRetryBackoff returns the bounded, context-aware exponential backoff
+// shared by the ClaimSandbox and CloneSandbox create-retry loops. The step
+// count caps how many sandbox creations a single operation may trigger.
+func createRetryBackoff() wait.Backoff {
+	return wait.Backoff{
+		Steps:    CreateMaxRetrySteps,
+		Duration: CreateRetryInterval,
+		Factor:   CreateRetryBackoffFactor,
+		Jitter:   CreateRetryJitter,
+		Cap:      CreateRetryIntervalCap,
+	}
+}
+
 func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions) (infra.Sandbox, infra.ClaimMetrics, error) {
 	log := klog.FromContext(ctx)
 	metrics := infra.ClaimMetrics{}
@@ -140,14 +152,12 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 	log.V(utils.DebugLogLevel).Info("claim sandbox options", "options", opts)
 	metrics.Retries = -1 // starts from 0
 	var claimedSandbox infra.Sandbox
-	err = retry.OnError(wait.Backoff{
-		Steps:    retrySteps(opts.ClaimTimeout),
-		Duration: RetryInterval,
-		Factor:   LockBackoffFactor,
-		Jitter:   LockJitter,
-	}, func(err error) bool {
-		return errors.As(err, &retriableError{})
-	}, func() error {
+	// The create retry budget is intentionally bounded (CreateMaxRetrySteps) to
+	// cap how many sandbox creations a single claim may trigger. The backoff is
+	// context-aware: a sleep between attempts is interrupted as soon as claimCtx
+	// is cancelled or reaches ClaimTimeout.
+	var lastErr error
+	waitErr := wait.ExponentialBackoffWithContext(claimCtx, createRetryBackoff(), func(context.Context) (bool, error) {
 		metrics.Retries++
 		log.Info("try to claim sandbox", "retries", metrics.Retries)
 		claimed, tryMetrics, claimErr := TryClaimSandbox(claimCtx, opts, &i.pickCache, i.Cache, i.claimLockChannel, i.createLimiter)
@@ -164,27 +174,46 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 		}
 		if claimErr == nil {
 			claimedSandbox = claimed
-		} else {
-			metrics.RetryCost += tryMetrics.Total
+			return true, nil
 		}
-		return preserveInterruptedError(claimErr)
+		metrics.RetryCost += tryMetrics.Total
+		lastErr = claimErr
+		if errors.As(claimErr, &retriableError{}) {
+			return false, nil
+		}
+		// Terminal error (e.g. classified BadRequest/Internal): stop retrying so
+		// buildClaimError can preserve its ErrorCode for HTTP status mapping.
+		return false, claimErr
 	})
-	return claimedSandbox, metrics, buildClaimError(err, metrics.LastError, metrics.PickSandboxFailures)
+	// When the retry budget is exhausted (steps used up while claimCtx is still
+	// live), surface the last retriable attempt error instead of the generic
+	// wait sentinel. On context cancellation/timeout keep the context error.
+	finalErr := waitErr
+	if waitErr != nil && claimCtx.Err() == nil && lastErr != nil {
+		finalErr = lastErr
+	}
+	return claimedSandbox, metrics, buildClaimError(finalErr, metrics.LastError, metrics.PickSandboxFailures)
 }
 
 func buildClaimError(err error, lastError error, failures []infra.PickSandboxFailure) error {
 	if err == nil {
 		return nil
 	}
+	// Preserve terminal error type (ErrorBadRequest / ErrorInternal) from the classifier.
+	// These errors were not retried and carry the correct ErrorCode for HTTP status mapping.
+	var mErr *managererrors.Error
+	if errors.As(err, &mErr) {
+		return mErr
+	}
+	// Retry exhausted or interrupted: wrap as Internal
 	base := fmt.Sprintf("%v, last error: %v", err, lastError)
-	if len(failures) == 0 {
-		return fmt.Errorf("%s", base)
+	if len(failures) > 0 {
+		raw, marshalErr := json.Marshal(failures)
+		if marshalErr == nil {
+			base = fmt.Sprintf("%s, pick sandbox failures: %s", base, string(raw))
+		}
 	}
-	raw, marshalErr := json.Marshal(failures)
-	if marshalErr != nil {
-		return fmt.Errorf("%s, pick sandbox failures marshal error: %v", base, marshalErr)
-	}
-	return fmt.Errorf("%s, pick sandbox failures: %s", base, string(raw))
+	return managererrors.NewError(managererrors.ErrorInternal, "%s", base)
 }
 
 func (i *Infra) CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions) (infra.Sandbox, infra.CloneMetrics, error) {
@@ -207,41 +236,49 @@ func (i *Infra) CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions
 
 	metrics.Retries = -1 // starts from 0
 	var clonedSandbox infra.Sandbox
-	err = retry.OnError(wait.Backoff{
-		Steps:    retrySteps(opts.CloneTimeout),
-		Duration: RetryInterval,
-		Factor:   LockBackoffFactor,
-		Jitter:   LockJitter,
-	}, func(err error) bool {
-		return errors.As(err, &retriableError{})
-	}, func() error {
+	// Bounded, context-aware create retry (see ClaimSandbox for the rationale).
+	var lastErr error
+	waitErr := wait.ExponentialBackoffWithContext(cloneCtx, createRetryBackoff(), func(context.Context) (bool, error) {
 		metrics.Retries++
 		cloned, tryMetrics, cloneErr := CloneSandbox(cloneCtx, attemptOpts, i.Cache)
 		metrics.Merge(tryMetrics)
 		if cloneErr == nil {
 			clonedSandbox = cloned
-		} else {
-			metrics.LastError = cloneErr
+			return true, nil
 		}
-		return preserveInterruptedError(cloneErr)
+		metrics.LastError = cloneErr
+		lastErr = cloneErr
+		if errors.As(cloneErr, &retriableError{}) {
+			return false, nil
+		}
+		// Terminal error: stop retrying and preserve its ErrorCode.
+		return false, cloneErr
 	})
-	if err != nil {
-		log.Error(err, "failed to clone sandbox", "metrics", metrics.String())
-		return nil, metrics, err
+	if waitErr != nil {
+		// On retry-budget exhaustion (cloneCtx still live) surface the last
+		// attempt error; on context cancellation/timeout keep the context error.
+		finalErr := waitErr
+		if cloneCtx.Err() == nil && lastErr != nil {
+			finalErr = lastErr
+		}
+		log.Error(finalErr, "failed to clone sandbox", "metrics", metrics.String())
+		return nil, metrics, buildCloneError(finalErr)
 	}
 	log.Info("sandbox cloned", "sandbox", klog.KObj(clonedSandbox), "metrics", metrics.String())
 	return clonedSandbox, metrics, nil
 }
 
-// retrySteps converts a total timeout into the Steps value for wait.Backoff.
-// It clamps to at least one attempt so a sub-RetryInterval timeout still runs
-// the closure once.
-func retrySteps(timeout time.Duration) int {
-	steps := int(timeout / RetryInterval)
-	if steps < 1 {
-		return 1
+// buildCloneError keeps an already-classified manager error (so its
+// ErrorCode reaches the HTTP layer) and wraps any other error as ErrorInternal.
+func buildCloneError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return steps
+	var mErr *managererrors.Error
+	if errors.As(err, &mErr) {
+		return mErr
+	}
+	return managererrors.NewError(managererrors.ErrorInternal, "%v", err)
 }
 
 func (i *Infra) DeleteCheckpoint(ctx context.Context, opts infra.DeleteCheckpointOptions) error {

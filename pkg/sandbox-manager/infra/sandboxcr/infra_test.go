@@ -40,6 +40,7 @@ import (
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/runtime"
@@ -348,6 +349,8 @@ func TestInfra_GetClaimedSandbox_CacheMiss_WaitsUntilCacheHit(t *testing.T) {
 				})
 			}
 
+			// Cache propagation should be polled with a short interval. With
+			// succeedAfter=3 this should complete well under 500ms.
 			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 			defer cancel()
 			got, err := infraInstance.GetClaimedSandbox(ctx, infra.GetClaimedSandboxOptions{
@@ -399,6 +402,9 @@ func TestInfra_GetClaimedSandbox_SharedContextError_RetriesWhileContextLive(t *t
 				WithProxy(proxy.NewServer(options)).
 				Build().(*Infra)
 
+			// Shared context sentinel errors can be returned by cache helpers
+			// before this request's context has actually ended. Keep retrying
+			// quickly while the request context is still live.
 			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 			defer cancel()
 			got, err := infraInstance.GetClaimedSandbox(ctx, infra.GetClaimedSandboxOptions{
@@ -1159,10 +1165,13 @@ func TestInfra_CloneSandboxRetriesWaitReadyFailure(t *testing.T) {
 	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
 
 	opts := infra.CloneSandboxOptions{
-		User:                    "test-user",
-		CheckPointID:            checkpointID,
-		WaitReadyTimeout:        20 * time.Millisecond,
-		CloneTimeout:            300 * time.Millisecond,
+		User:             "test-user",
+		CheckPointID:     checkpointID,
+		WaitReadyTimeout: 20 * time.Millisecond,
+		// 5s allows the second attempt to run after the 1s exponential
+		// backoff initial wait, while the first attempt fails fast on
+		// WaitReady (20ms).
+		CloneTimeout:            5 * time.Second,
 		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
 	}
 	sbx, metrics, err := infraInstance.CloneSandbox(t.Context(), opts)
@@ -1239,10 +1248,13 @@ func TestInfra_CloneSandboxRetriesCreateFailure(t *testing.T) {
 			t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
 
 			opts := infra.CloneSandboxOptions{
-				User:                    "test-user",
-				CheckPointID:            checkpointID,
-				WaitReadyTimeout:        30 * time.Second,
-				CloneTimeout:            300 * time.Millisecond,
+				User:             "test-user",
+				CheckPointID:     checkpointID,
+				WaitReadyTimeout: 30 * time.Second,
+				// 8s accommodates exponential backoff (1s, 2s, 4s) so
+				// transient retries succeed and the always-failing case
+				// still hits the deadline after multiple attempts.
+				CloneTimeout:            8 * time.Second,
 				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
 			}
 			sbx, metrics, err := infraInstance.CloneSandbox(t.Context(), opts)
@@ -1800,6 +1812,51 @@ func TestInfra_DeleteCheckpoint_IgnoresNotFoundDuringDeletes(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectCheckpoint, deleteCpCount)
 			assert.Equal(t, tt.expectTemplate, deleteTmplCount)
+		})
+	}
+}
+
+func TestBuildClaimError_PreservesTerminalError(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		lastError       error
+		failures        []infra.PickSandboxFailure
+		expectErrorCode managererrors.ErrorCode
+	}{
+		{
+			name:            "nil error returns nil",
+			err:             nil,
+			expectErrorCode: "",
+		},
+		{
+			name:            "terminal ErrorBadRequest preserved",
+			err:             managererrors.NewError(managererrors.ErrorBadRequest, "quota exceeded"),
+			lastError:       nil,
+			expectErrorCode: managererrors.ErrorBadRequest,
+		},
+		{
+			name:            "terminal ErrorInternal preserved",
+			err:             managererrors.NewError(managererrors.ErrorInternal, "RBAC issue"),
+			lastError:       nil,
+			expectErrorCode: managererrors.ErrorInternal,
+		},
+		{
+			name:            "non-terminal error wrapped as Internal",
+			err:             fmt.Errorf("retry exhausted"),
+			lastError:       fmt.Errorf("last attempt failed"),
+			expectErrorCode: managererrors.ErrorInternal,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildClaimError(tt.err, tt.lastError, tt.failures)
+			if tt.err == nil {
+				assert.Nil(t, result)
+				return
+			}
+			code := managererrors.GetErrCode(result)
+			assert.Equal(t, tt.expectErrorCode, code)
 		})
 	}
 }

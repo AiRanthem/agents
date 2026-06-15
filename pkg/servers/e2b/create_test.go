@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -34,6 +35,7 @@ import (
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
@@ -503,4 +505,40 @@ func TestParseCreateSandboxRequest(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
 		assert.Contains(t, apiErr.Message, "timeout should between")
 	})
+}
+
+func TestMapInfraErrorToApiError(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		expectedCode int
+	}{
+		{
+			name:         "ErrorBadRequest maps to 400",
+			err:          managererrors.NewError(managererrors.ErrorBadRequest, "quota exceeded"),
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "ErrorNotFound maps to 400",
+			err:          managererrors.NewError(managererrors.ErrorNotFound, "template not found"),
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "ErrorInternal maps to 500",
+			err:          managererrors.NewError(managererrors.ErrorInternal, "platform issue"),
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:         "plain error maps to 500",
+			err:          fmt.Errorf("some unknown error"),
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiErr := mapInfraErrorToApiError(tt.err)
+			assert.Equal(t, tt.expectedCode, apiErr.Code)
+			assert.Contains(t, apiErr.Message, tt.err.Error())
+		})
+	}
 }

@@ -1586,3 +1586,50 @@ func TestSandboxManager_DeleteCheckpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestPreserveTypedError(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		contextMsg      string
+		expectErrorCode errors.ErrorCode
+		expectContains  string
+	}{
+		{
+			name:            "BadRequest classification is preserved as-is",
+			err:             errors.NewError(errors.ErrorBadRequest, "quota exceeded"),
+			contextMsg:      "failed to claim sandbox",
+			expectErrorCode: errors.ErrorBadRequest,
+			// Preserved verbatim, not re-wrapped with contextMsg.
+			expectContains: "quota exceeded",
+		},
+		{
+			name:            "Internal classification is preserved as-is",
+			err:             errors.NewError(errors.ErrorInternal, "platform issue"),
+			contextMsg:      "failed to claim sandbox",
+			expectErrorCode: errors.ErrorInternal,
+			expectContains:  "platform issue",
+		},
+		{
+			name:            "NotFound classification is preserved as-is",
+			err:             errors.NewError(errors.ErrorNotFound, "template missing"),
+			contextMsg:      "failed to claim sandbox",
+			expectErrorCode: errors.ErrorNotFound,
+			expectContains:  "template missing",
+		},
+		{
+			name:            "untyped error is wrapped as Internal with context",
+			err:             fmt.Errorf("retry exhausted"),
+			contextMsg:      "failed to claim sandbox",
+			expectErrorCode: errors.ErrorInternal,
+			expectContains:  "failed to claim sandbox: retry exhausted",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := preserveTypedError(tt.err, tt.contextMsg)
+			assert.Equal(t, tt.expectErrorCode, errors.GetErrCode(result))
+			assert.Contains(t, result.Error(), tt.expectContains)
+		})
+	}
+}

@@ -104,7 +104,7 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	sbx, initRuntimeOpts, metrics, err := createSandboxFromCheckpoint(ctx, opts, tmpl, cp, cache, metrics)
 	if err != nil {
 		if !wait.Interrupted(err) {
-			err = retriableError{Message: fmt.Sprintf("failed to create sandbox from checkpoint: %s", err)}
+			err = classifyCreateError(err, "failed to create sandbox from checkpoint")
 		}
 		return nil, metrics, err
 	}

@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -208,7 +210,7 @@ func TestCreateSandbox(t *testing.T) {
 				},
 			},
 			expectError: &web.ApiError{
-				Code:    0,
+				Code:    500,
 				Message: "no available sandboxes for template test-template (no stock)",
 			},
 		},
@@ -536,6 +538,54 @@ func TestCreateSandbox(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateSandboxReturnsImmediatelyWhenCreateOnNoStockHitsQuota(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	templateName := "quota-denied-template"
+	cleanup := CreateSandboxPool(t, controller, templateName, 0)
+	defer cleanup()
+
+	// This simulates the create-on-no-stock path reaching the apiserver and
+	// being rejected by ResourceQuota. Forbidden create failures are classified
+	// as terminal platform errors, so CreateSandbox must return immediately
+	// instead of sleeping and retrying sandbox creation.
+	quotaError := apierrors.NewForbidden(
+		schema.GroupResource{Group: "agents.kruise.io", Resource: "sandboxes"},
+		"quota-denied-sandbox",
+		fmt.Errorf("exceeded quota: cpu-quota, requested: cpu=2, used: cpu=10, limited: cpu=10"),
+	)
+	origCreateSandbox := sandboxcr.DefaultCreateSandbox
+	var createCalls atomic.Int32
+	sandboxcr.DefaultCreateSandbox = func(context.Context, *v1alpha1.Sandbox, ctrlclient.Client) (*v1alpha1.Sandbox, error) {
+		createCalls.Add(1)
+		return nil, quotaError
+	}
+	t.Cleanup(func() { sandboxcr.DefaultCreateSandbox = origCreateSandbox })
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "test-user",
+	}
+	start := time.Now()
+	resp, apiError := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		Metadata: map[string]string{
+			models.ExtensionKeyCreateOnNoStock: v1alpha1.True,
+			models.ExtensionKeyClaimTimeout:    "10",
+		},
+	}, nil, user))
+	elapsed := time.Since(start)
+
+	require.NotNil(t, apiError)
+	assert.Nil(t, resp.Body)
+	assert.Equal(t, http.StatusInternalServerError, apiError.Code)
+	assert.Contains(t, apiError.Message, "platform configuration issue")
+	assert.Equal(t, int32(1), createCalls.Load(), "terminal quota denial must not retry sandbox creation")
+	assert.Less(t, elapsed, sandboxcr.CreateRetryInterval, "terminal quota denial must return before retry backoff")
 }
 
 func TestCreateSandboxAlwaysCreatesAccessToken(t *testing.T) {

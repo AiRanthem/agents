@@ -2942,9 +2942,11 @@ func TestInfraClaimSandboxAggregatesPickSandboxFailuresInError(t *testing.T) {
 		{
 			name: "aggregates repeated no stock retries",
 			options: infra.ClaimSandboxOptions{
-				User:         "test-user",
-				Template:     "test-template",
-				ClaimTimeout: 100 * time.Millisecond,
+				User:     "test-user",
+				Template: "test-template",
+				// 5s allows multiple retries with the 1s exponential backoff
+				// (attempts at ~0s, ~1s, ~3s) so PickSandboxFailures.Count > 1.
+				ClaimTimeout: 5 * time.Second,
 			},
 			expectKey:   "",
 			expectError: "no stock",
@@ -2969,6 +2971,31 @@ func TestInfraClaimSandboxAggregatesPickSandboxFailuresInError(t *testing.T) {
 			assert.Equal(t, metrics.PickSandboxFailures[0], got[0])
 		})
 	}
+}
+
+// TestInfraClaimSandboxContextCancelInterruptsBackoff verifies the create-retry
+// backoff is context-aware: a ClaimTimeout shorter than the first backoff
+// interval (CreateRetryInterval) must interrupt the sleep instead of waiting a
+// full step, so the call returns promptly rather than after ~1s.
+func TestInfraClaimSandboxContextCancelInterruptsBackoff(t *testing.T) {
+	utestutils.InitLogOutput()
+	testInfra, _ := NewTestInfra(t)
+
+	start := time.Now()
+	// Empty pool -> NoAvailableError (retriable). The first attempt fails fast,
+	// then the loop would sleep CreateRetryInterval (1s) before retrying; the
+	// 100ms ClaimTimeout must cut that sleep short.
+	_, metrics, err := testInfra.ClaimSandbox(t.Context(), infra.ClaimSandboxOptions{
+		User:         "test-user",
+		Template:     "test-template",
+		ClaimTimeout: 100 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no stock")
+	assert.Less(t, elapsed, CreateRetryInterval, "backoff sleep should be interrupted by claimCtx, not run the full interval")
+	assert.Equal(t, 0, metrics.Retries, "only the initial attempt should run before the timeout fires")
 }
 
 func TestInfra_ClaimSandboxWithNamespace(t *testing.T) {

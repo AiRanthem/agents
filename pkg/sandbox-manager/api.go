@@ -28,6 +28,17 @@ import (
 	"github.com/openkruise/agents/pkg/utils/pagination"
 )
 
+// preserveTypedError keeps an already-classified manager error (e.g. the
+// ErrorBadRequest / ErrorInternal produced by the infra create-error classifier)
+// so its ErrorCode survives up to the HTTP layer and maps to the right status.
+// Only untyped errors are wrapped as ErrorInternal with the given context.
+func preserveTypedError(err error, contextMsg string) error {
+	if errors.GetErrCode(err) != errors.ErrorUnknown {
+		return err
+	}
+	return errors.NewError(errors.ErrorInternal, "%s: %v", contextMsg, err)
+}
+
 // ClaimSandbox attempts to lock a Pod and assign it to the current caller.
 //
 // Two counters are recorded on failure paths and they have distinct semantics
@@ -53,7 +64,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts infra.ClaimSandb
 		}
 		sandboxClaimCreationResponses.WithLabelValues(opts.Namespace, "failure").Inc()
 		sandboxClaimTotal.WithLabelValues(opts.Namespace, "failure", lockType).Inc()
-		return nil, errors.NewError(errors.ErrorInternal, "failed to claim sandbox: %v", err)
+		return nil, preserveTypedError(err, "failed to claim sandbox")
 	}
 
 	// Success: Record metrics
@@ -80,7 +91,7 @@ func (m *SandboxManager) CloneSandbox(ctx context.Context, opts infra.CloneSandb
 	if err != nil {
 		log.Error(err, "failed to clone sandbox", "metrics", cloneMetrics)
 		sandboxCloneTotal.WithLabelValues(opts.Namespace, "failure").Inc()
-		return nil, errors.NewError(errors.ErrorInternal, "failed to clone sandbox: %v", err)
+		return nil, preserveTypedError(err, "failed to clone sandbox")
 	}
 
 	// Clone-specific metrics

@@ -185,7 +185,14 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 				UID:             sbx.GetUID(),
 				ResourceVersion: expectations.GetNewerResourceVersion(sbx),
 			})
-			err = retriableError{Message: fmt.Sprintf("failed to lock sandbox: %s", err)}
+		}
+		if lockType == infra.LockTypeCreate {
+			err = classifyCreateError(err, "failed to lock sandbox via create")
+		} else {
+			if apierrors.IsConflict(err) {
+				err = retriableError{Message: fmt.Sprintf("failed to lock sandbox: %s", err)}
+			}
+			// Non-conflict update errors: keep raw (already stops retry loop)
 		}
 		return
 	}

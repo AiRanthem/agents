@@ -25,6 +25,9 @@ var (
 	DefaultCloneTimeout            = time.Minute
 	DefaultReserveFailedSandboxFor = 30 * time.Minute
 	RetryInterval                  = 25 * time.Millisecond
-	LockBackoffFactor              = 1.0
-	LockJitter                     = 0.2
+	CreateRetryInterval            = 1 * time.Second
+	CreateRetryBackoffFactor       = 2.0
+	CreateRetryJitter              = 0.3
+	CreateRetryIntervalCap         = 16 * time.Second
+	CreateMaxRetrySteps            = 10
 )

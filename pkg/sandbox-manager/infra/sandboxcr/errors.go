@@ -20,20 +20,11 @@ import (
 	"errors"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
-)
 
-// preserveInterruptedError keeps the original error message when the outer
-// retry.OnError loop would otherwise rewrite an interrupted error to the last
-// retriable one. Context cancellation is interrupted but non-retriable, so
-// keep its message while intentionally avoiding %w; wrapping would still let
-// wait.Interrupted identify and rewrite it.
-func preserveInterruptedError(err error) error {
-	if wait.Interrupted(err) {
-		return fmt.Errorf("%v", err)
-	}
-	return err
-}
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
+)
 
 type retriableError struct {
 	Message string
@@ -53,4 +44,74 @@ func (e retriableError) Is(target error) bool {
 
 func NoAvailableError(template, reason string) error {
 	return retriableError{Message: fmt.Sprintf("no available sandboxes for template %s (%s)", template, reason)}
+}
+
+// classifyCreateError classifies a Kubernetes API error from a Create/Update
+// operation into one of three categories:
+// - retryable: transient server errors, conflicts, network errors -> retriableError
+// - terminal bad request: schema/validation errors -> managererrors.Error{ErrorBadRequest}
+// - terminal internal: Forbidden/auth/platform misconfig -> managererrors.Error{ErrorInternal}
+func classifyCreateError(err error, contextMsg string) error {
+	if err == nil {
+		return nil
+	}
+
+	// Context interrupted - return as-is so the retry loop stops (non-retriable).
+	if wait.Interrupted(err) {
+		return err
+	}
+
+	// Transient server errors - retryable
+	if apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
+		apierrors.IsServiceUnavailable(err) || apierrors.IsTooManyRequests(err) ||
+		apierrors.IsInternalError(err) {
+		return retriableError{Message: fmt.Sprintf("%s: %s", contextMsg, err)}
+	}
+
+	// Conflict - retryable (optimistic locking)
+	if apierrors.IsConflict(err) {
+		return retriableError{Message: fmt.Sprintf("%s: %s", contextMsg, err)}
+	}
+
+	// Invalid / BadRequest - terminal user error
+	if apierrors.IsInvalid(err) || apierrors.IsBadRequest(err) {
+		return managererrors.NewError(managererrors.ErrorBadRequest, "%s: %s", contextMsg, sanitizeCreateErrorMessage(err))
+	}
+
+	// Forbidden - always a platform issue. The sandbox-manager service account
+	// lacks the required RBAC permissions, or a cluster-level policy (quota,
+	// admission webhook, PodSecurity, etc.) denied the operation. Either way
+	// this is a server-side misconfiguration, not the HTTP caller's fault.
+	if apierrors.IsForbidden(err) {
+		return managererrors.NewError(managererrors.ErrorInternal, "%s: sandbox creation failed due to platform configuration issue", contextMsg)
+	}
+
+	// Unauthorized - platform issue
+	if apierrors.IsUnauthorized(err) {
+		return managererrors.NewError(managererrors.ErrorInternal, "%s: sandbox creation failed due to platform configuration issue", contextMsg)
+	}
+
+	// NotFound (CRD/namespace missing) - platform issue
+	if apierrors.IsNotFound(err) {
+		return managererrors.NewError(managererrors.ErrorInternal, "%s: sandbox creation failed due to platform configuration issue", contextMsg)
+	}
+
+	// MethodNotSupported - platform issue
+	if apierrors.IsMethodNotSupported(err) {
+		return managererrors.NewError(managererrors.ErrorInternal, "%s: sandbox creation failed due to platform configuration issue", contextMsg)
+	}
+
+	// Non-StatusError (network errors, etc.) - retryable (conservative)
+	return retriableError{Message: fmt.Sprintf("%s: %s", contextMsg, err)}
+}
+
+// sanitizeCreateErrorMessage returns a user-facing error message that preserves
+// quota/admission denial reasons but strips internal Kubernetes details like
+// namespace paths and service account names.
+func sanitizeCreateErrorMessage(err error) string {
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		return err.Error()
+	}
+	return statusErr.Status().Message
 }

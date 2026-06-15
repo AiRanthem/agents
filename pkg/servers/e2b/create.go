@@ -29,6 +29,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -45,6 +46,20 @@ import (
 // unchanged. ~100 years is indistinguishable from unlimited for any real
 // request and stays well within time.Duration's int64 range (max ~292 years).
 const noServerTimeout = 100 * 365 * 24 * time.Hour
+
+// mapInfraErrorToApiError converts an infra-layer error to an ApiError with the
+// appropriate HTTP status code based on managererrors.ErrorCode.
+func mapInfraErrorToApiError(err error) *web.ApiError {
+	// The E2B POST /sandboxes spec only defines 400/401/500, so client-side
+	// errors (bad request, not found) map to 400 and everything else to 500.
+	switch managererrors.GetErrCode(err) {
+	case managererrors.ErrorBadRequest, managererrors.ErrorNotFound:
+		return &web.ApiError{Code: http.StatusBadRequest, Message: err.Error()}
+	default:
+		// ErrorInternal, ErrorUnknown, or untyped errors (e.g., retry exhausted) → 500
+		return &web.ApiError{Code: http.StatusInternalServerError, Message: err.Error()}
+	}
+}
 
 // resolveServerTimeout maps an extension-provided seconds value to a server-side
 // timeout. A positive value yields a finite timeout; an absent (zero) or
@@ -156,9 +171,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 	sbx, err := sc.manager.ClaimSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "sandbox creation failed")
-		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
-			Message: err.Error(),
-		}
+		return web.ApiResponse[*models.Sandbox]{}, mapInfraErrorToApiError(err)
 	}
 	log.Info("sandbox created", "id", sbx.GetSandboxID(), "sbx", klog.KObj(sbx),
 		"resourceVersion", sbx.GetResourceVersion(), "totalCost", time.Since(claimStart))
@@ -215,9 +228,7 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 	sbx, err := sc.manager.CloneSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "sandbox clone failed")
-		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
-			Message: err.Error(),
-		}
+		return web.ApiResponse[*models.Sandbox]{}, mapInfraErrorToApiError(err)
 	}
 	log.Info("sandbox cloned", "id", sbx.GetSandboxID(), "sbx", klog.KObj(sbx),
 		"resourceVersion", sbx.GetResourceVersion(), "totalCost", time.Since(start))
