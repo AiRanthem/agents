@@ -53,7 +53,7 @@ import (
 
 func imageChecker(image string, controller *Controller) func(t *testing.T, resp *models.Sandbox) {
 	return func(t *testing.T, resp *models.Sandbox) {
-		sbx, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
+		sbx, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 			SandboxID: resp.SandboxID,
 		})
 		assert.NoError(t, err)
@@ -254,7 +254,7 @@ func TestCreateSandbox(t *testing.T) {
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox) {
 				assert.Equal(t, "0001-01-01T00:00:00Z", resp.EndAt)
-				sbx, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
+				sbx, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 					SandboxID: resp.SandboxID,
 				})
 				assert.NoError(t, err)
@@ -382,7 +382,7 @@ func TestCreateSandbox(t *testing.T) {
 
 				assert.NotContains(t, sbx.Spec.Template.Labels, "regular-metadata-key")
 
-				sandboxFromManager, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
+				sandboxFromManager, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 					SandboxID: resp.SandboxID,
 				})
 				assert.NoError(t, err)
@@ -978,7 +978,7 @@ func TestCloneSandbox(t *testing.T) {
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox, controller *Controller) {
 				assert.Equal(t, "0001-01-01T00:00:00Z", resp.EndAt)
-				sbx, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
+				sbx, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 					SandboxID: resp.SandboxID,
 				})
 				assert.NoError(t, err)
@@ -993,7 +993,7 @@ func TestCloneSandbox(t *testing.T) {
 				AutoPause:  true,
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox, controller *Controller) {
-				sbx, err := controller.manager.GetClaimedSandbox(t.Context(), keys.AdminKeyID.String(), infra.GetClaimedSandboxOptions{
+				sbx, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning, v1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 					SandboxID: resp.SandboxID,
 				})
 				assert.NoError(t, err)
@@ -1585,6 +1585,95 @@ func TestDeleteSandbox(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeleteSandboxDeadClaimedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "dead-delete-sandbox", "test-template", user.ID.String(), nil)
+	sandboxID := fmt.Sprintf("%s--%s", sandbox.Namespace, sandbox.Name)
+	UpdateSandboxWhen(t, fc, sandboxID, Immediately, DoSetSandboxStatus(v1alpha1.SandboxRunning, "", metav1.ConditionFalse))
+	require.NoError(t, fc.Get(t.Context(), ctrlclient.ObjectKey{Namespace: sandbox.Namespace, Name: sandbox.Name}, &v1alpha1.Sandbox{}))
+
+	deleteCalls := 0
+	origDeleteSandbox := sandboxcr.DefaultDeleteSandbox
+	sandboxcr.DefaultDeleteSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, client ctrlclient.Client) error {
+		deleteCalls++
+		return origDeleteSandbox(ctx, sbx, client)
+	}
+	t.Cleanup(func() { sandboxcr.DefaultDeleteSandbox = origDeleteSandbox })
+
+	deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+		"sandboxID": sandboxID,
+	}, user))
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, http.StatusNoContent, deleteResp.Code)
+	require.Equal(t, 1, deleteCalls)
+	var getErr error
+	require.Eventually(t, func() bool {
+		got := &v1alpha1.Sandbox{}
+		getErr = fc.Get(t.Context(), ctrlclient.ObjectKey{Namespace: sandbox.Namespace, Name: sandbox.Name}, got)
+		return apierrors.IsNotFound(getErr)
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, apierrors.IsNotFound(getErr), "expected sandbox to be deleted, got error: %v", getErr)
+}
+
+func TestDescribeSandboxDeadClaimedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "dead-describe-sandbox", "test-template", user.ID.String(), nil)
+	sandboxID := fmt.Sprintf("%s--%s", sandbox.Namespace, sandbox.Name)
+	UpdateSandboxWhen(t, fc, sandboxID, Immediately, DoSetSandboxStatus(v1alpha1.SandboxRunning, "", metav1.ConditionFalse))
+
+	describeResp, apiErr := controller.DescribeSandbox(NewRequest(t, nil, nil, map[string]string{
+		"sandboxID": sandboxID,
+	}, user))
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, describeResp.Body)
+	assert.Equal(t, sandboxID, describeResp.Body.SandboxID)
+	assert.Equal(t, v1alpha1.SandboxStateDead, describeResp.Body.State)
+}
+
+func TestConnectSandboxDeadClaimedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "dead-connect-sandbox", "test-template", user.ID.String(), nil)
+	sandboxID := fmt.Sprintf("%s--%s", sandbox.Namespace, sandbox.Name)
+	UpdateSandboxWhen(t, fc, sandboxID, Immediately, DoSetSandboxStatus(v1alpha1.SandboxRunning, "", metav1.ConditionFalse))
+
+	connectResp, apiErr := controller.ConnectSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 60,
+	}, map[string]string{
+		"sandboxID": sandboxID,
+	}, user))
+
+	assert.Equal(t, web.ApiResponse[*models.Sandbox]{}, connectResp)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+	assert.Contains(t, apiErr.Message, "is not healthy")
 }
 
 func TestSandboxNamespaceIsolationWithSameName(t *testing.T) {
