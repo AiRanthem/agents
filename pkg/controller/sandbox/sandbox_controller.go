@@ -525,8 +525,7 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 
 	// If the sandbox has a paused-retention policy, extend ShutdownTime so the
 	// sandbox is preserved for the configured duration after being paused.
-	if raw, ok := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok {
-		retention := r.resolveRetentionOrDefault(box, raw)
+	if retention, managed := r.resolveRetentionAnnotationOrDefault(box); managed {
 		if box.Spec.ShutdownTime != nil {
 			newShutdown := metav1.NewTime(pausedretention.PausedShutdownTime(now.Time, retention))
 			modified.Spec.ShutdownTime = &newShutdown
@@ -589,14 +588,15 @@ func (r *SandboxReconciler) calcTimeoutRequeue(box *agentsv1alpha1.Sandbox, now 
 	return requeueAfter
 }
 
-// resolveRetentionOrDefault parses the paused-retention annotation value.
+// resolveRetentionAnnotationOrDefault parses the paused-retention annotation value.
 // On parse failure, it logs a warning, emits an event, and returns the default
 // retention duration without mutating the annotation.
-func (r *SandboxReconciler) resolveRetentionOrDefault(box *agentsv1alpha1.Sandbox, raw string) time.Duration {
-	retention, err := pausedretention.ParseReservePausedSandboxFor(raw)
+func (r *SandboxReconciler) resolveRetentionAnnotationOrDefault(box *agentsv1alpha1.Sandbox) (time.Duration, bool) {
+	retention, managed, err := pausedretention.ResolveReservePausedSandboxForAnnotation(box.Annotations)
 	if err == nil {
-		return retention
+		return retention, managed
 	}
+	raw := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]
 
 	klog.ErrorS(err, "invalid reserve paused sandbox annotation, using default",
 		"sandbox", klog.KObj(box),
@@ -606,5 +606,5 @@ func (r *SandboxReconciler) resolveRetentionOrDefault(box *agentsv1alpha1.Sandbo
 		r.recorder.Eventf(box, corev1.EventTypeWarning, "InvalidReservePausedSandboxFor",
 			"Invalid %s=%q: %v", agentsv1alpha1.AnnotationReservePausedSandboxFor, raw, err)
 	}
-	return timeoututils.DefaultReservePausedSandboxFor
+	return timeoututils.DefaultReservePausedSandboxFor, true
 }
