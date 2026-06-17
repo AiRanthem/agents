@@ -30,7 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -467,7 +466,7 @@ func TestSandbox_Pause(t *testing.T) {
 	}
 }
 
-func TestSandbox_PauseWritesReservePausedForWhenUpdateWins(t *testing.T) {
+func TestSandbox_PauseWritesExtraAnnotationsWhenUpdateWins(t *testing.T) {
 	tests := []struct {
 		name         string
 		reserveValue string
@@ -518,8 +517,10 @@ func TestSandbox_PauseWritesReservePausedForWhenUpdateWins(t *testing.T) {
 			pauseCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			require.NoError(t, s.Pause(pauseCtx, infra.PauseOptions{
-				Timeout:          &timeout.Options{ShutdownTime: now.Add(time.Hour)},
-				ReservePausedFor: &tt.reserveValue,
+				Timeout: &timeout.Options{ShutdownTime: now.Add(time.Hour)},
+				ExtraAnnotations: map[string]string{
+					v1alpha1.AnnotationReservePausedSandboxFor: tt.reserveValue,
+				},
 			}))
 
 			var updated v1alpha1.Sandbox
@@ -544,7 +545,9 @@ func TestSandbox_PauseSkipsSideEffectsWhenLatestAlreadyPaused(t *testing.T) {
 					ShutdownTime: time.Now().Add(3 * time.Hour),
 					PauseTime:    time.Now().Add(90 * time.Minute),
 				},
-				ReservePausedFor: &value,
+				ExtraAnnotations: map[string]string{
+					v1alpha1.AnnotationReservePausedSandboxFor: value,
+				},
 			},
 		},
 	}
@@ -762,7 +765,7 @@ func TestSandbox_PauseAlreadyPausedShortCircuitsWithActiveResumeWaitHook(t *test
 	err = s.Pause(t.Context(), infra.PauseOptions{})
 	require.NoError(t, err)
 
-	// Synthetic guard: production should not keep a Resume hook after the sandbox is already paused.
+	// Synthetic guard: production should not leave a Resume hook after the sandbox is already paused.
 	val, ok := cache.GetWaitHooks().Load(key)
 	require.True(t, ok)
 	entry := val.(*cacheutils.WaitEntry[*v1alpha1.Sandbox])
@@ -1553,11 +1556,8 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 		initialPaused     bool
 		initialPauseAt    *metav1.Time
 		initialShutAt     *metav1.Time
-		optsTimeout       *timeout.Options
-		reservePausedFor  *string
-		wantAnnotation    string
-		wantAnnotationSet bool
-		want              expected
+		optsTimeout *timeout.Options
+		want        expected
 	}{
 		{
 			name:           "winner-with-realTimeout",
@@ -1568,10 +1568,7 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 				PauseTime:    realPauseAt.Time,
 				ShutdownTime: realShutdownAt.Time,
 			},
-			reservePausedFor:  ptr.To(timeout.ReservePausedSandboxForDefaultValue),
-			wantAnnotation:    timeout.ReservePausedSandboxForDefaultValue,
-			wantAnnotationSet: true,
-			want:              expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
+			want: expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
 		},
 		{
 			name:           "winner-no-placeholder",
@@ -1590,9 +1587,7 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 				PauseTime:    now.Add(5 * time.Minute),
 				ShutdownTime: now.Add(20 * time.Minute),
 			},
-			reservePausedFor:  ptr.To(timeout.ReservePausedSandboxForDefaultValue),
-			wantAnnotationSet: false,
-			want:              expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
+			want: expected{paused: false, pauseTime: &realPauseAt, shutdownTime: &realShutdownAt},
 		},
 		{
 			name:           "never-timeout",
@@ -1689,8 +1684,7 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 			})
 
 			err = s.Resume(t.Context(), infra.ResumeOptions{
-				Timeout:          tc.optsTimeout,
-				ReservePausedFor: tc.reservePausedFor,
+				Timeout: tc.optsTimeout,
 			})
 			require.NoError(t, err)
 
@@ -1711,11 +1705,9 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 			assert.Equal(t, tc.want.paused, final.Spec.Paused)
 			assertTimePtrEqual(t, tc.want.pauseTime, final.Spec.PauseTime, "final PauseTime must match expected")
 			assertTimePtrEqual(t, tc.want.shutdownTime, final.Spec.ShutdownTime, "final ShutdownTime must match expected")
-			gotAnnotation, gotAnnotationSet := final.Annotations[v1alpha1.AnnotationReservePausedSandboxFor]
-			assert.Equal(t, tc.wantAnnotationSet, gotAnnotationSet)
-			if tc.wantAnnotationSet {
-				assert.Equal(t, tc.wantAnnotation, gotAnnotation)
-			}
+			// Resume must never write the reserve-paused annotation.
+			_, gotAnnotationSet := final.Annotations[v1alpha1.AnnotationReservePausedSandboxFor]
+			assert.False(t, gotAnnotationSet, "Resume must not write reserve paused annotation")
 		})
 	}
 }
@@ -1863,8 +1855,7 @@ func TestSandbox_ResumeExtendOnlyConcurrent(t *testing.T) {
 
 			result, err := s.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
 				Timeout: tc.postTimeout,
-				Policy:  timeout.UpdatePolicyExtendOnly,
-			})
+			}, timeout.UpdatePolicyExtendOnly)
 			require.NoError(t, err)
 			assert.Equal(t, tc.expectSaveWasUpdated, result.Updated)
 
@@ -1984,8 +1975,7 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 
 				_, err := s.SaveTimeoutWithPolicy(t.Context(), infra.SaveTimeoutOptions{
 					Timeout: realTimeout,
-					Policy:  timeout.UpdatePolicyExtendOnly,
-				})
+				}, timeout.UpdatePolicyExtendOnly)
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), injectedErr.Error())
 			},

@@ -814,7 +814,11 @@ func TestConnectSandboxConcurrentPausedTimeouts(t *testing.T) {
 	}
 }
 
-func TestResumeSandboxBackfillsReservePausedAnnotationWithPlaceholder(t *testing.T) {
+// TestResumeSandboxPlaceholderDoesNotBackfillReservePausedAnnotation verifies
+// that Resume does not backfill the reserve-paused annotation. The placeholder
+// timeout math (PauseTime + retention → ShutdownTime) still works using the
+// default retention, but the annotation itself is never written by Resume.
+func TestResumeSandboxPlaceholderDoesNotBackfillReservePausedAnnotation(t *testing.T) {
 	controller, fc, teardown := Setup(t)
 	defer teardown()
 	user := &models.CreatedTeamAPIKey{
@@ -838,12 +842,14 @@ func TestResumeSandboxBackfillsReservePausedAnnotationWithPlaceholder(t *testing
 	require.Nil(t, err)
 	require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
 
+	EnableWaitSim(t, controller, createResp.Body.SandboxID)
+	pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, false, false, user)
+
+	// Remove the annotation AFTER pause so we can verify Resume does not recreate it.
+	// Pause may have backfilled it; we explicitly remove it post-pause to isolate Resume behavior.
 	sbx := GetSandbox(t, createResp.Body.SandboxID, fc)
 	delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
 	require.NoError(t, fc.Update(t.Context(), sbx))
-
-	EnableWaitSim(t, controller, createResp.Body.SandboxID)
-	pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, false, false, user)
 
 	go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
 		return sbx.Spec.Paused == false
@@ -858,11 +864,74 @@ func TestResumeSandboxBackfillsReservePausedAnnotationWithPlaceholder(t *testing
 	require.Nil(t, apiErr)
 
 	after := GetSandbox(t, createResp.Body.SandboxID, fc)
-	assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+	// Resume must NOT backfill the annotation
+	assert.NotContains(t, after.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+	// Placeholder timeout math still works using default retention
 	require.NotNil(t, after.Spec.PauseTime)
 	require.NotNil(t, after.Spec.ShutdownTime)
 	assert.WithinDuration(t, beforeResume.Add(600*time.Second), after.Spec.PauseTime.Time, 5*time.Second)
 	assert.WithinDuration(t, after.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), after.Spec.ShutdownTime.Time, 5*time.Second)
+}
+
+// TestResumeSandboxCustomRetentionPlaceholderDoesNotBackfillAnnotation verifies
+// that when a paused sandbox has a custom retention annotation (e.g. "30m"),
+// Resume preserves it and uses the custom retention for placeholder timeout math.
+// ResumeOptions never carries annotation backfill.
+func TestResumeSandboxCustomRetentionPlaceholderDoesNotBackfillAnnotation(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+
+	templateName := "test-resume-custom-retention-placeholder"
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		AutoPause:  true,
+		Timeout:    300,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, err)
+	require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+
+	EnableWaitSim(t, controller, createResp.Body.SandboxID)
+	pauseSandboxHelper(t, controller, fc, createResp.Body.SandboxID, false, false, user)
+
+	// Set a custom retention annotation on the paused sandbox
+	sbx := GetSandbox(t, createResp.Body.SandboxID, fc)
+	if sbx.Annotations == nil {
+		sbx.Annotations = map[string]string{}
+	}
+	sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = "30m"
+	require.NoError(t, fc.Update(t.Context(), sbx))
+
+	go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
+		return sbx.Spec.Paused == false
+	}, DoSetSandboxStatus(agentsv1alpha1.SandboxRunning, metav1.ConditionFalse, metav1.ConditionTrue))
+
+	beforeResume := time.Now()
+	_, apiErr := controller.ResumeSandbox(NewRequest(t, nil, models.SetTimeoutRequest{
+		TimeoutSeconds: 600,
+	}, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, user))
+	require.Nil(t, apiErr)
+
+	after := GetSandbox(t, createResp.Body.SandboxID, fc)
+	// Annotation remains "30m" — not overwritten by Resume
+	assert.Equal(t, "30m", after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+	// Placeholder timeout uses 30m retention math
+	require.NotNil(t, after.Spec.PauseTime)
+	require.NotNil(t, after.Spec.ShutdownTime)
+	assert.WithinDuration(t, beforeResume.Add(600*time.Second), after.Spec.PauseTime.Time, 5*time.Second)
+	assert.WithinDuration(t, after.Spec.PauseTime.Time.Add(30*time.Minute), after.Spec.ShutdownTime.Time, 5*time.Second)
 }
 
 func TestPauseSandboxErrorCode(t *testing.T) {
@@ -1258,7 +1327,7 @@ func pickPlaceholderDeadline(sbx *agentsv1alpha1.Sandbox, autoPause bool) (*meta
 	return sbx.Spec.ShutdownTime, "ShutdownTime"
 }
 
-// placeholderAssertion returns the hook the Resume-wait observer fires when
+// placeholderAssertion returns the hook the Resume-wait observer fires if
 // it sees Spec.Paused=false. At that instant the Resume mutator has just
 // committed and the e2b handler is still blocked inside Resume's Wait, so the
 // observed payload is the atomic placeholder — proving Resume() wrote

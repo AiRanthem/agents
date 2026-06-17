@@ -297,8 +297,7 @@ func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reser
 		log.Info("the failed sandbox will be reserved before delayed deletion", "reason", err, "shutdownTime", shutdownTime)
 		if _, updateErr := sbx.SaveTimeoutWithPolicy(cleanupCtx, infra.SaveTimeoutOptions{
 			Timeout: timeoututils.Options{ShutdownTime: shutdownTime},
-			Policy:  timeoututils.UpdatePolicyAlways,
-		}); updateErr != nil {
+		}, timeoututils.UpdatePolicyAlways); updateErr != nil {
 			log.Error(updateErr, "failed to set delayed deletion time for failed sandbox")
 		}
 		return

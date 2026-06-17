@@ -41,9 +41,7 @@ type SecurityTokenOptions struct {
 
 type SaveTimeoutOptions struct {
 	Timeout          timeout.Options
-	Policy           timeout.UpdatePolicy
-	ReservePausedFor *string
-	TimeoutResolver  TimeoutResolver
+	ExtraAnnotations map[string]string
 }
 
 type ClaimSandboxOptions struct {

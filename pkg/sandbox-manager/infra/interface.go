@@ -61,15 +61,9 @@ type TimeoutUpdateResult struct {
 	Updated bool
 }
 
-// TimeoutResolver builds timeout options inside infra retry mutators from the
-// fresh backend-neutral Sandbox object being updated. The returned annotation
-// value is written only when non-nil.
-type TimeoutResolver func(sbx Sandbox) (timeout.Options, *string, error)
-
 type PauseOptions struct {
 	Timeout          *timeout.Options
-	ReservePausedFor *string
-	TimeoutResolver  TimeoutResolver
+	ExtraAnnotations map[string]string
 }
 
 // ResumeOptions configures a Resume operation.
@@ -80,9 +74,7 @@ type PauseOptions struct {
 // timeout. Pass nil to skip the atomic write (the caller accepts that
 // PauseTime may remain stale until the next write).
 type ResumeOptions struct {
-	Timeout          *timeout.Options
-	ReservePausedFor *string
-	TimeoutResolver  TimeoutResolver
+	Timeout *timeout.Options
 }
 
 type HasTemplateOptions struct {
@@ -151,7 +143,7 @@ type Sandbox interface {
 	SetPodLabels(labels map[string]string)
 	GetPodLabels() map[string]string
 	SetTimeout(opts timeout.Options)
-	SaveTimeoutWithPolicy(ctx context.Context, opts SaveTimeoutOptions) (TimeoutUpdateResult, error)
+	SaveTimeoutWithPolicy(ctx context.Context, opts SaveTimeoutOptions, policy timeout.UpdatePolicy) (TimeoutUpdateResult, error)
 	GetTimeout() timeout.Options
 	GetClaimTime() (time.Time, error)
 	Kill(ctx context.Context) error                                                                     // Delete the Sandbox resource

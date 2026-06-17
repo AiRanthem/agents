@@ -182,38 +182,29 @@ func (s *Sandbox) GetRoute() proxy.Route {
 	return proxyutils.DefaultGetRouteFunc(s.Sandbox)
 }
 
-func setTimeout(s *agentsv1alpha1.Sandbox, opts timeout.Options) {
+func setTimeout(sbx *agentsv1alpha1.Sandbox, opts timeout.Options) {
 	if !opts.PauseTime.IsZero() {
-		s.Spec.PauseTime = ptr.To(metav1.NewTime(timeout.NormalizeTime(opts.PauseTime)))
+		sbx.Spec.PauseTime = ptr.To(metav1.NewTime(timeout.NormalizeTime(opts.PauseTime)))
 	} else {
-		s.Spec.PauseTime = nil
+		sbx.Spec.PauseTime = nil
 	}
 	if !opts.ShutdownTime.IsZero() {
-		s.Spec.ShutdownTime = ptr.To(metav1.NewTime(timeout.NormalizeTime(opts.ShutdownTime)))
+		sbx.Spec.ShutdownTime = ptr.To(metav1.NewTime(timeout.NormalizeTime(opts.ShutdownTime)))
 	} else {
-		s.Spec.ShutdownTime = nil
+		sbx.Spec.ShutdownTime = nil
 	}
 }
 
-func setReservePausedForAnnotation(sbx *agentsv1alpha1.Sandbox, value *string) {
-	if value == nil {
+func mergeExtraAnnotations(sbx *agentsv1alpha1.Sandbox, annotations map[string]string) {
+	if len(annotations) == 0 {
 		return
 	}
 	if sbx.Annotations == nil {
 		sbx.Annotations = map[string]string{}
 	}
-	sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *value
-}
-
-func resolveTimeoutMutation(cacheProvider cache.Provider, sbx *agentsv1alpha1.Sandbox, opts *timeout.Options, reservePausedFor *string, resolver infra.TimeoutResolver) (*timeout.Options, *string, error) {
-	if resolver == nil {
-		return opts, reservePausedFor, nil
+	for key, value := range annotations {
+		sbx.Annotations[key] = value
 	}
-	resolved, resolvedReservePausedFor, err := resolver(AsSandbox(sbx, cacheProvider))
-	if err != nil {
-		return nil, nil, err
-	}
-	return &resolved, resolvedReservePausedFor, nil
 }
 
 func (s *Sandbox) SetTimeout(opts timeout.Options) {
@@ -250,33 +241,29 @@ func (s *Sandbox) GetImage() string {
 // SaveTimeoutWithPolicy updates timeout with given policy. Available timeout update policies:
 //   - Always: overwrite timeout whenever the requested value differs from current.
 //   - ExtendOnly: only extend to a later effective end time.
-func (s *Sandbox) SaveTimeoutWithPolicy(ctx context.Context, opts infra.SaveTimeoutOptions) (infra.TimeoutUpdateResult, error) {
-	log := klog.FromContext(ctx).V(utils.DebugLogLevel).WithValues("sandbox", klog.KObj(s.Sandbox), "policy", opts.Policy)
+func (s *Sandbox) SaveTimeoutWithPolicy(ctx context.Context, opts infra.SaveTimeoutOptions, policy timeout.UpdatePolicy) (infra.TimeoutUpdateResult, error) {
+	log := klog.FromContext(ctx).V(utils.DebugLogLevel).WithValues("sandbox", klog.KObj(s.Sandbox), "policy", policy)
 	result := infra.TimeoutUpdateResult{}
 
 	updated, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
-		requested, reservePausedFor, err := resolveTimeoutMutation(s.Cache, sbx, &opts.Timeout, opts.ReservePausedFor, opts.TimeoutResolver)
-		if err != nil {
-			return false, err
-		}
 		current := timeout.GetTimeoutFromSandbox(sbx)
 		log.Info("data fetched before saving timeout", "current", current)
 
 		shouldUpdate := false
-		switch opts.Policy {
+		switch policy {
 		case timeout.UpdatePolicyAlways:
-			shouldUpdate = !timeout.Equal(current, *requested)
+			shouldUpdate = !timeout.Equal(current, opts.Timeout)
 		case timeout.UpdatePolicyExtendOnly:
-			shouldUpdate = timeout.ShouldExtendTimeout(current, *requested)
+			shouldUpdate = timeout.ShouldExtendTimeout(current, opts.Timeout)
 		default:
-			return false, fmt.Errorf("unsupported timeout update policy %q", opts.Policy)
+			return false, fmt.Errorf("unsupported timeout update policy %q", policy)
 		}
 
 		if !shouldUpdate {
 			return false, nil
 		}
-		setTimeout(sbx, *requested)
-		setReservePausedForAnnotation(sbx, reservePausedFor)
+		setTimeout(sbx, opts.Timeout)
+		mergeExtraAnnotations(sbx, opts.ExtraAnnotations)
 		return true, nil
 	})
 	if err != nil {
@@ -328,22 +315,18 @@ func (s *Sandbox) Pause(ctx context.Context, opts infra.PauseOptions) error {
 	defer pauseTask.Release()
 	updated, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 		if sbx.Spec.Paused {
-			// Pause is first-writer-wins: only the request that flips
-			// No need to update if spec.paused is already true.
+			// Pause is first-writer-wins: only the request that flips Spec.Paused
+			// from false to true may update timeout fields or annotations.
 			return false, nil
 		}
-		timeoutOpts, reservePausedFor, err := resolveTimeoutMutation(s.Cache, sbx, opts.Timeout, opts.ReservePausedFor, opts.TimeoutResolver)
-		if err != nil {
-			return false, err
-		}
 		sbx.Spec.Paused = true
-		if timeoutOpts != nil {
+		if opts.Timeout != nil {
 			current := timeout.GetTimeoutFromSandbox(sbx)
-			if !timeout.Equal(current, *timeoutOpts) {
-				setTimeout(sbx, *timeoutOpts)
+			if !timeout.Equal(current, *opts.Timeout) {
+				setTimeout(sbx, *opts.Timeout)
 			}
 		}
-		setReservePausedForAnnotation(sbx, reservePausedFor)
+		mergeExtraAnnotations(sbx, opts.ExtraAnnotations)
 		return true, nil
 	})
 	if err != nil {
@@ -400,15 +383,10 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) error {
 			// fresh PauseTime, otherwise the controller would auto-pause.
 			return false, nil
 		}
-		timeoutOpts, reservePausedFor, err := resolveTimeoutMutation(s.Cache, sbx, opts.Timeout, opts.ReservePausedFor, opts.TimeoutResolver)
-		if err != nil {
-			return false, err
-		}
 		sbx.Spec.Paused = false
-		if timeoutOpts != nil {
-			setTimeout(sbx, *timeoutOpts)
+		if opts.Timeout != nil {
+			setTimeout(sbx, *opts.Timeout)
 		}
-		setReservePausedForAnnotation(sbx, reservePausedFor)
 		return true, nil
 	})
 	if err != nil {
