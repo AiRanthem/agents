@@ -252,8 +252,12 @@ live-CR read (`ListLiveSandboxEntriesByOwner`) and accepts the registered event 
 ### 6.1 Backend selection (pluggable, optional Redis)
 
 - **Redis configured** → `redisBackend`: full enforcement.
-- **Redis not configured** → `noopBackend`: `Acquire` always allows, `Release`/anti-drift are no-ops, `Describe` reports
-  "unlimited". Setting a **non-empty** quota at key create is **rejected** (§3.1) so a quota is never silently ignored.
+- **Redis not configured** → `noopBackend`: `Acquire` always allows, `Release`/anti-drift are no-ops. Setting a
+  **non-empty** quota at key create is **rejected** (§3.1) so a quota is never silently ignored — therefore, when Redis
+  was *never* configured, no key can carry a stored quota and `Describe` correctly reports "unlimited". For the
+  *operational* case where Redis config is **removed** after limited keys already exist (§9), such a key still has a
+  stored quota: `Describe` does **not** report "unlimited" (which would hide the configured limit) — it returns the
+  stored limits with usage marked **stale/unknown**, like any Redis-unavailable read (§11).
 
 ### 6.2 Redis keys (per limited key K; all hash-tagged `{K}`)
 
@@ -344,7 +348,8 @@ return 'OK'
   `HEXISTS` short-circuit cannot under-charge; a defensive footprint-mismatch check is unnecessary.)
 - **Redis transport error / unreachable** → **fail-open** (treat the key as unlimited for this request; allow). Phase 1
   default; a config knob to fail-closed instead is deferred (§9).
-- **Quantization:** values are integers; an unlimited dimension passes `-1`.
+- **Quantization:** values are integers; an unlimited dimension passes `-1`. The Lua above is pseudo-code — the
+  implementation `tonumber`s every numeric ARGV (`footCpu`/`footMem`/`limCount`/`limCpu`/`limMem`) before comparison.
 
 ### 6.5 Removal — eager, pre-emptive, event-driven, and a leader backstop
 
@@ -366,8 +371,9 @@ invisible. Paths, fastest first (all idempotent, safe to overlap):
 
 1. **Create failure → eager Release** (replica handling the create). Unlike rev1's conservative "release only if provably
    pre-CR", rev2 releases on **any** create failure rather than depend on the backstop. If the CR was in fact committed,
-   the bidirectional anti-drift **re-adds** it within grace (§6.5.2) — so an over-eager release self-heals; the
-   trade is a transient over-admission, bounded by grace.
+   the bidirectional anti-drift **re-adds** it once its `CreationTimestamp` age exceeds grace, on the next diff (§6.5.2)
+   — so an over-eager release self-heals; the trade is a transient over-admission, bounded by **grace + the diff
+   cadence** (§7.1).
 2. **Manager `DELETE /sandboxes/{id}` → pre-emptive Release** (replica handling the delete). The slot returns to the key
    immediately, before the CR is gone. If the delete then fails/stalls, anti-drift behaviour is governed by the
    live-CR rule below.
@@ -421,10 +427,10 @@ and exports diff-lag / rebuild-duration / divergence metrics (§16). For each en
      key but not the hash) that the membership-guarded add/remove cannot see. Cost is bounded by the key's own live-set
      size, which its **own quota** caps (the footprint invariant, §6.3: a `sandbox.count` limit directly, or — since
      every sandbox has a positive cpu/memory footprint — a cpu/memory limit equally bounds the entry count), so the hash
-     never grows unboundedly. `resyncSums` runs on a **slow cadence** (much less frequent than the membership diff — it
-     only repairs the rare *external* sum-only loss), so even for a key with a very large quota its single-threaded
-     `HVALS` cost is infrequent and amortized; resync latency is a monitored metric and the implementation documents a
-     max-supported per-key live-set envelope.
+     never grows unboundedly. `resyncSums` runs **once per diff cycle** (alongside the membership diff), so a sum-only
+     loss is repaired within the **diff cadence** — the same bound as membership drift, not a slower one. Its per-key
+     single-threaded `HVALS` cost is bounded by that key's quota-capped live-set; for a key with a very large quota the
+     implementation documents a max-supported per-key live-set envelope and monitors resync latency.
 
 Add/Remove are **per-lockstring, idempotent** (HEXISTS / HGET guards) and `resyncSums` is a single atomic Lua, so the
 whole pass is safe to run concurrently with the hot path and with a flapping leader, with **no version guard**.
@@ -557,7 +563,8 @@ Phase 1 posture: **fail-open** on any Redis trouble; rely on the leader's bidire
   each key's live CRs off the **informer** (`IndexUser`, never APIReader). Enforcement resumes per key as its entries are
   rebuilt. The oversell window is the rebuild duration; bounded and self-healing.
 - **Partial rollback** (some entries or a sum key lost, others survive): the **add** direction re-charges missing live
-  CRs and `resyncSums` recomputes the sums from membership (§6.5.2) within `grace`. No detection key is needed in the
+  CRs (after `grace`) and `resyncSums` recomputes the sums from membership within the **diff cadence** (§6.5.2). No
+  detection key is needed in the
   fail-open posture.
 - **Redis config removed after keys exist** (operational): treated exactly as a Redis **outage** — limited keys fall to
   fail-open and new non-empty-quota key creates are rejected (`noopBackend`, §6.1). No special cross-check is added.
@@ -634,10 +641,10 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   truth to catch missed events; rev3 makes it **infrequent** and **entirely informer-served** (no apiserver `List`
   anywhere, not even for rebuilds — subjects come from the key store, live CRs from `IndexUser`). Monitor diff lag and
   divergence counts.
-- **Large-key resync cost.** `HGETALL` and the atomic `HVALS`-based `resyncSums` are single-threaded Redis ops whose cost
-  grows with a key's live-set (quota-bounded, but a very large quota makes them heavy and competes with hot-path
-  `Acquire`). Mitigation: run `resyncSums` on a slow cadence (it only repairs rare external sum-loss), document a
-  max-supported per-key live-set envelope, and monitor resync/`HGETALL` latency (§6.5.2).
+- **Large-key resync cost.** `HGETALL` and the atomic `HVALS`-based `resyncSums` (once per diff cycle) are single-threaded
+  Redis ops whose cost grows with a key's live-set (quota-bounded, but a very large quota makes them heavy and competes
+  with hot-path `Acquire`). Mitigation: per-key cost is capped by the key's quota, the diff cadence is tunable, the
+  implementation documents a max-supported per-key live-set envelope, and resync/`HGETALL` latency is monitored (§6.5.2).
 - **Deletion-requested = freed transient over-actual** (§6.5.1). A stuck-terminating sandbox plus a replacement can
   briefly exceed `limit` in physical pods. Deliberate latency trade; bounded by concurrent terminations; not resurrected
   by anti-drift (live-CR-only add).
@@ -694,7 +701,8 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   resolution failure fails safe.
 - Sum/membership consistency: every add/remove changes the HASH field and the affected sums in one Lua; sums never drift
   from `HLEN`/membership under churn.
-- `Describe` reports correct per-dimension `live`/`limit`.
+- `Describe` reports correct per-dimension `live`/`limit`; under Redis failure / mid-rebuild it returns the stored limits
+  with usage marked stale/unknown (never a fabricated `live = 0`).
 - Validation (§3.1): `limit = 0` blocks all creates in that dimension **including a zero-footprint create** (the Lua
   treats `lim == 0` as hard-zero); an all-nil-limits quota is normalized to unlimited; negative / duplicate /
   unknown-dimension / non-empty-scope / non-empty-quota-without-Redis are rejected at key create.
@@ -771,6 +779,9 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - Where exactly `Acquire`/`Release` hook into `TryClaimSandbox` / clone / `DELETE`, and how a tentatively-picked pooled
   sandbox is returned to the pool on a 429.
 - The `ListLiveSandboxEntriesByOwner` signature in `pkg/cache` (over `IndexUser`) and the `resyncSums` Lua encoding.
+- A concrete informer-health API from `pkg/cache` (e.g. `SandboxInformerHealthy()`) backing the remove-gate (§6.5.2) —
+  tracking initial-list-complete, relist start/success, watch error, and last successful sync — so it is **not**
+  implemented as plain `HasSynced`.
 
 ## 17. Deferred / Future Work
 
