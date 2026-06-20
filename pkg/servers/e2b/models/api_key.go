@@ -17,6 +17,7 @@ limitations under the License.
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,6 +65,8 @@ type CreatedTeamAPIKey struct {
 	CreatedBy *TeamUser                `json:"createdBy"`
 	Team      *Team                    `json:"team,omitempty"`
 	LastUsed  *time.Time               `json:"lastUsed"`
+	Quota     *APIKeyQuota             `json:"quota,omitempty"`
+	QuotaSpec *QuotaSpec               `json:"-"`
 }
 
 // TeamAPIKey represents a team API key
@@ -74,12 +77,15 @@ type TeamAPIKey struct {
 	Name      string                   `json:"name"`
 	CreatedBy *TeamUser                `json:"createdBy"`
 	LastUsed  *time.Time               `json:"lastUsed"`
+	Quota     *APIKeyQuota             `json:"quota,omitempty"`
 }
 
 // NewTeamAPIKey represents a request to create a new team API key
 type NewTeamAPIKey struct {
-	Name     string `json:"name"`
-	TeamName string `json:"teamName,omitempty"`
+	Name      string       `json:"name"`
+	TeamName  string       `json:"teamName,omitempty"`
+	Quota     *APIKeyQuota `json:"quota,omitempty"`
+	QuotaSpec *QuotaSpec   `json:"-"`
 }
 
 // CompatibleAPIKey represents the SDK-compatible form of an authenticated API key.
@@ -98,4 +104,56 @@ type ListedTeam struct {
 // UpdateTeamAPIKey represents a request to update a team API key
 type UpdateTeamAPIKey struct {
 	Name string `json:"name"`
+}
+
+func (k CreatedTeamAPIKey) MarshalJSON() ([]byte, error) {
+	type alias CreatedTeamAPIKey
+
+	out := alias(k)
+	if k.QuotaSpec != nil {
+		out.Quota = APIKeyQuotaFromSpec(k.QuotaSpec)
+	}
+
+	return json.Marshal(out)
+}
+
+func (k TeamAPIKey) MarshalJSON() ([]byte, error) {
+	type alias TeamAPIKey
+
+	return json.Marshal(alias(k))
+}
+
+func (k *NewTeamAPIKey) UnmarshalJSON(data []byte) error {
+	type alias NewTeamAPIKey
+
+	var out alias
+	if err := json.Unmarshal(data, &out); err != nil {
+		return err
+	}
+
+	*k = NewTeamAPIKey(out)
+
+	if k.Quota == nil {
+		k.QuotaSpec = nil
+		return nil
+	}
+
+	spec, err := k.Quota.ToQuotaSpec()
+	if err != nil {
+		return err
+	}
+	k.QuotaSpec = spec
+
+	return nil
+}
+
+func (k NewTeamAPIKey) MarshalJSON() ([]byte, error) {
+	type alias NewTeamAPIKey
+
+	out := alias(k)
+	if k.QuotaSpec != nil {
+		out.Quota = APIKeyQuotaFromSpec(k.QuotaSpec)
+	}
+
+	return json.Marshal(out)
 }
