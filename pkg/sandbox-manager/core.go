@@ -199,6 +199,9 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 
 func (m *SandboxManager) Stop(ctx context.Context) {
 	log := klog.FromContext(ctx)
+	if m.elector != nil {
+		m.elector.Stop(ctx)
+	}
 	m.proxy.Stop(ctx)
 	m.infra.Stop(ctx)
 	if m.peersManager != nil {
