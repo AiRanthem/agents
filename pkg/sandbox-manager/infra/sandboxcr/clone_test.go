@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,6 +43,7 @@ import (
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	utestutils "github.com/openkruise/agents/pkg/utils/testutils"
@@ -201,6 +204,27 @@ func TestValidateAndInitCheckpointOptions(t *testing.T) {
 			assert.Equal(t, tt.expectOpts.WaitSuccessTimeout, result.WaitSuccessTimeout)
 		})
 	}
+}
+
+func TestNewSandboxFromTemplate_StampsCloneLockString(t *testing.T) {
+	tmpl := &v1alpha1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl", Namespace: "default"},
+		Spec: v1alpha1.SandboxTemplateSpec{
+			Template: &corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: "main", Image: "busybox"}},
+				},
+			},
+		},
+	}
+
+	sbx := newSandboxFromTemplate(infra.CloneSandboxOptions{
+		User:       "user-1",
+		LockString: "lock-1",
+	}, tmpl, nil)
+
+	assert.Equal(t, "user-1", sbx.GetAnnotations()[v1alpha1.AnnotationOwner])
+	assert.Equal(t, "lock-1", sbx.GetAnnotations()[v1alpha1.AnnotationLock])
 }
 
 func TestNewSandboxFromTemplate_DeepCopiesTemplate(t *testing.T) {
@@ -405,6 +429,186 @@ func TestCloneSandbox_CleansFailedCreatedSandbox(t *testing.T) {
 			assert.Nil(t, got.Spec.ShutdownTime)
 		})
 	}
+}
+
+func TestCloneSandbox_QuotaAdmissionPostLockKillRelease(t *testing.T) {
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	require.NoError(t, cache.Run(t.Context()))
+	defer cache.Stop(t.Context())
+	createCloneTestCheckpoint(t, fc, cache, "clone-quota-kill-release")
+
+	origCreateSandbox := DefaultCreateSandbox
+	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
+		sbx.Name = "failed-clone-quota-kill-release"
+		return origCreateSandbox(ctx, sbx, c)
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	var acquiredLock string
+	releaseCalls := 0
+	releaseHasDeadline := false
+	opts := infra.CloneSandboxOptions{
+		User:                    "user-1",
+		CheckPointID:            "clone-quota-kill-release",
+		WaitReadyTimeout:        20 * time.Millisecond,
+		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(_ context.Context, lockString string) error {
+				acquiredLock = lockString
+				return nil
+			},
+			Release: func(ctx context.Context, lockString string) error {
+				_, releaseHasDeadline = ctx.Deadline()
+				releaseCalls++
+				assert.Equal(t, acquiredLock, lockString)
+				return fmt.Errorf("release failure must be ignored")
+			},
+		},
+	}
+
+	sbx, _, err := CloneSandbox(t.Context(), opts, cache)
+
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Contains(t, err.Error(), "failed to wait for sandbox ready")
+	assert.NotEmpty(t, acquiredLock)
+	assert.Equal(t, 1, releaseCalls)
+	assert.True(t, releaseHasDeadline, "quota release must use a bounded request-side context")
+	got := &v1alpha1.Sandbox{}
+	err = fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "failed-clone-quota-kill-release"}, got)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestCloneSandbox_QuotaAdmissionDefaultReserveRetainsCharge(t *testing.T) {
+	cache, _, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	require.NoError(t, cache.Run(t.Context()))
+	defer cache.Stop(t.Context())
+	fc := cache.GetClient()
+	createCloneTestCheckpoint(t, fc, cache, "clone-quota-default-reserve")
+
+	origCreateSandbox := DefaultCreateSandbox
+	createCalls := 0
+	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
+		createCalls++
+		sbx.Name = fmt.Sprintf("failed-clone-quota-default-reserve-%d", createCalls)
+		return origCreateSandbox(ctx, sbx, c)
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	charged := map[string]struct{}{}
+	releaseCalls := 0
+	opts := infra.CloneSandboxOptions{
+		User:             "user-1",
+		CheckPointID:     "clone-quota-default-reserve",
+		WaitReadyTimeout: 20 * time.Millisecond,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(_ context.Context, lockString string) error {
+				if len(charged) >= 1 {
+					return managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
+				}
+				charged[lockString] = struct{}{}
+				return nil
+			},
+			Release: func(context.Context, string) error {
+				releaseCalls++
+				return nil
+			},
+		},
+	}
+
+	sbx, _, err := CloneSandbox(t.Context(), opts, cache)
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Contains(t, err.Error(), "failed to wait for sandbox ready")
+	assert.Equal(t, 0, releaseCalls)
+	assert.Len(t, charged, 1)
+
+	sbx, _, err = CloneSandbox(t.Context(), opts, cache)
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Equal(t, managererrors.ErrorQuotaExceeded, managererrors.GetErrCode(err))
+	assert.Equal(t, 0, releaseCalls)
+	assert.Len(t, charged, 1)
+	assert.Equal(t, 1, createCalls, "quota denial on the second attempt must happen before CR create")
+}
+
+func TestCloneSandbox_QuotaAdmissionReleasesProvablyRejectedCreate(t *testing.T) {
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	require.NoError(t, cache.Run(t.Context()))
+	defer cache.Stop(t.Context())
+	createCloneTestCheckpoint(t, fc, cache, "clone-quota-rejected-create")
+
+	releaseCalls := atomic.Int64{}
+	origCreateSandbox := DefaultCreateSandbox
+	DefaultCreateSandbox = func(context.Context, *v1alpha1.Sandbox, client.Client) (*v1alpha1.Sandbox, error) {
+		return nil, apierrors.NewInvalid(
+			schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "Sandbox"},
+			"bad-sandbox",
+			nil,
+		)
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	var acquiredLock string
+	sbx, _, err := CloneSandbox(t.Context(), infra.CloneSandboxOptions{
+		User:             "key-1",
+		CheckPointID:     "clone-quota-rejected-create",
+		WaitReadyTimeout: 20 * time.Millisecond,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(_ context.Context, lockString string) error {
+				acquiredLock = lockString
+				return nil
+			},
+			Release: func(ctx context.Context, lockString string) error {
+				_, hasDeadline := ctx.Deadline()
+				assert.True(t, hasDeadline)
+				assert.NotEmpty(t, lockString)
+				assert.Equal(t, acquiredLock, lockString)
+				releaseCalls.Add(1)
+				return nil
+			},
+		},
+	}, cache)
+
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Equal(t, managererrors.ErrorBadRequest, managererrors.GetErrCode(err))
+	assert.Equal(t, int64(1), releaseCalls.Load())
+}
+
+func TestCloneSandbox_QuotaAdmissionRetainsAmbiguousCreateError(t *testing.T) {
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	require.NoError(t, cache.Run(t.Context()))
+	defer cache.Stop(t.Context())
+	createCloneTestCheckpoint(t, fc, cache, "clone-quota-ambiguous-create")
+
+	releaseCalls := atomic.Int64{}
+	origCreateSandbox := DefaultCreateSandbox
+	DefaultCreateSandbox = func(context.Context, *v1alpha1.Sandbox, client.Client) (*v1alpha1.Sandbox, error) {
+		return nil, errors.New("apiserver timeout after create")
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	sbx, _, err := CloneSandbox(t.Context(), infra.CloneSandboxOptions{
+		User:             "key-1",
+		CheckPointID:     "clone-quota-ambiguous-create",
+		WaitReadyTimeout: 20 * time.Millisecond,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(context.Context, string) error { return nil },
+			Release: func(context.Context, string) error {
+				releaseCalls.Add(1)
+				return nil
+			},
+		},
+	}, cache)
+
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Equal(t, int64(0), releaseCalls.Load())
 }
 
 func TestCloneSandbox(t *testing.T) {

@@ -110,6 +110,16 @@ func classifyCreateError(err error, contextMsg string) error {
 	return retriableError{Message: fmt.Sprintf("%s: %s", contextMsg, err)}
 }
 
+func isProvablyNoCRWriteCreateError(err error) bool {
+	return apierrors.IsInvalid(err) ||
+		apierrors.IsBadRequest(err) ||
+		apierrors.IsForbidden(err) ||
+		apierrors.IsUnauthorized(err) ||
+		apierrors.IsNotFound(err) ||
+		apierrors.IsMethodNotSupported(err) ||
+		apierrors.IsAlreadyExists(err)
+}
+
 func newPlatformCreateError(err error, contextMsg string) error {
 	return managererrors.NewError(
 		managererrors.ErrorInternal,

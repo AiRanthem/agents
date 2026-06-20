@@ -87,7 +87,7 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 	if opts.CandidateCounts <= 0 {
 		opts.CandidateCounts = consts.DefaultPoolingCandidateCounts
 	}
-	if opts.LockString == "" {
+	if opts.LockString == "" && opts.Admission == nil {
 		opts.LockString = utils.NewLockString()
 	}
 	if opts.ClaimTimeout <= 0 {
@@ -135,6 +135,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		log.Info("got a free claim worker", "cost", metrics.Wait)
 	}
 	var pickedSandboxKey string
+	var attemptLockString string
 	defer func() {
 		freeWorkerOnce()
 		if err != nil {
@@ -146,7 +147,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		}
 		metrics.LastError = err
 		log.Info("try claim sandbox result", "metrics", metrics.String())
-		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor)
+		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor, opts.Admission, attemptLockString)
 	}()
 	// Step 1: Pick an available sandbox
 	var sbx *Sandbox
@@ -171,12 +172,30 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	log.Info("sandbox picked", "sandbox", klog.KObj(sbx.Sandbox), "lockType", lockType)
 
 	// Step 2: Modify and lock sandbox. All modifications to be applied to the Sandbox should be performed here.
+	attemptLockString = chooseAttemptLockString(opts)
+	opts.LockString = attemptLockString
+	admitted := false
+	lockAttempted := false
+	if opts.Admission != nil && opts.Admission.Acquire != nil {
+		if err = opts.Admission.Acquire(ctx, attemptLockString); err != nil {
+			log.Error(err, "sandbox admission denied", "lockString", attemptLockString)
+			return
+		}
+		admitted = true
+	}
+	defer func() {
+		if admitted && err != nil && !lockAttempted {
+			releaseAdmission(ctx, opts.Admission, attemptLockString)
+		}
+	}()
+
 	if err = modifyPickedSandbox(sbx, lockType, opts); err != nil {
 		log.Error(err, "failed to modify picked sandbox")
 		err = retriableError{Message: fmt.Sprintf("failed to modify picked sandbox: %s", err)}
 		return
 	}
 
+	lockAttempted = true
 	err = performLockSandbox(ctx, sbx, lockType, opts, cache)
 	if err != nil {
 		log.Error(err, "failed to lock sandbox")
@@ -187,9 +206,17 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 			})
 		}
 		if lockType == infra.LockTypeCreate {
+			if admitted && isProvablyNoCRWriteCreateError(err) {
+				releaseAdmission(ctx, opts.Admission, attemptLockString)
+				admitted = false
+			}
 			err = classifyCreateError(err, "failed to lock sandbox via create")
 		} else {
 			if apierrors.IsConflict(err) {
+				if admitted {
+					releaseAdmission(ctx, opts.Admission, attemptLockString)
+					admitted = false
+				}
 				err = retriableError{Message: fmt.Sprintf("failed to lock sandbox: %s", err)}
 			}
 			// Non-conflict update errors: keep raw (already stops retry loop)
@@ -286,9 +313,29 @@ func processSecurityToken(ctx context.Context, opts infra.ClaimSandboxOptions, s
 	return nil
 }
 
+const quotaReleaseTimeout = 250 * time.Millisecond
+
+func chooseAttemptLockString(opts infra.ClaimSandboxOptions) string {
+	if opts.Admission != nil || opts.LockString == "" {
+		return utils.NewLockString()
+	}
+	return opts.LockString
+}
+
+func releaseAdmission(ctx context.Context, admission *infra.SandboxAdmission, lockString string) {
+	if admission == nil || admission.Release == nil || lockString == "" {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)
+	defer cancel()
+	if err := admission.Release(releaseCtx, lockString); err != nil {
+		klog.FromContext(releaseCtx).Error(err, "failed to release sandbox admission", "lockString", lockString)
+	}
+}
+
 // clearFailedSandbox cleans up (or reserves) a failed sandbox according to
 // reserveFor. A nil reserveFor falls back to DefaultReserveFailedSandboxFor.
-func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserveFor *time.Duration) {
+func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserveFor *time.Duration, admission *infra.SandboxAdmission, lockString string) {
 	if err == nil || sbx == nil {
 		return
 	}
@@ -318,6 +365,7 @@ func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reser
 		log.Error(killErr, "failed to delete failed sandbox")
 	} else {
 		log.Info("sandbox deleted")
+		releaseAdmission(ctx, admission, lockString)
 	}
 }
 

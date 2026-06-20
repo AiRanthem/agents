@@ -14,23 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package errors
+package quota
 
-import (
-	"testing"
+import "errors"
 
-	"github.com/stretchr/testify/assert"
+var (
+	ErrQuotaExceeded      = errors.New("quota exceeded")
+	ErrBackendUnavailable = errors.New("quota backend unavailable")
+	ErrMissingIdentity    = errors.New("quota acquire missing identity")
 )
-
-func TestError(t *testing.T) {
-	newError := NewError(ErrorInternal, "foo")
-	code := GetErrCode(newError)
-	assert.Equal(t, ErrorInternal, code)
-	assert.Equal(t, "Internal: foo", newError.Error())
-	assert.Equal(t, ErrorUnknown, GetErrCode(nil))
-}
-
-func TestGetErrCode_QuotaExceeded(t *testing.T) {
-	err := NewError(ErrorQuotaExceeded, "quota exceeded")
-	assert.Equal(t, ErrorQuotaExceeded, GetErrCode(err))
-}

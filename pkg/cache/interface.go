@@ -18,7 +18,9 @@ package cache
 
 import (
 	"context"
+	"time"
 
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -51,6 +53,16 @@ type Provider interface {
 	// CountActiveSandboxes counts active (non-dead) sandboxes filtered by namespace
 	// and optional owner. Faster than ListSandboxes when only the count is needed.
 	CountActiveSandboxes(ctx context.Context, opts ListSandboxesOptions) (int32, error)
+
+	// ListLiveLockstringsByOwner returns live quota lockstrings for a single owner.
+	// It reads only from the informer owner index and never falls back to APIReader.
+	ListLiveLockstringsByOwner(ctx context.Context, opts ListLiveLockstringsByOwnerOptions) ([]LiveLockstring, error)
+
+	// AddSandboxEventHandler registers a raw Sandbox informer event handler.
+	AddSandboxEventHandler(ctx context.Context, handler toolscache.ResourceEventHandler) (SandboxEventHandlerRegistration, error)
+
+	// RemoveSafe reports whether remove-capable quota reconciliation may run.
+	RemoveSafe() bool
 
 	// ListCheckpoints returns Checkpoint CRD objects filtered by namespace and optional owner.
 	// Ownership is determined by the AnnotationOwner annotation on the Checkpoint resource when User is set.
@@ -131,6 +143,21 @@ type ListSandboxSetsOptions struct {
 type ListSandboxesOptions struct {
 	Namespace string
 	User      string
+}
+
+type LiveLockstring struct {
+	LockString        string
+	CreationTimestamp time.Time
+}
+
+type ListLiveLockstringsByOwnerOptions struct {
+	Namespace string
+	Owner     string
+}
+
+type SandboxEventHandlerRegistration interface {
+	HasSynced() bool
+	Remove() error
 }
 
 type ListCheckpointsOptions struct {

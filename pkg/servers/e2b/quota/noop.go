@@ -14,23 +14,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package errors
+package quota
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
+	"context"
+	"time"
 )
 
-func TestError(t *testing.T) {
-	newError := NewError(ErrorInternal, "foo")
-	code := GetErrCode(newError)
-	assert.Equal(t, ErrorInternal, code)
-	assert.Equal(t, "Internal: foo", newError.Error())
-	assert.Equal(t, ErrorUnknown, GetErrCode(nil))
+type NoopBackend struct{}
+
+func (NoopBackend) Acquire(context.Context, string, string, int64) error {
+	return nil
 }
 
-func TestGetErrCode_QuotaExceeded(t *testing.T) {
-	err := NewError(ErrorQuotaExceeded, "quota exceeded")
-	assert.Equal(t, ErrorQuotaExceeded, GetErrCode(err))
+func (NoopBackend) Release(context.Context, string, string) error {
+	return nil
+}
+
+func (NoopBackend) AddObserved(context.Context, string, string, time.Time) error {
+	return nil
+}
+
+func (NoopBackend) List(context.Context, string) (map[string]time.Time, error) {
+	return map[string]time.Time{}, nil
+}
+
+func (NoopBackend) DeleteSubject(context.Context, string) error {
+	return nil
 }

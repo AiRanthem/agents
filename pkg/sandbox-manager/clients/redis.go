@@ -14,23 +14,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package errors
+package clients
 
-import (
-	"testing"
+import "github.com/redis/go-redis/v9"
 
-	"github.com/stretchr/testify/assert"
-)
-
-func TestError(t *testing.T) {
-	newError := NewError(ErrorInternal, "foo")
-	code := GetErrCode(newError)
-	assert.Equal(t, ErrorInternal, code)
-	assert.Equal(t, "Internal: foo", newError.Error())
-	assert.Equal(t, ErrorUnknown, GetErrCode(nil))
+type RedisConfig struct {
+	Addr     string
+	Username string
+	Password string
+	DB       int
 }
 
-func TestGetErrCode_QuotaExceeded(t *testing.T) {
-	err := NewError(ErrorQuotaExceeded, "quota exceeded")
-	assert.Equal(t, ErrorQuotaExceeded, GetErrCode(err))
+func NewRedisClient(cfg RedisConfig) *redis.Client {
+	return redis.NewClient(&redis.Options{
+		Addr:     cfg.Addr,
+		Username: cfg.Username,
+		Password: cfg.Password,
+		DB:       cfg.DB,
+	})
 }

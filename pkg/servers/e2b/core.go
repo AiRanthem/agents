@@ -32,12 +32,20 @@ import (
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
 	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
+	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
+	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 )
+
+type quotaManager interface {
+	Acquire(ctx context.Context, req quota.AcquireRequest) error
+	Release(ctx context.Context, req quota.ReleaseRequest) error
+	DeleteSubject(ctx context.Context, apiKeyID string) error
+}
 
 // Controller handles sandbox-related operations
 type Controller struct {
@@ -55,6 +63,7 @@ type Controller struct {
 	sandboxNamespace      string
 	memberlistBindPort    int
 	keyCfg                *keys.Config
+	quotaCfg              quota.Config
 
 	// fields
 	mux             *http.ServeMux
@@ -66,10 +75,12 @@ type Controller struct {
 	domain          string
 	manager         *sandboxmanager.SandboxManager
 	keys            keys.KeyStorage
+	quota           quotaManager
+	quotaAntiDrift  *quota.AntiDriftDriver
 }
 
 // NewController creates a new E2B Controller
-func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSelector string, maxTimeout, minResumeTimeout, maxClaimWorkers, maxCreateQPS int, extProcMaxConcurrency uint32, port, memberlistBindPort int, keyCfg *keys.Config, clientConfig *rest.Config) *Controller {
+func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSelector string, maxTimeout, minResumeTimeout, maxClaimWorkers, maxCreateQPS int, extProcMaxConcurrency uint32, port, memberlistBindPort int, keyCfg *keys.Config, clientConfig *rest.Config, quotaCfg quota.Config) *Controller {
 	sc := &Controller{
 		mux:                   http.NewServeMux(),
 		domain:                domain,
@@ -86,6 +97,7 @@ func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSe
 		extProcMaxConcurrency: extProcMaxConcurrency,
 		memberlistBindPort:    memberlistBindPort,
 		keyCfg:                keyCfg,
+		quotaCfg:              quotaCfg,
 	}
 
 	sc.server = &http.Server{
@@ -118,7 +130,10 @@ func (sc *Controller) Init() error {
 	sc.storageRegistry = storages.NewStorageProvider()
 	sc.registerRoutes()
 
-	return sc.initKeyStorage(ctx)
+	if err := sc.initKeyStorage(ctx); err != nil {
+		return err
+	}
+	return sc.initQuota(ctx)
 }
 
 func (sc *Controller) sandboxManagerOptions() config.SandboxManagerOptions {
@@ -151,6 +166,48 @@ func (sc *Controller) initKeyStorage(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (sc *Controller) initQuota(ctx context.Context) error {
+	log := klog.FromContext(ctx)
+	if sc.keys == nil {
+		sc.quota = quota.NewManager(quota.NoopBackend{})
+		log.Info("api-key quota is unenforced because E2B auth is disabled")
+		return nil
+	}
+	if sc.quotaCfg.RedisAddr == "" {
+		sc.quota = quota.NewManager(quota.NoopBackend{})
+		log.Info("api-key quota Redis is not configured; limited keys are accepted but unenforced")
+		return nil
+	}
+
+	redisClient := clients.NewRedisClient(clients.RedisConfig{
+		Addr:     sc.quotaCfg.RedisAddr,
+		Username: sc.quotaCfg.RedisUsername,
+		Password: sc.quotaCfg.RedisPassword,
+		DB:       sc.quotaCfg.RedisDB,
+	})
+	backend := quota.NewRedisBackend(redisClient, sc.quotaCfg.OperationTimeout)
+	sc.quota = quota.NewManager(backend)
+	log.Info("api-key quota Redis configured; Redis transport errors fail open", "addr", sc.quotaCfg.RedisAddr)
+
+	driver := quota.NewAntiDriftDriver(
+		quota.AntiDriftConfig{
+			Interval: sc.quotaCfg.AntiDriftInterval,
+			Grace:    sc.quotaCfg.AntiDriftGrace,
+		},
+		sc.manager,
+		sc.keys,
+		sc.cache,
+		backend,
+	)
+	registration, err := sc.cache.AddSandboxEventHandler(ctx, driver.SandboxEventHandler())
+	if err != nil {
+		return err
+	}
+	driver.SetEventRegistration(registration)
+	sc.quotaAntiDrift = driver
 	return nil
 }
 
@@ -191,11 +248,17 @@ func (sc *Controller) Run() (context.Context, error) {
 		if sc.keys != nil {
 			sc.keys.Stop()
 		}
+		if sc.quotaAntiDrift != nil {
+			sc.quotaAntiDrift.Stop()
+		}
 		klog.InfoS("Server exited")
 	}()
 
 	if sc.keys != nil {
 		sc.keys.Run()
+	}
+	if sc.quotaAntiDrift != nil {
+		sc.quotaAntiDrift.Run(ctx)
 	}
 	return ctx, nil
 }

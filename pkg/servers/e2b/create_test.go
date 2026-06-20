@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,7 +39,40 @@ import (
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 )
+
+type recordingQuotaManager struct {
+	acquireCalls atomic.Int64
+	releaseCalls atomic.Int64
+	deleteCalls  atomic.Int64
+
+	acquireErr error
+	releaseErr error
+
+	lastAcquire        quota.AcquireRequest
+	lastRelease        quota.ReleaseRequest
+	releaseHasDeadline atomic.Bool
+}
+
+func (m *recordingQuotaManager) Acquire(_ context.Context, req quota.AcquireRequest) error {
+	m.acquireCalls.Add(1)
+	m.lastAcquire = req
+	return m.acquireErr
+}
+
+func (m *recordingQuotaManager) Release(ctx context.Context, req quota.ReleaseRequest) error {
+	m.releaseCalls.Add(1)
+	m.lastRelease = req
+	_, ok := ctx.Deadline()
+	m.releaseHasDeadline.Store(ok)
+	return m.releaseErr
+}
+
+func (m *recordingQuotaManager) DeleteSubject(context.Context, string) error {
+	m.deleteCalls.Add(1)
+	return nil
+}
 
 // TestResolveServerTimeout verifies that a positive seconds value yields a
 // finite timeout, while an absent (zero) or non-positive value yields
@@ -66,6 +100,76 @@ func TestResolveServerTimeout(t *testing.T) {
 			assert.Equal(t, tt.expected, resolveServerTimeout(tt.seconds))
 		})
 	}
+}
+
+func TestMapInfraErrorToApiError_QuotaExceeded(t *testing.T) {
+	apiErr := mapInfraErrorToApiError(managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded"))
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.Code)
+	assert.Contains(t, apiErr.Message, "api-key quota exceeded")
+}
+
+func TestControllerQuotaAdmission(t *testing.T) {
+	limit := int64(1)
+	user := &models.CreatedTeamAPIKey{
+		ID:        uuid.New(),
+		Name:      "limited",
+		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}}},
+	}
+
+	t.Run("unlimited key uses zero backend IO", func(t *testing.T) {
+		manager := &recordingQuotaManager{}
+		admission := (&Controller{quota: manager}).quotaAdmission(&models.CreatedTeamAPIKey{ID: uuid.New()})
+
+		assert.Nil(t, admission)
+		assert.Equal(t, int64(0), manager.acquireCalls.Load())
+	})
+
+	t.Run("quota exceeded maps to manager error", func(t *testing.T) {
+		manager := &recordingQuotaManager{acquireErr: quota.ErrQuotaExceeded}
+		admission := (&Controller{quota: manager}).quotaAdmission(user)
+		require.NotNil(t, admission)
+
+		err := admission.Acquire(context.Background(), "lock-1")
+		require.Error(t, err)
+		assert.Equal(t, managererrors.ErrorQuotaExceeded, managererrors.GetErrCode(err))
+		assert.Equal(t, int64(1), manager.acquireCalls.Load())
+		assert.Equal(t, user.ID.String(), manager.lastAcquire.APIKeyID)
+		assert.Equal(t, "lock-1", manager.lastAcquire.LockString)
+		assert.NotSame(t, user.QuotaSpec, manager.lastAcquire.Quota)
+	})
+}
+
+func TestCreateSandbox_QuotaExceededFromAdmission(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+	templateName := "quota-limited-template"
+	_ = CreateSandboxPool(t, controller, templateName, 1)
+
+	limit := int64(1)
+	manager := &recordingQuotaManager{acquireErr: quota.ErrQuotaExceeded}
+	controller.quota = manager
+	user := &models.CreatedTeamAPIKey{
+		ID:        uuid.New(),
+		Key:       "limited-key",
+		Name:      "limited",
+		Team:      models.AdminTeam(),
+		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}}},
+	}
+
+	_, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.Code)
+	assert.Equal(t, int64(1), manager.acquireCalls.Load())
+	assert.Equal(t, user.ID.String(), manager.lastAcquire.APIKeyID)
+	assert.NotEmpty(t, manager.lastAcquire.LockString)
 }
 
 // TestCsiMountOptionsConfigRecord tests the csiMountOptionsConfigRecord function

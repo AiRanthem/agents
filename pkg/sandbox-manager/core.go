@@ -55,6 +55,7 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 		instance: &SandboxManager{
 			proxy:              proxy.NewServer(opts),
 			memberlistBindPort: opts.MemberlistBindPort,
+			primary:            &primaryState{},
 		},
 		opts: opts,
 	}
@@ -62,11 +63,11 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 
 func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 	b.buildInfraFunc = func() (infra.Builder, error) {
-		mgr, err := infracache.NewControllerManager(b.opts.RestConfig, b.opts)
+		mgr, health, err := infracache.NewControllerManagerWithHealth(b.opts.RestConfig, b.opts)
 		if err != nil {
 			return nil, err
 		}
-		cache, err := infracache.NewCache(mgr)
+		cache, err := infracache.NewCacheWithHealth(mgr, health)
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +140,17 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 		b.instance.proxy.SetRequestAdapter(b.requestAdapter)
 	}
 
+	if b.instance.primary == nil {
+		b.instance.primary = &primaryState{}
+	}
+	if b.opts.RestConfig != nil {
+		elector, err := newPrimaryElector(b.opts, b.instance.primary)
+		if err != nil {
+			return nil, errors.NewError(errors.ErrorInternal, "failed to create primary elector: %v", err)
+		}
+		b.instance.elector = elector
+	}
+
 	return b.instance, nil
 }
 
@@ -148,6 +160,9 @@ type SandboxManager struct {
 
 	infra infra.Infrastructure
 	proxy *proxy.Server
+
+	primary *primaryState
+	elector *primaryElector
 }
 
 func (m *SandboxManager) Run(ctx context.Context) error {
@@ -160,6 +175,12 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 			klog.Error(err, "proxy stopped")
 		}
 	}()
+
+	if m.elector != nil {
+		go m.elector.Run(ctx)
+	} else {
+		m.primary.set(true)
+	}
 
 	// Start peers (optional - only if configured)
 	if m.peersManager != nil {
@@ -190,4 +211,14 @@ func (m *SandboxManager) Stop(ctx context.Context) {
 
 func (m *SandboxManager) GetInfra() infra.Infrastructure {
 	return m.infra
+}
+
+func (m *SandboxManager) IsPrimary() bool {
+	if m == nil || m.primary == nil {
+		return true
+	}
+	if m.elector == nil {
+		return true
+	}
+	return m.primary.IsPrimary()
 }

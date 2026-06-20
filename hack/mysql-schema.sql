@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS `team_api_keys` (
   `team_id`         BIGINT UNSIGNED NOT NULL,
   -- Creator metadata only; not used for ownership or authorization
   `created_by_uid`  VARCHAR(36)     DEFAULT NULL,
+  -- Static API-key quota configuration. Dynamic usage is stored outside MySQL.
+  `quota`           JSON            DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE INDEX `idx_team_api_keys_uid`      (`uid`),
   UNIQUE INDEX `idx_team_api_keys_key_hash` (`key_hash`),
@@ -46,6 +48,9 @@ CREATE TABLE IF NOT EXISTS `team_api_keys` (
   INDEX        `idx_team_api_keys_created_by_uid`   (`created_by_uid`),
   INDEX        `idx_team_api_keys_deleted_at`        (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- Manual migration for existing deployments:
+-- ALTER TABLE `team_api_keys` ADD COLUMN `quota` JSON DEFAULT NULL AFTER `created_by_uid`;
 
 -- ---------------------------------------------------------------
 -- Seed Data

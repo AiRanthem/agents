@@ -360,7 +360,7 @@ func TestSecretKeyStorage_UpdateAndRetry(t *testing.T) {
 			run: func(t *testing.T) error {
 				storage, _ := newSecretStorageForTest(t, map[string][]byte{})
 				oldMarshal := marshalAPIKey
-				marshalAPIKey = func(v any) ([]byte, error) { return nil, fmt.Errorf("boom") }
+				marshalAPIKey = func(*models.CreatedTeamAPIKey) ([]byte, error) { return nil, fmt.Errorf("boom") }
 				t.Cleanup(func() { marshalAPIKey = oldMarshal })
 				return storage.updateSecret(context.Background(), "id", &models.CreatedTeamAPIKey{ID: uuid.New(), Key: "x"})
 			},
@@ -634,7 +634,7 @@ func TestSecretKeyStorage_CreateKeyInSecretErrors(t *testing.T) {
 			run: func(t *testing.T) error {
 				storage, _ := newSecretStorageForTest(t, map[string][]byte{})
 				oldMarshal := marshalAPIKey
-				marshalAPIKey = func(v any) ([]byte, error) { return nil, fmt.Errorf("marshal failed") }
+				marshalAPIKey = func(*models.CreatedTeamAPIKey) ([]byte, error) { return nil, fmt.Errorf("marshal failed") }
 				t.Cleanup(func() { marshalAPIKey = oldMarshal })
 				_, err := storage.createKeyInSecret(t.Context(), uuid.NewString(), &models.CreatedTeamAPIKey{
 					ID:   uuid.New(),
@@ -774,6 +774,142 @@ func TestSecretKeyStorage_DeleteAndList(t *testing.T) {
 	}
 	storageWithDeleteError := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
 	require.Error(t, storageWithDeleteError.DeleteKey(context.Background(), key2))
+}
+
+func TestSecretKeyStorage_QuotaPersistenceAndLimitedList(t *testing.T) {
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+	creator := &models.CreatedTeamAPIKey{
+		ID:   uuid.New(),
+		Team: &models.Team{ID: uuid.New(), Name: "team-a"},
+	}
+	limit := int64(2)
+
+	created, err := storage.CreateKey(context.Background(), creator, CreateKeyOptions{
+		Name: "limited",
+		Quota: &models.QuotaSpec{
+			Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}},
+		},
+	})
+	require.NoError(t, err)
+	assertQuotaLimitForKeysTest(t, created.QuotaSpec, 2)
+	assertPublicQuotaLimitForKeysTest(t, created.Quota, 2)
+
+	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
+	loaded, found := storage.LoadByID(context.Background(), created.ID.String())
+	require.True(t, found)
+	assertQuotaLimitForKeysTest(t, loaded.QuotaSpec, 2)
+	assertPublicQuotaLimitForKeysTest(t, loaded.Quota, 2)
+
+	limited, err := storage.ListLimited(context.Background())
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+	require.Equal(t, created.ID, limited[0].ID)
+	assertQuotaLimitForKeysTest(t, limited[0].QuotaSpec, 2)
+	assertPublicQuotaLimitForKeysTest(t, limited[0].Quota, 2)
+}
+
+func TestSecretKeyStorage_OldPayloadWithoutQuotaIsUnlimited(t *testing.T) {
+	keyID := uuid.New()
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{
+		keyID.String(): []byte(fmt.Sprintf(`{"id":%q,"key":"old-key","name":"old","team":{"id":%q,"name":"team-a"}}`, keyID.String(), uuid.NewString())),
+	})
+
+	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
+	loaded, found := storage.LoadByID(context.Background(), keyID.String())
+	require.True(t, found)
+	assert.Nil(t, loaded.QuotaSpec)
+	assert.Nil(t, loaded.Quota)
+
+	limited, err := storage.ListLimited(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, limited)
+}
+
+func TestSecretKeyStorage_InvalidPersistedQuotaIsUnlimited(t *testing.T) {
+	tests := []struct {
+		name     string
+		quotaRaw string
+	}{
+		{
+			name:     "structural quota decode error keeps key",
+			quotaRaw: `{"limits":{"dimension":"sandbox.count","limit":1}}`,
+		},
+		{
+			name:     "unknown quota field keeps key",
+			quotaRaw: `{"limits":[{"dimension":"sandbox.count","limit":1}],"sandbox":{"count":1}}`,
+		},
+		{
+			name:     "semantic quota validation error keeps key",
+			quotaRaw: `{"limits":[{"dimension":"sandbox.count","limit":-1}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			keyID := uuid.New()
+			rawKey := uuid.NewString()
+			storage, _ := newSecretStorageForTest(t, map[string][]byte{
+				keyID.String(): []byte(fmt.Sprintf(`{"id":%q,"key":%q,"name":"bad-quota","team":{"id":%q,"name":"team-a"},"quota":%s}`, keyID.String(), rawKey, uuid.NewString(), tt.quotaRaw)),
+			})
+
+			require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
+			loaded, found := storage.LoadByKey(context.Background(), rawKey)
+			require.True(t, found)
+			require.Equal(t, keyID, loaded.ID)
+			assert.Nil(t, loaded.QuotaSpec)
+			assert.Nil(t, loaded.Quota)
+		})
+	}
+}
+
+func TestSecretKeyStorage_ListByOwnerTeamIncludesQuota(t *testing.T) {
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+	creator := &models.CreatedTeamAPIKey{
+		ID:   uuid.New(),
+		Team: &models.Team{ID: uuid.New(), Name: "team-a"},
+	}
+	limit := int64(4)
+
+	created, err := storage.CreateKey(context.Background(), creator, CreateKeyOptions{
+		Name: "limited",
+		Quota: &models.QuotaSpec{
+			Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
+
+	keys, err := storage.ListByOwnerTeam(context.Background(), creator)
+	require.NoError(t, err)
+	var listed *models.TeamAPIKey
+	for _, key := range keys {
+		if key.ID == created.ID {
+			listed = key
+			break
+		}
+	}
+	require.NotNil(t, listed)
+	assertPublicQuotaLimitForKeysTest(t, listed.Quota, 4)
+	spec, err := listed.Quota.ToQuotaSpec()
+	require.NoError(t, err)
+	assertQuotaLimitForKeysTest(t, spec, 4)
+}
+
+func assertQuotaLimitForKeysTest(t *testing.T, spec *models.QuotaSpec, want int64) {
+	t.Helper()
+	require.NotNil(t, spec)
+	got, ok := spec.SandboxCountLimit()
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+func assertPublicQuotaLimitForKeysTest(t *testing.T, quota *models.APIKeyQuota, want int64) {
+	t.Helper()
+	require.NotNil(t, quota)
+	require.NotNil(t, quota.Sandbox)
+	require.NotNil(t, quota.Sandbox.Count)
+	assert.Equal(t, want, *quota.Sandbox.Count)
 }
 
 func TestSecretKeyStorage_ListNilUsers(t *testing.T) {

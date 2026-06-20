@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +56,7 @@ import (
 	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	pkgutils "github.com/openkruise/agents/pkg/utils"
@@ -2885,6 +2887,86 @@ func TestTryClaimSandboxRecordsPickSandboxFailures(t *testing.T) {
 	}
 }
 
+func TestTryClaimSandbox_AdmissionDeniedIsTerminalBeforeLock(t *testing.T) {
+	testInfra, fc := NewTestInfra(t)
+	createAvailableSandboxForFailureRecord(t, fc, "tmpl", func(sbx *v1alpha1.Sandbox) {
+		sbx.Name = "pooled-1"
+	})
+	quotaErr := managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
+	opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+		Namespace:       "default",
+		User:            "user-1",
+		Template:        "tmpl",
+		CreateOnNoStock: false,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(context.Context, string) error { return quotaErr },
+			Release: func(context.Context, string) error {
+				t.Fatalf("release must not be called when acquire fails")
+				return nil
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	claimed, _, claimErr := TryClaimSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, testInfra.createLimiter)
+
+	require.Error(t, claimErr)
+	assert.Nil(t, claimed)
+	assert.True(t, errors.Is(claimErr, quotaErr) || managererrors.GetErrCode(claimErr) == managererrors.ErrorQuotaExceeded)
+	pooled := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "pooled-1"}, pooled))
+	assert.Empty(t, pooled.Annotations[v1alpha1.AnnotationLock])
+}
+
+func TestTryClaimSandbox_AdmissionDeniedReturnsPooledSandbox(t *testing.T) {
+	testInfra, fc := NewTestInfra(t)
+	createAvailableSandboxForFailureRecord(t, fc, "tmpl", func(sbx *v1alpha1.Sandbox) {
+		sbx.Name = "pooled-1"
+	})
+
+	quotaErr := managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
+	releaseCalled := false
+	denyOpts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+		Namespace:       "default",
+		User:            "user-1",
+		Template:        "tmpl",
+		CreateOnNoStock: false,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(context.Context, string) error { return quotaErr },
+			Release: func(context.Context, string) error {
+				releaseCalled = true
+				return nil
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	claimed, _, claimErr := TryClaimSandbox(t.Context(), denyOpts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, testInfra.createLimiter)
+	require.Error(t, claimErr)
+	assert.Nil(t, claimed)
+	assert.Equal(t, managererrors.ErrorQuotaExceeded, managererrors.GetErrCode(claimErr))
+	assert.False(t, releaseCalled, "nothing was charged, so Release must not run")
+
+	pooled := &v1alpha1.Sandbox{}
+	require.NoError(t, fc.Get(t.Context(), client.ObjectKey{Namespace: "default", Name: "pooled-1"}, pooled))
+	_, residual := testInfra.pickCache.Load(getPickKey(pooled))
+	assert.False(t, residual, "admission denial must leave no pickCache residue")
+	assert.Len(t, testInfra.claimLockChannel, 0, "admission denial must free the claim worker")
+	assert.Empty(t, pooled.Annotations[v1alpha1.AnnotationLock], "denied attempt must not lock the pooled sandbox")
+
+	allowOpts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+		Namespace:       "default",
+		User:            "user-2",
+		Template:        "tmpl",
+		CreateOnNoStock: false,
+	})
+	require.NoError(t, err)
+	reclaimed, _, err := TryClaimSandbox(t.Context(), allowOpts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, testInfra.createLimiter)
+	require.NoError(t, err)
+	require.NotNil(t, reclaimed)
+	assert.Equal(t, "pooled-1", reclaimed.(*Sandbox).Sandbox.Name)
+}
+
 func createAvailableSandboxForFailureRecord(t *testing.T, fc client.Client, template string, mutate func(sbx *v1alpha1.Sandbox)) {
 	t.Helper()
 	sbx := &v1alpha1.Sandbox{
@@ -3274,6 +3356,99 @@ func TestPickAnAvailableSandbox_PrefersMatchingRevision(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClaimAdmissionReleasesProvablyRejectedCreate(t *testing.T) {
+	utestutils.InitLogOutput()
+
+	releaseCalls := atomic.Int64{}
+	origCreateSandbox := DefaultCreateSandbox
+	DefaultCreateSandbox = func(context.Context, *v1alpha1.Sandbox, client.Client) (*v1alpha1.Sandbox, error) {
+		return nil, apierrors.NewInvalid(
+			schema.GroupKind{Group: v1alpha1.GroupVersion.Group, Kind: "Sandbox"},
+			"bad-sandbox",
+			nil,
+		)
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+		DisableRouteReconciliation: true,
+	})
+	createClaimSandboxSetForTest(t, fc, "tmpl", "default")
+	_, _, err := testInfra.ClaimSandbox(t.Context(), infra.ClaimSandboxOptions{
+		Namespace:       "default",
+		User:            "key-1",
+		Template:        "tmpl",
+		CreateOnNoStock: true,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(context.Context, string) error { return nil },
+			Release: func(ctx context.Context, lockString string) error {
+				_, hasDeadline := ctx.Deadline()
+				assert.True(t, hasDeadline)
+				assert.NotEmpty(t, lockString)
+				releaseCalls.Add(1)
+				return nil
+			},
+		},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, managererrors.ErrorBadRequest, managererrors.GetErrCode(err))
+	assert.Equal(t, int64(1), releaseCalls.Load())
+}
+
+func TestClaimAdmissionRetainsAmbiguousCreateError(t *testing.T) {
+	utestutils.InitLogOutput()
+
+	releaseCalls := atomic.Int64{}
+	origCreateSandbox := DefaultCreateSandbox
+	DefaultCreateSandbox = func(context.Context, *v1alpha1.Sandbox, client.Client) (*v1alpha1.Sandbox, error) {
+		return nil, errors.New("apiserver timeout after create")
+	}
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+		DisableRouteReconciliation: true,
+	})
+	createClaimSandboxSetForTest(t, fc, "tmpl", "default")
+	_, _, err := testInfra.ClaimSandbox(t.Context(), infra.ClaimSandboxOptions{
+		Namespace:       "default",
+		User:            "key-1",
+		Template:        "tmpl",
+		CreateOnNoStock: true,
+		ClaimTimeout:    50 * time.Millisecond,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(context.Context, string) error { return nil },
+			Release: func(context.Context, string) error {
+				releaseCalls.Add(1)
+				return nil
+			},
+		},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, int64(0), releaseCalls.Load())
+}
+
+func createClaimSandboxSetForTest(t *testing.T, c client.Client, name, namespace string) {
+	t.Helper()
+	sbs := &v1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: v1alpha1.SandboxSetSpec{
+			EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "main", Image: "test-image"}},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, c.Create(t.Context(), sbs))
 }
 
 func TestModifyPickedSandbox_InitRuntime(t *testing.T) {

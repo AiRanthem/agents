@@ -17,14 +17,20 @@ limitations under the License.
 package e2b
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
+
+	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
 )
+
+const apiKeyQuotaCleanupTimeout = 2 * time.Second
 
 func (sc *Controller) ListAPIKeys(r *http.Request) (web.ApiResponse[[]*models.TeamAPIKey], *web.ApiError) {
 	ctx := r.Context()
@@ -68,6 +74,7 @@ func (sc *Controller) CreateAPIKey(r *http.Request) (web.ApiResponse[*models.Cre
 	createdAPIKey, err := sc.keys.CreateKey(ctx, user, keys.CreateKeyOptions{
 		Name:     request.Name,
 		TeamName: request.TeamName,
+		Quota:    request.QuotaSpec.DeepCopy(),
 	})
 	if err != nil {
 		return web.ApiResponse[*models.CreatedTeamAPIKey]{}, &web.ApiError{
@@ -103,6 +110,14 @@ func validateCreateAPIKeyRequest(request *models.NewTeamAPIKey) *web.ApiError {
 			Message: "api-key name is required",
 		}
 	}
+	quotaSpec, err := request.Quota.ToQuotaSpec()
+	if err != nil {
+		return &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		}
+	}
+	request.QuotaSpec = quotaSpec
 	return nil
 }
 
@@ -148,9 +163,40 @@ func (sc *Controller) DeleteAPIKey(r *http.Request) (web.ApiResponse[struct{}], 
 				Message: fmt.Sprintf("Failed to delete API key: %v", err),
 			}
 		}
+		sc.cleanupQuotaForDeletedAPIKey(ctx, key.ID.String())
 	}
 
 	return web.ApiResponse[struct{}]{
 		Code: http.StatusNoContent,
 	}, nil
+}
+
+func (sc *Controller) cleanupQuotaForDeletedAPIKey(ctx context.Context, apiKeyID string) {
+	if sc.quota == nil || apiKeyID == "" {
+		return
+	}
+	go func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), apiKeyQuotaCleanupTimeout)
+		defer cancel()
+		log := klog.FromContext(cleanupCtx)
+		backoff := 100 * time.Millisecond
+		for {
+			err := sc.quota.DeleteSubject(cleanupCtx, apiKeyID)
+			if err == nil {
+				return
+			}
+			log.Error(err, "failed to cleanup quota live set for deleted api-key", "apiKeyID", apiKeyID)
+
+			timer := time.NewTimer(backoff)
+			select {
+			case <-cleanupCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if backoff < 500*time.Millisecond {
+				backoff *= 2
+			}
+		}
+	}()
 }

@@ -210,8 +210,6 @@ cython_debug/
 .trae/
 .agents/
 
-REVIEW.md
-
 .gomodcache/
 .modcache/
 .DS_Store

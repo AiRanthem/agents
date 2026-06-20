@@ -1587,6 +1587,105 @@ func TestDeleteSandbox(t *testing.T) {
 	}
 }
 
+func TestDeleteSandbox_ReleasesQuotaAfterAcceptedDelete(t *testing.T) {
+	templateName := "quota-release-template"
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+
+	tests := []struct {
+		name       string
+		releaseErr error
+	}{
+		{name: "release succeeds"},
+		{name: "release error does not change delete response", releaseErr: fmt.Errorf("redis timeout")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller, _, teardown := Setup(t)
+			defer teardown()
+			_ = CreateSandboxPool(t, controller, templateName, 1)
+			manager := &recordingQuotaManager{releaseErr: tt.releaseErr}
+			controller.quota = manager
+
+			createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+				TemplateID: templateName,
+				Metadata: map[string]string{
+					models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+				},
+			}, nil, user))
+			require.Nil(t, err)
+
+			deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+				"sandboxID": createResp.Body.SandboxID,
+			}, user))
+
+			require.Nil(t, apiErr)
+			assert.Equal(t, http.StatusNoContent, deleteResp.Code)
+			assert.Equal(t, int64(1), manager.releaseCalls.Load())
+			assert.True(t, manager.releaseHasDeadline.Load(), "request-side release must be deadline bounded")
+			assert.Equal(t, keys.AdminKeyID.String(), manager.lastRelease.APIKeyID)
+			assert.NotEmpty(t, manager.lastRelease.LockString)
+		})
+	}
+}
+
+func TestDeleteSandbox_SkipsQuotaReleaseWhenDeleteNotAccepted(t *testing.T) {
+	templateName := "quota-release-skip-template"
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+
+	t.Run("missing sandbox remains idempotent without release", func(t *testing.T) {
+		controller, _, teardown := Setup(t)
+		defer teardown()
+		manager := &recordingQuotaManager{}
+		controller.quota = manager
+
+		deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+			"sandboxID": "missing",
+		}, user))
+
+		require.Nil(t, apiErr)
+		assert.Equal(t, http.StatusNoContent, deleteResp.Code)
+		assert.Equal(t, int64(0), manager.releaseCalls.Load())
+	})
+
+	t.Run("delete failure does not release", func(t *testing.T) {
+		controller, _, teardown := Setup(t)
+		defer teardown()
+		_ = CreateSandboxPool(t, controller, templateName, 1)
+		manager := &recordingQuotaManager{}
+		controller.quota = manager
+
+		createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+			TemplateID: templateName,
+			Metadata: map[string]string{
+				models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+			},
+		}, nil, user))
+		require.Nil(t, err)
+
+		origDeleteSandbox := sandboxcr.DefaultDeleteSandbox
+		sandboxcr.DefaultDeleteSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, client ctrlclient.Client) error {
+			return fmt.Errorf("delete failed")
+		}
+		t.Cleanup(func() { sandboxcr.DefaultDeleteSandbox = origDeleteSandbox })
+
+		_, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+			"sandboxID": createResp.Body.SandboxID,
+		}, user))
+
+		require.NotNil(t, apiErr)
+		assert.Equal(t, int64(0), manager.releaseCalls.Load())
+	})
+}
+
 func TestDeleteSandboxDeadClaimedSandbox(t *testing.T) {
 	controller, fc, teardown := Setup(t)
 	defer teardown()

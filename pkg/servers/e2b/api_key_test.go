@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -200,6 +202,183 @@ func TestCreateAPIKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateAPIKey_QuotaJSONValidationAndResponses(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	ctx := logs.NewContext()
+	adminUser := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	regularUser, err := controller.keys.CreateKey(ctx, adminUser, keys.CreateKeyOptions{Name: "regular-user", TeamName: "regular-team"})
+	require.NoError(t, err)
+	refreshKeyStorageForTest(t, controller)
+	require.NoError(t, fc.Create(t.Context(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "regular-team"},
+	}))
+
+	tests := []struct {
+		name             string
+		header           string
+		body             string
+		expectCode       int
+		expectError      string
+		expectQuota      *int64
+		expectNoQuota    bool
+		expectNoLimits   bool
+		expectCompatible bool
+	}{
+		{
+			name:             "admin creates limited key with nested quota",
+			header:           InitKey,
+			body:             `{"name":"limited","quota":{"sandbox":{"count":2}}}`,
+			expectCode:       http.StatusCreated,
+			expectQuota:      ptrInt64ForAPIKeyTest(2),
+			expectNoLimits:   true,
+			expectCompatible: true,
+		},
+		{
+			name:             "admin creates hard-zero key",
+			header:           InitKey,
+			body:             `{"name":"zero","quota":{"sandbox":{"count":0}}}`,
+			expectCode:       http.StatusCreated,
+			expectQuota:      ptrInt64ForAPIKeyTest(0),
+			expectNoLimits:   true,
+			expectCompatible: true,
+		},
+		{
+			name:        "regular key cannot set quota",
+			header:      regularUser.Key,
+			body:        `{"name":"regular-limited","quota":{"sandbox":{"count":1}}}`,
+			expectCode:  http.StatusForbidden,
+			expectError: "only admin can set api-key quota",
+		},
+		{
+			name:        "negative nested count is rejected",
+			header:      InitKey,
+			body:        `{"name":"negative","quota":{"sandbox":{"count":-1}}}`,
+			expectCode:  http.StatusBadRequest,
+			expectError: "cannot be negative",
+		},
+		{
+			name:        "unsupported future dimension is rejected",
+			header:      InitKey,
+			body:        `{"name":"future","quota":{"cpu":{"count":1}}}`,
+			expectCode:  http.StatusBadRequest,
+			expectError: `unsupported quota field "cpu"`,
+		},
+		{
+			name:        "internal limits shape is rejected",
+			header:      InitKey,
+			body:        `{"name":"internal","quota":{"limits":[{"dimension":"sandbox.count","limit":1}]}}`,
+			expectCode:  http.StatusBadRequest,
+			expectError: `unsupported quota field "limits"`,
+		},
+		{
+			name:             "missing quota remains unlimited",
+			header:           InitKey,
+			body:             `{"name":"unlimited"}`,
+			expectCode:       http.StatusCreated,
+			expectNoQuota:    true,
+			expectCompatible: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := createAPIKeyViaHTTP(t, controller, tt.header, tt.body)
+			require.Equal(t, tt.expectCode, rec.Code)
+			if tt.expectError != "" {
+				var apiErr web.ApiError
+				require.NoError(t, json.NewDecoder(rec.Body).Decode(&apiErr))
+				assert.Contains(t, apiErr.Message, tt.expectError)
+				return
+			}
+
+			var body models.CreatedTeamAPIKey
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+			if tt.expectCompatible {
+				assert.True(t, keys.IsE2BSDKCompatible(body.Key))
+			}
+			if tt.expectNoQuota {
+				assert.Nil(t, body.Quota)
+			}
+			if tt.expectQuota != nil {
+				require.NotNil(t, body.Quota)
+				require.NotNil(t, body.Quota.Sandbox)
+				require.NotNil(t, body.Quota.Sandbox.Count)
+				assert.Equal(t, *tt.expectQuota, *body.Quota.Sandbox.Count)
+			}
+			if tt.expectNoLimits {
+				assert.NotContains(t, rec.Body.String(), `"limits"`)
+			}
+		})
+	}
+}
+
+func TestListAPIKeys_ReturnsNestedQuotaJSON(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	createRec := createAPIKeyViaHTTP(t, controller, InitKey, `{"name":"limited","quota":{"sandbox":{"count":2}}}`)
+	require.Equal(t, http.StatusCreated, createRec.Code)
+	refreshKeyStorageForTest(t, controller)
+
+	req := httptest.NewRequest(http.MethodGet, "/api-keys", nil)
+	req.Header.Set(models.HeaderApiKey, InitKey)
+	rec := httptest.NewRecorder()
+	controller.mux.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.NotContains(t, rec.Body.String(), `"limits"`)
+
+	var body []*models.TeamAPIKey
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	var limited *models.TeamAPIKey
+	for _, apiKey := range body {
+		if apiKey.Name == "limited" {
+			limited = apiKey
+			break
+		}
+	}
+	require.NotNil(t, limited)
+	require.NotNil(t, limited.Quota)
+	require.NotNil(t, limited.Quota.Sandbox)
+	require.NotNil(t, limited.Quota.Sandbox.Count)
+	assert.Equal(t, int64(2), *limited.Quota.Sandbox.Count)
+}
+
+func TestCreateAPIKey_QuotaAcceptedWhenRedisAbsent(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	rec := createAPIKeyViaHTTP(t, controller, InitKey, `{"name":"limited-no-redis","quota":{"sandbox":{"count":2}}}`)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var body models.CreatedTeamAPIKey
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	require.NotNil(t, body.Quota)
+	require.NotNil(t, body.Quota.Sandbox)
+	require.NotNil(t, body.Quota.Sandbox.Count)
+	assert.Equal(t, int64(2), *body.Quota.Sandbox.Count)
+}
+
+func createAPIKeyViaHTTP(t *testing.T, controller *Controller, header, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api-keys", strings.NewReader(body))
+	req.Header.Set(models.HeaderApiKey, header)
+	rec := httptest.NewRecorder()
+	controller.mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func ptrInt64ForAPIKeyTest(v int64) *int64 {
+	return &v
 }
 
 func TestCompatibleAPIKeyEndpoint(t *testing.T) {
@@ -463,4 +642,35 @@ func TestDeleteAPIKeyPermissionMiddleware(t *testing.T) {
 			assert.Equal(t, tt.expectCode, resp.Code)
 		})
 	}
+}
+
+func TestDeleteAPIKey_CleansQuotaLiveSet(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	ctx := logs.NewContext()
+	adminUser := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	targetKey, err := controller.keys.CreateKey(ctx, adminUser, keys.CreateKeyOptions{Name: "target-key", TeamName: "team-a"})
+	require.NoError(t, err)
+	refreshKeyStorageForTest(t, controller)
+
+	manager := &recordingQuotaManager{}
+	controller.quota = manager
+
+	req := NewRequest(t, nil, nil, map[string]string{"apiKeyID": targetKey.ID.String()}, adminUser)
+	reqCtx := context.WithValue(logs.NewContext(), "user", adminUser)
+	reqCtx, apiError := controller.CheckDeleteAPIKeyPermission(reqCtx, req)
+	require.Nil(t, apiError)
+
+	resp, apiError := controller.DeleteAPIKey(req.WithContext(reqCtx))
+	require.Nil(t, apiError)
+	assert.Equal(t, http.StatusNoContent, resp.Code)
+	require.Eventually(t, func() bool {
+		return manager.deleteCalls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
 }

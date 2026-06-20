@@ -18,9 +18,11 @@ package keys
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +47,10 @@ const loadKeyJoinByHashRegex = loadKeyJoinPrefix + "key_hash"
 const loadKeyJoinByUIDRegex = loadKeyJoinPrefix + "uid"
 
 // listByOwnerRegex matches the subquery used by ListByOwnerTeam.
-const listByOwnerRegex = "SELECT `created_at`,`uid`,`name`,`created_by_uid` FROM `team_api_keys` WHERE \\(team_id = \\(SELECT id FROM teams WHERE name = \\? AND deleted_at IS NULL LIMIT 1\\)\\) AND `team_api_keys`\\.`deleted_at` IS NULL"
+const listByOwnerRegex = "SELECT `created_at`,`uid`,`name`,`created_by_uid`,`quota` FROM `team_api_keys` WHERE \\(team_id = \\(SELECT id FROM teams WHERE name = \\? AND deleted_at IS NULL LIMIT 1\\)\\) AND `team_api_keys`\\.`deleted_at` IS NULL"
+
+// listLimitedRegex matches the joined limited-key query used by ListLimited.
+const listLimitedRegex = "SELECT team_api_keys\\.\\*, teams\\.uid AS team_uid, teams\\.name AS team_name FROM `team_api_keys` JOIN teams ON teams\\.id = team_api_keys\\.team_id AND teams\\.deleted_at IS NULL.*team_api_keys\\.quota IS NOT NULL"
 
 // listTeamsRegex matches the EXISTS subquery used by ListTeams for admin users.
 const listTeamsRegex = "SELECT `uid`,`name` FROM `teams` WHERE \\(EXISTS \\(SELECT 1 FROM team_api_keys WHERE team_api_keys\\.team_id = teams\\.id AND team_api_keys\\.deleted_at IS NULL\\)\\) AND `teams`\\.`deleted_at` IS NULL"
@@ -307,6 +312,54 @@ func TestMySQL_LoadByKeyAndID(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestMySQL_LoadByKeyAndIDInvalidQuotaDoesNotAuthenticate(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(*mysqlKeyStorage, sqlmock.Sqlmock, time.Time, uuid.UUID, uuid.UUID)
+		load      func(*mysqlKeyStorage, uuid.UUID) (*models.CreatedTeamAPIKey, bool)
+	}{
+		{
+			name: "load by key",
+			setupMock: func(st *mysqlKeyStorage, mock sqlmock.Sqlmock, now time.Time, keyID, teamID uuid.UUID) {
+				mock.ExpectQuery(loadKeyJoinByHashRegex).
+					WillReturnRows(sqlmock.NewRows(
+						[]string{"id", "created_at", "updated_at", "deleted_at", "uid", "name", "key_hash", "team_id", "created_by_uid", "quota", "team_uid", "team_name"},
+					).AddRow(1, now, now, nil, keyID.String(), "bad-quota", st.hashKey("raw"), 1, nil, `{"limits":[{"dimension":"sandbox.count","limit":-1}]}`, teamID.String(), "team-a"))
+			},
+			load: func(st *mysqlKeyStorage, _ uuid.UUID) (*models.CreatedTeamAPIKey, bool) {
+				return st.LoadByKey(context.Background(), "raw")
+			},
+		},
+		{
+			name: "load by id",
+			setupMock: func(st *mysqlKeyStorage, mock sqlmock.Sqlmock, now time.Time, keyID, teamID uuid.UUID) {
+				mock.ExpectQuery(loadKeyJoinByUIDRegex).
+					WillReturnRows(sqlmock.NewRows(
+						[]string{"id", "created_at", "updated_at", "deleted_at", "uid", "name", "key_hash", "team_id", "created_by_uid", "quota", "team_uid", "team_name"},
+					).AddRow(1, now, now, nil, keyID.String(), "bad-quota", st.hashKey("raw"), 1, nil, `{"limits":[{"dimension":"sandbox.count","limit":-1}]}`, teamID.String(), "team-a"))
+			},
+			load: func(st *mysqlKeyStorage, keyID uuid.UUID) (*models.CreatedTeamAPIKey, bool) {
+				return st.LoadByID(context.Background(), keyID.String())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			st, mock, done := newMockStorage(t)
+			defer done()
+			keyID := uuid.New()
+			teamID := uuid.New()
+			tt.setupMock(st, mock, time.Now(), keyID, teamID)
+
+			got, ok := tt.load(st, keyID)
+			require.False(t, ok)
+			require.Nil(t, got)
+		})
+	}
+}
+
 func TestMySQL_CreateKeyBranches(t *testing.T) {
 	userTeam := &models.Team{ID: uuid.New(), Name: "team-a"}
 	user := &models.CreatedTeamAPIKey{ID: uuid.New(), Team: userTeam}
@@ -446,6 +499,132 @@ func TestMySQL_CreateKeyCachesSanitizedClones(t *testing.T) {
 	}
 }
 
+func TestMySQL_QuotaMarshalAndLimitedList(t *testing.T) {
+	limit := int64(2)
+	quotaRaw, err := marshalQuotaForDB(&models.QuotaSpec{
+		Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, quotaRaw)
+	require.Contains(t, *quotaRaw, "sandbox.count")
+
+	decoded, err := unmarshalQuotaFromDB(quotaRaw)
+	require.NoError(t, err)
+	assertQuotaLimitForKeysTest(t, decoded, 2)
+
+	st, mock, done := newMockStorage(t)
+	defer done()
+
+	now := time.Now()
+	keyID := uuid.New()
+	teamID := uuid.New()
+	creatorID := uuid.New()
+	mock.ExpectQuery(listLimitedRegex).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"id", "created_at", "updated_at", "deleted_at", "uid", "name", "key_hash", "team_id", "created_by_uid", "quota", "team_uid", "team_name"},
+		).AddRow(1, now, now, nil, keyID.String(), "limited", st.hashKey("raw"), 7, creatorID.String(), *quotaRaw, teamID.String(), "team-a"))
+
+	keys, err := st.ListLimited(context.Background())
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.Equal(t, keyID, keys[0].ID)
+	require.Equal(t, "limited", keys[0].Name)
+	require.Equal(t, teamID, keys[0].Team.ID)
+	require.Equal(t, "team-a", keys[0].Team.Name)
+	assertQuotaLimitForKeysTest(t, keys[0].QuotaSpec, 2)
+	assertPublicQuotaLimitForKeysTest(t, keys[0].Quota, 2)
+}
+
+func TestMySQL_ListByOwnerTeamIncludesQuota(t *testing.T) {
+	st, mock, done := newMockStorage(t)
+	defer done()
+
+	now := time.Now()
+	owner := &models.CreatedTeamAPIKey{ID: uuid.New(), Team: &models.Team{Name: "my-team"}}
+	keyID := uuid.New()
+	creatorID := uuid.New()
+	quotaRaw := mustQuotaJSONForMySQLTest(t, 4)
+	mock.ExpectQuery(listByOwnerRegex).
+		WithArgs("my-team").
+		WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid", "quota"}).
+			AddRow(now, keyID.String(), "limited", creatorID.String(), quotaRaw))
+
+	keys, err := st.ListByOwnerTeam(context.Background(), owner)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.Equal(t, keyID, keys[0].ID)
+	require.Equal(t, "limited", keys[0].Name)
+	assertPublicQuotaLimitForKeysTest(t, keys[0].Quota, 4)
+	spec, err := keys[0].Quota.ToQuotaSpec()
+	require.NoError(t, err)
+	assertQuotaLimitForKeysTest(t, spec, 4)
+}
+
+func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
+	st, mock, done := newMockStorage(t)
+	defer done()
+
+	team := &models.Team{ID: uuid.New(), Name: "team-a"}
+	user := &models.CreatedTeamAPIKey{ID: uuid.New(), Team: team}
+	limit := int64(3)
+	mock.ExpectQuery("SELECT .*FROM `teams`.*").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "uid", "name"}).AddRow(7, team.ID.String(), team.Name),
+	)
+	mock.ExpectExec("INSERT INTO `team_api_keys`.*`quota`.*").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "n", sqlmock.AnyArg(), 7, user.ID.String(), quotaJSONArg{limit: 3}).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	created, err := st.CreateKey(context.Background(), user, CreateKeyOptions{
+		Name: "n",
+		Quota: &models.QuotaSpec{
+			Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}},
+		},
+	})
+	require.NoError(t, err)
+	assertQuotaLimitForKeysTest(t, created.QuotaSpec, 3)
+	assertPublicQuotaLimitForKeysTest(t, created.Quota, 3)
+	payload, err := json.Marshal(created)
+	require.NoError(t, err)
+	require.Contains(t, string(payload), `"quota"`)
+	require.NotContains(t, string(payload), `"limits"`)
+
+	byKey, ok := st.LoadByKey(context.Background(), created.Key)
+	require.True(t, ok)
+	assertQuotaLimitForKeysTest(t, byKey.QuotaSpec, 3)
+	assertPublicQuotaLimitForKeysTest(t, byKey.Quota, 3)
+
+	byID, ok := st.LoadByID(context.Background(), created.ID.String())
+	require.True(t, ok)
+	assertQuotaLimitForKeysTest(t, byID.QuotaSpec, 3)
+	assertPublicQuotaLimitForKeysTest(t, byID.Quota, 3)
+}
+
+type quotaJSONArg struct {
+	limit int64
+}
+
+func (a quotaJSONArg) Match(value driver.Value) bool {
+	var raw string
+	switch typed := value.(type) {
+	case string:
+		raw = typed
+	case []byte:
+		raw = string(typed)
+	default:
+		return false
+	}
+	return strings.Contains(raw, "sandbox.count") && strings.Contains(raw, fmt.Sprintf(`"limit":%d`, a.limit))
+}
+
+func mustQuotaJSONForMySQLTest(t *testing.T, limit int64) string {
+	t.Helper()
+	raw, err := json.Marshal(&models.QuotaSpec{
+		Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}},
+	})
+	require.NoError(t, err)
+	return string(raw)
+}
+
 func TestMySQL_ListByOwner(t *testing.T) {
 	ownerKey := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
@@ -475,9 +654,9 @@ func TestMySQL_ListByOwner(t *testing.T) {
 			ctx:   func() context.Context { return context.Background() },
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(listByOwnerRegex).
-					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid"}).
-						AddRow(now, listID.String(), "a", listCreator.String()).
-						AddRow(now, "bad", "b", nil))
+					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid", "quota"}).
+						AddRow(now, listID.String(), "a", listCreator.String(), nil).
+						AddRow(now, "bad", "b", nil, nil))
 			},
 			expectKeys: 1,
 			validate: func(t *testing.T, keys []*models.TeamAPIKey) {
@@ -496,7 +675,7 @@ func TestMySQL_ListByOwner(t *testing.T) {
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(listByOwnerRegex).
 					WithArgs(models.AdminTeamName).
-					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid"}))
+					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid", "quota"}))
 			},
 		},
 		{
@@ -509,7 +688,7 @@ func TestMySQL_ListByOwner(t *testing.T) {
 			},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(listByOwnerRegex).
-					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid"}))
+					WillReturnRows(sqlmock.NewRows([]string{"created_at", "uid", "name", "created_by_uid", "quota"}))
 			},
 		},
 		{

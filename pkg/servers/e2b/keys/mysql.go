@@ -17,12 +17,15 @@ limitations under the License.
 package keys
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -84,6 +87,7 @@ type TeamAPIKeyEntity struct {
 	TeamID  uint   `gorm:"not null;index"`
 	// CreatedByUID is creator metadata only. Do not use it for ownership or authorization.
 	CreatedByUID *string `gorm:"column:created_by_uid;type:varchar(36);index"`
+	Quota        *string `gorm:"type:json"`
 }
 
 // TableName overrides the table name.
@@ -310,6 +314,8 @@ func cloneCreatedTeamAPIKey(apiKey *models.CreatedTeamAPIKey) *models.CreatedTea
 		lastUsed := *apiKey.LastUsed
 		cloned.LastUsed = &lastUsed
 	}
+	cloned.QuotaSpec = apiKey.QuotaSpec.DeepCopy()
+	cloned.Quota = models.APIKeyQuotaFromSpec(cloned.QuotaSpec)
 	return &cloned
 }
 
@@ -323,10 +329,67 @@ func cloneTeamUser(user *models.TeamUser) *models.TeamUser {
 	}
 }
 
+func marshalQuotaForDB(quota *models.QuotaSpec) (*string, error) {
+	normalized, err := models.NormalizeQuotaSpec(quota)
+	if err != nil {
+		return nil, err
+	}
+	return marshalNormalizedQuotaForDB(normalized)
+}
+
+func marshalNormalizedQuotaForDB(normalized *models.QuotaSpec) (*string, error) {
+	if normalized == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	out := string(raw)
+	return &out, nil
+}
+
+func unmarshalQuotaFromDB(raw *string) (*models.QuotaSpec, error) {
+	if raw == nil || *raw == "" {
+		return nil, nil
+	}
+	return unmarshalPersistedQuota([]byte(*raw))
+}
+
+func unmarshalPersistedQuota(raw []byte) (*models.QuotaSpec, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, nil
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var quota models.QuotaSpec
+	if err := decoder.Decode(&quota); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			err = errors.New("multiple quota JSON values")
+		}
+		return nil, err
+	}
+	return models.NormalizeQuotaSpec(&quota)
+}
+
 // CreateKey generates a new API key, stores only the HMAC hash, and returns the raw key once.
 func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeamAPIKey, opts CreateKeyOptions) (*models.CreatedTeamAPIKey, error) {
 	log := klog.FromContext(ctx).WithValues("name", opts.Name).V(utils.DebugLogLevel)
 	teamName, err := validateCreateKeyOptions(key, opts)
+	if err != nil {
+		return nil, err
+	}
+	normalizedQuota, err := models.NormalizeQuotaSpec(opts.Quota)
+	if err != nil {
+		return nil, err
+	}
+	quotaForDB, err := marshalNormalizedQuotaForDB(normalizedQuota)
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +426,7 @@ func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeam
 			KeyHash:      k.hashKey(newKey.String()),
 			TeamID:       teamEntity.ID,
 			CreatedByUID: &createdBy,
+			Quota:        quotaForDB,
 		}
 		if err := db.Session(&gorm.Session{SkipDefaultTransaction: true}).Create(&entity).Error; err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
@@ -387,6 +451,8 @@ func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeam
 		Mask:      models.IdentifierMaskingDetails{},
 		Team:      team,
 		CreatedBy: &models.TeamUser{ID: key.ID},
+		QuotaSpec: normalizedQuota.DeepCopy(),
+		Quota:     models.APIKeyQuotaFromSpec(normalizedQuota),
 	}
 	log.Info("api-key generated", "id", apiKey.ID)
 	k.cachePutTeam(team)
@@ -474,7 +540,7 @@ func (k *mysqlKeyStorage) ListByOwnerTeam(ctx context.Context, owner *models.Cre
 	// consistent with `loadCreatedKeyFromDB` and resilient to future changes.
 	if err := k.db.WithContext(ctx).
 		Model(&TeamAPIKeyEntity{}).
-		Select("created_at", "uid", "name", "created_by_uid").
+		Select("created_at", "uid", "name", "created_by_uid", "quota").
 		Where("team_id = (SELECT id FROM teams WHERE name = ? AND deleted_at IS NULL LIMIT 1)", teamName).
 		Find(&entities).Error; err != nil {
 		return nil, fmt.Errorf("list keys by team: %w", err)
@@ -487,14 +553,55 @@ func (k *mysqlKeyStorage) ListByOwnerTeam(ctx context.Context, owner *models.Cre
 			klog.FromContext(ctx).Error(err, "invalid uid in key entity", "uid", e.UID)
 			continue
 		}
+		quota, err := unmarshalQuotaFromDB(e.Quota)
+		if err != nil {
+			klog.FromContext(ctx).Error(err, "invalid api-key quota, treating as unlimited", "uid", e.UID)
+			quota = nil
+		}
 		tk := &models.TeamAPIKey{
 			CreatedAt: e.CreatedAt,
 			ID:        id,
 			Name:      e.Name,
 			Mask:      models.IdentifierMaskingDetails{},
 			CreatedBy: teamUserFromUID(ctx, e.CreatedByUID),
+			Quota:     models.APIKeyQuotaFromSpec(quota),
 		}
 		out = append(out, tk)
+	}
+	return out, nil
+}
+
+func (k *mysqlKeyStorage) ListLimited(ctx context.Context) ([]*models.CreatedTeamAPIKey, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultListTimeout)
+		defer cancel()
+	}
+	var rows []joinedAPIKeyRow
+	if err := k.db.WithContext(ctx).Table("team_api_keys").
+		Select("team_api_keys.*, teams.uid AS team_uid, teams.name AS team_name").
+		Joins("JOIN teams ON teams.id = team_api_keys.team_id AND teams.deleted_at IS NULL").
+		Where("team_api_keys.deleted_at IS NULL").
+		Where("team_api_keys.quota IS NOT NULL").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list limited keys: %w", err)
+	}
+	out := make([]*models.CreatedTeamAPIKey, 0, len(rows))
+	for i := range rows {
+		quota, err := unmarshalQuotaFromDB(rows[i].Quota)
+		if err != nil {
+			klog.FromContext(ctx).Error(err, "invalid api-key quota, skipping limited list row", "uid", rows[i].UID)
+			continue
+		}
+		if quota == nil || !quota.IsLimited() {
+			continue
+		}
+		apiKey, err := k.createdKeyFromJoinedRow(ctx, &rows[i], quota)
+		if err != nil {
+			klog.FromContext(ctx).Error(err, "invalid limited api-key row", "uid", rows[i].UID)
+			continue
+		}
+		out = append(out, apiKey)
 	}
 	return out, nil
 }
@@ -646,6 +753,14 @@ func (k *mysqlKeyStorage) loadCreatedKeyFromDB(ctx context.Context, applyPredica
 	if err := query.Take(&row).Error; err != nil {
 		return nil, err
 	}
+	quota, err := unmarshalQuotaFromDB(row.Quota)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshal api-key quota: %w", err)
+	}
+	return k.createdKeyFromJoinedRow(ctx, &row, quota)
+}
+
+func (k *mysqlKeyStorage) createdKeyFromJoinedRow(ctx context.Context, row *joinedAPIKeyRow, quota *models.QuotaSpec) (*models.CreatedTeamAPIKey, error) {
 	id, err := uuid.Parse(row.UID)
 	if err != nil {
 		return nil, fmt.Errorf("parse entity uid %q: %w", row.UID, err)
@@ -660,6 +775,14 @@ func (k *mysqlKeyStorage) loadCreatedKeyFromDB(ctx context.Context, applyPredica
 		Name: row.TeamName,
 	}
 	k.cachePutTeam(team)
+	normalizedQuota := quota.DeepCopy()
+	if quota == nil {
+		normalizedQuota, err = unmarshalQuotaFromDB(row.Quota)
+		if err != nil {
+			klog.FromContext(ctx).Error(err, "invalid api-key quota, treating as unlimited", "uid", row.UID)
+			normalizedQuota = nil
+		}
+	}
 
 	return &models.CreatedTeamAPIKey{
 		CreatedAt: row.CreatedAt,
@@ -669,5 +792,7 @@ func (k *mysqlKeyStorage) loadCreatedKeyFromDB(ctx context.Context, applyPredica
 		Mask:      models.IdentifierMaskingDetails{},
 		CreatedBy: createdBy,
 		Team:      team,
+		QuotaSpec: normalizedQuota.DeepCopy(),
+		Quota:     models.APIKeyQuotaFromSpec(normalizedQuota),
 	}, nil
 }

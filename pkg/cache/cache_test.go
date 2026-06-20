@@ -475,8 +475,25 @@ func TestCache_CountActiveSandboxes(t *testing.T) {
 			PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.4"},
 		},
 	}
+	// Failed and succeeded sandboxes remain excluded by CountActiveSandboxes.
+	sbx5 := &agentsv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "sbx-5", Namespace: "default",
+			Annotations: map[string]string{agentsv1alpha1.AnnotationOwner: "user-1"},
+			Labels:      map[string]string{agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.True},
+		},
+		Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxFailed},
+	}
+	sbx6 := &agentsv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "sbx-6", Namespace: "default",
+			Annotations: map[string]string{agentsv1alpha1.AnnotationOwner: "user-1"},
+			Labels:      map[string]string{agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.True},
+		},
+		Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxSucceeded},
+	}
 
-	c, _, err := cachetest.NewTestCache(t, sbx1, sbx2, sbx3, sbx4)
+	c, _, err := cachetest.NewTestCache(t, sbx1, sbx2, sbx3, sbx4, sbx5, sbx6)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -522,6 +539,85 @@ func TestCache_CountActiveSandboxes(t *testing.T) {
 	cnt, err := c.CountActiveSandboxes(t.Context(), cache.ListSandboxesOptions{User: "user-1"})
 	require.NoError(t, err)
 	assert.Equal(t, listNonDead, cnt, "CountActiveSandboxes should match ListSandboxes non-dead count")
+}
+
+func TestCache_ListLiveLockstringsByOwner(t *testing.T) {
+	now := metav1.NewTime(time.Date(2026, time.June, 20, 12, 0, 0, 0, time.UTC))
+	base := func(name, namespace, owner, lock string, phase agentsv1alpha1.SandboxPhase) *agentsv1alpha1.Sandbox {
+		return &agentsv1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+				Annotations: map[string]string{
+					agentsv1alpha1.AnnotationOwner: owner,
+					agentsv1alpha1.AnnotationLock:  lock,
+				},
+				CreationTimestamp: now,
+			},
+			Status: agentsv1alpha1.SandboxStatus{Phase: phase},
+		}
+	}
+	deleting := base("deleting", "default", "user-1", "lock-deleting", agentsv1alpha1.SandboxRunning)
+	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
+	deleting.Finalizers = []string{"agents.kruise.io/sandbox"}
+	missingOwner := base("missing-owner", "default", "", "lock-missing-owner", agentsv1alpha1.SandboxRunning)
+	delete(missingOwner.Annotations, agentsv1alpha1.AnnotationOwner)
+	missingLock := base("missing-lock", "default", "user-1", "", agentsv1alpha1.SandboxRunning)
+	delete(missingLock.Annotations, agentsv1alpha1.AnnotationLock)
+
+	c, _, err := cachetest.NewTestCache(t,
+		base("running", "default", "user-1", "lock-running", agentsv1alpha1.SandboxRunning),
+		base("failed", "default", "user-1", "lock-failed", agentsv1alpha1.SandboxFailed),
+		base("succeeded", "default", "user-1", "lock-succeeded", agentsv1alpha1.SandboxSucceeded),
+		base("terminating", "default", "user-1", "lock-terminating", agentsv1alpha1.SandboxTerminating),
+		deleting,
+		base("other", "default", "user-2", "lock-other", agentsv1alpha1.SandboxRunning),
+		base("other-namespace", "other", "user-1", "lock-other-namespace", agentsv1alpha1.SandboxRunning),
+		missingOwner,
+		missingLock,
+	)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		opts        cache.ListLiveLockstringsByOwnerOptions
+		expectLocks []string
+	}{
+		{
+			name:        "owner returns live running failed and succeeded lockstrings",
+			opts:        cache.ListLiveLockstringsByOwnerOptions{Owner: "user-1"},
+			expectLocks: []string{"lock-running", "lock-failed", "lock-succeeded", "lock-other-namespace"},
+		},
+		{
+			name:        "namespace scopes owner live lockstrings",
+			opts:        cache.ListLiveLockstringsByOwnerOptions{Namespace: "default", Owner: "user-1"},
+			expectLocks: []string{"lock-running", "lock-failed", "lock-succeeded"},
+		},
+		{
+			name:        "other owner only returns its own live lockstrings",
+			opts:        cache.ListLiveLockstringsByOwnerOptions{Owner: "user-2"},
+			expectLocks: []string{"lock-other"},
+		},
+		{
+			name:        "empty owner returns nothing",
+			opts:        cache.ListLiveLockstringsByOwnerOptions{},
+			expectLocks: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := c.ListLiveLockstringsByOwner(t.Context(), tt.opts)
+			require.NoError(t, err)
+
+			gotLocks := make([]string, 0, len(got))
+			for _, item := range got {
+				gotLocks = append(gotLocks, item.LockString)
+				assert.True(t, now.Time.Equal(item.CreationTimestamp))
+			}
+			assert.ElementsMatch(t, tt.expectLocks, gotLocks)
+		})
+	}
 }
 
 func TestCache_ListCheckpointsWithOptions_UserScoped(t *testing.T) {

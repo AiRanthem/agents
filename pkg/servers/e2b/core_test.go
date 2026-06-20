@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
@@ -56,6 +58,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	quotapkg "github.com/openkruise/agents/pkg/servers/e2b/quota"
 	"github.com/openkruise/agents/pkg/utils/testutils"
 )
 
@@ -79,6 +82,99 @@ func Setup(t *testing.T) (*Controller, ctrlclient.Client, func()) {
 func refreshKeyStorageForTest(t *testing.T, controller *Controller) {
 	t.Helper()
 	require.NoError(t, controller.keys.Init(t.Context()))
+}
+
+type quotaInitKeyStorage struct {
+	keys.KeyStorage
+}
+
+type quotaInitCache struct {
+	infracache.Provider
+	addCalls atomic.Int64
+	addErr   error
+}
+
+func (c *quotaInitCache) AddSandboxEventHandler(ctx context.Context, handler toolscache.ResourceEventHandler) (infracache.SandboxEventHandlerRegistration, error) {
+	c.addCalls.Add(1)
+	if c.addErr != nil {
+		return nil, c.addErr
+	}
+	return quotaInitRegistration{}, nil
+}
+
+type quotaInitRegistration struct{}
+
+func (quotaInitRegistration) HasSynced() bool { return true }
+func (quotaInitRegistration) Remove() error   { return nil }
+
+func TestControllerInitQuotaRedisAbsentSkipsAntiDrift(t *testing.T) {
+	tests := []struct {
+		name string
+		keys keys.KeyStorage
+	}{
+		{name: "auth disabled", keys: nil},
+		{name: "redis absent", keys: &quotaInitKeyStorage{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spyCache := &quotaInitCache{}
+			sc := &Controller{
+				keys:     tt.keys,
+				cache:    spyCache,
+				quotaCfg: quotapkg.Config{},
+			}
+
+			require.NoError(t, sc.initQuota(t.Context()))
+			require.NotNil(t, sc.quota)
+			assert.Nil(t, sc.quotaAntiDrift)
+			assert.Equal(t, int64(0), spyCache.addCalls.Load(), "Redis absent/auth-disabled must not register raw sandbox event handlers")
+		})
+	}
+}
+
+func TestControllerInitQuotaRedisConfiguredRegistersAntiDrift(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	sc := &Controller{
+		manager: &sandboxmanager.SandboxManager{},
+		keys:    &quotaInitKeyStorage{},
+		cache:   spyCache,
+		quotaCfg: quotapkg.Config{
+			RedisAddr:         "127.0.0.1:1",
+			OperationTimeout:  time.Millisecond,
+			AntiDriftInterval: time.Minute,
+			AntiDriftGrace:    time.Minute,
+		},
+	}
+
+	require.NoError(t, sc.initQuota(t.Context()))
+	require.NotNil(t, sc.quota)
+	require.NotNil(t, sc.quotaAntiDrift)
+	assert.Equal(t, int64(1), spyCache.addCalls.Load(), "Redis configured must register the anti-drift event handler")
+}
+
+func TestControllerInitQuotaRedisConfiguredTransportUnavailableStillFailOpen(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	sc := &Controller{
+		manager: &sandboxmanager.SandboxManager{},
+		keys:    &quotaInitKeyStorage{},
+		cache:   spyCache,
+		quotaCfg: quotapkg.Config{
+			RedisAddr:         "127.0.0.1:1",
+			OperationTimeout:  time.Millisecond,
+			AntiDriftInterval: time.Minute,
+			AntiDriftGrace:    time.Minute,
+		},
+	}
+	require.NoError(t, sc.initQuota(t.Context()))
+
+	limit := int64(1)
+	err := sc.quota.Acquire(t.Context(), quotapkg.AcquireRequest{
+		APIKeyID:   "key-1",
+		LockString: "lock-1",
+		Quota:      &models.QuotaSpec{Limits: []models.QuotaLimit{{Dimension: models.DimSandboxCount, Limit: &limit}}},
+	})
+	require.NoError(t, err, "configured Redis transport errors must fail open on the hot path")
+	require.NotNil(t, sc.quotaAntiDrift, "transport unavailability must not disable driver construction when Redis is configured")
 }
 
 // SetupWithMinResumeTimeout mirrors Setup but lets the caller override
@@ -107,7 +203,7 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 			AdminKey:  InitKey,
 			Client:    fc,
 			APIReader: fc,
-		}, nil)
+		}, nil, quotapkg.Config{})
 
 	// Create test resources using the controller-runtime fake client
 	pod := &corev1.Pod{
