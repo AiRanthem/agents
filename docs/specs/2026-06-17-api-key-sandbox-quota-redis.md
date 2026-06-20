@@ -1,6 +1,6 @@
 # API Key Sandbox Quota — Design Spec (Redis-backed, count-only live-set)
 
-- Date: 2026-06-19 (rev5)
+- Date: 2026-06-20 (rev6)
 - Branch: `feature/e2b-api-quota-260617`
 - Supersedes:
   - rev0–rev2: the per-shard Lease leader-election design and the Redis **committed-counter +
@@ -18,8 +18,8 @@
     2. **Redis is the sole quota backend.** No MySQL-native counter and no pluggable alternative store; the
        "Alternatives Considered" section is dropped.
     3. **Quota is settable even without Redis.** A non-empty quota is **no longer rejected** when Redis is
-       absent — it is simply **unenforced** (fail-open), exactly as during a Redis outage. The stored limit is
-       still persisted and surfaced by `Describe` (usage marked stale/unknown).
+       absent — it is simply **unenforced** (fail-open), exactly as during a Redis outage. The stored static
+       quota is still persisted and surfaced by API-key create/list responses; Phase 1 exposes no usage field.
     4. **Fail-open is an explicit, confirmed product decision** — not an unstated default. The guarantee is
        restated as **strict-at-admit while Redis is healthy**; the fail-closed posture stays deferred (§16).
     5. **Strict, no-over-admission-while-healthy release.** Eager-release-on-any-failure and
@@ -27,7 +27,7 @@
        (the bidirectional anti-drift removes a truly-leaked entry after grace); manager `DELETE` releases **only
        after the deletion is accepted** (the CR has a `DeletionTimestamp` / is Terminating) or an informer event
        confirms it.
-  - rev4 → rev5 (this revision), driven by an implementation-planning review:
+  - rev4 → rev5, driven by an implementation-planning review:
     **Create-failure release widened from provably-pre-CR to also cover cleanup-deleted.** §6.4 path 1, the
     acquire hook (step 5), and the §15 classification now release the charge not only when the failure is
     provably **before any CR write**, but also when the attempt **did create a CR and the failed-sandbox cleanup
@@ -36,6 +36,13 @@
     failed Sandbox that still counts) **keep** the charge for anti-drift. Because this only releases
     provably-gone slots, it tightens the bounded under-sell window without weakening the
     no-over-sell-while-healthy guarantee.
+  - rev5 → rev6 (this revision), driven by final plan repair:
+    **Describe/usage reporting removed from Phase 1 and request-side release bounded.** Phase 1 has no public
+    quota Describe endpoint, no internal `QuotaManager.Describe`, and no dynamic usage field; API-key
+    create/list responses expose static quota only. Request-side release after failed-create cleanup or accepted
+    manager delete uses a short `context.WithTimeout(context.WithoutCancel(...), quotaReleaseTimeout)` so Redis
+    outages cannot hold user requests for maintenance-operation timeouts. Event release and periodic anti-drift
+    keep their own bounded maintenance contexts.
 - Scope: `pkg/servers/e2b/` (create, api_key, models, keys, routes), `pkg/servers/e2b/quota/` (new:
   `QuotaManager`, the Redis backend, the count-only Lua, and the leader-gated anti-drift **driver**),
   `pkg/sandbox-manager/` (api/infra wiring, a generic `IsPrimary()` leadership capability),
@@ -194,8 +201,8 @@ A quota is **never silently ignored or silently accepted**:
   not yet enforceable), so a future dimension is never silently dropped or silently honored.
 - **Non-empty `scope`** → **rejected in Phase 1**.
 - **No constraint on Redis presence.** A non-empty quota is **accepted regardless of whether Redis is
-  configured**; if Redis is absent (or later unavailable) the limit is simply **unenforced** (fail-open, §6.1),
-  and `Describe` reports the stored limit with usage stale/unknown (§11). The quota is persisted either way.
+  configured**; if Redis is absent (or later unavailable) the limit is simply **unenforced** (fail-open, §6.1).
+  The quota is persisted either way and returned as static quota on API-key create/list responses.
 
 ## 4. Static Config Storage
 
@@ -265,10 +272,10 @@ type QuotaManager interface {
     // Acquire charges one sandbox, or returns ErrQuotaExceeded (429). Unlimited keys
     // are a no-op (zero Redis IO). Idempotent on the lockstring.
     Acquire(ctx, req AcquireRequest) (Reservation, error)
-    // Release returns a charged sandbox. Idempotent. Issued with context.WithoutCancel.
+    // Release returns a charged sandbox. Idempotent. Request-side callers issue it with
+    // context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout); maintenance/event
+    // callers provide their own bounded contexts.
     Release(ctx, req ReleaseRequest) error
-    // Describe reports current count usage/limit for read APIs.
-    Describe(ctx, apiKeyID string) (QuotaStatus, error)
 }
 // AcquireRequest carries apiKeyID, lockstring, and the loaded QuotaSpec (count limit).
 ```
@@ -283,9 +290,10 @@ never drives reconcile.
 - **Redis configured** → `redisBackend`: full enforcement.
 - **Redis not configured** → `noopBackend`: `Acquire` always allows (fail-open), `Release` / anti-drift are
   no-ops. Setting a **non-empty** quota at key create is **still accepted** (§3.1) and persisted; it is simply
-  unenforced while no Redis exists. `Describe` returns the **stored limits with usage marked stale/unknown** —
-  it does **not** fabricate a usage of 0 (which would falsely imply enforcement). This is identical to the
-  Redis-configured-but-unavailable case (§9), so "Redis absent" and "Redis down" behave the same.
+  unenforced while no Redis exists. API-key create/list responses still show the stored static quota, but Phase
+  1 has no dynamic usage reporting and never fabricates `live = 0`. This is identical to the
+  Redis-configured-but-unavailable case (§9), so "Redis absent" and "Redis down" behave the same for
+  enforcement.
 
 ### 6.2 Redis keys (per limited key K; hash-tagged `{K}`)
 
@@ -533,7 +541,7 @@ Phase 1 posture: **fail-open** on any Redis trouble; rely on the leader's bidire
 This is an explicit, confirmed availability-over-enforcement decision, not an unstated default — see §7.1.
 
 - **No Redis configured** → `noopBackend`: all keys unenforced (unlimited); a non-empty quota is still accepted
-  and persisted (§6.1) and surfaced by `Describe` as stored-limit-with-unknown-usage.
+  and persisted (§6.1) and surfaced as static quota on API-key create/list responses. There is no usage field.
 - **Redis transiently unreachable** (restart, network error, failover unreachable phase): limited-key `Acquire`
   **allows** (treated as unlimited for that request); unlimited keys unaffected. Bounded oversell, self-healing.
 - **Redis data loss** (cold restart / flush / first boot): the hash is empty, so `Acquire` reads `HLEN = 0` and
@@ -568,14 +576,17 @@ Operational recommendation to keep loss rare even under fail-open: Redis AOF `ap
    - transport error → **fail-open** (allow).
 4. The `lockstring` is the one `LockSandbox` already stamps on the CR — no extra CR write, no infra interface
    change.
-5. Run `ClaimSandbox` / `CloneSandbox`. On failure → **conservative release** (§6.4 path 1): release with
-   `context.WithoutCancel` **only** if the failure is provably pre-CR or failed-sandbox cleanup has successfully
-   requested deletion of the attempt's CR; otherwise keep the charge for anti-drift. On success → nothing; the
-   entry already reflects the live sandbox.
+5. Run `ClaimSandbox` / `CloneSandbox`. On failure → **conservative release** (§6.4 path 1): release with a
+   short bounded request context (`context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)`) **only**
+   if the failure is provably pre-CR or failed-sandbox cleanup has successfully requested deletion of the
+   attempt's CR; otherwise keep the charge for anti-drift. Release failure/timeout is logged and counted but
+   never changes the create failure being returned. On success → nothing; the entry already reflects the live
+   sandbox.
 
 `DELETE /sandboxes/{id}` releases the lockstring (§6.4 path 2) **after** the apiserver accepts the deletion (CR
-→ deletion-requested), for low-latency-but-safe slot return; the leader's event handler (path 3) is the backstop
-for all non-manager deletions.
+→ deletion-requested), for low-latency-but-safe slot return. This release also uses the short bounded request
+context, and release failure/timeout only logs/metrics; it must not block or fail the 204 response beyond that
+short timeout. The leader's event handler (path 3) is the backstop for all non-manager deletions.
 
 ## 11. API Surface
 
@@ -587,10 +598,10 @@ for all non-manager deletions.
   **Accepted regardless of Redis presence** (unenforced if no Redis, §6.1).
 - **No quota `PATCH`** (§6.7): immutable after create; change quota by creating a new key. (Deliberate Phase 1
   scope-down — a product decision.)
-- **Describe** (optional): count `live` / `limit` for a key, via `QuotaManager.Describe`. When Redis is
-  unreachable, absent, or a key is mid-rebuild, `Describe` does **not** fabricate `live = 0`; it returns the
-  stored limit with usage marked **stale/unknown** (or, if the caller requires it, an error) — consistent with
-  the fail-open posture that *enforcement* (not reporting) degrades gracefully.
+- **No Describe / usage reporting in Phase 1:** do not add a public quota Describe endpoint, dynamic usage field,
+  or internal `QuotaManager.Describe`/`QuotaStatus` surface. API-key create/list responses expose static quota
+  only. Metrics/logs may report backend health and fail-open events, but user-facing API responses must not
+  fabricate `live = 0` when Redis is absent/unavailable.
 - **Key delete** (`DELETE /api-keys/{id}`): drop the quota config; **keep** existing sandboxes; single one-slot
   `DEL q:live:{K}` (§6.6), bounded non-blocking retry, non-fatal — the sole cleanup (no `SCAN`).
 
@@ -644,6 +655,9 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   anti-drift later removes); a provably-pre-CR failure releases immediately; `DELETE` releases only after the
   deletion is accepted; all idempotent with the leader's event-driven release (no double-decrement below zero,
   no over-admission while Redis healthy).
+- Request-side release is bounded: failed-create cleanup release and accepted manager `DELETE` release use a
+  short `quotaReleaseTimeout`; Redis release errors/timeouts are logged/counted and do not replace the create
+  failure or change the delete success response.
 - Deletion-requested = freed: a `DeletionTimestamp`-set / Terminating owner CR no longer counts; anti-drift does
   **not** re-add it.
 - Bidirectional anti-drift: subjects enumerated from the key store; (a) an entry whose CR is gone is removed
@@ -660,8 +674,8 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   provably do zero Redis IO; after Redis returns, the leader rebuild restores exact `live` and enforcement
   resumes.
 - Quota settable without Redis: a non-empty quota at key create is accepted and persisted even when no Redis is
-  configured; it is unenforced, and `Describe` reports the stored limit with usage stale/unknown (never a
-  fabricated `live = 0`).
+  configured; it is unenforced, API-key create/list responses still return the stored static quota, and no
+  dynamic usage field is returned (never a fabricated `live = 0`).
 - No quota `PATCH`; a newly-created limited key enforces from its first `Acquire`; no replica observes a limited
   key as "unlimited" (unknown key → auth failure).
 - 429 with no retry: a quota miss returns immediately with the E2B-compatible error body and a tentatively-picked
@@ -677,8 +691,8 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   live set via `IndexUser` (informer, never APIReader) and returns the correct set; no owner label, no backfill.
 - Redis topology: Phase 1 Lua touches only the one `{K}`-tagged key (no `CROSSSLOT`); standalone/Sentinel
   verified, Cluster structurally compatible.
-- Table-driven unit tests for `QuotaManager` (acquire/release/describe, idempotency, fail-open, quota-without-
-  Redis) and the anti-drift driver (both directions, grace, cache-health gate, key-store enumeration,
+- Table-driven unit tests for `QuotaManager` (acquire/release, idempotency, fail-open, quota-without-Redis,
+  missing limited-key identity) and the anti-drift driver (both directions, grace, cache-health gate, key-store enumeration,
   leader-gating), plus create-path integration.
 
 ## 15. Resolved Decisions & Implementation Discretion
@@ -697,10 +711,11 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - **Identity:** the existing **lockstring** (`AnnotationLock`, UUID from `LockSandbox`), stamped on **every**
   owner-stamping path — claim/create already do; **clone** is fixed to stamp one too (§1/§5). No new annotation.
 - **Removal:** **conservative, no over-admission while healthy.** Release a create-failure charge **only** when
-  provably pre-CR (ambiguous failure keeps the charge for anti-drift); manager `DELETE` releases **only after
-  the deletion is accepted** (CR → deletion-requested), never pre-emptively; leader event-driven release for
-  non-manager deletions; leader bidirectional anti-drift backstop. **Deletion-requested = freed** (do not wait
-  for CR invisibility). The single **quota-live predicate** `isLiveForQuota` frees a slot iff
+  provably pre-CR or when failed-sandbox cleanup successfully requests deletion of the attempt's CR (ambiguous
+  failure keeps the charge for anti-drift); manager `DELETE` releases **only after the deletion is accepted**
+  (CR → deletion-requested), never pre-emptively; leader event-driven release for non-manager deletions; leader
+  bidirectional anti-drift backstop. **Deletion-requested = freed** (do not wait for CR invisibility). The
+  single **quota-live predicate** `isLiveForQuota` frees a slot iff
   `DeletionTimestamp != nil` or phase `Terminating`; Failed/Succeeded-but-not-deleted **still occupy** —
   deliberately **narrower** than `CountActiveSandboxes`'s Dead-exclusion, so quota uses its own owner read (§5).
 - **Anti-drift is bidirectional** (add missing live-CR entries; remove leaked entries) — required so lost
@@ -730,7 +745,8 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 
 - Redis key prefix, hash-tag form (`{K}`), and Lua script encoding.
 - Redis client choice and config wiring (`pkg/sandbox-manager/config` / `clients`, `cmd/sandbox-manager`):
-  pooling, retry/back-off, acquire timeout, and the fail-open error classification.
+  pooling, retry/back-off, acquire timeout, the request-side `quotaReleaseTimeout`, and the fail-open error
+  classification.
 - The generic leadership lease name and `leaderelection` parameters; `IsPrimary()` exposure on
   `SandboxManager`.
 - Anti-drift cadence values, the key-store enumeration of limited keys, and how missed-event divergence is
