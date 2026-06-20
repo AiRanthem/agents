@@ -17,7 +17,9 @@ limitations under the License.
 package sandbox_manager
 
 import (
+	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,22 +32,133 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 )
 
+type recordingLeaderElector struct {
+	calls atomic.Int64
+}
+
+func (r *recordingLeaderElector) Run(context.Context) {
+	r.calls.Add(1)
+}
+
 func TestPrimaryState(t *testing.T) {
-	t.Run("state transitions", func(t *testing.T) {
-		state := &primaryState{}
-		assert.False(t, state.IsPrimary())
+	tests := []struct {
+		name   string
+		state  *primaryState
+		steps  []bool
+		expect bool
+	}{
+		{
+			name:   "zero value is not primary",
+			state:  &primaryState{},
+			expect: false,
+		},
+		{
+			name:   "set true",
+			state:  &primaryState{},
+			steps:  []bool{true},
+			expect: true,
+		},
+		{
+			name:   "set true then false",
+			state:  &primaryState{},
+			steps:  []bool{true, false},
+			expect: false,
+		},
+		{
+			name:   "nil state defaults to primary",
+			state:  nil,
+			expect: true,
+		},
+	}
 
-		state.set(true)
-		assert.True(t, state.IsPrimary())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, step := range tt.steps {
+				tt.state.set(step)
+			}
+			assert.Equal(t, tt.expect, tt.state.IsPrimary())
+		})
+	}
+}
 
-		state.set(false)
-		assert.False(t, state.IsPrimary())
-	})
+func TestPrimaryElectorCallbacksRespectRunLifecycle(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopFirst  bool
+		cancel     bool
+		stopped    bool
+		expectLive bool
+	}{
+		{
+			name:       "matching active run becomes primary",
+			expectLive: true,
+		},
+		{
+			name:      "stopped run ignores late start callback",
+			stopFirst: true,
+		},
+		{
+			name:   "canceled context ignores start callback",
+			cancel: true,
+		},
+		{
+			name:    "stopped elector ignores start callback",
+			stopped: true,
+		},
+	}
 
-	t.Run("nil state defaults to primary", func(t *testing.T) {
-		var state *primaryState
-		assert.True(t, state.IsPrimary())
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &primaryState{}
+			elector := &primaryElector{state: state, runID: 1, stopped: tt.stopped}
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), primaryRunIDContextKey{}, uint64(1)))
+			if tt.stopFirst {
+				elector.stopLeading()
+			}
+			if tt.cancel {
+				cancel()
+			} else {
+				defer cancel()
+			}
+
+			elector.startLeading(ctx)
+			assert.Equal(t, tt.expectLive, state.IsPrimary())
+		})
+	}
+}
+
+func TestPrimaryElectorStopCancelsAndClearsPrimary(t *testing.T) {
+	state := &primaryState{}
+	state.set(true)
+	runCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	elector := &primaryElector{
+		state:  state,
+		runID:  1,
+		cancel: cancel,
+		done:   done,
+	}
+
+	go func() {
+		<-runCtx.Done()
+		close(done)
+	}()
+
+	elector.Stop(context.Background())
+	assert.False(t, state.IsPrimary())
+	assert.ErrorIs(t, runCtx.Err(), context.Canceled)
+}
+
+func TestPrimaryElectorRunDoesNotStartAfterStop(t *testing.T) {
+	state := &primaryState{}
+	runner := &recordingLeaderElector{}
+	elector := &primaryElector{state: state, elector: runner}
+
+	elector.Stop(context.Background())
+	elector.Run(context.Background())
+
+	assert.Equal(t, int64(0), runner.calls.Load())
+	assert.False(t, state.IsPrimary())
 }
 
 func TestSandboxManagerIsPrimary(t *testing.T) {

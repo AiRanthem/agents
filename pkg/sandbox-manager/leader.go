@@ -19,6 +19,7 @@ package sandbox_manager
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,15 +56,32 @@ func (s *primaryState) set(v bool) {
 	s.primary.Store(v)
 }
 
-type primaryElector struct {
-	elector *leaderelection.LeaderElector
+type leaderElectionRunner interface {
+	Run(ctx context.Context)
 }
+
+type primaryElector struct {
+	elector leaderElectionRunner
+	state   *primaryState
+
+	mu      sync.Mutex
+	runID   uint64
+	stopped bool
+	cancel  context.CancelFunc
+	done    chan struct{}
+
+	nextRunID atomic.Uint64
+}
+
+type primaryRunIDContextKey struct{}
 
 func newPrimaryElector(opts config.SandboxManagerOptions, state *primaryState) (*primaryElector, error) {
 	clientset, err := kubernetes.NewForConfig(opts.RestConfig)
 	if err != nil {
 		return nil, err
 	}
+
+	primary := &primaryElector{state: state}
 
 	lock, err := resourcelock.New(
 		resourcelock.LeasesResourceLock,
@@ -85,11 +103,11 @@ func newPrimaryElector(opts config.SandboxManagerOptions, state *primaryState) (
 		RenewDeadline: primaryRenewDeadline,
 		RetryPeriod:   primaryRetryPeriod,
 		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(context.Context) {
-				state.set(true)
+			OnStartedLeading: func(ctx context.Context) {
+				primary.startLeading(ctx)
 			},
 			OnStoppedLeading: func() {
-				state.set(false)
+				primary.stopLeading()
 			},
 		},
 		Name: primaryLeaseName,
@@ -98,14 +116,87 @@ func newPrimaryElector(opts config.SandboxManagerOptions, state *primaryState) (
 		return nil, err
 	}
 
-	return &primaryElector{elector: elector}, nil
+	primary.elector = elector
+	return primary, nil
 }
 
 func (e *primaryElector) Run(ctx context.Context) {
 	if e == nil || e.elector == nil {
 		return
 	}
-	e.elector.Run(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	runID := e.nextRunID.Add(1)
+	runCtx = context.WithValue(runCtx, primaryRunIDContextKey{}, runID)
+	done := make(chan struct{})
+
+	e.mu.Lock()
+	if e.stopped || e.runID != 0 {
+		e.mu.Unlock()
+		cancel()
+		close(done)
+		return
+	}
+	e.runID = runID
+	e.cancel = cancel
+	e.done = done
+	e.mu.Unlock()
+
+	defer close(done)
+	e.elector.Run(runCtx)
+}
+
+func (e *primaryElector) Stop(ctx context.Context) {
+	if e == nil {
+		return
+	}
+
+	e.mu.Lock()
+	cancel := e.cancel
+	done := e.done
+	e.stopped = true
+	e.runID = 0
+	e.state.set(false)
+	e.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done == nil {
+		return
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+func (e *primaryElector) startLeading(ctx context.Context) {
+	if e == nil || ctx.Err() != nil {
+		return
+	}
+	runID, ok := ctx.Value(primaryRunIDContextKey{}).(uint64)
+	if !ok {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.stopped || e.runID != runID || ctx.Err() != nil {
+		return
+	}
+	e.state.set(true)
+}
+
+func (e *primaryElector) stopLeading() {
+	if e == nil {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.runID = 0
+	e.state.set(false)
 }
 
 func resolvePrimaryIdentity() string {
