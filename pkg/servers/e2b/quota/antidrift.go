@@ -38,7 +38,7 @@ type AntiDriftConfig struct {
 
 type leakedObservation struct {
 	firstSeen time.Time
-	lastPass  uint64
+	confirmed bool
 }
 
 type AntiDriftDriver struct {
@@ -53,7 +53,6 @@ type AntiDriftDriver struct {
 	runDone      chan struct{}
 	cycleCancel  context.CancelFunc
 	seenLeaked   map[string]leakedObservation
-	pass         uint64
 	stopped      bool
 	now          func() time.Time
 
@@ -169,7 +168,6 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 
 	healthy := d.cache.SandboxInformerHealthy()
 	now := d.now()
-	pass := d.nextPass()
 	var firstErr error
 	for _, key := range limitedKeys {
 		if err := ctx.Err(); err != nil {
@@ -201,13 +199,14 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		}
 
 		liveLocks := make(map[string]struct{}, len(liveSandboxes))
+		nextLeaked := map[string]leakedObservation{}
+		keyFailed := false
 		for _, sbx := range liveSandboxes {
 			lockString := lockStringOf(sbx)
 			if lockString == "" {
 				continue
 			}
 			liveLocks[lockString] = struct{}{}
-			d.forgetLeaked(apiKeyID, lockString)
 
 			want := liveEntryForSandbox(sbx)
 			have, ok := haveEntries[lockString]
@@ -228,6 +227,7 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 				Limits:     key.QuotaSpec.LimitedPairs(),
 			}); err != nil {
 				antiDriftErrorsTotal.WithLabelValues("acquire").Inc()
+				keyFailed = true
 				if firstErr == nil {
 					firstErr = err
 				}
@@ -239,19 +239,35 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 				continue
 			}
 
-			firstSeen, seenPreviousPass := d.rememberLeaked(apiKeyID, lockString, now, pass)
-			if !seenPreviousPass || now.Sub(firstSeen) < d.cfg.Grace || !healthy {
+			obs := d.leakedObservation(apiKeyID, lockString)
+			if obs.firstSeen.IsZero() {
+				obs.firstSeen = now
+			}
+			seenPreviousSuccessfulPass := obs.confirmed
+			obs.confirmed = true
+			nextLeaked[lockString] = obs
+
+			if !seenPreviousSuccessfulPass || now.Sub(obs.firstSeen) < d.cfg.Grace || !healthy {
 				continue
 			}
 			if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
 				antiDriftErrorsTotal.WithLabelValues("release").Inc()
+				keyFailed = true
 				if firstErr == nil {
 					firstErr = err
 				}
 				continue
 			}
-			d.forgetLeaked(apiKeyID, lockString)
+			delete(nextLeaked, lockString)
 		}
+
+		if keyFailed {
+			for lockString, obs := range nextLeaked {
+				obs.confirmed = false
+				nextLeaked[lockString] = obs
+			}
+		}
+		d.replaceLeakedForKey(apiKeyID, nextLeaked)
 	}
 
 	return firstErr
@@ -372,32 +388,10 @@ func (d *AntiDriftDriver) clearLeaked() {
 	clear(d.seenLeaked)
 }
 
-func (d *AntiDriftDriver) nextPass() uint64 {
+func (d *AntiDriftDriver) leakedObservation(apiKeyID, lockString string) leakedObservation {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.pass++
-	return d.pass
-}
-
-func (d *AntiDriftDriver) rememberLeaked(apiKeyID, lockString string, now time.Time, pass uint64) (time.Time, bool) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	key := leakedKey(apiKeyID, lockString)
-	obs, ok := d.seenLeaked[key]
-	if !ok {
-		obs.firstSeen = now
-	}
-	seenPreviousPass := ok && obs.lastPass+1 == pass
-	obs.lastPass = pass
-	d.seenLeaked[key] = obs
-	return obs.firstSeen, seenPreviousPass
-}
-
-func (d *AntiDriftDriver) forgetLeaked(apiKeyID, lockString string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.seenLeaked, leakedKey(apiKeyID, lockString))
+	return d.seenLeaked[leakedKey(apiKeyID, lockString)]
 }
 
 func (d *AntiDriftDriver) clearLeakedForKey(apiKeyID string) {
@@ -408,6 +402,20 @@ func (d *AntiDriftDriver) clearLeakedForKey(apiKeyID string) {
 		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
 			delete(d.seenLeaked, key)
 		}
+	}
+}
+
+func (d *AntiDriftDriver) replaceLeakedForKey(apiKeyID string, leaked map[string]leakedObservation) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	prefix := apiKeyID + "\x00"
+	for key := range d.seenLeaked {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			delete(d.seenLeaked, key)
+		}
+	}
+	for lockString, obs := range leaked {
+		d.seenLeaked[leakedKey(apiKeyID, lockString)] = obs
 	}
 }
 

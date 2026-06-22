@@ -96,6 +96,7 @@ type fakeBackend struct {
 	acquireCalls        []acquireCall
 	releaseCalls        []releaseCall
 	entriesByKey        map[string]map[string]Entry
+	releaseErrByLock    map[string]error
 	listEntriesErrByKey map[string]error
 	listEntriesCalls    atomic.Int64
 }
@@ -108,6 +109,9 @@ func (b *fakeBackend) Acquire(_ context.Context, p AcquireParams) error {
 }
 
 func (b *fakeBackend) Release(_ context.Context, apiKeyID, lockString string) error {
+	if err := b.releaseErrByLock[lockString]; err != nil {
+		return err
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.releaseCalls = append(b.releaseCalls, releaseCall{apiKeyID: apiKeyID, lockString: lockString})
@@ -370,6 +374,38 @@ func TestAntiDriftListEntriesErrorDoesNotCountAsPreviousPass(t *testing.T) {
 	backend.listEntriesErrByKey = nil
 	require.NoError(t, driver.RunOnce(context.Background()))
 	assert.Empty(t, backend.releaseLockstrings())
+}
+
+func TestAntiDriftReleaseErrorDoesNotCountAsPreviousPass(t *testing.T) {
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-release-error")).String()
+	backend := &fakeBackend{
+		entriesByKey: map[string]map[string]Entry{
+			owner: {"lock-1": {}},
+		},
+	}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
+		newMutablePrimary(true),
+		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+	currentNow := now
+	driver.now = func() time.Time { return currentNow }
+
+	require.NoError(t, driver.RunOnce(context.Background()))
+
+	currentNow = currentNow.Add(11 * time.Minute)
+	backend.releaseErrByLock = map[string]error{"lock-1": errors.New("release failed")}
+	require.ErrorContains(t, driver.RunOnce(context.Background()), "release failed")
+
+	backend.releaseErrByLock = nil
+	require.NoError(t, driver.RunOnce(context.Background()))
+	assert.Empty(t, backend.releaseLockstrings())
+
+	require.NoError(t, driver.RunOnce(context.Background()))
+	assert.Equal(t, []string{"lock-1"}, backend.releaseLockstrings())
 }
 
 func TestAntiDriftReappearingEntryClearsLeakedMemory(t *testing.T) {
