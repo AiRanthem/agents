@@ -153,7 +153,7 @@ func TestQuotaSpecJSONHelpers(t *testing.T) {
 	})
 }
 
-func TestAPIKeyQuotaJSONToQuotaSpec(t *testing.T) {
+func TestNewTeamAPIKeyQuotaJSON(t *testing.T) {
 	tests := []struct {
 		name        string
 		rawJSON     string
@@ -181,11 +181,7 @@ func TestAPIKeyQuotaJSONToQuotaSpec(t *testing.T) {
 			rawJSON:     `{"name":"demo","quota":{"sandbox":{"count":0}}}`,
 			expectCount: 0,
 		},
-		{
-			name:        "negative quota limit is rejected",
-			rawJSON:     `{"name":"demo","quota":{"sandbox":{"count":-1}}}`,
-			expectError: "quota limit must be non-negative",
-		},
+		{name: "negative quota limit decodes for request validation", rawJSON: `{"name":"demo","quota":{"sandbox":{"count":-1}}}`, expectCount: -1},
 		{
 			name:        "unsupported top-level quota field is rejected",
 			rawJSON:     `{"name":"demo","quota":{"cpu":1}}`,
@@ -215,14 +211,16 @@ func TestAPIKeyQuotaJSONToQuotaSpec(t *testing.T) {
 
 			require.NoError(t, err)
 			if tt.expectNil {
+				assert.Nil(t, req.Quota)
 				assert.Nil(t, req.QuotaSpec)
 				return
 			}
 
-			require.NotNil(t, req.QuotaSpec)
-			count, ok := req.QuotaSpec.SandboxCountLimit()
-			require.True(t, ok)
-			assert.Equal(t, tt.expectCount, count)
+			require.NotNil(t, req.Quota)
+			require.NotNil(t, req.Quota.Sandbox)
+			require.NotNil(t, req.Quota.Sandbox.Count)
+			assert.Equal(t, tt.expectCount, *req.Quota.Sandbox.Count)
+			assert.Nil(t, req.QuotaSpec)
 		})
 	}
 }

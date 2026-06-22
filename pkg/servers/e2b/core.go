@@ -29,10 +29,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
 	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
-	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
@@ -190,7 +191,7 @@ func (sc *Controller) initQuota(ctx context.Context) error {
 		return fmt.Errorf("api-key quota Redis is configured but cache is not available")
 	}
 
-	redisClient := clients.NewRedisClient(clients.RedisConfig{
+	redisClient := redis.NewClient(&redis.Options{
 		Addr:     sc.quotaCfg.RedisAddr,
 		Username: sc.quotaCfg.RedisUsername,
 		Password: sc.quotaCfg.RedisPassword,

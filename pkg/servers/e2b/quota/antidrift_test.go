@@ -143,21 +143,15 @@ func (r *recordingBackend) List(_ context.Context, apiKeyID string) (map[string]
 }
 
 func (r *recordingBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
-	_, err := r.ReleaseResult(ctx, apiKeyID, lockString)
-	return err
-}
-
-func (r *recordingBackend) ReleaseResult(ctx context.Context, apiKeyID, lockString string) (bool, error) {
 	if _, ok := ctx.Deadline(); ok {
 		r.releaseSawDeadline.Store(true)
 	}
 	if r.releaseErr != nil {
-		return false, r.releaseErr
+		return r.releaseErr
 	}
-	_, existed := r.have[apiKeyID][lockString]
 	r.removed[apiKeyID] = append(r.removed[apiKeyID], lockString)
 	delete(r.have[apiKeyID], lockString)
-	return existed, nil
+	return nil
 }
 
 func (r *recordingBackend) DeleteSubject(context.Context, string) error {
@@ -180,14 +174,14 @@ func newBlockingReleaseBackend() *blockingReleaseBackend {
 	}
 }
 
-func (b *blockingReleaseBackend) ReleaseResult(ctx context.Context, apiKeyID, lockString string) (bool, error) {
+func (b *blockingReleaseBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
 	b.once.Do(func() { close(b.started) })
 	select {
 	case <-b.unblock:
 	case <-ctx.Done():
-		return false, ctx.Err()
+		return ctx.Err()
 	}
-	return b.recordingBackend.ReleaseResult(ctx, apiKeyID, lockString)
+	return b.recordingBackend.Release(ctx, apiKeyID, lockString)
 }
 
 type recordingRegistration struct {
@@ -503,16 +497,12 @@ func TestAntiDriftEventReleaseMetricsAndBoundedContext(t *testing.T) {
 		backend,
 	)
 
-	beforeReleased := testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("released"))
-	beforeProbeAttempt := testutil.ToFloat64(antiDriftEventProbeTotal.WithLabelValues("attempt"))
-	beforeProbeGone := testutil.ToFloat64(antiDriftEventProbeTotal.WithLabelValues("gone"))
+	beforeSuccess := testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("success"))
 	driver.SandboxEventHandler().OnDelete(sandboxForQuotaEvent(owner, "lock-1"))
 
 	assert.True(t, probeSawDeadline.Load())
 	assert.True(t, backend.releaseSawDeadline.Load())
-	assert.Equal(t, beforeReleased+1, testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("released")))
-	assert.Equal(t, beforeProbeAttempt+1, testutil.ToFloat64(antiDriftEventProbeTotal.WithLabelValues("attempt")))
-	assert.Equal(t, beforeProbeGone+1, testutil.ToFloat64(antiDriftEventProbeTotal.WithLabelValues("gone")))
+	assert.Equal(t, beforeSuccess+1, testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("success")))
 
 	noopOwner := uuid.New().String()
 	noopBackend := newRecordingBackend()
@@ -523,9 +513,9 @@ func TestAntiDriftEventReleaseMetricsAndBoundedContext(t *testing.T) {
 		fakeLiveCache{removeSafe: true},
 		noopBackend,
 	)
-	beforeNoop := testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("noop"))
+	beforeSuccess = testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("success"))
 	noopDriver.SandboxEventHandler().OnDelete(sandboxForQuotaEvent(noopOwner, "lock-1"))
-	assert.Equal(t, beforeNoop+1, testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("noop")))
+	assert.Equal(t, beforeSuccess+1, testutil.ToFloat64(antiDriftEventReleaseTotal.WithLabelValues("success")))
 }
 
 func TestAntiDriftRunStartsNonBlockingAndStopRemovesRegistration(t *testing.T) {

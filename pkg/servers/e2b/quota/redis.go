@@ -95,31 +95,21 @@ func (b *RedisBackend) Acquire(ctx context.Context, apiKeyID, lockString string,
 }
 
 func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
-	_, err := b.ReleaseResult(ctx, apiKeyID, lockString)
-	return err
-}
-
-func (b *RedisBackend) ReleaseResult(ctx context.Context, apiKeyID, lockString string) (bool, error) {
 	client, err := b.redisClient("release")
 	if err != nil {
-		return false, err
+		return err
 	}
 	releaseCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
 	defer cancel()
 
-	deleted, err := releaseRedisScript.Run(releaseCtx, client, []string{liveKey(apiKeyID)}, lockString).Int64()
+	_, err = releaseRedisScript.Run(releaseCtx, client, []string{liveKey(apiKeyID)}, lockString).Int64()
 	if err != nil {
 		releaseTotal.WithLabelValues("error").Inc()
-		return false, fmt.Errorf("%w: release quota in redis: %v", ErrBackendUnavailable, err)
+		return fmt.Errorf("%w: release quota in redis: %v", ErrBackendUnavailable, err)
 	}
 
-	if deleted == 1 {
-		releaseTotal.WithLabelValues("released").Inc()
-	} else {
-		releaseTotal.WithLabelValues("noop").Inc()
-	}
-
-	return deleted == 1, nil
+	releaseTotal.WithLabelValues("released").Inc()
+	return nil
 }
 
 func (b *RedisBackend) AddObserved(ctx context.Context, apiKeyID, lockString string, acquiredAt time.Time) error {

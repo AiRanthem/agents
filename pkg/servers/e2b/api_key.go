@@ -193,30 +193,17 @@ func (sc *Controller) cleanupDeletedAPIKeyQuota(ctx context.Context, apiKeyID st
 	var lastErr error
 
 	for {
-		if err := cleanupCtx.Err(); err != nil {
-			if lastErr != nil {
-				log.Error(lastErr, "failed to cleanup quota live set for deleted api-key", "apiKeyID", apiKeyID, "contextError", err)
-			}
-			return
-		}
 		err := sc.quota.DeleteSubject(cleanupCtx, apiKeyID)
 		if err == nil {
 			return
 		}
 		lastErr = err
 
-		timer := time.NewTimer(backoff)
 		select {
-		case <-timer.C:
 		case <-cleanupCtx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
 			log.Error(lastErr, "failed to cleanup quota live set for deleted api-key", "apiKeyID", apiKeyID, "contextError", cleanupCtx.Err())
 			return
+		case <-time.After(backoff):
 		}
 		if backoff < apiKeyQuotaCleanupMaxBackoff {
 			backoff *= 2

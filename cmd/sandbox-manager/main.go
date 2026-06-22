@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/servers/e2b"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
@@ -178,8 +177,8 @@ func main() {
 	if err := validateE2BTimeoutFlags(e2bMinResumeTimeout, e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
 	}
-	if err := config.ValidateQuotaRedisTimeout(e2bQuotaRedisOperationTimeout); err != nil {
-		klog.Fatalf("invalid quota redis timeout flag: %v", err)
+	if e2bQuotaRedisOperationTimeout <= 0 {
+		klog.Fatalf("--e2b-quota-redis-operation-timeout must be greater than 0")
 	}
 
 	if maxClaimWorkers < 0 {

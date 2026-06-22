@@ -64,13 +64,6 @@ var (
 		},
 		[]string{"result"},
 	)
-	antiDriftEventProbeTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "e2b_quota_antidrift_event_probe_total",
-			Help: "Total quota anti-drift event live-set probes by result.",
-		},
-		[]string{"result"},
-	)
 )
 
 func init() {
@@ -81,6 +74,5 @@ func init() {
 		antiDriftSkippedTotal,
 		antiDriftErrorsTotal,
 		antiDriftEventReleaseTotal,
-		antiDriftEventProbeTotal,
 	)
 }
