@@ -34,23 +34,38 @@ type Config struct {
 	AntiDriftGrace    time.Duration
 }
 
+type Entry struct {
+	Footprint map[models.QuotaDimension]int64
+	Scopes    []models.QuotaScope
+}
+
+type AcquireParams struct {
+	APIKeyID   string
+	LockString string
+	Footprint  map[models.QuotaDimension]int64
+	Scopes     []models.QuotaScope
+	Enforce    bool
+	Limits     map[models.QuotaDimension]map[models.QuotaScope]int64
+}
+
+type Backend interface {
+	Acquire(ctx context.Context, p AcquireParams) error
+	Release(ctx context.Context, apiKeyID, lockString string) error
+	ListEntries(ctx context.Context, apiKeyID string) (map[string]Entry, error)
+	Cleanup(ctx context.Context, apiKeyID string) error
+}
+
 type AcquireRequest struct {
 	APIKeyID   string
 	LockString string
 	Quota      *models.QuotaSpec
+	Footprint  map[models.QuotaDimension]int64
+	Scopes     []models.QuotaScope
 }
 
 type ReleaseRequest struct {
 	APIKeyID   string
 	LockString string
-}
-
-type Backend interface {
-	Acquire(ctx context.Context, apiKeyID, lockString string, limit int64) error
-	Release(ctx context.Context, apiKeyID, lockString string) error
-	AddObserved(ctx context.Context, apiKeyID, lockString string, acquiredAt time.Time) error
-	List(ctx context.Context, apiKeyID string) (map[string]time.Time, error)
-	DeleteSubject(ctx context.Context, apiKeyID string) error
 }
 
 type LimitedKeyStore interface {

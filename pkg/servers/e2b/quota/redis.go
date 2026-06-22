@@ -18,11 +18,14 @@ package quota
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strconv"
+	"sort"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 const (
@@ -32,15 +35,147 @@ const (
 
 var (
 	acquireRedisScript = redis.NewScript(`
-if redis.call('HEXISTS', KEYS[1], ARGV[1]) == 1 then return 'OK' end
-local lim = tonumber(ARGV[2])
-if lim == 0 then return 'REJECTED' end
-if lim > 0 and redis.call('HLEN', KEYS[1]) + 1 > lim then return 'REJECTED' end
-redis.call('HSET', KEYS[1], ARGV[1], redis.call('TIME')[1])
+local lockString = ARGV[1]
+local newEntry = cjson.decode(ARGV[2])
+local enforce = ARGV[3] == '1'
+local limits = {}
+if ARGV[4] ~= '' then
+	limits = cjson.decode(ARGV[4])
+end
+local oldRaw = redis.call('HGET', KEYS[1], lockString)
+local oldEntry = nil
+if oldRaw then
+	oldEntry = cjson.decode(oldRaw)
+end
+local dims = {'sandbox.count', 'limits.cpu', 'limits.memory'}
+local keyIndex = {['sandbox.count'] = 2, ['limits.cpu'] = 3, ['limits.memory'] = 4}
+
+local function amount(entry, dim)
+	if entry == nil then
+		return 0
+	end
+	if dim == 'sandbox.count' then
+		return 1
+	end
+	if entry['d'] == nil then
+		return 0
+	end
+	local value = entry['d'][dim]
+	if value == nil then
+		return 0
+	end
+	return tonumber(value) or 0
+end
+
+local function scopeSet(entry)
+	local set = {all = true}
+	if entry == nil or entry['s'] == nil then
+		return set
+	end
+	for _, scope in ipairs(entry['s']) do
+		set[scope] = true
+	end
+	return set
+end
+
+local oldScopes = scopeSet(oldEntry)
+local newScopes = scopeSet(newEntry)
+
+local function deltaFor(dim, scope)
+	local delta = 0
+	if newScopes[scope] then
+		delta = delta + amount(newEntry, dim)
+	end
+	if oldScopes[scope] then
+		delta = delta - amount(oldEntry, dim)
+	end
+	return delta
+end
+
+if enforce then
+	for _, dim in ipairs(dims) do
+		local limitByDim = limits[dim]
+		if limitByDim ~= nil then
+			for scope, limit in pairs(limitByDim) do
+				local delta = deltaFor(dim, scope)
+				if delta > 0 then
+					local current = tonumber(redis.call('HGET', KEYS[keyIndex[dim]], scope) or '0')
+					if current + delta > tonumber(limit) then
+						return 'REJECTED'
+					end
+				end
+			end
+		end
+	end
+end
+
+for _, dim in ipairs(dims) do
+	local scopes = {}
+	for scope, _ in pairs(oldScopes) do
+		scopes[scope] = true
+	end
+	for scope, _ in pairs(newScopes) do
+		scopes[scope] = true
+	end
+	for scope, _ in pairs(scopes) do
+		local delta = deltaFor(dim, scope)
+		if delta ~= 0 then
+			local nextValue = redis.call('HINCRBY', KEYS[keyIndex[dim]], scope, delta)
+			if tonumber(nextValue) < 0 then
+				redis.call('HSET', KEYS[keyIndex[dim]], scope, 0)
+			end
+		end
+	end
+end
+
+if oldRaw ~= ARGV[2] then
+	redis.call('HSET', KEYS[1], lockString, ARGV[2])
+end
 return 'OK'
 `)
 	releaseRedisScript = redis.NewScript(`
-return redis.call('HDEL', KEYS[1], ARGV[1])
+local oldRaw = redis.call('HGET', KEYS[1], ARGV[1])
+if not oldRaw then
+	return 'OK'
+end
+local oldEntry = cjson.decode(oldRaw)
+local dims = {'sandbox.count', 'limits.cpu', 'limits.memory'}
+local keyIndex = {['sandbox.count'] = 2, ['limits.cpu'] = 3, ['limits.memory'] = 4}
+local scopes = {all = true}
+if oldEntry['s'] ~= nil then
+	for _, scope in ipairs(oldEntry['s']) do
+		scopes[scope] = true
+	end
+end
+
+local function amount(dim)
+	if dim == 'sandbox.count' then
+		return 1
+	end
+	if oldEntry['d'] == nil then
+		return 0
+	end
+	local value = oldEntry['d'][dim]
+	if value == nil then
+		return 0
+	end
+	return tonumber(value) or 0
+end
+
+for _, dim in ipairs(dims) do
+	local delta = amount(dim)
+	if delta ~= 0 then
+		for scope, _ in pairs(scopes) do
+			local nextValue = redis.call('HINCRBY', KEYS[keyIndex[dim]], scope, -delta)
+			if tonumber(nextValue) < 0 then
+				redis.call('HSET', KEYS[keyIndex[dim]], scope, 0)
+			end
+		end
+	end
+end
+
+redis.call('HDEL', KEYS[1], ARGV[1])
+return 'OK'
 `)
 )
 
@@ -49,15 +184,118 @@ type RedisBackend struct {
 	timeout time.Duration
 }
 
+type redisEntry struct {
+	Footprint map[models.QuotaDimension]int64 `json:"d"`
+	Scopes    []models.QuotaScope             `json:"s"`
+}
+
 func NewRedisBackend(client *redis.Client, timeout time.Duration) *RedisBackend {
 	if timeout <= 0 {
 		timeout = defaultAcquireTimeout
 	}
+	return &RedisBackend{client: client, timeout: timeout}
+}
 
-	return &RedisBackend{
-		client:  client,
-		timeout: timeout,
+func (b *RedisBackend) Acquire(ctx context.Context, p AcquireParams) error {
+	client, err := b.redisClient("acquire")
+	if err != nil {
+		return err
 	}
+
+	entryJSON, err := marshalEntry(entryFromAcquireParams(p))
+	if err != nil {
+		return fmt.Errorf("marshal quota entry: %w", err)
+	}
+	limitsJSON, err := marshalLimits(p.Limits)
+	if err != nil {
+		return fmt.Errorf("marshal quota limits: %w", err)
+	}
+
+	acquireCtx, cancel := context.WithTimeout(ctx, b.acquireTimeout())
+	defer cancel()
+
+	result, err := acquireRedisScript.Run(acquireCtx, client, redisKeys(p.APIKeyID), p.LockString, entryJSON, boolToLuaFlag(p.Enforce), limitsJSON).Text()
+	if err != nil {
+		return fmt.Errorf("%w: acquire quota in redis: %v", ErrBackendUnavailable, err)
+	}
+	if result == "REJECTED" {
+		return ErrQuotaExceeded
+	}
+	if result != "OK" {
+		return fmt.Errorf("%w: unexpected acquire result %q", ErrBackendUnavailable, result)
+	}
+	return nil
+}
+
+func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
+	client, err := b.redisClient("release")
+	if err != nil {
+		return err
+	}
+
+	releaseCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
+	defer cancel()
+
+	result, err := releaseRedisScript.Run(releaseCtx, client, redisKeys(apiKeyID), lockString).Text()
+	if err != nil {
+		releaseTotal.WithLabelValues("error").Inc()
+		return fmt.Errorf("%w: release quota in redis: %v", ErrBackendUnavailable, err)
+	}
+	if result != "OK" {
+		releaseTotal.WithLabelValues("error").Inc()
+		return fmt.Errorf("%w: unexpected release result %q", ErrBackendUnavailable, result)
+	}
+
+	releaseTotal.WithLabelValues("released").Inc()
+	return nil
+}
+
+func (b *RedisBackend) ListEntries(ctx context.Context, apiKeyID string) (map[string]Entry, error) {
+	client, err := b.redisClient("list_entries")
+	if err != nil {
+		return nil, err
+	}
+
+	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
+	defer cancel()
+
+	values, err := client.HGetAll(opCtx, liveKey(apiKeyID)).Result()
+	if err != nil {
+		backendErrorsTotal.WithLabelValues("list_entries").Inc()
+		return nil, fmt.Errorf("%w: list quota entries in redis: %v", ErrBackendUnavailable, err)
+	}
+
+	entries := make(map[string]Entry, len(values))
+	for lockString, raw := range values {
+		entry, decodeErr := unmarshalEntry(raw)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decode quota entry %q: %w", lockString, decodeErr)
+		}
+		entries[lockString] = entry
+	}
+	return entries, nil
+}
+
+func (b *RedisBackend) Cleanup(ctx context.Context, apiKeyID string) error {
+	client, err := b.redisClient("cleanup")
+	if err != nil {
+		return err
+	}
+
+	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
+	defer cancel()
+
+	if err := client.Del(opCtx, redisKeys(apiKeyID)...).Err(); err != nil {
+		return fmt.Errorf("%w: cleanup quota keys in redis: %v", ErrBackendUnavailable, err)
+	}
+	return nil
+}
+
+func (b *RedisBackend) acquireTimeout() time.Duration {
+	if b == nil || b.timeout <= 0 {
+		return defaultAcquireTimeout
+	}
+	return b.timeout
 }
 
 func (b *RedisBackend) redisClient(op string) (*redis.Client, error) {
@@ -67,111 +305,112 @@ func (b *RedisBackend) redisClient(op string) (*redis.Client, error) {
 	return b.client, nil
 }
 
-func (b *RedisBackend) Acquire(ctx context.Context, apiKeyID, lockString string, limit int64) error {
-	client, err := b.redisClient("acquire")
-	if err != nil {
-		return err
+func entryFromAcquireParams(p AcquireParams) Entry {
+	return Entry{
+		Footprint: normalizeFootprint(p.Footprint),
+		Scopes:    normalizeScopes(p.Scopes),
 	}
-	timeout := b.timeout
-	if timeout <= 0 {
-		timeout = defaultAcquireTimeout
-	}
-	acquireCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+}
 
-	result, err := acquireRedisScript.Run(acquireCtx, client, []string{liveKey(apiKeyID)}, lockString, limit).Text()
-	if err != nil {
-		return fmt.Errorf("%w: acquire quota in redis: %v", ErrBackendUnavailable, err)
+func marshalEntry(entry Entry) (string, error) {
+	payload := redisEntry{
+		Footprint: normalizeFootprint(entry.Footprint),
+		Scopes:    normalizeScopes(entry.Scopes),
+	}
+	if payload.Footprint == nil {
+		payload.Footprint = map[models.QuotaDimension]int64{}
+	}
+	if payload.Scopes == nil {
+		payload.Scopes = []models.QuotaScope{}
 	}
 
-	switch result {
-	case "OK":
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func unmarshalEntry(raw string) (Entry, error) {
+	var payload redisEntry
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return Entry{}, err
+	}
+	return Entry{
+		Footprint: normalizeFootprint(payload.Footprint),
+		Scopes:    normalizeScopes(payload.Scopes),
+	}, nil
+}
+
+func marshalLimits(limits map[models.QuotaDimension]map[models.QuotaScope]int64) (string, error) {
+	if len(limits) == 0 {
+		return "", nil
+	}
+	raw, err := json.Marshal(limits)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func normalizeFootprint(in map[models.QuotaDimension]int64) map[models.QuotaDimension]int64 {
+	if len(in) == 0 {
 		return nil
-	case "REJECTED":
-		return ErrQuotaExceeded
-	default:
-		return fmt.Errorf("%w: unexpected acquire result %q", ErrBackendUnavailable, result)
 	}
-}
-
-func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
-	client, err := b.redisClient("release")
-	if err != nil {
-		return err
-	}
-	releaseCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
-	defer cancel()
-
-	_, err = releaseRedisScript.Run(releaseCtx, client, []string{liveKey(apiKeyID)}, lockString).Int64()
-	if err != nil {
-		releaseTotal.WithLabelValues("error").Inc()
-		return fmt.Errorf("%w: release quota in redis: %v", ErrBackendUnavailable, err)
-	}
-
-	releaseTotal.WithLabelValues("released").Inc()
-	return nil
-}
-
-func (b *RedisBackend) AddObserved(ctx context.Context, apiKeyID, lockString string, acquiredAt time.Time) error {
-	client, err := b.redisClient("add_observed")
-	if err != nil {
-		return err
-	}
-	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
-	defer cancel()
-
-	if err := client.HSet(opCtx, liveKey(apiKeyID), lockString, acquiredAt.Unix()).Err(); err != nil {
-		backendErrorsTotal.WithLabelValues("add_observed").Inc()
-		return fmt.Errorf("%w: add observed quota entry in redis: %v", ErrBackendUnavailable, err)
-	}
-
-	return nil
-}
-
-func (b *RedisBackend) List(ctx context.Context, apiKeyID string) (map[string]time.Time, error) {
-	client, err := b.redisClient("list")
-	if err != nil {
-		return nil, err
-	}
-	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
-	defer cancel()
-
-	values, err := client.HGetAll(opCtx, liveKey(apiKeyID)).Result()
-	if err != nil {
-		backendErrorsTotal.WithLabelValues("list").Inc()
-		return nil, fmt.Errorf("%w: list quota entries in redis: %v", ErrBackendUnavailable, err)
-	}
-
-	live := make(map[string]time.Time, len(values))
-	for lockString, rawValue := range values {
-		seconds, parseErr := strconv.ParseInt(rawValue, 10, 64)
-		if parseErr != nil {
-			live[lockString] = time.Unix(0, 0)
+	out := make(map[models.QuotaDimension]int64, len(in))
+	for dim, amount := range in {
+		if amount == 0 {
 			continue
 		}
-		live[lockString] = time.Unix(seconds, 0)
+		out[dim] = amount
 	}
-
-	return live, nil
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
-func (b *RedisBackend) DeleteSubject(ctx context.Context, apiKeyID string) error {
-	client, err := b.redisClient("delete_subject")
-	if err != nil {
-		return err
+func normalizeScopes(in []models.QuotaScope) []models.QuotaScope {
+	if len(in) == 0 {
+		return nil
 	}
-	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
-	defer cancel()
-
-	if err := client.Del(opCtx, liveKey(apiKeyID)).Err(); err != nil {
-		return fmt.Errorf("%w: delete quota subject in redis: %v", ErrBackendUnavailable, err)
+	seen := make(map[models.QuotaScope]struct{}, len(in))
+	out := make([]models.QuotaScope, 0, len(in))
+	for _, scope := range in {
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		out = append(out, scope)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
+}
 
-	return nil
+func redisKeys(apiKeyID string) []string {
+	return []string{
+		liveKey(apiKeyID),
+		sumKey(apiKeyID, models.DimSandboxCount),
+		sumKey(apiKeyID, models.DimLimitsCPU),
+		sumKey(apiKeyID, models.DimLimitsMemory),
+	}
 }
 
 func liveKey(apiKeyID string) string {
 	return "q:live:{" + apiKeyID + "}"
+}
+
+func sumKey(apiKeyID string, dimension models.QuotaDimension) string {
+	return "q:sum:{" + apiKeyID + "}:" + string(dimension)
+}
+
+func boolToLuaFlag(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
 }
 
 func withOperationTimeout(ctx context.Context, defaultTimeout time.Duration) (context.Context, context.CancelFunc) {

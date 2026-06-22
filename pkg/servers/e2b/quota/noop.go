@@ -16,21 +16,16 @@ limitations under the License.
 
 package quota
 
-import (
-	"context"
-	"time"
-)
+import "context"
 
 type NoopBackend struct{}
 
-func (NoopBackend) Acquire(context.Context, string, string, int64) error { return nil }
+func (NoopBackend) Acquire(context.Context, AcquireParams) error { return nil }
 
 func (NoopBackend) Release(context.Context, string, string) error { return nil }
 
-func (NoopBackend) AddObserved(context.Context, string, string, time.Time) error { return nil }
-
-func (NoopBackend) List(context.Context, string) (map[string]time.Time, error) {
-	return map[string]time.Time{}, nil
+func (NoopBackend) ListEntries(context.Context, string) (map[string]Entry, error) {
+	return map[string]Entry{}, nil
 }
 
-func (NoopBackend) DeleteSubject(context.Context, string) error { return nil }
+func (NoopBackend) Cleanup(context.Context, string) error { return nil }
