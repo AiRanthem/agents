@@ -2024,19 +2024,18 @@ func TestWaitForPodResizeState(t *testing.T) {
 	}
 }
 
-func TestNewSandboxFromTemplate_RateLimitExceeded(t *testing.T) {
+func TestTryClaimSandbox_CreateOnNoStockRateLimitExceeded(t *testing.T) {
 	utestutils.InitLogOutput()
 
-	// Create a rate limiter with 0 burst to ensure it's always exhausted
-	limiter := rate.NewLimiter(rate.Limit(1), 0)
+	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+	require.True(t, limiter.Allow(), "test setup must exhaust the create limiter before claiming")
 
-	// Create test infrastructure
-	infraInstance, fc := NewTestInfra(t)
-	defer infraInstance.Stop(t.Context())
+	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+		DisableRouteReconciliation: true,
+	})
 
 	template := "test-template"
 
-	// Create SandboxSet
 	sbs := &v1alpha1.SandboxSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      template,
@@ -2060,26 +2059,22 @@ func TestNewSandboxFromTemplate_RateLimitExceeded(t *testing.T) {
 	err := fc.Create(t.Context(), sbs)
 	require.NoError(t, err)
 
-	// Wait for cache to sync
 	require.Eventually(t, func() bool {
-		_, err := infraInstance.Cache.PickSandboxSet(t.Context(), infracache.PickSandboxSetOptions{Name: template})
+		_, err := testInfra.Cache.PickSandboxSet(t.Context(), infracache.PickSandboxSetOptions{Name: template})
 		return err == nil
 	}, time.Second, 10*time.Millisecond)
 
-	// Test: Call newSandboxFromSandboxSet when rate limiter is exhausted
-	opts := infra.ClaimSandboxOptions{
+	opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
 		Template: template,
 		User:     "test-user",
-	}
+		CreateOnNoStock: true,
+	})
+	require.NoError(t, err)
 
-	// Call the function
-	sbx, _, err := newSandboxFromSandboxSet(t.Context(), opts, infraInstance.Cache, limiter)
+	sbx, _, err := TryClaimSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, limiter)
 
-	// Assertions
 	assert.Nil(t, sbx, "sandbox should be nil when rate limited")
-	assert.Error(t, err, "should return error when rate limited")
-
-	// Check error message
+	require.Error(t, err, "should return error when rate limited")
 	assert.Contains(t, err.Error(), "sandbox creation is not allowed by rate limiter", "error should indicate rate limit")
 	assert.Contains(t, err.Error(), template, "error should contain template name")
 }
