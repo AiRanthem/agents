@@ -324,7 +324,7 @@ func cloneCreatedTeamAPIKey(apiKey *models.CreatedTeamAPIKey) *models.CreatedTea
 	cloned.Team = cloneTeam(apiKey.Team)
 	cloned.CreatedBy = cloneTeamUser(apiKey.CreatedBy)
 	cloned.QuotaSpec = apiKey.QuotaSpec.DeepCopy()
-	cloned.Quota = models.APIKeyQuotaFromSpec(cloned.QuotaSpec)
+	cloned.Quota = models.WireFromQuotaSpec(cloned.QuotaSpec)
 	if apiKey.LastUsed != nil {
 		lastUsed := *apiKey.LastUsed
 		cloned.LastUsed = &lastUsed
@@ -445,7 +445,7 @@ func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeam
 		CreatedBy: &models.TeamUser{ID: key.ID},
 		QuotaSpec: normalizedQuota.DeepCopy(),
 	}
-	apiKey.Quota = models.APIKeyQuotaFromSpec(apiKey.QuotaSpec)
+	apiKey.Quota = models.WireFromQuotaSpec(apiKey.QuotaSpec)
 	log.Info("api-key generated", "id", apiKey.ID)
 	k.cachePutTeam(team)
 	k.cachePutKey(apiKey)
@@ -553,7 +553,7 @@ func (k *mysqlKeyStorage) ListByOwnerTeam(ctx context.Context, owner *models.Cre
 			CreatedBy: teamUserFromUID(ctx, e.CreatedByUID),
 		}
 		quota := quotaFromDBOrUnlimited(ctx, e.UID, e.Quota)
-		tk.Quota = models.APIKeyQuotaFromSpec(quota)
+		tk.Quota = models.WireFromQuotaSpec(quota)
 		out = append(out, tk)
 	}
 	return out, nil
@@ -764,6 +764,6 @@ func (k *mysqlKeyStorage) createdKeyFromJoinedRow(ctx context.Context, row *join
 		Team:      team,
 		QuotaSpec: quota,
 	}
-	apiKey.Quota = models.APIKeyQuotaFromSpec(apiKey.QuotaSpec)
+	apiKey.Quota = models.WireFromQuotaSpec(apiKey.QuotaSpec)
 	return apiKey, nil
 }

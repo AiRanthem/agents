@@ -25,9 +25,12 @@ If deploying to a real K8s cluster, please modify to an appropriate tag and push
     kubectl apply -f bin/sandbox-manager.yaml
     ```
 
-## API Key Sandbox Count Quota
+## API Key Quota
 
-API keys may carry a static `sandbox.count` quota. Dynamic enforcement uses Redis only. If `--e2b-quota-redis-addr`
+API keys may carry static quotas across `sandbox.count`, `limits.cpu`, and `limits.memory`, scoped by `running` or
+`all`. The public wire shape is nested JSON such as
+`{"running":{"count":10,"cpu":8000,"memory":16384},"all":{"count":50}}`, while Secret/MySQL storage persists the
+normalized internal `(dimension, scope, limit)` list. Dynamic enforcement uses Redis only. If `--e2b-quota-redis-addr`
 is empty, or Redis is configured but unavailable, sandbox-manager intentionally fails open: limited keys are accepted
 and stored, but create requests are temporarily unenforced. Metrics and logs expose fail-open events.
 
