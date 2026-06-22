@@ -175,7 +175,8 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		log.Info("got a free claim worker", "cost", metrics.Wait)
 	}
 	var pickedSandboxKey string
-	var attemptLockString string
+	attemptLockString := chooseAttemptLockString(opts)
+	opts.LockString = attemptLockString
 	defer func() {
 		freeWorkerOnce()
 		if err != nil {
@@ -211,8 +212,6 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	}()
 	log.Info("sandbox picked", "sandbox", klog.KObj(sbx.Sandbox), "lockType", lockType)
 
-	attemptLockString = chooseAttemptLockString(opts)
-	opts.LockString = attemptLockString
 	admitted := false
 	lockAttempted := false
 	if opts.Admission != nil && opts.Admission.Acquire != nil {
@@ -227,6 +226,12 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 			releaseAdmission(ctx, opts.Admission, attemptLockString)
 		}
 	}()
+	if lockType == infra.LockTypeCreate && createLimiter != nil {
+		if !createLimiter.Allow() {
+			err = NoAvailableError(opts.Template, "sandbox creation is not allowed by rate limiter")
+			return
+		}
+	}
 
 	// Step 2: Modify and lock sandbox. All modifications to be applied to the Sandbox should be performed here.
 	if err = modifyPickedSandbox(sbx, lockType, opts); err != nil {
@@ -565,12 +570,7 @@ func issueSecurityToken(ctx context.Context, sbx *Sandbox, opts *infra.SecurityT
 
 var FilteredAnnotationsOnCreation []string
 
-func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOptions, cache infracache.Provider, limiter *rate.Limiter) (*Sandbox, infra.LockType, error) {
-	if limiter != nil {
-		if !limiter.Allow() {
-			return nil, "", NoAvailableError(opts.Template, "sandbox creation is not allowed by rate limiter")
-		}
-	}
+func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOptions, cache infracache.Provider, _ *rate.Limiter) (*Sandbox, infra.LockType, error) {
 	sbs, err := cache.PickSandboxSet(ctx, infracache.PickSandboxSetOptions{Namespace: opts.Namespace, Name: opts.Template})
 	if err != nil {
 		return nil, "", NoAvailableError(opts.Template, "cannot create new sandbox: "+err.Error())

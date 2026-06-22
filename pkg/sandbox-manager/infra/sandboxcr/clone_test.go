@@ -481,6 +481,7 @@ func TestCloneSandbox_AdmissionQuotaExceededIsTerminalBeforeCreate(t *testing.T)
 	origCreateSandbox := DefaultCreateSandbox
 	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
 
+	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
 	createCalls := 0
 	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
 		createCalls++
@@ -494,6 +495,7 @@ func TestCloneSandbox_AdmissionQuotaExceededIsTerminalBeforeCreate(t *testing.T)
 		CheckPointID:            checkpointID,
 		WaitReadyTimeout:        20 * time.Millisecond,
 		CloneTimeout:            time.Second,
+		CreateLimiter:           limiter,
 		Admission:               quota.admission(),
 		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
 	})
@@ -506,6 +508,7 @@ func TestCloneSandbox_AdmissionQuotaExceededIsTerminalBeforeCreate(t *testing.T)
 	assert.Zero(t, createCalls)
 	assert.Len(t, quota.acquireCalls(), 1)
 	assert.Empty(t, quota.releaseCalls())
+	assert.True(t, limiter.Allow(), "quota rejection must not consume create limiter capacity")
 }
 
 func TestCloneSandbox_ReleasesQuotaAfterKilledFailedCloneAllowsRetryWithFreshLockString(t *testing.T) {
