@@ -41,29 +41,29 @@ import (
 	"github.com/openkruise/agents/pkg/servers/web"
 )
 
-type retryDeleteSubjectQuotaManager struct {
+type retryCleanupQuotaManager struct {
 	calls       atomic.Int64
 	failures    int64
 	callCh      chan int64
 	sawDeadline atomic.Bool
 }
 
-func newRetryDeleteSubjectQuotaManager(failures int64) *retryDeleteSubjectQuotaManager {
-	return &retryDeleteSubjectQuotaManager{
+func newRetryCleanupQuotaManager(failures int64) *retryCleanupQuotaManager {
+	return &retryCleanupQuotaManager{
 		failures: failures,
 		callCh:   make(chan int64, 8),
 	}
 }
 
-func (m *retryDeleteSubjectQuotaManager) Acquire(context.Context, quota.AcquireRequest) error {
+func (m *retryCleanupQuotaManager) Acquire(context.Context, quota.AcquireRequest) error {
 	return nil
 }
 
-func (m *retryDeleteSubjectQuotaManager) Release(context.Context, quota.ReleaseRequest) error {
+func (m *retryCleanupQuotaManager) Release(context.Context, quota.ReleaseRequest) error {
 	return nil
 }
 
-func (m *retryDeleteSubjectQuotaManager) DeleteSubject(ctx context.Context, _ string) error {
+func (m *retryCleanupQuotaManager) Cleanup(ctx context.Context, _ string) error {
 	if deadline, ok := ctx.Deadline(); ok {
 		m.sawDeadline.Store(true)
 		if remaining := time.Until(deadline); remaining > apiKeyQuotaCleanupTimeout+50*time.Millisecond {
@@ -274,27 +274,27 @@ func TestCreateAPIKey_QuotaJSONValidationAndResponses(t *testing.T) {
 		{
 			name:       "admin creates limited key with nested quota",
 			apiKey:     InitKey,
-			body:       `{"name":"limited-key","quota":{"sandbox":{"count":2}}}`,
+			body:       `{"name":"limited-key","quota":{"running":{"count":2}}}`,
 			expectCode: http.StatusCreated,
 			expectContains: []string{
-				`"quota":{"sandbox":{"count":2}}`,
+				`"quota":{"running":{"count":2}}`,
 			},
 			expectMissing: []string{`"limits"`},
 		},
 		{
 			name:       "admin creates hard zero quota key",
 			apiKey:     InitKey,
-			body:       `{"name":"hard-zero-key","quota":{"sandbox":{"count":0}}}`,
+			body:       `{"name":"hard-zero-key","quota":{"running":{"count":0}}}`,
 			expectCode: http.StatusCreated,
 			expectContains: []string{
-				`"quota":{"sandbox":{"count":0}}`,
+				`"quota":{"running":{"count":0}}`,
 			},
 			expectMissing: []string{`"limits"`},
 		},
 		{
 			name:       "regular key cannot set quota",
 			apiKey:     regularUser.Key,
-			body:       `{"name":"regular-limited","quota":{"sandbox":{"count":2}}}`,
+			body:       `{"name":"regular-limited","quota":{"running":{"count":2}}}`,
 			expectCode: http.StatusForbidden,
 			expectContains: []string{
 				`only admin can set api-key quota`,
@@ -303,7 +303,7 @@ func TestCreateAPIKey_QuotaJSONValidationAndResponses(t *testing.T) {
 		{
 			name:       "negative count is rejected",
 			apiKey:     InitKey,
-			body:       `{"name":"negative-key","quota":{"sandbox":{"count":-1}}}`,
+			body:       `{"name":"negative-key","quota":{"running":{"count":-1}}}`,
 			expectCode: http.StatusBadRequest,
 			expectContains: []string{
 				`quota limit must be non-negative`,
@@ -315,7 +315,7 @@ func TestCreateAPIKey_QuotaJSONValidationAndResponses(t *testing.T) {
 			body:       `{"name":"cpu-key","quota":{"cpu":{"count":2}}}`,
 			expectCode: http.StatusBadRequest,
 			expectContains: []string{
-				`unsupported quota field "cpu"`,
+				`unsupported quota scope "cpu"`,
 			},
 		},
 		{
@@ -324,7 +324,7 @@ func TestCreateAPIKey_QuotaJSONValidationAndResponses(t *testing.T) {
 			body:       `{"name":"internal-shape","quota":{"limits":[{"dimension":"sandbox.count","limit":2}]}}`,
 			expectCode: http.StatusBadRequest,
 			expectContains: []string{
-				`unsupported quota field "limits"`,
+				`unmarshal quota wire`,
 			},
 		},
 		{
@@ -370,7 +370,7 @@ func TestListAPIKeys_ReturnsNestedQuotaJSON(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
-	req := httptest.NewRequest(http.MethodPost, "/api-keys", bytes.NewBufferString(`{"name":"limited-key","quota":{"sandbox":{"count":2}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api-keys", bytes.NewBufferString(`{"name":"limited-key","quota":{"running":{"count":2}}}`))
 	req.Header.Set(models.HeaderApiKey, InitKey)
 	req.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
@@ -384,7 +384,7 @@ func TestListAPIKeys_ReturnsNestedQuotaJSON(t *testing.T) {
 	controller.mux.ServeHTTP(listRec, listReq)
 
 	require.Equal(t, http.StatusOK, listRec.Code, listRec.Body.String())
-	assert.Contains(t, listRec.Body.String(), `"quota":{"sandbox":{"count":2}}`)
+	assert.Contains(t, listRec.Body.String(), `"quota":{"running":{"count":2}}`)
 	assert.NotContains(t, listRec.Body.String(), `"limits"`)
 }
 
@@ -392,7 +392,7 @@ func TestCreateAPIKey_QuotaAcceptedWhenRedisAbsent(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
-	req := httptest.NewRequest(http.MethodPost, "/api-keys", strings.NewReader(`{"name":"limited-without-redis","quota":{"sandbox":{"count":2}}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api-keys", strings.NewReader(`{"name":"limited-without-redis","quota":{"running":{"count":2}}}`))
 	req.Header.Set(models.HeaderApiKey, InitKey)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -400,7 +400,7 @@ func TestCreateAPIKey_QuotaAcceptedWhenRedisAbsent(t *testing.T) {
 	controller.mux.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Contains(t, rec.Body.String(), `"quota":{"sandbox":{"count":2}}`)
+	assert.Contains(t, rec.Body.String(), `"quota":{"running":{"count":2}}`)
 	assert.NotContains(t, rec.Body.String(), `"limits"`)
 }
 
@@ -682,7 +682,7 @@ func TestDeleteAPIKeyQuotaCleanupRetriesBestEffort(t *testing.T) {
 	require.NoError(t, err)
 	refreshKeyStorageForTest(t, controller)
 
-	fakeQuota := newRetryDeleteSubjectQuotaManager(1)
+	fakeQuota := newRetryCleanupQuotaManager(1)
 	controller.quota = fakeQuota
 
 	req := NewRequest(t, nil, nil, map[string]string{"apiKeyID": target.ID.String()}, adminUser)
@@ -706,7 +706,8 @@ func quotaSpecForAPIKeyTest(count int64) *models.QuotaSpec {
 	return &models.QuotaSpec{
 		Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,
-			Limit:     &count,
+			Scope:     models.ScopeRunning,
+			Limit:     count,
 		}},
 	}
 }

@@ -92,6 +92,8 @@ func main() {
 	var e2bQuotaRedisAddr string
 	var e2bQuotaRedisDB int
 	var e2bQuotaRedisOperationTimeout time.Duration
+	var e2bQuotaRedisBreakerN int
+	var e2bQuotaRedisBreakerD time.Duration
 	var e2bQuotaAntiDriftInterval time.Duration
 	var e2bQuotaAntiDriftGrace time.Duration
 
@@ -128,6 +130,8 @@ func main() {
 	pflag.StringVar(&e2bQuotaRedisAddr, "e2b-quota-redis-addr", "", "Redis address for E2B API-key quota enforcement. Empty disables enforcement and fails open.")
 	pflag.IntVar(&e2bQuotaRedisDB, "e2b-quota-redis-db", 0, "Redis DB for E2B API-key quota enforcement.")
 	pflag.DurationVar(&e2bQuotaRedisOperationTimeout, "e2b-quota-redis-operation-timeout", 50*time.Millisecond, "Per-operation timeout for Redis quota commands.")
+	pflag.IntVar(&e2bQuotaRedisBreakerN, "e2b-quota-redis-breaker-n", 3, "Consecutive Redis quota backend errors required to open the fail-open breaker.")
+	pflag.DurationVar(&e2bQuotaRedisBreakerD, "e2b-quota-redis-breaker-d", 30*time.Second, "How long the Redis quota fail-open breaker stays open before probing again.")
 	pflag.DurationVar(&e2bQuotaAntiDriftInterval, "e2b-quota-anti-drift-interval", 5*time.Minute, "Interval for quota anti-drift reconciliation.")
 	pflag.DurationVar(&e2bQuotaAntiDriftGrace, "e2b-quota-anti-drift-grace", 10*time.Minute, "Grace period before quota anti-drift adds or removes live-set entries.")
 
@@ -227,6 +231,8 @@ func main() {
 		RedisPassword:     e2bQuotaRedisPassword,
 		RedisDB:           e2bQuotaRedisDB,
 		OperationTimeout:  e2bQuotaRedisOperationTimeout,
+		BreakerN:          e2bQuotaRedisBreakerN,
+		BreakerD:          e2bQuotaRedisBreakerD,
 		AntiDriftInterval: e2bQuotaAntiDriftInterval,
 		AntiDriftGrace:    e2bQuotaAntiDriftGrace,
 	}
