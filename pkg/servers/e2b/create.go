@@ -110,6 +110,14 @@ func applyClaimResourceOverride(template *corev1.PodTemplateSpec, override *mode
 			container.Resources.Limits[corev1.ResourceCPU] = target.DeepCopy()
 		}
 	}
+	if target, ok := override.Limits[corev1.ResourceMemory]; ok {
+		if cur, ok := container.Resources.Limits[corev1.ResourceMemory]; ok && !cur.IsZero() {
+			if container.Resources.Limits == nil {
+				container.Resources.Limits = corev1.ResourceList{}
+			}
+			container.Resources.Limits[corev1.ResourceMemory] = target.DeepCopy()
+		}
+	}
 	return copied
 }
 
