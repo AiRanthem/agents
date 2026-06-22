@@ -19,8 +19,8 @@ authenticates via `X-API-KEY`, resolved to a `*models.CreatedTeamAPIKey` (with `
 `Modifier`), and it surfaces as `route.Owner`.
 
 We need to cap **how much a single API key may hold** across several resource **dimensions** (count, cpu,
-memory), each optionally narrowed to a **subset** of the key's sandboxes (Phase 1: the `all` subset and the
-`running` subset), enforced across replicas without materially slowing down create. Peak create throughput is
+memory), each optionally narrowed to a **scope** of the key's sandboxes (Phase 1: the `all` scope and the
+`running` scope), enforced across replicas without materially slowing down create. Peak create throughput is
 ~2500/sec (150k/min) aggregate; a single cluster may hold ~**500k** sandboxes; the apiserver may lag by up to
 ~**1 minute**. The worst case for a single limited key is "small limit + high churn" (constantly creating and
 deleting against a tiny limit), which rules out any per-operation external IO on the **unlimited** hot path and
@@ -29,13 +29,13 @@ demands a cheap, contention-free check on the **limited** hot path, plus timely 
 ### Why a Redis live set + per-dimension sums
 
 Redis holds the **live set itself** — one entry per live sandbox, keyed by its **lockstring** — plus a small set
-of **incrementally-maintained per-`(dimension, subset)` sums**, so:
+of **incrementally-maintained per-`(dimension, scope)` sums**, so:
 
-- Every dynamic value is `q:sum:{K}:<dim>[<subset>]` — read in O(1), never recomputed by scanning. The entry
-  carries the per-sandbox footprint and subset membership; the sums are the rollups.
+- Every dynamic value is `q:sum:{K}:<dim>[<scope>]` — read in O(1), never recomputed by scanning. The entry
+  carries the per-sandbox footprint and scope membership; the sums are the rollups.
 - Every mutation is a **single, atomic, idempotent upsert** keyed by a stable per-sandbox identity (the
-  lockstring): it reads the entry's old `(footprint, subsets)`, diffs against the new value, and applies the
-  per-`(dim, subset)` delta to the sums. **Idempotency is intrinsic to the diff** (re-applying the same value
+  lockstring): it reads the entry's old `(footprint, scopes)`, diffs against the new value, and applies the
+  per-`(dim, scope)` delta to the sums. **Idempotency is intrinsic to the diff** (re-applying the same value
   yields zero deltas) — it replaces a version guard. Concurrent / retried / leadership-handoff / double-fired
   writes all converge.
 - The entry and its sum contributions are **always written together in one Lua script** (the co-write
@@ -56,7 +56,7 @@ of **incrementally-maintained per-`(dimension, subset)` sums**, so:
 - The Sandbox CR carries the resolved pod resource requests/limits, from which the cpu/memory **footprint** is
   computed. `Status.Phase` (`sandbox_types.go:238`) ranges over
   `Pending/Running/Paused/Resuming/Upgrading/Succeeded/Failed/Terminating`; `Spec.Paused` (`sandbox_types.go:71`)
-  is the pause request. These drive subset membership (§5).
+  is the pause request. These drive scope membership (§5).
 - `pkg/cache` is the sandbox-manager-only, informer-backed cache. It already runs informers, exposes
   `CacheSandboxCustomReconciler` + `AddReconcileHandlers()` for external event handlers, and maintains an
   `IndexUser` field index over `AnnotationOwner` (`index.go:83`, for both Sandbox and Checkpoint). This design
@@ -65,7 +65,7 @@ of **incrementally-maintained per-`(dimension, subset)` sums**, so:
   Anti-drift never uses `GetAPIReader` — all its **Sandbox CR** reads are informer reads, gated on cache health
   (subjects come from the key store, not the apiserver; §6.4.2).
 - `CountActiveSandboxes` **excludes** `Dead` (`cache.go:306`) and is relied on by the SandboxClaim controller.
-  **It must not be modified.** Quota uses its own additive owner read with its own live/subset predicates (§5).
+  **It must not be modified.** Quota uses its own additive owner read with its own live/scope predicates (§5).
 - `k8s.io/client-go/tools/leaderelection` (Lease-backed) is already vendored — reused for a single generic
   `IsPrimary()` capability (§8).
 - No Redis client is vendored yet; this design adds one (e.g. `github.com/redis/go-redis/v9`) behind a backend
@@ -79,9 +79,9 @@ of **incrementally-maintained per-`(dimension, subset)` sums**, so:
 ### Goals
 
 - Enforce per-API-key limits across the **count**, **cpu**, and **memory** dimensions, each over the `all` or
-  `running` subset, **strict at admit while Redis is healthy**, across replicas.
+  `running` scope, **strict at admit while Redis is healthy**, across replicas.
 - Make every dynamic value **exact and lag-free in steady state** by storing the literal live set (lockstrings,
-  footprint, subset membership) plus incrementally-maintained per-`(dimension, subset)` sums in Redis — no
+  footprint, scope membership) plus incrementally-maintained per-`(dimension, scope)` sums in Redis — no
   periodic recompute, no frequent full `List`.
 - Keep enforcement correct under concurrency/retry/leadership-handoff using a **single per-lockstring
   idempotent, per-op atomic** upsert (Lua) — no version guard.
@@ -89,22 +89,22 @@ of **incrementally-maintained per-`(dimension, subset)` sums**, so:
   round-trip per acquire.
 - The cluster remains the **ground truth**; the Redis state is reconstructible from it and self-heals via a
   **bidirectional** anti-drift diff (charge entries for live CRs missing from Redis; release entries whose CR is
-  gone; correct subset-membership/footprint drift in either direction).
+  gone; correct scope-membership/footprint drift in either direction).
 - **No over-admission while Redis is healthy:** the create admission is strict, and release is conservative
   (keep the charge on an ambiguous create failure; free a slot only once deletion is accepted), so a
   healthy-state transient can only be a bounded *under-sell*, never an over-sell — **except** for the
-  deliberately-accepted, bounded over-limit the `running` subset can exhibit via un-gated `resume` (§6.4.1, §7).
+  deliberately-accepted, bounded over-limit the `running` scope can exhibit via un-gated `resume` (§6.4.1, §7).
 - Backward compatible: keys without a quota field default to **unlimited**.
-- The quota **data model is `(apiKeyID, dimension, subset)` and extensible** (new dimensions, new subsets) by
-  construction — adding a dimension or subset later needs no schema change and no data migration (the sums are
+- The quota **data model is `(apiKeyID, dimension, scope)` and extensible** (new dimensions, new scopes) by
+  construction — adding a dimension or scope later needs no schema change and no data migration (the sums are
   maintained generically).
 
 ### Non-Goals (Phase 1)
 
-- **Per-template subset, per-team subset.** The quota subject is always the API key. The storage layer treats a
-  subset as an opaque string (so `template:<name>` already works structurally), but Phase 1's manager **emits and
-  enforces only `all` and `running`**, and **rejects any other subset at key-create validation** (§3.1), so a
-  not-yet-supported subset is never silently accepted.
+- **Per-template scope, per-team scope.** The quota subject is always the API key. The storage layer treats a
+  scope as an opaque string (so `template:<name>` already works structurally), but Phase 1's manager **emits and
+  enforces only `all` and `running`**, and **rejects any other scope at key-create validation** (§3.1), so a
+  not-yet-supported scope is never silently accepted.
 - **Post-create resize / 变配 admission.** sandbox-manager exposes no post-create resource-change API, so there is
   no admission gate for resizes. A footprint that *does* change out-of-band (e.g. controller-driven in-place
   update) is **reconciled into the sums by the leader** (the upsert handles it, §6.4.2) but is never
@@ -123,8 +123,8 @@ of **incrementally-maintained per-`(dimension, subset)` sums**, so:
 
 ## 3. Quota Data Model (static)
 
-A quota is addressed by `(apiKeyID, dimension, subset)`. Phase 1 enforces three dimensions over two subsets; the
-model reserves further dimensions/subsets for forward compatibility but does **not** enforce them.
+A quota is addressed by `(apiKeyID, dimension, scope)`. Phase 1 enforces three dimensions over two scopes; the
+model reserves further dimensions/scopes for forward compatibility but does **not** enforce them.
 
 ```go
 type QuotaDimension string
@@ -135,18 +135,18 @@ const (
     // further dimensions are reserved; rejected at validation until shipped (§3.1)
 )
 
-// Subset narrows which of the key's sandboxes a limit counts. Subject is always the API key (never a team).
-// Stored/serialized as an opaque string so new subsets need no schema change. Phase 1 accepts only:
-type QuotaSubset string
+// Scope narrows which of the key's sandboxes a limit counts. Subject is always the API key (never a team).
+// Stored/serialized as an opaque string so new scopes need no schema change. Phase 1 accepts only:
+type QuotaScope string
 const (
-    SubsetAll     QuotaSubset = "all"     // every sandbox that is live for quota (IsLiveForQuota, §5)
-    SubsetRunning QuotaSubset = "running" // live for quota AND not paused (the create→Running flow, orthogonal to Paused)
+    ScopeAll     QuotaScope = "all"     // every sandbox that is live for quota (IsLiveForQuota, §5)
+    ScopeRunning QuotaScope = "running" // live for quota AND not paused (the create→Running flow, orthogonal to Paused)
     // e.g. "template:<name>" is structurally supported but rejected at validation in Phase 1
 )
 
 type QuotaLimit struct {
     Dimension QuotaDimension `json:"dimension"`
-    Subset    QuotaSubset    `json:"subset"`
+    Scope     QuotaScope     `json:"scope"`
     Limit     int64          `json:"limit"` // >= 0; 0 == valid hard-zero. Presence == limited (absence == unlimited)
 }
 
@@ -155,14 +155,14 @@ type QuotaSpec struct {
 }
 ```
 
-- **Presence semantics:** a `(dimension, subset)` pair is **limited** iff it appears in `Limits`. An absent pair
+- **Presence semantics:** a `(dimension, scope)` pair is **limited** iff it appears in `Limits`. An absent pair
   is **unlimited**. There is no nil-limit sentinel — normalization (§3.1) drops any explicitly-unlimited pair, so
   a "limited key" is defined uniformly as *having ≥1 `QuotaLimit`* (the same definition the hot path and the
   anti-drift driver use, §6.4.2).
 - **External JSON** is nested and extensible; the handler normalizes it into `QuotaSpec.Limits`. A natural shape
-  is subset-outer, e.g. `"quota": { "running": { "count": 10, "cpu": 8000, "memory": 16384 }, "all": { "count":
+  is scope-outer, e.g. `"quota": { "running": { "count": 10, "cpu": 8000, "memory": 16384 }, "all": { "count":
   50 } }` (cpu in millicores, memory in MiB). The exact external shape is an implementation detail provided it
-  stays nested (so new dimensions/subsets can be added without breaking it) and is never silently dropped (§3.1).
+  stays nested (so new dimensions/scopes can be added without breaking it) and is never silently dropped (§3.1).
 - `QuotaSpec` is loaded at auth time (`CheckApiKey` puts `user` in context), so the hot path never re-reads the
   key store.
 
@@ -172,12 +172,12 @@ A quota is **never silently ignored or silently accepted**:
 
 - **Absent / `null` quota** (or empty `Limits`) → **unlimited**.
 - **Explicitly-unlimited pairs** → **dropped at normalization**, so a "limited key" is uniformly *≥1 limit*.
-- **`Limit == 0`** for a `(dim, subset)` → **valid** hard-zero (every create charging that pair returns 403).
+- **`Limit == 0`** for a `(dim, scope)` → **valid** hard-zero (every create charging that pair returns 403).
 - **`Limit < 0`** → **rejected**.
-- **Duplicate `(dimension, subset)`** → **rejected**.
+- **Duplicate `(dimension, scope)`** → **rejected**.
 - **Any dimension other than `sandbox.count` / `limits.cpu` / `limits.memory`** → **rejected** (reserved, not
   yet enforceable), so a future dimension is never silently dropped or silently honored.
-- **Any subset other than `all` / `running`** (e.g. `template:<name>`) → **rejected in Phase 1**.
+- **Any scope other than `all` / `running`** (e.g. `template:<name>`) → **rejected in Phase 1**.
 - **No constraint on Redis presence.** A non-empty quota is **accepted regardless of whether Redis is
   configured**; if Redis is absent (or later unavailable) the limit is simply **unenforced** (fail-open, §6.1).
   The quota is persisted either way and returned as static quota on API-key create/list responses.
@@ -196,7 +196,7 @@ Redis.
 - **MySQL backend:** add a nullable `quota JSON` column to `team_api_keys` (`NULL` == unlimited); `AutoMigrate`
   adds it, gated by `DisableAutoMigrate` with a documented manual DDL alternative.
 
-## 5. Identity, Owner Index, Footprint, and Subset Predicates
+## 5. Identity, Owner Index, Footprint, and Scope Predicates
 
 - **Sandbox identity in Redis = the lockstring** (`AnnotationLock`, a UUID stamped by `LockSandbox`). It is
   globally unique and persisted on the CR, so it survives `GenerateName` (the create path need not know the
@@ -210,7 +210,7 @@ Redis.
   reads (never APIReader, §6.4.2), no server-side label selector is required, so this design adds **no** owner
   label and needs **no** one-time backfill. The index covers every CR carrying `AnnotationOwner`, including
   clones once they are owner-stamped.
-- **Quota-live and subset predicates — the single source of truth for membership, used identically by the count
+- **Quota-live and scope predicates — the single source of truth for membership, used identically by the count
   read and by both anti-drift directions (§6.4.2):**
 
   ```go
@@ -221,16 +221,16 @@ Redis.
       return sbx.DeletionTimestamp == nil && sbx.Status.Phase != agentsv1alpha1.SandboxTerminating
   }
 
-  // InRunningSubset reports membership in the `running` subset: live for quota AND not paused. Membership in
+  // InRunningScope reports membership in the `running` scope: live for quota AND not paused. Membership in
   // `running` flips off exactly when the sandbox is paused and back on when it is not — orthogonal to Paused,
   // spanning the whole create→Running flow.
-  func InRunningSubset(sbx *agentsv1alpha1.Sandbox) bool {
+  func InRunningScope(sbx *agentsv1alpha1.Sandbox) bool {
       return IsLiveForQuota(sbx) && sbx.Status.Phase != agentsv1alpha1.SandboxPaused
   }
 
-  // ConditionalSubsetsOf returns the *conditional* subsets a sandbox belongs to (NOT `all`, which is implicit
-  // and always holds while IsLiveForQuota). Phase 1: ["running"] or []. Forward-compatible with more subsets.
-  func ConditionalSubsetsOf(sbx *agentsv1alpha1.Sandbox) []QuotaSubset
+  // ConditionalScopesOf returns the *conditional* scopes a sandbox belongs to (NOT `all`, which is implicit
+  // and always holds while IsLiveForQuota). Phase 1: ["running"] or []. Forward-compatible with more scopes.
+  func ConditionalScopesOf(sbx *agentsv1alpha1.Sandbox) []QuotaScope
 
   // FootprintOf returns the per-dimension resource amounts charged for this sandbox, in integer units (cpu
   // millicores, memory MiB). `sandbox.count` is the implicit constant 1 and is NOT included here. Resolved from
@@ -242,7 +242,7 @@ Redis.
   `IsLiveForQuota` is **deliberately narrower** than `CountActiveSandboxes`'s "not `Dead`" filter (which *also*
   excludes Failed/Succeeded): quota frees a slot only when deletion is requested/terminating, **not** the moment
   a pod fails. That difference is why quota uses its own additive read rather than `CountActiveSandboxes` (left
-  untouched, §1). The exact treatment of transition phases (`Resuming`, pausing-in-progress) for `InRunningSubset`
+  untouched, §1). The exact treatment of transition phases (`Resuming`, pausing-in-progress) for `InRunningScope`
   is confirmed at implementation; the **semantics** above (membership = "live and not paused") are fixed. We do
   **not** wait for the CR to become invisible.
 
@@ -250,28 +250,28 @@ Redis.
   // ListLiveSandboxesByOwner returns every Sandbox CR with IsLiveForQuota == true for owner K, read from the
   // warm informer via MatchingFields{user: K} (IndexUser). Never APIReader; the caller invokes it only after the
   // cache is healthy (§6.4.2), so an unsynced cache can never look "empty". The quota driver derives lockstring,
-  // ConditionalSubsetsOf, and FootprintOf from each returned CR (cache stays free of quota semantics beyond
+  // ConditionalScopesOf, and FootprintOf from each returned CR (cache stays free of quota semantics beyond
   // IsLiveForQuota).
   func (c *Cache) ListLiveSandboxesByOwner(ctx, K) ([]*agentsv1alpha1.Sandbox, error)
   ```
 
-## 6. Counting Model (Redis live-set + per-(dimension, subset) sums)
+## 6. Counting Model (Redis live-set + per-(dimension, scope) sums)
 
 All enforcement lives in a `QuotaManager` (package `pkg/servers/e2b/quota`) behind a `QuotaBackend` interface,
 with a `redisBackend` (wrapped by a circuit breaker, §9) and a `noopBackend`.
 
 ```go
 type QuotaManager interface {
-    // Acquire upserts one sandbox's footprint + subset membership and, when enforcing, admits it or returns
+    // Acquire upserts one sandbox's footprint + scope membership and, when enforcing, admits it or returns
     // ErrQuotaExceeded (403). Unlimited keys are a no-op (zero Redis IO). Idempotent on the lockstring.
     Acquire(ctx, req AcquireRequest) (Reservation, error)
-    // Release returns a charged sandbox (subtracts its footprint from all its subsets' sums and removes the
+    // Release returns a charged sandbox (subtracts its footprint from all its scopes' sums and removes the
     // entry). Idempotent. Request-side callers issue it with context.WithTimeout(context.WithoutCancel(ctx),
     // quotaReleaseTimeout); maintenance/event callers provide their own bounded contexts.
     Release(ctx, req ReleaseRequest) error
 }
-// AcquireRequest carries apiKeyID K, lockstring, the new footprint (FootprintOf), the new conditional subsets
-// (ConditionalSubsetsOf), the loaded QuotaSpec limits, and an `enforce` flag (true on the create hot path,
+// AcquireRequest carries apiKeyID K, lockstring, the new footprint (FootprintOf), the new conditional scopes
+// (ConditionalScopesOf), the loaded QuotaSpec limits, and an `enforce` flag (true on the create hot path,
 // false on every leader-driven reconcile call).
 ```
 
@@ -293,19 +293,19 @@ drives reconcile.
 
 | Redis key | Type | Field → Value | Meaning |
 |---|---|---|---|
-| `q:live:{K}` | HASH | lockstring → `cjson({d:{<dim>:<amount>...}, s:[<conditional subset>...]})` | The live set. `d` carries the cpu/memory footprint (**no `count`** — it is the implicit 1); `s` carries the **conditional** subsets (**no `all`** — it is implicit while the entry exists). Membership in `all` ⟺ the entry exists. |
-| `q:sum:{K}:<dim>` | HASH | subset → integer | The incrementally-maintained rollup for dimension `<dim>`. One hash per dimension (scheme A). `q:sum:{K}:sandbox.count` always exists. `<subset>` includes the implicit `all` plus any conditional subset the key's sandboxes occupy. |
+| `q:live:{K}` | HASH | lockstring → `cjson({d:{<dim>:<amount>...}, s:[<conditional scope>...]})` | The live set. `d` carries the cpu/memory footprint (**no `count`** — it is the implicit 1); `s` carries the **conditional** scopes (**no `all`** — it is implicit while the entry exists). Membership in `all` ⟺ the entry exists. |
+| `q:sum:{K}:<dim>` | HASH | scope → integer | The incrementally-maintained rollup for dimension `<dim>`. One hash per dimension (scheme A). `q:sum:{K}:sandbox.count` always exists. `<scope>` includes the implicit `all` plus any conditional scope the key's sandboxes occupy. |
 
-- `value(dim, subset, K)` = `HGET q:sum:{K}:<dim> <subset>` (absent field reads as 0). There is **no `HLEN`-based
+- `value(dim, scope, K)` = `HGET q:sum:{K}:<dim> <scope>` (absent field reads as 0). There is **no `HLEN`-based
   count** — `count` is just `q:sum:{K}:sandbox.count`, maintained like any other dimension (each entry contributes
-  the implicit 1 to every subset it occupies).
+  the implicit 1 to every scope it occupies).
 - **count is structural, not stored per-entry** (every entry is one sandbox); **`all` is structural, not stored
   per-entry** (every live entry occupies it). The Lua adds both implicitly. This keeps the entry storing only the
-  non-obvious state: the cpu/memory amounts and the conditional subset list.
+  non-obvious state: the cpu/memory amounts and the conditional scope list.
 - **Integer units + `HINCRBY` only** (never `HINCRBYFLOAT`): cpu in millicores, memory in MiB, count in
   sandboxes — all integers, so long-lived incremental sums never accumulate float drift. A defensive
   `max(0, …)` floor guards against any underflow.
-- **Sum fields are never deleted.** A `(dim, subset)` field that decrements to 0 is **kept** (not `HDEL`-ed; the
+- **Sum fields are never deleted.** A `(dim, scope)` field that decrements to 0 is **kept** (not `HDEL`-ed; the
   per-dimension hash is not `DEL`-ed when empty). The set of dimensions is small and bounded, so the memory is
   negligible and it removes all field-cleanup/empty-hash complexity. The only deletion is the whole-key cleanup on
   API-key delete (§6.6).
@@ -318,26 +318,26 @@ drives reconcile.
 ### 6.3 Acquire (the single upsert) — atomic, idempotent
 
 `Acquire` is one Lua script, run on **every** replica for the create hot path (`enforce=true`) and by the leader
-for reconcile (`enforce=false`). It reads the entry's old `(footprint, subsets)`, diffs against the new value,
-admits (when enforcing), and applies the per-`(dim, subset)` deltas. Redis is the serialization point; no
+for reconcile (`enforce=false`). It reads the entry's old `(footprint, scopes)`, diffs against the new value,
+admits (when enforcing), and applies the per-`(dim, scope)` deltas. Redis is the serialization point; no
 leadership on the hot path.
 
 ```lua
 -- KEYS: q:live:{K}, and q:sum:{K}:<dim> for each dimension touched (all hash-tagged {K}).
--- ARGV: lockstring, new footprint d={<dim>:<amount>}, new conditional subsets s=[...], enforce flag,
---       and, when enforcing, the limited (dim,subset)->limit map.
+-- ARGV: lockstring, new footprint d={<dim>:<amount>}, new conditional scopes s=[...], enforce flag,
+--       and, when enforcing, the limited (dim,scope)->limit map.
 -- Dimension domain D    = old.d keys ∪ new.d keys ∪ {sandbox.count}   (UNION of OLD and NEW dims — so a
 --                                                                       dimension dropped from the new footprint
 --                                                                       still gets its negative delta applied)
--- Effective new subsets = s ∪ {all}                          (Acquire always means "live", so `all` is included)
--- Effective old subsets = (entry exists) ? old.s ∪ {all} : {}   (absent entry contributes nothing yet)
+-- Effective new scopes = s ∪ {all}                          (Acquire always means "live", so `all` is included)
+-- Effective old scopes = (entry exists) ? old.s ∪ {all} : {}   (absent entry contributes nothing yet)
 
-old := HGET(q:live:{K}, lockstring)            -- nil, or cjson(old footprint + conditional subsets)
+old := HGET(q:live:{K}, lockstring)            -- nil, or cjson(old footprint + conditional scopes)
 
--- For each dim in domain D, per (dim, subset) delta from the add/update/delete classification:
---   add    (subset ∈ new \ old): +new_amount(dim)
---   update (subset ∈ new ∩ old): +(new_amount(dim) - old_amount(dim))
---   delete (subset ∈ old \ new): -old_amount(dim)
+-- For each dim in domain D, per (dim, scope) delta from the add/update/delete classification:
+--   add    (scope ∈ new \ old): +new_amount(dim)
+--   update (scope ∈ new ∩ old): +(new_amount(dim) - old_amount(dim))
+--   delete (scope ∈ old \ new): -old_amount(dim)
 -- where new_amount(sandbox.count)=old_amount(sandbox.count)=1; resource amount = value in that state's footprint
 -- (old.d for old, new.d for new), or 0 if absent in that state. Iterating dim over the full domain D (not just
 -- new.d) is what guarantees an old-only dimension is correctly drained to 0.
@@ -345,12 +345,12 @@ old := HGET(q:live:{K}, lockstring)            -- nil, or cjson(old footprint + 
 if enforce then
   -- Only pairs being *charged more* can breach a cap; a delta<=0 (idempotent re-entry, or a release-direction
   -- change) must NEVER be rejected — otherwise a fail-open oversell (value>limit) would wrongly reject retries.
-  for each limited (dim, subset) with delta > 0 do
-    if value(dim, subset) + delta > limit(dim, subset) then return 'REJECTED' end   -- atomic; writes nothing
+  for each limited (dim, scope) with delta > 0 do
+    if value(dim, scope) + delta > limit(dim, scope) then return 'REJECTED' end   -- atomic; writes nothing
   end
 end
 
-for each (dim, subset) with delta ~= 0 do HINCRBY(q:sum:{K}:<dim>, subset, delta) end   -- skip delta==0
+for each (dim, scope) with delta ~= 0 do HINCRBY(q:sum:{K}:<dim>, scope, delta) end   -- skip delta==0
 if new_entry ~= old then HSET(q:live:{K}, lockstring, cjson(new_entry)) end              -- skip if unchanged
 -- NOTE: the "unchanged" test must compare CANONICAL encodings (stable key/element order) or decoded values, so an
 -- idempotent re-entry truly writes nothing; a non-canonical re-encode could differ byte-wise and HSET needlessly.
@@ -359,8 +359,8 @@ return 'OK'
 
 - **Unlimited key** (empty `QuotaSpec`) → `QuotaManager.Acquire` short-circuits **before any Redis call** (zero
   IO) — the majority of the 2500/sec. The Lua only ever runs for a limited key.
-- **`enforce=true` (create hot path):** `old` is absent → every subset is an *add*, every delta is the full new
-  amount (positive), so the check is `value + new_amount <= limit` per limited `(dim, subset)` the new sandbox
+- **`enforce=true` (create hot path):** `old` is absent → every scope is an *add*, every delta is the full new
+  amount (positive), so the check is `value + new_amount <= limit` per limited `(dim, scope)` the new sandbox
   occupies (it occupies `all` and `running` at create). `OK` → proceed with create (the lockstring is the one
   already stamped on the CR by `LockSandbox` — no extra CR write). `REJECTED` → HTTP **403**, returned
   **immediately with no retry** (a pooled sandbox tentatively picked before the charge is returned to the pool —
@@ -368,7 +368,7 @@ return 'OK'
 - **`enforce=false` (leader reconcile):** never rejects (anti-drift reflects reality; it cannot reject an
   existing sandbox), just applies the deltas. Used for pause/resume/footprint changes and for the full-diff
   charge direction.
-- **Idempotency is intrinsic.** A retry with the same `(footprint, subsets)` reads `old == new` → all deltas 0 →
+- **Idempotency is intrinsic.** A retry with the same `(footprint, scopes)` reads `old == new` → all deltas 0 →
   the script does only the `HGET` and returns `OK`: **zero writes, no double-charge**. This replaces the version
   guard and the `HEXISTS` short-circuit entirely. Lockstrings are fresh per-create UUIDs, never reused.
 - **Redis transport error / circuit open** → **fail-open** (treat the key as unlimited for this request; allow),
@@ -376,15 +376,15 @@ return 'OK'
 
 ### 6.4 Removal & reconcile — conservative request-side, event-driven, leader backstop
 
-`Release` is one atomic, idempotent Lua that subtracts the entry's footprint from **all** its subsets' sums
+`Release` is one atomic, idempotent Lua that subtracts the entry's footprint from **all** its scopes' sums
 (including the implicit `all` and the implicit `count`) and removes the entry:
 
 ```lua
 -- KEYS: q:live:{K}, q:sum:{K}:<dim> for each dimension. ARGV: lockstring.
 old := HGET(q:live:{K}, lockstring); if not old then return 0 end          -- idempotent: already gone
-for each subset in (old.s ∪ {all}) do
-  HINCRBY(q:sum:{K}:sandbox.count, subset, -1)
-  for each (dim, amount) in old.d do HINCRBY(q:sum:{K}:<dim>, subset, -amount) end
+for each scope in (old.s ∪ {all}) do
+  HINCRBY(q:sum:{K}:sandbox.count, scope, -1)
+  for each (dim, amount) in old.d do HINCRBY(q:sum:{K}:<dim>, scope, -amount) end
 end
 HDEL(q:live:{K}, lockstring); return 1                                      -- sum fields kept (may now read 0)
 ```
@@ -406,7 +406,7 @@ idempotent, safe to overlap):
    GC.
 3. **Leader event reconcile** (covers pause/resume, footprint changes, and non-manager deletions — TTL,
    `kubectl`, controller-driven). On a Sandbox owner-CR event, the leader recomputes `(footprint, conditional
-   subsets, IsLiveForQuota)` and: if the CR is **not** `IsLiveForQuota` → `Release(lockstring)`; otherwise →
+   scopes, IsLiveForQuota)` and: if the CR is **not** `IsLiveForQuota` → `Release(lockstring)`; otherwise →
    `Acquire(enforce=false)` with the new value. A pause therefore subtracts only the `running` sums (the entry
    stays, still in `all`); a resume re-adds them; a delete/terminate removes the entry entirely. Runs **only on
    the leader** (`IsPrimary()`); freeing is cache-health-gated (§6.4.2); idempotent w.r.t. paths 1–2.
@@ -421,10 +421,10 @@ idempotent, safe to overlap):
   this is **not** a quota over-admission, only a transient excess of physical pods, bounded by concurrent
   terminations. The anti-drift charge direction only considers `IsLiveForQuota` CRs, so it never resurrects an
   intended deletion.
-- **`running` subset via un-gated `resume`.** Admission is gated **only at create** (where the sandbox enters the
+- **`running` scope via un-gated `resume`.** Admission is gated **only at create** (where the sandbox enters the
   `all`+`running` membership). `resume` (paused→not-paused) re-enters `running` through the leader event, which
   charges **without** a limit check (it reflects reality, like any reconcile). So a burst of resumes can push a
-  `running`-subset sum **above** its limit. This is the deliberately-accepted relaxation (the user confirmed
+  `running`-scope sum **above** its limit. This is the deliberately-accepted relaxation (the user confirmed
   "running spans create→Running, orthogonal to Paused"): the leader converges the sum to the truth and **never
   drains** existing sandboxes; further *creates* charging that pair are rejected until the sum falls below the
   limit. It mirrors the existing tolerance "anti-drift converges to truth; usage may legitimately remain >
@@ -454,13 +454,13 @@ filters server-side (`WHERE quota IS NOT NULL`). Full-rebuild duration after a R
 diff-lag / rebuild-duration / divergence metrics (§15). For each enumerated key K:
 
 1. `live := ListLiveSandboxesByOwner(K)` → the authoritative CRs (informer only). For each, derive `(lockstring,
-   FootprintOf, ConditionalSubsetsOf)`.
-2. `have := HGETALL q:live:{K}` → the current Redis entries (lockstring → footprint + conditional subsets).
+   FootprintOf, ConditionalScopesOf)`.
+2. `have := HGETALL q:live:{K}` → the current Redis entries (lockstring → footprint + conditional scopes).
 3. Diff per lockstring:
    - **Charge / correct (CR live):** if absent from `have` (after CR `CreationTimestamp` age `> grace`), or
-     present but with a different footprint/subset set → `Acquire(enforce=false)` with the CR-derived value. The
+     present but with a different footprint/scope set → `Acquire(enforce=false)` with the CR-derived value. The
      upsert adds a missing entry (recomputing the footprint from the CR — no snapshot annotation, by design),
-     **or** applies exactly the deltas that fix a footprint/subset drift the events missed. `enforce=false`, so it
+     **or** applies exactly the deltas that fix a footprint/scope drift the events missed. `enforce=false`, so it
      never rejects an existing sandbox. Heals lost entries and rebuilds after Redis loss.
    - **Release (CR gone / not live):** lockstring in `have`, no matching `IsLiveForQuota` CR → `Release`. Frees
      failed-create leftovers (path 1's kept charges) and deletions the event handler missed.
@@ -538,14 +538,14 @@ enforcement begins). Phase 1 simply does not implement mutation; nothing here fo
 
 ## 7. Correctness
 
-Admission (create hot path, `enforce=true`) grants iff, for every limited `(dim, subset)` the new sandbox occupies
+Admission (create hot path, `enforce=true`) grants iff, for every limited `(dim, scope)` the new sandbox occupies
 with a positive delta, `value + delta <= limit`, computed and committed **atomically** in the Acquire Lua. **While
 Redis is healthy**, at the instant of every admission each `value` equals the exact charged sum, so a grant cannot
 exceed any limit — **strict enforcement at admit**.
 
 The whole-system invariant is **convergence**: the Redis live set converges to the cluster's set of `IsLiveForQuota`
-owner-K CRs (by lockstring), each with the correct footprint and subset membership, and every
-`q:sum:{K}:<dim>[<subset>]` equals the sum of the matching entries' contributions. This rests on:
+owner-K CRs (by lockstring), each with the correct footprint and scope membership, and every
+`q:sum:{K}:<dim>[<scope>]` equals the sum of the matching entries' contributions. This rests on:
 
 1. **One per-lockstring idempotent, per-op atomic upsert.** Every Redis mutation is one Lua script keyed by a
    stable lockstring; idempotency is intrinsic to the old→new diff (re-applying a value yields zero deltas). So
@@ -569,11 +569,11 @@ owner-K CRs (by lockstring), each with the correct footprint and subset membersh
 
 ### 7.1 Honest no-oversell statement
 
-- **Redis healthy, count/cpu/memory over the `all` subset, and `running` modified only by create/delete:**
+- **Redis healthy, count/cpu/memory over the `all` scope, and `running` modified only by create/delete:**
   enforcement is **strict at admit** *and* **release is conservative**, so there is **no over-admission**. The
   only healthy-state transient is a bounded **under-sell** (over-rejection): an ambiguous failed create that
   charged but produced no CR holds a leaked entry until anti-drift releases it.
-- **`running` subset via un-gated `resume` (§6.4.1):** a burst of resumes can push a `running` sum above its
+- **`running` scope via un-gated `resume` (§6.4.1):** a burst of resumes can push a `running` sum above its
   limit. The quota charge tracks the truth; the leader never drains; further creates charging that pair are
   rejected until it falls. Bounded by the number of paused sandboxes a key can resume; a **deliberately-accepted
   relaxation**, self-healing in the rejection direction.
@@ -660,7 +660,7 @@ Operational recommendation to keep loss rare even under fail-open: Redis AOF `ap
 1. `CheckApiKey` already put `user` (with `QuotaSpec`) in context.
 2. **Unlimited key** → `Acquire` returns a sentinel reservation; no Redis, no leadership lookup; zero cost.
 3. **Limited key** → resolve the new sandbox's `FootprintOf` (cpu/memory — **only** when the key limits a
-   cpu/memory dimension; a count-only key resolves no resources) and `ConditionalSubsetsOf` (at create the
+   cpu/memory dimension; a count-only key resolves no resources) and `ConditionalScopesOf` (at create the
    sandbox is live and not paused → it occupies `all` + `running`). One Lua `Acquire(enforce=true)`:
    - `OK` → proceed.
    - `REJECTED` → **HTTP 403 immediately, no retry**; if a pooled sandbox was tentatively picked, return it to
@@ -678,7 +678,7 @@ Operational recommendation to keep loss rare even under fail-open: Redis AOF `ap
 deletion-requested), for low-latency-but-safe slot return. This release also uses the short bounded request
 context, and release failure/timeout only logs/metrics; it must not block or fail the 204 response beyond that
 short timeout. The leader's event handler (path 3) is the backstop for all non-manager deletions, and the sole
-driver of `running`-subset adjustments on pause/resume.
+driver of `running`-scope adjustments on pause/resume.
 
 ## 11. API Surface
 
@@ -708,12 +708,12 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - New dependency: a Redis client (dormant unless configured). Phase 1 has **no global Redis keys**, so
   standalone / Sentinel / Cluster are all structurally compatible (§6.2).
 - No change to E2B lifecycle semantics beyond create-time admission, the removal paths of §6.4, and the
-  leader-driven `running`-subset/footprint reconciliation.
+  leader-driven `running`-scope/footprint reconciliation.
 
 ## 13. Risks
 
 - **Redis memory for the live set + sums.** Storing every live sandbox (lockstring + small footprint JSON +
-  subset list) plus a handful of per-dimension sum hashes — on the order of tens of MB at 500k. Monitor memory
+  scope list) plus a handful of per-dimension sum hashes — on the order of tens of MB at 500k. Monitor memory
   and per-key cardinality.
 - **Footprint recompute consistency.** The hot path resolves the footprint from the create spec; anti-drift
   recomputes it from the CR. These must be the **same deterministic function** of the resolved resources. Phase 1
@@ -742,11 +742,11 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 
 ## 14. Acceptance Criteria
 
-- Concurrent creates for one limited key across replicas never exceed any limited `(dim, subset)` **while Redis
+- Concurrent creates for one limited key across replicas never exceed any limited `(dim, scope)` **while Redis
   is healthy** (count/cpu/memory over `all`; `running` modified only by create/delete).
-- Idempotent upsert: a retried `Acquire` with the same `(footprint, subsets)` yields zero deltas and zero writes
+- Idempotent upsert: a retried `Acquire` with the same `(footprint, scopes)` yields zero deltas and zero writes
   (no double-charge); the `HEXISTS`/version-guard is gone.
-- `running` subset semantics: a paused sandbox leaves the `running` sums but stays in `all`; a resume re-adds it
+- `running` scope semantics: a paused sandbox leaves the `running` sums but stays in `all`; a resume re-adds it
   (un-gated, may transiently exceed the `running` limit — leader converges, never drains; new creates blocked
   until it falls); a terminate/delete removes it from all sums.
 - cpu/memory dimensions: footprint resolved on the hot path only for keys limiting cpu/memory; sums maintained in
@@ -781,7 +781,7 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   pooled sandbox is returned to the pool.
 - Validation (§3.1): `limit = 0` blocks all creates charging that pair; an all-unlimited quota normalizes to
   unlimited; negative / duplicate / non-`{sandbox.count,limits.cpu,limits.memory}`-dimension / non-`{all,running}`
-  -subset are rejected at key create; Redis presence imposes **no** validation constraint.
+  -scope are rejected at key create; Redis presence imposes **no** validation constraint.
 - `CountActiveSandboxes` and SandboxClaim self-healing unchanged (regression).
 - `IsPrimary()` gates only the anti-drift diff + event-driven reconcile; correctness holds with them forced on
   all replicas (idempotency regression test).
@@ -790,7 +790,7 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - Redis topology: Phase 1 Lua touches only `{K}`-tagged keys (no `CROSSSLOT`); standalone/Sentinel verified,
   Cluster structurally compatible.
 - Table-driven unit tests for `QuotaManager` (upsert add/update/delete classification, enforce vs reconcile,
-  idempotency/zero-delta, fail-open, circuit-breaker open/half-open/close, quota-without-Redis), the subset/
+  idempotency/zero-delta, fail-open, circuit-breaker open/half-open/close, quota-without-Redis), the scope/
   footprint predicates, and the anti-drift driver (both directions, grace, two-pass release gate, cache-health
   gate, key-store enumeration, leader-gating), plus create-path integration.
 
@@ -798,16 +798,16 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 
 ### Resolved (product / architecture)
 
-- **Model:** `(apiKeyID, dimension, subset)`. Phase 1 dimensions = `sandbox.count` / `limits.cpu` /
-  `limits.memory`; Phase 1 subsets = `all` / `running`. `running` = live and **not paused** (spans create→Running,
-  orthogonal to Paused). Further dimensions/subsets are reserved and **rejected at validation** (§3.1).
+- **Model:** `(apiKeyID, dimension, scope)`. Phase 1 dimensions = `sandbox.count` / `limits.cpu` /
+  `limits.memory`; Phase 1 scopes = `all` / `running`. `running` = live and **not paused** (spans create→Running,
+  orthogonal to Paused). Further dimensions/scopes are reserved and **rejected at validation** (§3.1).
 - **Storage:** Redis holds the **live set** (`q:live:{K}` HASH: lockstring → footprint without count + conditional
-  subsets without `all`) plus **per-dimension sum hashes** (`q:sum:{K}:<dim>`: subset → integer, scheme A).
+  scopes without `all`) plus **per-dimension sum hashes** (`q:sum:{K}:<dim>`: scope → integer, scheme A).
   `count` and `all` are **structural/implicit** (count = const 1 per entry; `all` ⟺ entry exists), never stored
   per entry, always present in the sums. Integer units + `HINCRBY` (no floats); sum fields kept at 0, never
   deleted; **no per-entry `ts`**.
 - **Single mutation primitive:** an idempotent **upsert `Acquire`** (read old, diff old→new, apply per-`(dim,
-  subset)` deltas; skip zero deltas; skip unchanged `HSET`) with an `enforce` flag (hot-path create rejects on a
+  scope)` deltas; skip zero deltas; skip unchanged `HSET`) with an `enforce` flag (hot-path create rejects on a
   positive-delta breach; leader reconcile never rejects), and a `Release` (subtract old, remove entry). **No
   version guard** (idempotency is intrinsic to the diff); **no `HEXISTS` short-circuit**; **no separate
   `resyncSums`** (the co-write invariant makes the rebuild self-consistent).
@@ -860,14 +860,14 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - The `ListLiveSandboxesByOwner` signature in `pkg/cache` (over `IndexUser`) and the concrete
   `SandboxInformerHealthy()` API (initial-list-complete, relist start/success, watch error, last successful sync)
   — **not** plain `HasSynced`.
-- The exact `InRunningSubset` boundary for transition phases (`Resuming`, pausing-in-progress) — the fixed
+- The exact `InRunningScope` boundary for transition phases (`Resuming`, pausing-in-progress) — the fixed
   semantics is "live and not paused".
 
 ## 16. Deferred / Future Work
 
-- **Further dimensions / subsets** (e.g. per-`template:<name>` subset, gpu, ephemeral-storage): the storage layer
-  already treats dimensions/subsets generically and maintains sums for whatever a key declares, so adding one is a
-  validation + footprint/subset-derivation change with **no data migration**. Reserved and rejected at validation
+- **Further dimensions / scopes** (e.g. per-`template:<name>` scope, gpu, ephemeral-storage): the storage layer
+  already treats dimensions/scopes generically and maintains sums for whatever a key declares, so adding one is a
+  validation + footprint/scope-derivation change with **no data migration**. Reserved and rejected at validation
   until shipped.
 - **Fail-closed posture** (`onRedisUnavailable: reject`): `q:warm` total-loss detector, Redis-clock settle
   window, `COLD → 503`, and synchronous replication (`WAIT` / sync topology) for strictness across failover.
@@ -875,14 +875,14 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
 - **Quota mutation** — both changing a *limited* key's limits **and promoting `unlimited → limited`** — with a
   safe-activation scheme (activation window or all-replica `QuotaSpec` cache invalidation that drains stale
   `unlimited` admissions before enforcement begins). Explicitly **planned**, not forbidden (§6.7).
-- **Strict `running` (and other lifecycle-subset) enforcement:** gate pause/resume (and any →subset transition)
+- **Strict `running` (and other lifecycle-scope) enforcement:** gate pause/resume (and any →scope transition)
   through admission instead of the create-only + leader-reconcile model, removing the bounded resume over-limit
   (§6.4.1).
 - **Post-create 变配 admission** (if the manager ever exposes resize): an admission gate against quota plus the
   already-present leader footprint reconciliation.
 - **Apiserver-side fencing** (a validating webhook rejecting a Sandbox create whose reservation is
   unknown/expired) for absolute 0-oversell under failure intersections — out of scope by product decision.
-- **Optional belt-and-suspenders sum recompute** in the infrequent diff (recompute each `(dim, subset)` from
+- **Optional belt-and-suspenders sum recompute** in the infrequent diff (recompute each `(dim, scope)` from
   current live entries and atomically correct), defending against corruption outside Redis's atomic-replication
   guarantee — not required for correctness (§6.4.2).
 - **Official Redis Cluster support** (testing + the deferred-posture hash-tag redesign).
