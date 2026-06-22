@@ -18,256 +18,255 @@ package quota
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"sync"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
-func TestRedisBackendAcquireCountOnly(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 50*time.Millisecond)
-	ctx := context.Background()
-
+func TestAcquireUpsert(t *testing.T) {
 	tests := []struct {
 		name        string
-		lockString  string
-		limit       int64
-		expectError error
-	}{
-		{name: "first acquire allowed", lockString: "lock-1", limit: 1},
-		{name: "same lock idempotent", lockString: "lock-1", limit: 1},
-		{name: "second lock rejected", lockString: "lock-2", limit: 1, expectError: ErrQuotaExceeded},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := backend.Acquire(ctx, "key-1", tt.lockString, tt.limit)
-			if tt.expectError != nil {
-				require.ErrorIs(t, err, tt.expectError)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-
-	got, err := backend.List(ctx, "key-1")
-	require.NoError(t, err)
-	assert.Len(t, got, 1)
-}
-
-func TestRedisBackendConcurrentAcquireDoesNotExceedLimit(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 100*time.Millisecond)
-	ctx := context.Background()
-
-	const (
-		workers = 20
-		limit   = 3
-	)
-
-	type acquireResult struct {
-		lockString string
-		err        error
-	}
-
-	start := make(chan struct{})
-	results := make(chan acquireResult, workers)
-	var wg sync.WaitGroup
-
-	for i := 0; i < workers; i++ {
-		lockString := fmt.Sprintf("lock-%d", i)
-		wg.Add(1)
-
-		go func(lockString string) {
-			defer wg.Done()
-			<-start
-			results <- acquireResult{
-				lockString: lockString,
-				err:        backend.Acquire(ctx, "key-1", lockString, limit),
-			}
-		}(lockString)
-	}
-
-	close(start)
-	wg.Wait()
-	close(results)
-
-	allowed := make(map[string]struct{}, limit)
-	rejected := 0
-	var unexpected []string
-
-	for result := range results {
-		switch {
-		case result.err == nil:
-			allowed[result.lockString] = struct{}{}
-		case errors.Is(result.err, ErrQuotaExceeded):
-			rejected++
-		default:
-			unexpected = append(unexpected, fmt.Sprintf("%s: %v", result.lockString, result.err))
-		}
-	}
-
-	require.Empty(t, unexpected, "unexpected acquire errors: %v", unexpected)
-	assert.Len(t, allowed, limit)
-	assert.Equal(t, workers-limit, rejected)
-
-	live, err := backend.List(ctx, "key-1")
-	require.NoError(t, err)
-	assert.Len(t, live, limit)
-
-	liveLockStrings := make(map[string]struct{}, len(live))
-	for lockString := range live {
-		liveLockStrings[lockString] = struct{}{}
-	}
-	assert.Equal(t, allowed, liveLockStrings)
-}
-
-func TestRedisBackendAcquireDoesNotRecordManagerDecisionMetrics(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 50*time.Millisecond)
-
-	beforeAllowed := testutil.ToFloat64(acquireTotal.WithLabelValues("allowed"))
-	beforeRejected := testutil.ToFloat64(acquireTotal.WithLabelValues("rejected"))
-	beforeErrors := testutil.ToFloat64(backendErrorsTotal.WithLabelValues("acquire"))
-
-	require.NoError(t, backend.Acquire(context.Background(), "key-1", "lock-1", 1))
-	require.ErrorIs(t, backend.Acquire(context.Background(), "key-1", "lock-2", 1), ErrQuotaExceeded)
-
-	assert.Equal(t, beforeAllowed, testutil.ToFloat64(acquireTotal.WithLabelValues("allowed")))
-	assert.Equal(t, beforeRejected, testutil.ToFloat64(acquireTotal.WithLabelValues("rejected")))
-	assert.Equal(t, beforeErrors, testutil.ToFloat64(backendErrorsTotal.WithLabelValues("acquire")))
-}
-
-func TestRedisBackendWrappedErrorsDoNotRecordManagerBackendErrorMetrics(t *testing.T) {
-	srv := miniredis.RunT(t)
-	addr := srv.Addr()
-	srv.Close()
-
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	backend := NewRedisBackend(client, 10*time.Millisecond)
-	beforeReleaseErrors := testutil.ToFloat64(backendErrorsTotal.WithLabelValues("release"))
-	beforeDeleteSubjectErrors := testutil.ToFloat64(backendErrorsTotal.WithLabelValues("delete_subject"))
-	beforeReleaseTotalErrors := testutil.ToFloat64(releaseTotal.WithLabelValues("error"))
-
-	require.ErrorIs(t, backend.Release(context.Background(), "key-1", "lock-1"), ErrBackendUnavailable)
-	require.ErrorIs(t, backend.DeleteSubject(context.Background(), "key-1"), ErrBackendUnavailable)
-
-	assert.Equal(t, beforeReleaseErrors, testutil.ToFloat64(backendErrorsTotal.WithLabelValues("release")))
-	assert.Equal(t, beforeDeleteSubjectErrors, testutil.ToFloat64(backendErrorsTotal.WithLabelValues("delete_subject")))
-	assert.Equal(t, beforeReleaseTotalErrors+1, testutil.ToFloat64(releaseTotal.WithLabelValues("error")))
-}
-
-func TestRedisBackendNilReceiverOrClientReturnsUnavailable(t *testing.T) {
-	tests := []struct {
-		name    string
-		backend *RedisBackend
+		seed        []AcquireParams
+		op          AcquireParams
+		wantSum     map[string]map[string]int64
+		expectError string
 	}{
 		{
-			name:    "nil receiver",
-			backend: nil,
+			name: "first create charges count all and running",
+			op: AcquireParams{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Enforce:    true,
+				Limits: map[models.QuotaDimension]map[models.QuotaScope]int64{
+					models.DimSandboxCount: {models.ScopeAll: 10},
+				},
+			},
+			wantSum: map[string]map[string]int64{
+				"sandbox.count": {"all": 1, "running": 1},
+			},
 		},
 		{
-			name:    "nil client",
-			backend: &RedisBackend{},
+			name: "idempotent reacquire is zero delta",
+			seed: []AcquireParams{{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+			}},
+			op: AcquireParams{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+			},
+			wantSum: map[string]map[string]int64{
+				"sandbox.count": {"all": 1, "running": 1},
+			},
+		},
+		{
+			name: "pause drops running and keeps all",
+			seed: []AcquireParams{{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+			}},
+			op: AcquireParams{
+				APIKeyID:   "K",
+				LockString: "l1",
+			},
+			wantSum: map[string]map[string]int64{
+				"sandbox.count": {"all": 1, "running": 0},
+			},
+		},
+		{
+			name: "enforce rejects at all scope cap",
+			seed: []AcquireParams{{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+			}},
+			op: AcquireParams{
+				APIKeyID:   "K",
+				LockString: "l2",
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Enforce:    true,
+				Limits: map[models.QuotaDimension]map[models.QuotaScope]int64{
+					models.DimSandboxCount: {models.ScopeAll: 1},
+				},
+			},
+			expectError: "quota exceeded",
+		},
+		{
+			name: "cpu footprint charges all and running",
+			op: AcquireParams{
+				APIKeyID:   "K",
+				LockString: "l1",
+				Footprint: map[models.QuotaDimension]int64{
+					models.DimLimitsCPU: 2000,
+				},
+				Scopes: []models.QuotaScope{models.ScopeRunning},
+			},
+			wantSum: map[string]map[string]int64{
+				"sandbox.count": {"all": 1, "running": 1},
+				"limits.cpu":    {"all": 2000, "running": 2000},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.ErrorIs(t, tt.backend.Acquire(context.Background(), "key-1", "lock-1", 1), ErrBackendUnavailable)
-			require.ErrorIs(t, tt.backend.Release(context.Background(), "key-1", "lock-1"), ErrBackendUnavailable)
-			require.ErrorIs(t, tt.backend.AddObserved(context.Background(), "key-1", "lock-1", time.Now()), ErrBackendUnavailable)
-			listed, err := tt.backend.List(context.Background(), "key-1")
-			require.ErrorIs(t, err, ErrBackendUnavailable)
-			assert.Nil(t, listed)
-			require.ErrorIs(t, tt.backend.DeleteSubject(context.Background(), "key-1"), ErrBackendUnavailable)
+			backend, client := newTestRedisBackend(t)
+			ctx := context.Background()
+
+			for _, seed := range tt.seed {
+				require.NoError(t, backend.Acquire(ctx, seed))
+			}
+
+			err := backend.Acquire(ctx, tt.op)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				require.NoError(t, err)
+			}
+
+			for dim, scopes := range tt.wantSum {
+				for scope, want := range scopes {
+					assert.Equal(t, want, readSum(t, client, "K", models.QuotaDimension(dim), models.QuotaScope(scope)))
+				}
+			}
 		})
 	}
 }
 
-func TestRedisBackendHardZeroAndRelease(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 50*time.Millisecond)
+func TestReleaseSubtractsAllScopes(t *testing.T) {
+	backend, client := newTestRedisBackend(t)
 	ctx := context.Background()
 
-	require.ErrorIs(t, backend.Acquire(ctx, "key-1", "lock-1", 0), ErrQuotaExceeded)
-	require.NoError(t, backend.AddObserved(ctx, "key-1", "lock-1", time.Unix(10, 0)))
-	require.NoError(t, backend.Release(ctx, "key-1", "lock-1"))
-	require.NoError(t, backend.Release(ctx, "key-1", "lock-1"))
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l1",
+		Footprint: map[models.QuotaDimension]int64{
+			models.DimLimitsCPU:    2000,
+			models.DimLimitsMemory: 4096,
+		},
+		Scopes: []models.QuotaScope{models.ScopeRunning},
+	}))
 
-	got, err := backend.List(ctx, "key-1")
+	require.NoError(t, backend.Release(ctx, "K", "l1"))
+	require.NoError(t, backend.Release(ctx, "K", "l1"))
+
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeRunning))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeRunning))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsMemory, models.ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsMemory, models.ScopeRunning))
+
+	entries, err := backend.ListEntries(ctx, "K")
 	require.NoError(t, err)
-	assert.Empty(t, got)
+	assert.Empty(t, entries)
 }
 
-func TestRedisBackendTransportErrorClassifiedUnavailable(t *testing.T) {
-	srv := miniredis.RunT(t)
-	addr := srv.Addr()
-	srv.Close()
-
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	backend := NewRedisBackend(client, 10*time.Millisecond)
-
-	err := backend.Acquire(context.Background(), "key-1", "lock-1", 1)
-	require.ErrorIs(t, err, ErrBackendUnavailable)
-}
-
-func TestRedisBackendListAddObservedAndDeleteSubject(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 50*time.Millisecond)
+func TestListEntriesReturnsDecodedEntries(t *testing.T) {
+	backend, _ := newTestRedisBackend(t)
 	ctx := context.Background()
 
-	now := time.Unix(123, 0)
-	require.NoError(t, backend.AddObserved(ctx, "key-1", "lock-1", now))
-	require.NoError(t, backend.AddObserved(ctx, "key-1", "lock-2", now.Add(time.Second)))
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l1",
+		Footprint: map[models.QuotaDimension]int64{
+			models.DimLimitsCPU: 2000,
+		},
+		Scopes: []models.QuotaScope{models.ScopeRunning},
+	}))
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l2",
+		Scopes:     nil,
+	}))
 
-	got, err := backend.List(ctx, "key-1")
+	entries, err := backend.ListEntries(ctx, "K")
 	require.NoError(t, err)
-	assert.Equal(t, now, got["lock-1"])
-	assert.Equal(t, now.Add(time.Second), got["lock-2"])
-
-	require.NoError(t, backend.DeleteSubject(ctx, "key-1"))
-
-	got, err = backend.List(ctx, "key-1")
-	require.NoError(t, err)
-	assert.Empty(t, got)
+	require.Len(t, entries, 2)
+	assert.Equal(t, Entry{
+		Footprint: map[models.QuotaDimension]int64{models.DimLimitsCPU: 2000},
+		Scopes:    []models.QuotaScope{models.ScopeRunning},
+	}, entries["l1"])
+	assert.Equal(t, Entry{}, entries["l2"])
 }
 
-func TestRedisBackendListInvalidTimestampPreservesMembershipAsAncient(t *testing.T) {
-	srv := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
-	backend := NewRedisBackend(client, 50*time.Millisecond)
+func TestCleanupDeletesLiveAndAllSums(t *testing.T) {
+	backend, client := newTestRedisBackend(t)
+	ctx := context.Background()
 
-	srv.HSet("q:live:{key-1}", "lock-1", "bad-ts")
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l1",
+		Footprint: map[models.QuotaDimension]int64{
+			models.DimLimitsCPU: 2000,
+		},
+		Scopes: []models.QuotaScope{models.ScopeRunning},
+	}))
+	require.NoError(t, backend.Cleanup(ctx, "K"))
 
-	got, err := backend.List(context.Background(), "key-1")
-	require.NoError(t, err)
-	assert.Equal(t, time.Unix(0, 0), got["lock-1"])
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeAll))
+	assert.False(t, keyExists(t, client, liveKey("K")))
+	assert.False(t, keyExists(t, client, sumKey("K", models.DimSandboxCount)))
+	assert.False(t, keyExists(t, client, sumKey("K", models.DimLimitsCPU)))
+	assert.False(t, keyExists(t, client, sumKey("K", models.DimLimitsMemory)))
 }
 
 func TestNoopBackend(t *testing.T) {
 	backend := NoopBackend{}
 	ctx := context.Background()
 
-	require.NoError(t, backend.Acquire(ctx, "key-1", "lock-1", 1))
-	require.NoError(t, backend.Release(ctx, "key-1", "lock-1"))
-	require.NoError(t, backend.AddObserved(ctx, "key-1", "lock-1", time.Unix(1, 0)))
-	require.NoError(t, backend.DeleteSubject(ctx, "key-1"))
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l1"}))
+	require.NoError(t, backend.Release(ctx, "K", "l1"))
+	require.NoError(t, backend.Cleanup(ctx, "K"))
 
-	got, err := backend.List(ctx, "key-1")
+	entries, err := backend.ListEntries(ctx, "K")
 	require.NoError(t, err)
-	assert.Empty(t, got)
+	assert.Empty(t, entries)
+}
+
+func newTestRedisBackend(t *testing.T) (*RedisBackend, *redis.Client) {
+	t.Helper()
+
+	srv := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: srv.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+		srv.Close()
+	})
+	return NewRedisBackend(client, 50*time.Millisecond), client
+}
+
+func readSum(t *testing.T, client *redis.Client, apiKeyID string, dimension models.QuotaDimension, scope models.QuotaScope) int64 {
+	t.Helper()
+
+	value, err := client.HGet(context.Background(), sumKey(apiKeyID, dimension), string(scope)).Result()
+	if err == redis.Nil {
+		return 0
+	}
+	require.NoError(t, err)
+
+	sum, err := strconv.ParseInt(value, 10, 64)
+	require.NoError(t, err)
+	return sum
+}
+
+func keyExists(t *testing.T, client *redis.Client, key string) bool {
+	t.Helper()
+
+	exists, err := client.Exists(context.Background(), key).Result()
+	require.NoError(t, err)
+	return exists == 1
 }
