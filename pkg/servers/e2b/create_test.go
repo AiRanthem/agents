@@ -649,6 +649,33 @@ func TestResolveCreateFootprint(t *testing.T) {
 			},
 		},
 		{
+			name: "claim memory override wins",
+			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
+				createSandboxSetTemplateRefFixture(t, controller, Namespace, "claim-template", "claim-template-ref", "0m", "512Mi")
+			},
+			request: models.NewSandboxRequest{
+				TemplateID: "claim-template",
+				Extensions: models.NewSandboxRequestExtension{
+					InplaceUpdate: models.InplaceUpdateExtension{
+						Resources: &models.InplaceUpdateResourcesExtension{
+							Limits: corev1.ResourceList{
+								corev1.ResourceMemory: resource.MustParse("1024Mi"),
+							},
+						},
+					},
+				},
+			},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimLimitsMemory,
+				Scope:     models.ScopeRunning,
+				Limit:     2048,
+			}}),
+			expectFootprint: map[models.QuotaDimension]int64{
+				models.DimLimitsCPU:    0,
+				models.DimLimitsMemory: 1024,
+			},
+		},
+		{
 			name: "clone resolves checkpoint template without override",
 			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
 				createCheckpointTemplateWithLimitsFixture(t, controller, user.Team.Name, "clone-template", "checkpoint-1", user.ID.String(), "source-sandbox", "2026-06-19T00:00:00Z", "2000m", "0Mi")

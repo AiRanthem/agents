@@ -69,3 +69,42 @@ Result:
 
 ## Concerns
 - Claim-side resource override intentionally mirrors current infra behavior: only the first container's CPU limit is override-effective today. Memory override is not applied because the existing create hot path's `SetResources` logic does not apply it either.
+
+## Follow-up: claim memory override footprint fix
+
+### Status
+GREEN
+
+### RED evidence
+Command:
+```bash
+GOCACHE=/private/tmp/go-build-cache /Users/sophon/Bin/go test ./pkg/servers/e2b/ -run 'TestResolveCreateFootprint/claim_memory_override_wins' -v
+```
+Result:
+- FAIL as expected before the fix.
+- Regression was reproduced as `limits.memory`: expected `1024`, got `512`.
+
+### GREEN evidence
+Focused GREEN command:
+```bash
+GOCACHE=/private/tmp/go-build-cache /Users/sophon/Bin/go test ./pkg/servers/e2b/ -run 'TestResolveCreateFootprint/claim_memory_override_wins' -v
+```
+Result:
+- PASS
+
+Covering GREEN command:
+```bash
+GOCACHE=/private/tmp/go-build-cache /Users/sophon/Bin/go test ./pkg/servers/e2b/ -run 'ResolveCreateFootprint|Footprint|Create' -v
+```
+Result:
+- PASS
+- Included `TestResolveCreateFootprint/claim_memory_override_wins` plus the existing create/footprint package coverage selected by the command regex.
+
+### Files changed
+- `pkg/servers/e2b/create.go`
+- `pkg/servers/e2b/create_test.go`
+- `.superpowers/sdd/task-6-report.md`
+
+### Self-review
+- Kept the fix inside the existing claim override helper; no new abstraction, no clone-path change.
+- Memory override is applied only for quota footprint resolution and only on the existing limits basis, in MiB via `quota.FootprintOf`.
