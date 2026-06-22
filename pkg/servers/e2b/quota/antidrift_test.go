@@ -92,11 +92,12 @@ type releaseCall struct {
 }
 
 type fakeBackend struct {
-	mu               sync.Mutex
-	acquireCalls     []acquireCall
-	releaseCalls     []releaseCall
-	entriesByKey     map[string]map[string]Entry
-	listEntriesCalls atomic.Int64
+	mu                  sync.Mutex
+	acquireCalls        []acquireCall
+	releaseCalls        []releaseCall
+	entriesByKey        map[string]map[string]Entry
+	listEntriesErrByKey map[string]error
+	listEntriesCalls    atomic.Int64
 }
 
 func (b *fakeBackend) Acquire(_ context.Context, p AcquireParams) error {
@@ -115,6 +116,9 @@ func (b *fakeBackend) Release(_ context.Context, apiKeyID, lockString string) er
 
 func (b *fakeBackend) ListEntries(_ context.Context, apiKeyID string) (map[string]Entry, error) {
 	b.listEntriesCalls.Add(1)
+	if err := b.listEntriesErrByKey[apiKeyID]; err != nil {
+		return nil, err
+	}
 	if b.entriesByKey == nil || b.entriesByKey[apiKeyID] == nil {
 		return map[string]Entry{}, nil
 	}
@@ -306,6 +310,65 @@ func TestAntiDriftKeyStoreErrorSkipsCycle(t *testing.T) {
 	require.NoError(t, driver.RunOnce(context.Background()))
 	assert.Zero(t, backend.listEntriesCalls.Load())
 	assert.Empty(t, backend.acquireLockstrings())
+	assert.Empty(t, backend.releaseLockstrings())
+}
+
+func TestAntiDriftKeyStoreErrorDoesNotCountAsPreviousPass(t *testing.T) {
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-key-store-error")).String()
+	keyStore := &fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}}
+	backend := &fakeBackend{entriesByKey: map[string]map[string]Entry{
+		owner: {"lock-1": {}},
+	}}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
+		newMutablePrimary(true),
+		keyStore,
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+	currentNow := now
+	driver.now = func() time.Time { return currentNow }
+
+	require.NoError(t, driver.RunOnce(context.Background()))
+	require.Len(t, driver.seenLeaked, 1)
+
+	currentNow = currentNow.Add(11 * time.Minute)
+	keyStore.err = errors.New("boom")
+	require.NoError(t, driver.RunOnce(context.Background()))
+
+	keyStore.err = nil
+	require.NoError(t, driver.RunOnce(context.Background()))
+	assert.Empty(t, backend.releaseLockstrings())
+}
+
+func TestAntiDriftListEntriesErrorDoesNotCountAsPreviousPass(t *testing.T) {
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-list-entries-error")).String()
+	backend := &fakeBackend{
+		entriesByKey: map[string]map[string]Entry{
+			owner: {"lock-1": {}},
+		},
+	}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
+		newMutablePrimary(true),
+		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+	currentNow := now
+	driver.now = func() time.Time { return currentNow }
+
+	require.NoError(t, driver.RunOnce(context.Background()))
+	require.Len(t, driver.seenLeaked, 1)
+
+	currentNow = currentNow.Add(11 * time.Minute)
+	backend.listEntriesErrByKey = map[string]error{owner: errors.New("boom")}
+	require.ErrorContains(t, driver.RunOnce(context.Background()), "boom")
+
+	backend.listEntriesErrByKey = nil
+	require.NoError(t, driver.RunOnce(context.Background()))
 	assert.Empty(t, backend.releaseLockstrings())
 }
 

@@ -36,6 +36,11 @@ type AntiDriftConfig struct {
 	CycleTimeout time.Duration
 }
 
+type leakedObservation struct {
+	firstSeen time.Time
+	lastPass  uint64
+}
+
 type AntiDriftDriver struct {
 	cfg     AntiDriftConfig
 	primary PrimaryChecker
@@ -47,7 +52,8 @@ type AntiDriftDriver struct {
 	registration cachepkg.SandboxEventHandlerRegistration
 	runDone      chan struct{}
 	cycleCancel  context.CancelFunc
-	seenLeaked   map[string]time.Time
+	seenLeaked   map[string]leakedObservation
+	pass         uint64
 	stopped      bool
 	now          func() time.Time
 
@@ -72,7 +78,7 @@ func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, keys Limite
 		keys:       keys,
 		cache:      liveCache,
 		backend:    backend,
-		seenLeaked: map[string]time.Time{},
+		seenLeaked: map[string]leakedObservation{},
 		now:        time.Now,
 		stopCh:     make(chan struct{}),
 	}
@@ -157,11 +163,13 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 	limitedKeys, err := d.keys.ListLimited(ctx)
 	if err != nil {
 		antiDriftSkippedTotal.WithLabelValues("key_store_error").Inc()
+		d.clearLeaked()
 		return nil
 	}
 
 	healthy := d.cache.SandboxInformerHealthy()
 	now := d.now()
+	pass := d.nextPass()
 	var firstErr error
 	for _, key := range limitedKeys {
 		if err := ctx.Err(); err != nil {
@@ -175,6 +183,7 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		liveSandboxes, err := d.cache.ListLiveSandboxesByOwner(ctx, apiKeyID)
 		if err != nil {
 			antiDriftErrorsTotal.WithLabelValues("list_live").Inc()
+			d.clearLeakedForKey(apiKeyID)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -184,6 +193,7 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		haveEntries, err := d.backend.ListEntries(ctx, apiKeyID)
 		if err != nil {
 			antiDriftErrorsTotal.WithLabelValues("list_entries").Inc()
+			d.clearLeakedForKey(apiKeyID)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -229,8 +239,8 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 				continue
 			}
 
-			firstSeen, seenBefore := d.rememberLeaked(apiKeyID, lockString, now)
-			if !seenBefore || now.Sub(firstSeen) < d.cfg.Grace || !healthy {
+			firstSeen, seenPreviousPass := d.rememberLeaked(apiKeyID, lockString, now, pass)
+			if !seenPreviousPass || now.Sub(firstSeen) < d.cfg.Grace || !healthy {
 				continue
 			}
 			if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
@@ -271,7 +281,7 @@ func (d *AntiDriftDriver) Stop() {
 		d.stopped = true
 		registration := d.registration
 		d.registration = nil
-		d.seenLeaked = map[string]time.Time{}
+		d.seenLeaked = map[string]leakedObservation{}
 		done := d.runDone
 		cycleCancel := d.cycleCancel
 		close(d.stopCh)
@@ -362,23 +372,43 @@ func (d *AntiDriftDriver) clearLeaked() {
 	clear(d.seenLeaked)
 }
 
-func (d *AntiDriftDriver) rememberLeaked(apiKeyID, lockString string, now time.Time) (time.Time, bool) {
+func (d *AntiDriftDriver) nextPass() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.pass++
+	return d.pass
+}
+
+func (d *AntiDriftDriver) rememberLeaked(apiKeyID, lockString string, now time.Time, pass uint64) (time.Time, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	key := leakedKey(apiKeyID, lockString)
-	firstSeen, ok := d.seenLeaked[key]
-	if ok {
-		return firstSeen, true
+	obs, ok := d.seenLeaked[key]
+	if !ok {
+		obs.firstSeen = now
 	}
-	d.seenLeaked[key] = now
-	return now, false
+	seenPreviousPass := ok && obs.lastPass+1 == pass
+	obs.lastPass = pass
+	d.seenLeaked[key] = obs
+	return obs.firstSeen, seenPreviousPass
 }
 
 func (d *AntiDriftDriver) forgetLeaked(apiKeyID, lockString string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	delete(d.seenLeaked, leakedKey(apiKeyID, lockString))
+}
+
+func (d *AntiDriftDriver) clearLeakedForKey(apiKeyID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	prefix := apiKeyID + "\x00"
+	for key := range d.seenLeaked {
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			delete(d.seenLeaked, key)
+		}
+	}
 }
 
 func leakedKey(apiKeyID, lockString string) string {
