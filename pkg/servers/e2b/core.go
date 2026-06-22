@@ -45,7 +45,7 @@ import (
 type quotaManager interface {
 	Acquire(ctx context.Context, req quota.AcquireRequest) error
 	Release(ctx context.Context, req quota.ReleaseRequest) error
-	DeleteSubject(ctx context.Context, apiKeyID string) error
+	Cleanup(ctx context.Context, apiKeyID string) error
 }
 
 type redisClientCloser interface {
@@ -197,7 +197,11 @@ func (sc *Controller) initQuota(ctx context.Context) error {
 		Password: sc.quotaCfg.RedisPassword,
 		DB:       sc.quotaCfg.RedisDB,
 	})
-	backend := quota.NewRedisBackend(redisClient, sc.quotaCfg.OperationTimeout)
+	backend := quota.NewBreakerBackend(
+		quota.NewRedisBackend(redisClient, sc.quotaCfg.OperationTimeout),
+		sc.quotaCfg.BreakerN,
+		sc.quotaCfg.BreakerD,
+	)
 	driver := quota.NewAntiDriftDriver(quota.AntiDriftConfig{
 		Interval: sc.quotaCfg.AntiDriftInterval,
 		Grace:    sc.quotaCfg.AntiDriftGrace,

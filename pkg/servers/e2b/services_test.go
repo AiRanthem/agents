@@ -589,7 +589,7 @@ func TestCreateSandboxReturnsImmediatelyWhenCreateOnNoStockHitsQuota(t *testing.
 	assert.Less(t, elapsed, sandboxcr.CreateRetryInterval, "terminal quota denial must return before retry backoff")
 }
 
-func TestCreateSandbox_QuotaExceededReturns429WithoutRetry(t *testing.T) {
+func TestCreateSandbox_QuotaExceededReturns403WithoutRetry(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
@@ -604,7 +604,8 @@ func TestCreateSandbox_QuotaExceededReturns429WithoutRetry(t *testing.T) {
 		Team: models.AdminTeam(),
 		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,
-			Limit:     &limit,
+			Scope:     models.ScopeRunning,
+			Limit:     limit,
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
@@ -618,10 +619,11 @@ func TestCreateSandbox_QuotaExceededReturns429WithoutRetry(t *testing.T) {
 	}, nil, user))
 
 	require.NotNil(t, apiErr)
-	assert.Equal(t, http.StatusTooManyRequests, apiErr.Code)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
 	assert.Contains(t, apiErr.Message, "quota exceeded")
 	assert.Zero(t, resp.Code)
 	assert.Equal(t, int64(1), fakeQuota.acquireCalls.Load())
+	assert.Equal(t, []models.QuotaScope{models.ScopeRunning}, fakeQuota.lastAcquire.Scopes)
 }
 
 func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
@@ -639,7 +641,8 @@ func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
 		Team: models.AdminTeam(),
 		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,
-			Limit:     &limit,
+			Scope:     models.ScopeRunning,
+			Limit:     limit,
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
@@ -652,9 +655,10 @@ func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
 		},
 	}, nil, limited))
 	require.NotNil(t, apiErr)
-	assert.Equal(t, http.StatusTooManyRequests, apiErr.Code)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
 	assert.Zero(t, resp.Code)
 	assert.Equal(t, int64(1), fakeQuota.acquireCalls.Load(), "quota miss must not retry")
+	assert.Equal(t, []models.QuotaScope{models.ScopeRunning}, fakeQuota.lastAcquire.Scopes)
 
 	unlimited := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
@@ -679,7 +683,7 @@ func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
 	assert.NotEmpty(t, claimed.Annotations[v1alpha1.AnnotationLock])
 }
 
-func TestCreateSandbox_CloneQuotaExceededReturns429WithoutRetry(t *testing.T) {
+func TestCreateSandbox_CloneQuotaExceededReturns403WithoutRetry(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
@@ -692,7 +696,8 @@ func TestCreateSandbox_CloneQuotaExceededReturns429WithoutRetry(t *testing.T) {
 		Team: team,
 		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,
-			Limit:     &limit,
+			Scope:     models.ScopeRunning,
+			Limit:     limit,
 		}}},
 	}
 	cleanup := CreateCheckpointAndTemplateInNamespace(t, controller, team.Name, "clone-template", "checkpoint-1", user.ID.String(), "source-sandbox", "2026-06-19T00:00:00Z")
@@ -709,10 +714,11 @@ func TestCreateSandbox_CloneQuotaExceededReturns429WithoutRetry(t *testing.T) {
 	}, nil, user))
 
 	require.NotNil(t, apiErr)
-	assert.Equal(t, http.StatusTooManyRequests, apiErr.Code)
+	assert.Equal(t, http.StatusForbidden, apiErr.Code)
 	assert.Contains(t, apiErr.Message, "quota exceeded")
 	assert.Zero(t, resp.Code)
 	assert.Equal(t, int64(1), fakeQuota.acquireCalls.Load())
+	assert.Equal(t, []models.QuotaScope{models.ScopeRunning}, fakeQuota.lastAcquire.Scopes)
 }
 
 func TestCreateSandbox_UnlimitedKeyDoesNotCallQuota(t *testing.T) {
@@ -1828,7 +1834,7 @@ func (m *deleteReleaseQuotaManager) Release(ctx context.Context, req quota.Relea
 	return nil
 }
 
-func (m *deleteReleaseQuotaManager) DeleteSubject(context.Context, string) error {
+func (m *deleteReleaseQuotaManager) Cleanup(context.Context, string) error {
 	return nil
 }
 

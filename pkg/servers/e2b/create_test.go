@@ -48,13 +48,13 @@ type fakeQuotaManager struct {
 	releaseErr         error
 	acquireCalls       atomic.Int64
 	releaseCalls       atomic.Int64
-	deleteSubjectCalls atomic.Int64
+	cleanupCalls       atomic.Int64
 	releaseHasDeadline atomic.Bool
 
-	mu                sync.Mutex
-	lastAcquire       quota.AcquireRequest
-	lastRelease       quota.ReleaseRequest
-	lastDeleteSubject string
+	mu          sync.Mutex
+	lastAcquire quota.AcquireRequest
+	lastRelease quota.ReleaseRequest
+	lastCleanup string
 }
 
 func (f *fakeQuotaManager) Acquire(_ context.Context, req quota.AcquireRequest) error {
@@ -76,11 +76,11 @@ func (f *fakeQuotaManager) Release(ctx context.Context, req quota.ReleaseRequest
 	return f.releaseErr
 }
 
-func (f *fakeQuotaManager) DeleteSubject(_ context.Context, apiKeyID string) error {
+func (f *fakeQuotaManager) Cleanup(_ context.Context, apiKeyID string) error {
 	f.mu.Lock()
-	f.lastDeleteSubject = apiKeyID
+	f.lastCleanup = apiKeyID
 	f.mu.Unlock()
-	f.deleteSubjectCalls.Add(1)
+	f.cleanupCalls.Add(1)
 	return nil
 }
 
@@ -573,9 +573,9 @@ func TestMapInfraErrorToApiError(t *testing.T) {
 			expectedCode: http.StatusInternalServerError,
 		},
 		{
-			name:         "ErrorQuotaExceeded maps to 429",
+			name:         "ErrorQuotaExceeded maps to 403",
 			err:          managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded"),
-			expectedCode: http.StatusTooManyRequests,
+			expectedCode: http.StatusForbidden,
 		},
 		{
 			name:         "plain error maps to 500",

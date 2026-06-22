@@ -118,7 +118,7 @@ func validateCreateAPIKeyRequest(request *models.NewTeamAPIKey) *web.ApiError {
 		request.QuotaSpec = nil
 		return nil
 	}
-	quota, err := request.Quota.ToQuotaSpec()
+	quota, err := models.QuotaSpecFromWire(request.Quota)
 	if err != nil {
 		return &web.ApiError{
 			Code:    http.StatusBadRequest,
@@ -193,7 +193,7 @@ func (sc *Controller) cleanupDeletedAPIKeyQuota(ctx context.Context, apiKeyID st
 	var lastErr error
 
 	for {
-		err := sc.quota.DeleteSubject(cleanupCtx, apiKeyID)
+		err := sc.quota.Cleanup(cleanupCtx, apiKeyID)
 		if err == nil {
 			return
 		}

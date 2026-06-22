@@ -396,7 +396,8 @@ func TestControllerInitQuotaRedisConfiguredTransportUnavailableStillFailOpen(t *
 		LockString: "lock-1",
 		Quota: &models.QuotaSpec{Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,
-			Limit:     &limit,
+			Scope:     models.ScopeRunning,
+			Limit:     limit,
 		}}},
 	})
 	require.NoError(t, err, "configured Redis transport errors must fail open on the hot path")

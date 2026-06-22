@@ -53,13 +53,13 @@ const quotaReleaseTimeout = infra.SandboxAdmissionReleaseTimeout
 // mapInfraErrorToApiError converts an infra-layer error to an ApiError with the
 // appropriate HTTP status code based on managererrors.ErrorCode.
 func mapInfraErrorToApiError(err error) *web.ApiError {
-	// The create API maps validation/lookups to 400, quota misses to 429, and
+	// The create API maps validation/lookups to 400, quota misses to 403, and
 	// everything else to 500.
 	switch managererrors.GetErrCode(err) {
 	case managererrors.ErrorBadRequest, managererrors.ErrorNotFound:
 		return &web.ApiError{Code: http.StatusBadRequest, Message: err.Error()}
 	case managererrors.ErrorQuotaExceeded:
-		return &web.ApiError{Code: http.StatusTooManyRequests, Message: err.Error()}
+		return &web.ApiError{Code: http.StatusForbidden, Message: err.Error()}
 	default:
 		// ErrorInternal, ErrorUnknown, or untyped errors (e.g., retry exhausted) → 500
 		return &web.ApiError{Code: http.StatusInternalServerError, Message: err.Error()}
@@ -93,6 +93,7 @@ func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey) *infra.Sand
 				APIKeyID:   apiKeyID,
 				LockString: lockString,
 				Quota:      quotaSpec,
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
 			})
 			if errors.Is(err, quota.ErrQuotaExceeded) {
 				return managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
