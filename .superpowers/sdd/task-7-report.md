@@ -97,3 +97,37 @@ Observed result:
 - A per-key `ListLiveSandboxesByOwner` or `ListEntries` failure clears leaked confirmation state for that key only, preserving minimal scope while blocking stale maturation.
 - Reappearing live entries still clear leaked memory immediately.
 - Leader demotion and `Stop()` still clear leaked state.
+
+## 2026-06-23 Task 7 second fix: failed pass does not count as leaked confirmation
+
+### Status
+DONE
+
+### RED evidence
+Command:
+```bash
+GOCACHE=/private/tmp/go-build-cache /Users/sophon/Bin/go test ./pkg/servers/e2b/quota/ -run 'AntiDrift|Leaked|Release|KeyStore' -v
+```
+Observed failure:
+- `TestAntiDriftReleaseErrorDoesNotCountAsPreviousPass`: after an injected `Release` failure, the next healthy run still released `lock-1`, proving the failed pass was incorrectly treated as the previous leaked confirmation.
+
+### GREEN evidence
+Command:
+```bash
+GOCACHE=/private/tmp/go-build-cache /Users/sophon/Bin/go test ./pkg/servers/e2b/quota/ -run 'AntiDrift|Leaked|Release|KeyStore' -v
+```
+Observed result:
+- Exit code `0`
+- `PASS`
+- The new release-failure regression now requires one more successful leaked observation before release, while the existing anti-drift, key-store, and release-path coverage stays green.
+
+### Files changed
+- `pkg/servers/e2b/quota/antidrift.go`
+- `pkg/servers/e2b/quota/antidrift_test.go`
+- `.superpowers/sdd/task-7-report.md`
+
+### Self-review
+- Replaced pass-number confirmation with a minimal per-lock leaked state: `firstSeen` plus whether the immediately previous successful per-key diff observed the leak.
+- Current leaked observations are staged per key and committed only after that key finishes without `Acquire` or `Release` errors.
+- A failed key pass now keeps the leak age but clears successful-confirmation status, so the next healthy run observes again instead of releasing immediately.
+- `ListLimited` global clear, per-key list/have clear, live reappearance clear, and demotion clear behaviors remain unchanged.
