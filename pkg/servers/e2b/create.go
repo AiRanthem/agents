@@ -25,10 +25,13 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
@@ -70,6 +73,108 @@ func quotaRequestReleaseContext(ctx context.Context) (context.Context, context.C
 	return context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)
 }
 
+func quotaNeedsResolvedFootprint(user *models.CreatedTeamAPIKey) bool {
+	if user == nil || user.QuotaSpec == nil || !user.QuotaSpec.IsLimited() {
+		return false
+	}
+	for _, limit := range user.QuotaSpec.Limits {
+		if limit.Dimension == models.DimLimitsCPU || limit.Dimension == models.DimLimitsMemory {
+			return true
+		}
+	}
+	return false
+}
+
+func sandboxFromPodTemplate(template *corev1.PodTemplateSpec) *agentsv1alpha1.Sandbox {
+	return &agentsv1alpha1.Sandbox{
+		Spec: agentsv1alpha1.SandboxSpec{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+				Template: template,
+			},
+		},
+	}
+}
+
+func applyClaimResourceOverride(template *corev1.PodTemplateSpec, override *models.InplaceUpdateResourcesExtension) *corev1.PodTemplateSpec {
+	if template == nil || override == nil || len(template.Spec.Containers) == 0 {
+		return template
+	}
+
+	copied := template.DeepCopy()
+	container := &copied.Spec.Containers[0]
+	if target, ok := override.Limits[corev1.ResourceCPU]; ok {
+		if cur, ok := container.Resources.Limits[corev1.ResourceCPU]; ok && !cur.IsZero() {
+			if container.Resources.Limits == nil {
+				container.Resources.Limits = corev1.ResourceList{}
+			}
+			container.Resources.Limits[corev1.ResourceCPU] = target.DeepCopy()
+		}
+	}
+	return copied
+}
+
+func (sc *Controller) resolveClaimTemplate(ctx context.Context, namespace, templateID string) (*corev1.PodTemplateSpec, error) {
+	sbs, err := sc.cache.PickSandboxSet(ctx, infracache.PickSandboxSetOptions{Namespace: namespace, Name: templateID})
+	if err != nil {
+		return nil, err
+	}
+	if sbs.Spec.TemplateRef == nil {
+		return sbs.Spec.Template, nil
+	}
+
+	sbt := &agentsv1alpha1.SandboxTemplate{}
+	if err := sc.cache.GetClient().Get(ctx, ctrlclient.ObjectKey{
+		Namespace: sbs.Namespace,
+		Name:      sbs.Spec.TemplateRef.Name,
+	}, sbt); err != nil {
+		return nil, err
+	}
+	return sbt.Spec.Template, nil
+}
+
+func (sc *Controller) resolveCloneTemplate(ctx context.Context, namespace, checkpointID string) (*corev1.PodTemplateSpec, error) {
+	cp, err := sc.cache.GetCheckpoint(ctx, infracache.GetCheckpointOptions{
+		Namespace:    namespace,
+		CheckpointID: checkpointID,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sbt := &agentsv1alpha1.SandboxTemplate{}
+	if err := sc.cache.GetClient().Get(ctx, ctrlclient.ObjectKey{
+		Namespace: cp.Namespace,
+		Name:      cp.Name,
+	}, sbt); err != nil {
+		return nil, err
+	}
+	return sbt.Spec.Template, nil
+}
+
+func (sc *Controller) resolveCreateFootprint(ctx context.Context, request models.NewSandboxRequest, user *models.CreatedTeamAPIKey) (map[models.QuotaDimension]int64, error) {
+	if !quotaNeedsResolvedFootprint(user) {
+		return nil, nil
+	}
+
+	namespace := sc.getNamespaceOfUser(user)
+	if sc.manager.GetInfra().HasTemplate(ctx, infra.HasTemplateOptions{Namespace: namespace, Name: request.TemplateID}) {
+		template, err := sc.resolveClaimTemplate(ctx, namespace, request.TemplateID)
+		if err != nil {
+			return nil, err
+		}
+		return quota.FootprintOf(sandboxFromPodTemplate(applyClaimResourceOverride(template, request.Extensions.InplaceUpdate.Resources))), nil
+	}
+	if sc.manager.GetInfra().HasCheckpoint(ctx, infra.HasCheckpointOptions{Namespace: namespace, CheckpointID: request.TemplateID}) {
+		template, err := sc.resolveCloneTemplate(ctx, namespace, request.TemplateID)
+		if err != nil {
+			return nil, err
+		}
+		return quota.FootprintOf(sandboxFromPodTemplate(template)), nil
+	}
+
+	return nil, managererrors.NewError(managererrors.ErrorNotFound, "Template or Checkpoint not found")
+}
+
 // resolveServerTimeout maps an extension-provided seconds value to a server-side
 // timeout. A positive value yields a finite timeout; an absent (zero) or
 // non-positive value yields noServerTimeout.
@@ -80,7 +185,7 @@ func resolveServerTimeout(seconds int) time.Duration {
 	return noServerTimeout
 }
 
-func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey) *infra.SandboxAdmission {
+func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey, footprint map[models.QuotaDimension]int64) *infra.SandboxAdmission {
 	if sc.quota == nil || user == nil || user.QuotaSpec == nil || !user.QuotaSpec.IsLimited() {
 		return nil
 	}
@@ -93,6 +198,7 @@ func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey) *infra.Sand
 				APIKeyID:   apiKeyID,
 				LockString: lockString,
 				Quota:      quotaSpec,
+				Footprint:  footprint,
 				Scopes:     []models.QuotaScope{models.ScopeRunning},
 			})
 			if errors.Is(err, quota.ErrQuotaExceeded) {
@@ -149,11 +255,19 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 	log := klog.FromContext(ctx)
 	claimStart := time.Now()
 	var accessToken string
+	footprint, err := sc.resolveCreateFootprint(ctx, request, user)
+	if err != nil {
+		log.Error(err, "failed to resolve create footprint", "templateID", request.TemplateID)
+		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: "Template or Checkpoint not found",
+		}
+	}
 	opts := infra.ClaimSandboxOptions{
 		Namespace:    sc.getNamespaceOfUser(user),
 		Template:     request.TemplateID,
 		User:         user.ID.String(),
-		Admission:    sc.quotaAdmission(user),
+		Admission:    sc.quotaAdmission(user, footprint),
 		ClaimTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
@@ -230,11 +344,19 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 			Message: "InplaceUpdate is not supported for clone",
 		}
 	}
+	footprint, err := sc.resolveCreateFootprint(ctx, request, user)
+	if err != nil {
+		log.Error(err, "failed to resolve clone footprint", "checkpointID", request.TemplateID)
+		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: "Template or Checkpoint not found",
+		}
+	}
 
 	opts := infra.CloneSandboxOptions{
 		Namespace:    sc.getNamespaceOfUser(user),
 		User:         user.ID.String(),
-		Admission:    sc.quotaAdmission(user),
+		Admission:    sc.quotaAdmission(user, footprint),
 		CheckPointID: request.TemplateID,
 		CloneTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {

@@ -734,7 +734,7 @@ func TestCreateSandbox_UnlimitedKeyDoesNotCallQuota(t *testing.T) {
 		Team: models.AdminTeam(),
 	}
 
-	admission := controller.quotaAdmission(user)
+	admission := controller.quotaAdmission(user, nil)
 	assert.Nil(t, admission)
 	assert.Equal(t, int64(0), fakeQuota.acquireCalls.Load())
 }
