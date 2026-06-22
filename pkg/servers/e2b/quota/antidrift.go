@@ -56,10 +56,6 @@ type AntiDriftDriver struct {
 	stopCh   chan struct{}
 }
 
-type releaseResultBackend interface {
-	ReleaseResult(ctx context.Context, apiKeyID, lockString string) (bool, error)
-}
-
 func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, keys LimitedKeyStore, liveCache LiveLockstringCache, backend Backend) *AntiDriftDriver {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 5 * time.Minute
@@ -390,10 +386,8 @@ func (d *AntiDriftDriver) releaseWithProbe(ctx context.Context, owner, lockStrin
 		return
 	}
 
-	antiDriftEventProbeTotal.WithLabelValues("attempt").Inc()
 	live, err := d.cache.ListLiveLockstringsByOwner(ctx, cachepkg.ListLiveLockstringsByOwnerOptions{Owner: owner})
 	if err != nil {
-		antiDriftEventProbeTotal.WithLabelValues("error").Inc()
 		antiDriftEventReleaseTotal.WithLabelValues("skip_probe_error").Inc()
 		antiDriftErrorsTotal.WithLabelValues("event_probe").Inc()
 		klog.FromContext(ctx).Error(err, "quota anti-drift event probe failed", "apiKeyID", owner, "lockString", lockString)
@@ -401,43 +395,22 @@ func (d *AntiDriftDriver) releaseWithProbe(ctx context.Context, owner, lockStrin
 	}
 	for _, entry := range live {
 		if entry.LockString == lockString {
-			antiDriftEventProbeTotal.WithLabelValues("still_live").Inc()
 			antiDriftEventReleaseTotal.WithLabelValues("skip_still_live").Inc()
 			return
 		}
 	}
-	antiDriftEventProbeTotal.WithLabelValues("gone").Inc()
 
 	if d.backend == nil {
 		return
 	}
-	result, err := d.releaseQuotaEntry(ctx, owner, lockString)
-	if err != nil {
+	if err := d.backend.Release(ctx, owner, lockString); err != nil {
 		antiDriftEventReleaseTotal.WithLabelValues("error").Inc()
 		antiDriftErrorsTotal.WithLabelValues("event_release").Inc()
 		klog.FromContext(ctx).Error(err, "quota anti-drift event release failed", "apiKeyID", owner, "lockString", lockString)
 		return
 	}
 
-	antiDriftEventReleaseTotal.WithLabelValues(result).Inc()
-}
-
-func (d *AntiDriftDriver) releaseQuotaEntry(ctx context.Context, owner, lockString string) (string, error) {
-	if backend, ok := d.backend.(releaseResultBackend); ok {
-		deleted, err := backend.ReleaseResult(ctx, owner, lockString)
-		if err != nil {
-			return "", err
-		}
-		if deleted {
-			return "released", nil
-		}
-		return "noop", nil
-	}
-
-	if err := d.backend.Release(ctx, owner, lockString); err != nil {
-		return "", err
-	}
-	return "released", nil
+	antiDriftEventReleaseTotal.WithLabelValues("success").Inc()
 }
 
 func quotaIdentityFromSandbox(sbx *agentsv1alpha1.Sandbox) (string, string) {

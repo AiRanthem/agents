@@ -187,9 +187,6 @@ func TestRedisBackendNilReceiverOrClientReturnsUnavailable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			require.ErrorIs(t, tt.backend.Acquire(context.Background(), "key-1", "lock-1", 1), ErrBackendUnavailable)
 			require.ErrorIs(t, tt.backend.Release(context.Background(), "key-1", "lock-1"), ErrBackendUnavailable)
-			released, err := tt.backend.ReleaseResult(context.Background(), "key-1", "lock-1")
-			require.ErrorIs(t, err, ErrBackendUnavailable)
-			assert.False(t, released)
 			require.ErrorIs(t, tt.backend.AddObserved(context.Background(), "key-1", "lock-1", time.Now()), ErrBackendUnavailable)
 			listed, err := tt.backend.List(context.Background(), "key-1")
 			require.ErrorIs(t, err, ErrBackendUnavailable)
