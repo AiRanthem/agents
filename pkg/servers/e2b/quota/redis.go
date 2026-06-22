@@ -359,6 +359,9 @@ func normalizeFootprint(in map[models.QuotaDimension]int64) map[models.QuotaDime
 	}
 	out := make(map[models.QuotaDimension]int64, len(in))
 	for dim, amount := range in {
+		if dim != models.DimLimitsCPU && dim != models.DimLimitsMemory {
+			continue
+		}
 		if amount == 0 {
 			continue
 		}
@@ -377,6 +380,9 @@ func normalizeScopes(in []models.QuotaScope) []models.QuotaScope {
 	seen := make(map[models.QuotaScope]struct{}, len(in))
 	out := make([]models.QuotaScope, 0, len(in))
 	for _, scope := range in {
+		if scope == models.ScopeAll {
+			continue
+		}
 		if _, ok := seen[scope]; ok {
 			continue
 		}

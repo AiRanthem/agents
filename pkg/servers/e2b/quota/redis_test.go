@@ -202,6 +202,55 @@ func TestListEntriesReturnsDecodedEntries(t *testing.T) {
 	assert.Equal(t, Entry{}, entries["l2"])
 }
 
+func TestListEntriesNormalizesConditionalScopesOnly(t *testing.T) {
+	backend, _ := newTestRedisBackend(t)
+	ctx := context.Background()
+
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l1",
+		Scopes: []models.QuotaScope{
+			models.ScopeAll,
+			models.ScopeRunning,
+			models.ScopeRunning,
+		},
+	}))
+
+	entries, err := backend.ListEntries(ctx, "K")
+	require.NoError(t, err)
+	require.Contains(t, entries, "l1")
+	assert.Equal(t, Entry{
+		Scopes: []models.QuotaScope{models.ScopeRunning},
+	}, entries["l1"])
+}
+
+func TestListEntriesNormalizesFootprintDimensions(t *testing.T) {
+	backend, _ := newTestRedisBackend(t)
+	ctx := context.Background()
+
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{
+		APIKeyID:   "K",
+		LockString: "l1",
+		Footprint: map[models.QuotaDimension]int64{
+			models.DimSandboxCount:               1,
+			models.DimLimitsCPU:                  2000,
+			models.DimLimitsMemory:               4096,
+			models.QuotaDimension("limits.gpu"):  8,
+			models.QuotaDimension("unknown.dim"): -1,
+		},
+	}))
+
+	entries, err := backend.ListEntries(ctx, "K")
+	require.NoError(t, err)
+	require.Contains(t, entries, "l1")
+	assert.Equal(t, Entry{
+		Footprint: map[models.QuotaDimension]int64{
+			models.DimLimitsCPU:    2000,
+			models.DimLimitsMemory: 4096,
+		},
+	}, entries["l1"])
+}
+
 func TestCleanupDeletesLiveAndAllSums(t *testing.T) {
 	backend, client := newTestRedisBackend(t)
 	ctx := context.Background()
