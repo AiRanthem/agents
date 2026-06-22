@@ -48,13 +48,14 @@ type AntiDriftDriver struct {
 	cache   LiveSandboxCache
 	backend Backend
 
-	mu           sync.Mutex
-	registration cachepkg.SandboxEventHandlerRegistration
-	runDone      chan struct{}
-	cycleCancel  context.CancelFunc
-	seenLeaked   map[string]leakedObservation
-	stopped      bool
-	now          func() time.Time
+	mu            sync.Mutex
+	registration  cachepkg.SandboxEventHandlerRegistration
+	runDone       chan struct{}
+	cycleCancel   context.CancelFunc
+	seenLeaked    map[string]leakedObservation
+	limitedOwners map[string]struct{}
+	stopped       bool
+	now           func() time.Time
 
 	runOnce  sync.Once
 	stopOnce sync.Once
@@ -72,14 +73,15 @@ func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, keys Limite
 		cfg.CycleTimeout = 30 * time.Second
 	}
 	return &AntiDriftDriver{
-		cfg:        cfg,
-		primary:    primary,
-		keys:       keys,
-		cache:      liveCache,
-		backend:    backend,
-		seenLeaked: map[string]leakedObservation{},
-		now:        time.Now,
-		stopCh:     make(chan struct{}),
+		cfg:           cfg,
+		primary:       primary,
+		keys:          keys,
+		cache:         liveCache,
+		backend:       backend,
+		seenLeaked:    map[string]leakedObservation{},
+		limitedOwners: map[string]struct{}{},
+		now:           time.Now,
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -165,6 +167,14 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		d.clearLeaked()
 		return nil
 	}
+	limitedOwners := map[string]struct{}{}
+	for _, key := range limitedKeys {
+		if key == nil || key.QuotaSpec == nil || !key.QuotaSpec.IsLimited() {
+			continue
+		}
+		limitedOwners[key.ID.String()] = struct{}{}
+	}
+	d.replaceLimitedOwners(limitedOwners)
 
 	healthy := d.cache.SandboxInformerHealthy()
 	now := d.now()
@@ -298,6 +308,7 @@ func (d *AntiDriftDriver) Stop() {
 		registration := d.registration
 		d.registration = nil
 		d.seenLeaked = map[string]leakedObservation{}
+		d.limitedOwners = map[string]struct{}{}
 		done := d.runDone
 		cycleCancel := d.cycleCancel
 		close(d.stopCh)
@@ -353,6 +364,9 @@ func (d *AntiDriftDriver) reconcileSandboxEvent(sbx *agentsv1alpha1.Sandbox) {
 	if apiKeyID == "" || lockString == "" {
 		return
 	}
+	if !d.isKnownLimited(apiKeyID) {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), d.cycleTimeout())
 	defer cancel()
@@ -386,6 +400,19 @@ func (d *AntiDriftDriver) clearLeaked() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	clear(d.seenLeaked)
+}
+
+func (d *AntiDriftDriver) replaceLimitedOwners(limitedOwners map[string]struct{}) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.limitedOwners = limitedOwners
+}
+
+func (d *AntiDriftDriver) isKnownLimited(apiKeyID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.limitedOwners[apiKeyID]
+	return ok
 }
 
 func (d *AntiDriftDriver) leakedObservation(apiKeyID, lockString string) leakedObservation {

@@ -81,6 +81,13 @@ func ValidateAndInitCheckpointOptions(opts infra.CreateCheckpointOptions) infra.
 func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache infracache.Provider) (cloned infra.Sandbox, metrics infra.CloneMetrics, err error) {
 	log := klog.FromContext(ctx).WithValues("checkpoint", opts.CheckPointID)
 	opts.LockString = chooseCloneAttemptLockString(opts)
+	admitted := false
+	createAttempted := false
+	defer func() {
+		if admitted && err != nil && !createAttempted {
+			releaseAdmission(ctx, opts.Admission, opts.LockString)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -93,6 +100,14 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	tmpl, cp, metrics, err := findCheckpointAndTemplateById(ctx, opts, cache, metrics)
 	if err != nil {
 		return nil, metrics, err
+	}
+
+	if opts.Admission != nil && opts.Admission.Acquire != nil {
+		if err = opts.Admission.Acquire(ctx, opts.LockString); err != nil {
+			log.Error(err, "failed to acquire sandbox admission", "lockString", opts.LockString)
+			return nil, metrics, err
+		}
+		admitted = true
 	}
 
 	// Step 2: block on the create rate limiter so a single Infra.createLimiter
@@ -110,8 +125,12 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	// CR, the retry produces a second CR that this code path will not see
 	// (GenerateName, no IsAlreadyExists signal). Such orphans must be reaped
 	// out-of-band (e.g. by a janitor reconciler).
-	sbx, initRuntimeOpts, metrics, err := createSandboxFromCheckpoint(ctx, opts, tmpl, cp, cache, metrics)
+	sbx, initRuntimeOpts, metrics, createAttempted, err := createSandboxFromCheckpoint(ctx, opts, tmpl, cp, cache, metrics)
 	if err != nil {
+		if isKnownRejectedSandboxWrite(err) {
+			releaseAdmission(ctx, opts.Admission, opts.LockString)
+			admitted = false
+		}
 		if managererrors.GetErrCode(err) == managererrors.ErrorQuotaExceeded {
 			return nil, metrics, err
 		}
@@ -249,13 +268,13 @@ func waitCloneCreateLimiter(ctx context.Context, opts infra.CloneSandboxOptions,
 }
 
 // createSandboxFromCheckpoint creates a new sandbox from checkpoint
-func createSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandboxOptions, tmpl *v1alpha1.SandboxTemplate, cp *v1alpha1.Checkpoint, cache infracache.Provider, metrics infra.CloneMetrics) (*Sandbox, *config.InitRuntimeOptions, infra.CloneMetrics, error) {
+func createSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandboxOptions, tmpl *v1alpha1.SandboxTemplate, cp *v1alpha1.Checkpoint, cache infracache.Provider, metrics infra.CloneMetrics) (*Sandbox, *config.InitRuntimeOptions, infra.CloneMetrics, bool, error) {
 	log := klog.FromContext(ctx).WithValues("checkpoint", opts.CheckPointID, "step", "3.createSandboxFromCheckpoint")
 	start := time.Now()
 	initRuntimeOpts, err := runtime.GetInitRuntimeRequest(cp)
 	if err != nil {
 		log.Error(err, "failed to get init runtime request")
-		return nil, nil, metrics, err
+		return nil, nil, metrics, false, err
 	}
 	sbx := newSandboxFromTemplate(opts, tmpl, cache)
 	if initRuntimeOpts != nil {
@@ -265,26 +284,18 @@ func createSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandboxOpt
 	// e.g., copy csi mount config from checkpoint to sandbox obj
 	RestoreAnnotationsFromCheckpoint(cp, sbx.Sandbox)
 	DefaultPostProcessClonedSandbox(sbx.Sandbox)
-	if opts.Admission != nil && opts.Admission.Acquire != nil {
-		if err := opts.Admission.Acquire(ctx, opts.LockString); err != nil {
-			log.Error(err, "failed to acquire sandbox admission", "lockString", opts.LockString)
-			return nil, nil, metrics, err
-		}
-	}
 	log.Info("creating new sandbox from checkpoint")
+	createAttempted := true
 	sbx.Sandbox, err = DefaultCreateSandbox(ctx, sbx.Sandbox, cache.GetClient())
 	if err != nil {
 		log.Error(err, "failed to create sandbox")
-		if opts.Admission != nil && opts.Admission.Acquire != nil && isKnownRejectedSandboxWrite(err) {
-			releaseAdmission(ctx, opts.Admission, opts.LockString)
-		}
-		return nil, nil, metrics, err
+		return nil, nil, metrics, createAttempted, err
 	}
 	log = log.WithValues("sandbox", klog.KObj(sbx))
 	metrics.CreateSandbox = time.Since(start)
 	metrics.Total += metrics.CreateSandbox
 	log.Info("sandbox created, waiting it ready", "cost", metrics.CreateSandbox)
-	return sbx, initRuntimeOpts, metrics, nil
+	return sbx, initRuntimeOpts, metrics, createAttempted, nil
 }
 
 // cloneWaitSandboxReady waits for the sandbox to be ready

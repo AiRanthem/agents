@@ -178,6 +178,40 @@ func TestValidateAndInitClaimOptions_ReserveFailedSandboxFor(t *testing.T) {
 	}
 }
 
+func TestTryClaimSandbox_QuotaDeniedCreateOnNoStockDoesNotConsumeCreateLimiter(t *testing.T) {
+	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+		DisableRouteReconciliation: true,
+	})
+
+	const template = "quota-create-on-no-stock"
+	require.NoError(t, fc.Create(t.Context(), sandboxSetForTest(template, "default")))
+	require.Eventually(t, func() bool {
+		_, err := testInfra.Cache.PickSandboxSet(t.Context(), infracache.PickSandboxSetOptions{
+			Namespace: "default",
+			Name:      template,
+		})
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+
+	limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
+	quota := newCloneAdmissionQuotaTracker(t, 0)
+	opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+		User:                    "test-user",
+		Template:                template,
+		CreateOnNoStock:         true,
+		Admission:               quota.admission(),
+		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
+	})
+	require.NoError(t, err)
+
+	sbx, _, err := TryClaimSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, limiter)
+	require.Error(t, err)
+	assert.Nil(t, sbx)
+	assert.Equal(t, managererrors.ErrorQuotaExceeded, managererrors.GetErrCode(err))
+	assert.Len(t, quota.acquireCalls(), 1)
+	assert.True(t, limiter.Allow(), "quota rejection must not consume create limiter capacity")
+}
+
 //goland:noinspection GoDeprecation
 func TestInfra_ClaimSandbox(t *testing.T) {
 	utestutils.InitLogOutput()

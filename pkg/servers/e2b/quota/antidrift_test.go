@@ -245,43 +245,63 @@ func TestAntiDriftDiff(t *testing.T) {
 func TestAntiDriftEventReconcile(t *testing.T) {
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-event")).String()
+	otherOwner := uuid.NewSHA1(uuid.Nil, []byte("owner-event-other")).String()
 
 	tests := []struct {
-		name         string
-		sbx          *agentsv1alpha1.Sandbox
-		healthy      bool
-		wantCharged  []string
-		wantReleased []string
+		name          string
+		limitedOwners []string
+		sbx           *agentsv1alpha1.Sandbox
+		healthy       bool
+		wantCharged   []string
+		wantReleased  []string
 	}{
 		{
-			name:        "live sandbox acquired with predicate data",
-			sbx:         runningSandbox(now, owner, "lock-live", 30*time.Minute, 500, 256, false),
-			healthy:     true,
-			wantCharged: []string{"lock-live"},
+			name:          "live sandbox acquired with predicate data",
+			limitedOwners: []string{owner},
+			sbx:           runningSandbox(now, owner, "lock-live", 30*time.Minute, 500, 256, false),
+			healthy:       true,
+			wantCharged:   []string{"lock-live"},
 		},
 		{
-			name:         "not live sandbox released when cache healthy",
-			sbx:          terminatingSandbox(now, owner, "lock-dead"),
-			healthy:      true,
-			wantReleased: []string{"lock-dead"},
+			name:          "not live sandbox released when cache healthy",
+			limitedOwners: []string{owner},
+			sbx:           terminatingSandbox(now, owner, "lock-dead"),
+			healthy:       true,
+			wantReleased:  []string{"lock-dead"},
 		},
 		{
-			name:    "not live sandbox release skipped when cache unhealthy",
-			sbx:     terminatingSandbox(now, owner, "lock-skipped"),
-			healthy: false,
+			name:          "not live sandbox release skipped when cache unhealthy",
+			limitedOwners: []string{owner},
+			sbx:           terminatingSandbox(now, owner, "lock-skipped"),
+			healthy:       false,
+		},
+		{
+			name:          "owner not in limited set skipped",
+			limitedOwners: []string{otherOwner},
+			sbx:           runningSandbox(now, owner, "lock-unlimited", 30*time.Minute, 500, 256, false),
+			healthy:       true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &fakeBackend{}
+			limited := make([]*models.CreatedTeamAPIKey, 0, len(tt.limitedOwners))
+			for _, limitedOwner := range tt.limitedOwners {
+				limited = append(limited, limitedKey(limitedOwner))
+			}
 			driver := NewAntiDriftDriver(
 				AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 				newMutablePrimary(true),
-				nil,
-				&fakeLiveSandboxCache{healthy: tt.healthy},
+				&fakeKeyStore{limited: limited},
+				&fakeLiveSandboxCache{
+					healthy:     tt.healthy,
+					liveByOwner: map[string][]*agentsv1alpha1.Sandbox{},
+				},
 				backend,
 			)
+			require.NoError(t, driver.RunOnce(context.Background()))
+			backend.resetCalls()
 
 			driver.SandboxEventHandler().OnUpdate(nil, tt.sbx)
 			assert.ElementsMatch(t, tt.wantCharged, backend.acquireLockstrings())
