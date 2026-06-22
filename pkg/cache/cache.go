@@ -45,10 +45,9 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 )
 
-// watchErrorSettle is how long the remove direction stays disabled after a
-// watch error. It is well under the anti-drift grace, so the gate only shrinks
-// the transient: any spurious remove that slips through during recovery is
-// re-charged by the add direction within grace.
+// watchErrorSettle is how long sandbox informer health stays conservative after
+// a watch error. It is well under the anti-drift grace, so leaked-entry
+// releases stay blocked during recovery without inventing extra hidden state.
 const watchErrorSettle = 2 * time.Minute
 
 type InformerHealth struct {
@@ -74,7 +73,7 @@ func (h *InformerHealth) RecordWatchError(_ *toolscache.Reflector, err error) {
 	h.lastWatchError.Store(time.Now().UnixNano())
 }
 
-func (h *InformerHealth) RemoveSafe() bool {
+func (h *InformerHealth) Healthy() bool {
 	if h == nil || !h.synced.Load() {
 		return false
 	}
@@ -414,28 +413,21 @@ func IsLiveForQuota(sbx *agentsv1alpha1.Sandbox) bool {
 	return sbx.GetDeletionTimestamp() == nil && sbx.Status.Phase != agentsv1alpha1.SandboxTerminating
 }
 
-func (c *Cache) ListLiveLockstringsByOwner(ctx context.Context, opts ListLiveLockstringsByOwnerOptions) ([]LiveLockstring, error) {
-	if opts.Owner == "" {
+func (c *Cache) ListLiveSandboxesByOwner(ctx context.Context, owner string) ([]*agentsv1alpha1.Sandbox, error) {
+	if owner == "" {
 		return nil, nil
 	}
 	list := &agentsv1alpha1.SandboxList{}
-	if err := listObjectWithUserAndNamespace(ctx, c.client, list, opts.Owner, opts.Namespace); err != nil {
+	if err := c.client.List(ctx, list, ctrlclient.MatchingFields{IndexUser: owner}); err != nil {
 		return nil, err
 	}
-	result := make([]LiveLockstring, 0, len(list.Items))
+	result := make([]*agentsv1alpha1.Sandbox, 0, len(list.Items))
 	for i := range list.Items {
 		sbx := &list.Items[i]
 		if !IsLiveForQuota(sbx) {
 			continue
 		}
-		lock := sbx.GetAnnotations()[agentsv1alpha1.AnnotationLock]
-		if lock == "" {
-			continue
-		}
-		result = append(result, LiveLockstring{
-			LockString:        lock,
-			CreationTimestamp: sbx.CreationTimestamp.Time,
-		})
+		result = append(result, sbx)
 	}
 	return result, nil
 }
@@ -508,8 +500,8 @@ func (c *Cache) AddSandboxEventHandler(ctx context.Context, handler toolscache.R
 	return reg, nil
 }
 
-func (c *Cache) RemoveSafe() bool {
-	if c == nil || c.health == nil || !c.health.RemoveSafe() {
+func (c *Cache) SandboxInformerHealthy() bool {
+	if c == nil || c.health == nil || !c.health.Healthy() {
 		return false
 	}
 	c.sandboxEventRegistrationMu.RLock()

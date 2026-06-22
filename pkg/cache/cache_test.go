@@ -207,7 +207,7 @@ func TestCache_GetSandboxSet_MultipleTemplates(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in cache")
 }
 
-func TestCache_ListLiveLockstringsByOwner(t *testing.T) {
+func TestCache_ListLiveSandboxesByOwner(t *testing.T) {
 	now := metav1.Now()
 	base := func(name, owner, lock string, phase agentsv1alpha1.SandboxPhase) *agentsv1alpha1.Sandbox {
 		return &agentsv1alpha1.Sandbox{
@@ -239,22 +239,20 @@ func TestCache_ListLiveLockstringsByOwner(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	got, err := c.ListLiveLockstringsByOwner(t.Context(), cache.ListLiveLockstringsByOwnerOptions{
-		Namespace: "default",
-		Owner:     "user-1",
-	})
+	got, err := c.ListLiveSandboxesByOwner(t.Context(), "user-1")
 	require.NoError(t, err)
 
+	gotNames := make([]string, 0, len(got))
 	gotLocks := make([]string, 0, len(got))
-	for _, item := range got {
-		gotLocks = append(gotLocks, item.LockString)
-		assert.Equal(t, now.Time.Truncate(time.Second), item.CreationTimestamp)
+	for _, sbx := range got {
+		gotNames = append(gotNames, sbx.Name)
+		gotLocks = append(gotLocks, sbx.GetAnnotations()[agentsv1alpha1.AnnotationLock])
+		assert.Equal(t, now.Time.Truncate(time.Second), sbx.CreationTimestamp.Time.Truncate(time.Second))
 	}
-	assert.ElementsMatch(t, []string{"lock-running", "lock-failed", "lock-succeeded"}, gotLocks)
+	assert.ElementsMatch(t, []string{"running", "failed", "succeeded", "nolock"}, gotNames)
+	assert.ElementsMatch(t, []string{"lock-running", "lock-failed", "lock-succeeded", ""}, gotLocks)
 
-	got, err = c.ListLiveLockstringsByOwner(t.Context(), cache.ListLiveLockstringsByOwnerOptions{
-		Namespace: "default",
-	})
+	got, err = c.ListLiveSandboxesByOwner(t.Context(), "")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }

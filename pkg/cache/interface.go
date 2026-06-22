@@ -18,7 +18,6 @@ package cache
 
 import (
 	"context"
-	"time"
 
 	toolscache "k8s.io/client-go/tools/cache"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -54,9 +53,9 @@ type Provider interface {
 	// and optional owner. Faster than ListSandboxes when only the count is needed.
 	CountActiveSandboxes(ctx context.Context, opts ListSandboxesOptions) (int32, error)
 
-	// ListLiveLockstringsByOwner returns the lockstrings of quota-live sandboxes
-	// filtered by namespace and owner.
-	ListLiveLockstringsByOwner(ctx context.Context, opts ListLiveLockstringsByOwnerOptions) ([]LiveLockstring, error)
+	// ListLiveSandboxesByOwner returns quota-live sandboxes for the given owner
+	// using the informer-backed owner index only.
+	ListLiveSandboxesByOwner(ctx context.Context, owner string) ([]*agentsv1alpha1.Sandbox, error)
 
 	// ListCheckpoints returns Checkpoint CRD objects filtered by namespace and optional owner.
 	// Ownership is determined by the AnnotationOwner annotation on the Checkpoint resource when User is set.
@@ -92,9 +91,9 @@ type Provider interface {
 	// objects and returns a registration handle for sync tracking and removal.
 	AddSandboxEventHandler(ctx context.Context, handler toolscache.ResourceEventHandler) (SandboxEventHandlerRegistration, error)
 
-	// RemoveSafe reports whether cache-backed quota remove operations can safely
-	// proceed using the current informer health and raw sandbox handler state.
-	RemoveSafe() bool
+	// SandboxInformerHealthy reports the smallest truthful sandbox informer
+	// health signal currently available from the cache internals.
+	SandboxInformerHealthy() bool
 
 	// Run starts an owned manager and waits for cache sync.
 	// Do not call Run for a cache backed by an externally owned manager.
@@ -155,16 +154,6 @@ type ListCheckpointsOptions struct {
 type ListSandboxesInPoolOptions struct {
 	Namespace string
 	Pool      string
-}
-
-type LiveLockstring struct {
-	LockString        string
-	CreationTimestamp time.Time
-}
-
-type ListLiveLockstringsByOwnerOptions struct {
-	Namespace string
-	Owner     string
 }
 
 type SandboxEventHandlerRegistration interface {
