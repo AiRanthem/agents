@@ -136,7 +136,7 @@ func decodeStoredAPIKey(data []byte) (*models.CreatedTeamAPIKey, error, error) {
 	apiKey := storedTeamAPIKeyToModel(&stored)
 	quotaSpec, quotaErr := decodeStoredQuotaSpec(stored.Quota)
 	apiKey.QuotaSpec = quotaSpec
-	apiKey.Quota = models.APIKeyQuotaFromSpec(quotaSpec)
+	apiKey.Quota = models.WireFromQuotaSpec(quotaSpec)
 	return apiKey, nil, quotaErr
 }
 
@@ -406,7 +406,7 @@ func (k *secretKeyStorage) updateSecret(ctx context.Context, id string, apiKey *
 	if apiKey != nil {
 		keyToStore := cloneCreatedTeamAPIKey(apiKey)
 		keyToStore.QuotaSpec = normalizeStoredQuotaSpec(ctx, id, keyToStore.QuotaSpec)
-		keyToStore.Quota = models.APIKeyQuotaFromSpec(keyToStore.QuotaSpec)
+		keyToStore.Quota = models.WireFromQuotaSpec(keyToStore.QuotaSpec)
 		marshaled, err := marshalAPIKey(keyToStore)
 		if err != nil {
 			return fmt.Errorf("failed to marshal api-key: %w", err)
@@ -433,7 +433,7 @@ func (k *secretKeyStorage) createKeyInSecret(ctx context.Context, id string, api
 		keyToStore.Team = existingTeam
 	}
 	keyToStore.QuotaSpec = normalizeStoredQuotaSpec(ctx, id, keyToStore.QuotaSpec)
-	keyToStore.Quota = models.APIKeyQuotaFromSpec(keyToStore.QuotaSpec)
+	keyToStore.Quota = models.WireFromQuotaSpec(keyToStore.QuotaSpec)
 
 	marshaled, err := marshalAPIKey(&keyToStore)
 	if err != nil {
@@ -522,7 +522,7 @@ func (k *secretKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTea
 		},
 		QuotaSpec: opts.Quota.DeepCopy(),
 	}
-	apiKey.Quota = models.APIKeyQuotaFromSpec(apiKey.QuotaSpec)
+	apiKey.Quota = models.WireFromQuotaSpec(apiKey.QuotaSpec)
 
 	log.Info("api-key generated", "id", apiKey.ID)
 	createdKey, err := k.retryCreateKey(ctx, newID.String(), apiKey)
@@ -563,7 +563,7 @@ func (k *secretKeyStorage) ListByOwnerTeam(_ context.Context, owner *models.Crea
 				Name:      apikey.Name,
 				CreatedBy: apikey.CreatedBy,
 				LastUsed:  apikey.LastUsed,
-				Quota:     models.APIKeyQuotaFromSpec(apikey.QuotaSpec),
+				Quota:     models.WireFromQuotaSpec(apikey.QuotaSpec),
 			})
 		}
 		return true

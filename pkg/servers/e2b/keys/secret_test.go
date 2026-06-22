@@ -191,7 +191,6 @@ func TestSecretKeyStorage_LoadByKeyAndID(t *testing.T) {
 
 func TestSecretKeyStorage_LoadByKeyAndIDReturnClones(t *testing.T) {
 	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
-	count := int64(2)
 	key := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  uuid.NewString(),
@@ -203,12 +202,9 @@ func TestSecretKeyStorage_LoadByKeyAndIDReturnClones(t *testing.T) {
 		CreatedBy: &models.TeamUser{
 			ID: uuid.New(),
 		},
-		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{
-			Dimension: models.DimSandboxCount,
-			Limit:     &count,
-		}}},
+		QuotaSpec: quotaSpecWithMultipleLimits(),
 	}
-	key.Quota = models.APIKeyQuotaFromSpec(key.QuotaSpec)
+	key.Quota = models.WireFromQuotaSpec(key.QuotaSpec)
 	storage.storeKey(key)
 
 	gotByKey, found := storage.LoadByKey(context.Background(), key.Key)
@@ -216,16 +212,14 @@ func TestSecretKeyStorage_LoadByKeyAndIDReturnClones(t *testing.T) {
 	gotByKey.Name = "mutated"
 	gotByKey.Team.Name = "mutated-team"
 	gotByKey.CreatedBy.ID = uuid.New()
-	*gotByKey.QuotaSpec.Limits[0].Limit = 99
+	gotByKey.QuotaSpec.Limits[0].Limit = 99
 
 	gotByID, found := storage.LoadByID(context.Background(), key.ID.String())
 	require.True(t, found)
 	assert.Equal(t, "limited", gotByID.Name)
 	assert.Equal(t, "team-a", gotByID.Team.Name)
 	assert.Equal(t, key.CreatedBy.ID, gotByID.CreatedBy.ID)
-	loadedCount, limited := gotByID.QuotaSpec.SandboxCountLimit()
-	require.True(t, limited)
-	assert.EqualValues(t, 2, loadedCount)
+	assert.Equal(t, quotaSpecWithMultipleLimits().LimitedPairs(), gotByID.QuotaSpec.LimitedPairs())
 
 	gotByID.Name = "mutated-again"
 	gotByKeyAgain, found := storage.LoadByKey(context.Background(), key.Key)
@@ -659,28 +653,22 @@ func TestSecretKeyStorage_QuotaPersistenceAndLimitedList(t *testing.T) {
 
 	created, err := storage.CreateKey(context.Background(), creator, CreateKeyOptions{
 		Name:  "limited-key",
-		Quota: quotaSpecWithSandboxCount(3),
+		Quota: quotaSpecWithMultipleLimits(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, created.QuotaSpec)
-	count, limited := created.QuotaSpec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 3, count)
+	require.Equal(t, quotaSpecWithMultipleLimits(), created.QuotaSpec)
 	require.NotNil(t, created.Quota)
-	createdQuotaSpec, err := created.Quota.ToQuotaSpec()
+	createdQuotaSpec, err := models.QuotaSpecFromWire(created.Quota)
 	require.NoError(t, err)
-	require.NotNil(t, createdQuotaSpec)
-	createdQuotaCount, limited := createdQuotaSpec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 3, createdQuotaCount)
+	require.Equal(t, quotaSpecWithMultipleLimits(), createdQuotaSpec)
+	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(created.Quota))
 
 	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
 	stored, ok := storage.LoadByID(context.Background(), created.ID.String())
 	require.True(t, ok)
 	require.NotNil(t, stored.QuotaSpec)
-	storedCount, limited := stored.QuotaSpec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 3, storedCount)
+	require.Equal(t, quotaSpecWithMultipleLimits(), stored.QuotaSpec)
 	require.NotNil(t, stored.Quota)
 
 	limitedKeys, err := storage.ListLimited(context.Background())
@@ -688,9 +676,7 @@ func TestSecretKeyStorage_QuotaPersistenceAndLimitedList(t *testing.T) {
 	require.Len(t, limitedKeys, 1)
 	require.Equal(t, created.ID, limitedKeys[0].ID)
 	require.NotNil(t, limitedKeys[0].QuotaSpec)
-	limitedCount, limited := limitedKeys[0].QuotaSpec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 3, limitedCount)
+	require.Equal(t, quotaSpecWithMultipleLimits(), limitedKeys[0].QuotaSpec)
 }
 
 func TestSecretKeyStorage_OldPayloadWithoutQuotaIsUnlimited(t *testing.T) {
@@ -720,7 +706,7 @@ func TestSecretKeyStorage_ListByOwnerTeamIncludesQuota(t *testing.T) {
 
 	created, err := storage.CreateKey(context.Background(), creator, CreateKeyOptions{
 		Name:  "team-key",
-		Quota: quotaSpecWithSandboxCount(2),
+		Quota: quotaSpecWithMultipleLimits(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
@@ -738,12 +724,10 @@ func TestSecretKeyStorage_ListByOwnerTeamIncludesQuota(t *testing.T) {
 	}
 	require.NotNil(t, target)
 	require.NotNil(t, target.Quota)
-	spec, err := target.Quota.ToQuotaSpec()
+	spec, err := models.QuotaSpecFromWire(target.Quota)
 	require.NoError(t, err)
-	require.NotNil(t, spec)
-	count, limited := spec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 2, count)
+	require.Equal(t, quotaSpecWithMultipleLimits(), spec)
+	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(target.Quota))
 }
 
 func TestSecretKeyStorage_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
@@ -863,12 +847,13 @@ func TestSecretKeyStorage_CreateKeyInSecretErrors(t *testing.T) {
 	}
 }
 
-func quotaSpecWithSandboxCount(count int64) *models.QuotaSpec {
+func quotaSpecWithMultipleLimits() *models.QuotaSpec {
 	return &models.QuotaSpec{
-		Limits: []models.QuotaLimit{{
-			Dimension: models.DimSandboxCount,
-			Limit:     &count,
-		}},
+		Limits: []models.QuotaLimit{
+			{Dimension: models.DimLimitsCPU, Scope: models.ScopeRunning, Limit: 8000},
+			{Dimension: models.DimLimitsMemory, Scope: models.ScopeRunning, Limit: 16384},
+			{Dimension: models.DimSandboxCount, Scope: models.ScopeAll, Limit: 50},
+		},
 	}
 }
 

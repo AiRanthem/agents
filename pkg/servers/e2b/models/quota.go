@@ -24,146 +24,90 @@ import (
 
 type QuotaDimension string
 
-const DimSandboxCount QuotaDimension = "sandbox.count"
+const (
+	DimSandboxCount QuotaDimension = "sandbox.count"
+	DimLimitsCPU    QuotaDimension = "limits.cpu"
+	DimLimitsMemory QuotaDimension = "limits.memory"
+)
 
-var ErrQuotaLimitNegative = errors.New("limit must be non-negative")
+type QuotaScope string
 
-type QuotaScope struct {
-	Template string `json:"template,omitempty"`
-}
+const (
+	ScopeAll     QuotaScope = "all"
+	ScopeRunning QuotaScope = "running"
+)
+
+var ErrQuotaLimitNegative = errors.New("quota limit must be non-negative")
 
 type QuotaLimit struct {
 	Dimension QuotaDimension `json:"dimension"`
-	Scope     QuotaScope     `json:"scope,omitempty"`
-	Limit     *int64         `json:"limit,omitempty"`
+	Scope     QuotaScope     `json:"scope"`
+	Limit     int64          `json:"limit"`
 }
 
 type QuotaSpec struct {
 	Limits []QuotaLimit `json:"limits,omitempty"`
 }
 
-type APIKeyQuota struct {
-	Sandbox *SandboxQuota `json:"sandbox,omitempty"`
+func (q *QuotaSpec) IsLimited() bool {
+	return q != nil && len(q.Limits) > 0
 }
 
-type SandboxQuota struct {
-	Count *int64 `json:"count,omitempty"`
-}
-
-func (q *APIKeyQuota) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
+func (q *QuotaSpec) LimitedPairs() map[QuotaDimension]map[QuotaScope]int64 {
+	if q == nil {
 		return nil
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	for key := range raw {
-		if key != "sandbox" {
-			return fmt.Errorf("unsupported quota field %q", key)
+	pairs := make(map[QuotaDimension]map[QuotaScope]int64, len(q.Limits))
+	for _, limit := range q.Limits {
+		if _, ok := pairs[limit.Dimension]; !ok {
+			pairs[limit.Dimension] = map[QuotaScope]int64{}
 		}
+		pairs[limit.Dimension][limit.Scope] = limit.Limit
 	}
-
-	if rawSandbox, ok := raw["sandbox"]; ok {
-		if string(rawSandbox) == "null" {
-			return nil
-		}
-
-		var sandbox SandboxQuota
-		if err := json.Unmarshal(rawSandbox, &sandbox); err != nil {
-			return err
-		}
-		q.Sandbox = &sandbox
-	}
-
-	return nil
+	return pairs
 }
 
-func (q *SandboxQuota) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
+func (q *QuotaSpec) DeepCopy() *QuotaSpec {
+	if q == nil {
 		return nil
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	for key := range raw {
-		if key != "count" {
-			return fmt.Errorf("unsupported quota field %q", "sandbox."+key)
-		}
-	}
-
-	if rawCount, ok := raw["count"]; ok {
-		if string(rawCount) == "null" {
-			return nil
-		}
-
-		var count int64
-		if err := json.Unmarshal(rawCount, &count); err != nil {
-			return err
-		}
-		q.Count = &count
-	}
-
-	return nil
+	out := &QuotaSpec{Limits: make([]QuotaLimit, len(q.Limits))}
+	copy(out.Limits, q.Limits)
+	return out
 }
 
-func (q *APIKeyQuota) ToQuotaSpec() (*QuotaSpec, error) {
-	if q == nil || q.Sandbox == nil || q.Sandbox.Count == nil {
+func NormalizeQuotaSpec(spec *QuotaSpec) (*QuotaSpec, error) {
+	if spec == nil || len(spec.Limits) == 0 {
 		return nil, nil
 	}
 
-	spec := &QuotaSpec{
-		Limits: []QuotaLimit{{
-			Dimension: DimSandboxCount,
-			Limit:     q.Sandbox.Count,
-		}},
-	}
-
-	normalized, err := NormalizeQuotaSpec(spec)
-	if err != nil {
-		if errors.Is(err, ErrQuotaLimitNegative) {
-			return nil, fmt.Errorf("quota limit must be non-negative: %w", err)
+	normalized := &QuotaSpec{Limits: make([]QuotaLimit, 0, len(spec.Limits))}
+	seen := make(map[string]struct{}, len(spec.Limits))
+	for _, limit := range spec.Limits {
+		if err := validateQuotaDimension(limit.Dimension); err != nil {
+			return nil, err
 		}
-		return nil, err
+		if err := validateQuotaScope(limit.Scope); err != nil {
+			return nil, err
+		}
+		if limit.Limit < 0 {
+			return nil, ErrQuotaLimitNegative
+		}
+
+		key := string(limit.Dimension) + "\x00" + string(limit.Scope)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("duplicate quota limit for dimension %q and scope %q", limit.Dimension, limit.Scope)
+		}
+		seen[key] = struct{}{}
+		normalized.Limits = append(normalized.Limits, limit)
 	}
 
+	if len(normalized.Limits) == 0 {
+		return nil, nil
+	}
 	return normalized, nil
-}
-
-// APIKeyQuotaFromSpec converts an already-normalized internal quota spec to the public wire model.
-// Callers that load untrusted storage must call NormalizeQuotaSpec first.
-func APIKeyQuotaFromSpec(spec *QuotaSpec) *APIKeyQuota {
-	if spec == nil {
-		return nil
-	}
-
-	if count, ok := spec.SandboxCountLimit(); ok {
-		return &APIKeyQuota{
-			Sandbox: &SandboxQuota{Count: &count},
-		}
-	}
-
-	return nil
-}
-
-func MarshalQuotaSpec(spec *QuotaSpec) ([]byte, error) {
-	normalized, err := NormalizeQuotaSpec(spec)
-	if err != nil {
-		return nil, err
-	}
-	if normalized == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(normalized)
-	if err != nil {
-		return nil, fmt.Errorf("marshal quota: %w", err)
-	}
-	return raw, nil
 }
 
 func DecodeQuotaSpec(raw []byte) (*QuotaSpec, error) {
@@ -175,89 +119,139 @@ func DecodeQuotaSpec(raw []byte) (*QuotaSpec, error) {
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return nil, fmt.Errorf("unmarshal quota: %w", err)
 	}
-	return NormalizeQuotaSpec(&spec)
-}
 
-func NormalizeQuotaSpec(spec *QuotaSpec) (*QuotaSpec, error) {
-	if spec == nil || len(spec.Limits) == 0 {
-		return nil, nil
+	normalized, err := NormalizeQuotaSpec(&spec)
+	if err != nil {
+		return nil, err
 	}
-
-	normalized := &QuotaSpec{
-		Limits: make([]QuotaLimit, 0, len(spec.Limits)),
-	}
-	seen := map[string]struct{}{}
-
-	for _, limit := range spec.Limits {
-		if limit.Scope.Template != "" {
-			return nil, fmt.Errorf("quota scope is not supported")
-		}
-		if limit.Dimension != DimSandboxCount {
-			return nil, fmt.Errorf("unsupported quota dimension %q", limit.Dimension)
-		}
-
-		key := string(limit.Dimension) + "|" + limit.Scope.Template
-		if _, ok := seen[key]; ok {
-			return nil, fmt.Errorf("duplicate quota limit for dimension %q", limit.Dimension)
-		}
-		seen[key] = struct{}{}
-
-		if limit.Limit == nil {
-			continue
-		}
-		if *limit.Limit < 0 {
-			return nil, ErrQuotaLimitNegative
-		}
-		value := *limit.Limit
-		normalized.Limits = append(normalized.Limits, QuotaLimit{
-			Dimension: limit.Dimension,
-			Scope:     limit.Scope,
-			Limit:     &value,
-		})
-	}
-
-	if len(normalized.Limits) == 0 {
-		return nil, nil
-	}
-
 	return normalized, nil
 }
 
-func (q *QuotaSpec) SandboxCountLimit() (int64, bool) {
-	if q == nil {
-		return 0, false
+func MarshalQuotaSpec(spec *QuotaSpec) ([]byte, error) {
+	normalized, err := NormalizeQuotaSpec(spec)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == nil {
+		return nil, nil
 	}
 
-	for _, limit := range q.Limits {
-		if limit.Dimension != DimSandboxCount || limit.Scope.Template != "" || limit.Limit == nil {
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("marshal quota: %w", err)
+	}
+	return raw, nil
+}
+
+func QuotaSpecFromWire(raw json.RawMessage) (*QuotaSpec, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+
+	var wire map[string]map[string]int64
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, fmt.Errorf("unmarshal quota wire: %w", err)
+	}
+	if len(wire) == 0 {
+		return nil, nil
+	}
+
+	for scopeName, dims := range wire {
+		scope := QuotaScope(scopeName)
+		if err := validateQuotaScope(scope); err != nil {
+			return nil, err
+		}
+		for dimName := range dims {
+			if _, err := quotaDimensionFromWireKey(dimName); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	spec := &QuotaSpec{}
+	for _, scope := range []QuotaScope{ScopeRunning, ScopeAll} {
+		dims, ok := wire[string(scope)]
+		if !ok {
 			continue
 		}
-		return *limit.Limit, true
+		for _, dimName := range []string{"count", "cpu", "memory"} {
+			limit, exists := dims[dimName]
+			if !exists {
+				continue
+			}
+			dimension, err := quotaDimensionFromWireKey(dimName)
+			if err != nil {
+				return nil, err
+			}
+			spec.Limits = append(spec.Limits, QuotaLimit{
+				Dimension: dimension,
+				Scope:     scope,
+				Limit:     limit,
+			})
+		}
 	}
 
-	return 0, false
+	return NormalizeQuotaSpec(spec)
 }
 
-func (q *QuotaSpec) IsLimited() bool {
-	_, ok := q.SandboxCountLimit()
-	return ok
-}
-
-func (q *QuotaSpec) DeepCopy() *QuotaSpec {
-	if q == nil {
+func WireFromQuotaSpec(spec *QuotaSpec) json.RawMessage {
+	if spec == nil || len(spec.Limits) == 0 {
 		return nil
 	}
 
-	out := &QuotaSpec{
-		Limits: make([]QuotaLimit, len(q.Limits)),
-	}
-	for i := range q.Limits {
-		out.Limits[i] = q.Limits[i]
-		if q.Limits[i].Limit != nil {
-			value := *q.Limits[i].Limit
-			out.Limits[i].Limit = &value
+	wire := make(map[string]map[string]int64, 2)
+	for _, limit := range spec.Limits {
+		scopeKey := string(limit.Scope)
+		if _, ok := wire[scopeKey]; !ok {
+			wire[scopeKey] = map[string]int64{}
 		}
+		wire[scopeKey][quotaDimensionWireKey(limit.Dimension)] = limit.Limit
 	}
 
-	return out
+	raw, _ := json.Marshal(wire)
+	return raw
+}
+
+func validateQuotaDimension(dimension QuotaDimension) error {
+	switch dimension {
+	case DimSandboxCount, DimLimitsCPU, DimLimitsMemory:
+		return nil
+	default:
+		return fmt.Errorf("unsupported quota dimension %q", dimension)
+	}
+}
+
+func validateQuotaScope(scope QuotaScope) error {
+	switch scope {
+	case ScopeAll, ScopeRunning:
+		return nil
+	default:
+		return fmt.Errorf("unsupported quota scope %q", scope)
+	}
+}
+
+func quotaDimensionFromWireKey(key string) (QuotaDimension, error) {
+	switch key {
+	case "count":
+		return DimSandboxCount, nil
+	case "cpu":
+		return DimLimitsCPU, nil
+	case "memory":
+		return DimLimitsMemory, nil
+	default:
+		return "", fmt.Errorf("unsupported quota dimension %q", key)
+	}
+}
+
+func quotaDimensionWireKey(dimension QuotaDimension) string {
+	switch dimension {
+	case DimSandboxCount:
+		return "count"
+	case DimLimitsCPU:
+		return "cpu"
+	case DimLimitsMemory:
+		return "memory"
+	default:
+		return string(dimension)
+	}
 }

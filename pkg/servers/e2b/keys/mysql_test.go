@@ -478,17 +478,14 @@ func TestMySQL_CreateKeyCachesSanitizedClones(t *testing.T) {
 
 func TestMySQL_QuotaMarshalAndLimitedList(t *testing.T) {
 	t.Run("quota round trip", func(t *testing.T) {
-		raw, err := marshalQuotaForDB(mysqlQuotaSpecWithSandboxCount(5))
+		raw, err := marshalQuotaForDB(mysqlQuotaSpecWithMultipleLimits())
 		require.NoError(t, err)
 		require.NotNil(t, raw)
-		require.Contains(t, *raw, `"dimension":"sandbox.count"`)
+		require.Contains(t, *raw, `"dimension":"limits.cpu"`)
 
 		spec, err := unmarshalQuotaFromDB(raw)
 		require.NoError(t, err)
-		require.NotNil(t, spec)
-		count, limited := spec.SandboxCountLimit()
-		require.True(t, limited)
-		require.EqualValues(t, 5, count)
+		require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), spec)
 	})
 
 	t.Run("list limited filters non null quota in sql", func(t *testing.T) {
@@ -497,7 +494,7 @@ func TestMySQL_QuotaMarshalAndLimitedList(t *testing.T) {
 
 		now := time.Now()
 		keyID := uuid.New()
-		quotaRaw, err := marshalQuotaForDB(mysqlQuotaSpecWithSandboxCount(5))
+		quotaRaw, err := marshalQuotaForDB(mysqlQuotaSpecWithMultipleLimits())
 		require.NoError(t, err)
 		require.NotNil(t, quotaRaw)
 		mock.ExpectQuery(listLimitedRegex).
@@ -522,7 +519,7 @@ func TestMySQL_ListByOwnerTeamIncludesQuota(t *testing.T) {
 		Name: "owner",
 		Team: &models.Team{Name: "my-team"},
 	}
-	quotaRaw, err := marshalQuotaForDB(mysqlQuotaSpecWithSandboxCount(5))
+	quotaRaw, err := marshalQuotaForDB(mysqlQuotaSpecWithMultipleLimits())
 	require.NoError(t, err)
 	require.NotNil(t, quotaRaw)
 	mock.ExpectQuery(listByOwnerRegex).
@@ -533,12 +530,10 @@ func TestMySQL_ListByOwnerTeamIncludesQuota(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
 	require.NotNil(t, keys[0].Quota)
-	spec, err := keys[0].Quota.ToQuotaSpec()
+	spec, err := models.QuotaSpecFromWire(keys[0].Quota)
 	require.NoError(t, err)
-	require.NotNil(t, spec)
-	count, limited := spec.SandboxCountLimit()
-	require.True(t, limited)
-	require.EqualValues(t, 5, count)
+	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), spec)
+	require.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(keys[0].Quota))
 }
 
 func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
@@ -555,27 +550,27 @@ func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
 
 	created, err := st.CreateKey(context.Background(), user, CreateKeyOptions{
 		Name:  "limited",
-		Quota: mysqlQuotaSpecWithSandboxCount(2),
+		Quota: mysqlQuotaSpecWithMultipleLimits(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, created.QuotaSpec)
-	require.True(t, created.QuotaSpec.IsLimited())
+	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), created.QuotaSpec)
 	require.NotNil(t, created.Quota)
 
 	payload, err := json.Marshal(created)
 	require.NoError(t, err)
-	require.Contains(t, string(payload), `"quota":{"sandbox":{"count":2}}`)
+	require.JSONEq(t, `{"createdAt":"`+created.CreatedAt.Format(time.RFC3339Nano)+`","id":"`+created.ID.String()+`","key":"`+created.Key+`","mask":{"maskedValuePrefix":"","maskedValueSuffix":"","prefix":"","valueLength":0},"name":"limited","createdBy":{"email":"","id":"`+user.ID.String()+`"},"team":{"id":"`+userTeam.ID.String()+`","name":"team-a"},"lastUsed":null,"quota":{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}}`, string(payload))
 	require.NotContains(t, string(payload), `"limits"`)
 
 	byKey, ok := st.LoadByKey(context.Background(), created.Key)
 	require.True(t, ok)
 	require.NotNil(t, byKey.QuotaSpec)
-	require.True(t, byKey.QuotaSpec.IsLimited())
+	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), byKey.QuotaSpec)
 
 	byID, ok := st.LoadByID(context.Background(), created.ID.String())
 	require.True(t, ok)
 	require.NotNil(t, byID.QuotaSpec)
-	require.True(t, byID.QuotaSpec.IsLimited())
+	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), byID.QuotaSpec)
 }
 
 func TestMySQL_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
@@ -758,12 +753,13 @@ func TestMySQL_ListByOwner(t *testing.T) {
 	}
 }
 
-func mysqlQuotaSpecWithSandboxCount(count int64) *models.QuotaSpec {
+func mysqlQuotaSpecWithMultipleLimits() *models.QuotaSpec {
 	return &models.QuotaSpec{
-		Limits: []models.QuotaLimit{{
-			Dimension: models.DimSandboxCount,
-			Limit:     &count,
-		}},
+		Limits: []models.QuotaLimit{
+			{Dimension: models.DimLimitsCPU, Scope: models.ScopeRunning, Limit: 8000},
+			{Dimension: models.DimLimitsMemory, Scope: models.ScopeRunning, Limit: 16384},
+			{Dimension: models.DimSandboxCount, Scope: models.ScopeAll, Limit: 50},
+		},
 	}
 }
 
