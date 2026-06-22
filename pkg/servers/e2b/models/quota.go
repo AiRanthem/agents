@@ -115,6 +115,20 @@ func DecodeQuotaSpec(raw []byte) (*QuotaSpec, error) {
 		return nil, nil
 	}
 
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, fmt.Errorf("unmarshal quota: %w", err)
+	}
+	if len(stored) == 0 {
+		return nil, errors.New("stored quota missing limits")
+	}
+	if _, ok := stored["limits"]; !ok {
+		return nil, errors.New("stored quota missing limits")
+	}
+	if len(stored) != 1 {
+		return nil, errors.New("stored quota contains unsupported fields")
+	}
+
 	var spec QuotaSpec
 	if err := json.Unmarshal(raw, &spec); err != nil {
 		return nil, fmt.Errorf("unmarshal quota: %w", err)

@@ -361,15 +361,6 @@ func unmarshalQuotaFromDB(raw *string) (*models.QuotaSpec, error) {
 	return models.DecodeQuotaSpec([]byte(*raw))
 }
 
-func quotaFromDBOrUnlimited(ctx context.Context, uid string, raw *string) *models.QuotaSpec {
-	quota, err := unmarshalQuotaFromDB(raw)
-	if err != nil {
-		klog.FromContext(ctx).Error(err, "failed to decode api-key quota from db, treat key as unlimited", "uid", uid)
-		return nil
-	}
-	return quota
-}
-
 // CreateKey generates a new API key, stores only the HMAC hash, and returns the raw key once.
 func (k *mysqlKeyStorage) CreateKey(ctx context.Context, key *models.CreatedTeamAPIKey, opts CreateKeyOptions) (*models.CreatedTeamAPIKey, error) {
 	log := klog.FromContext(ctx).WithValues("name", opts.Name).V(utils.DebugLogLevel)
@@ -552,7 +543,10 @@ func (k *mysqlKeyStorage) ListByOwnerTeam(ctx context.Context, owner *models.Cre
 			Mask:      models.IdentifierMaskingDetails{},
 			CreatedBy: teamUserFromUID(ctx, e.CreatedByUID),
 		}
-		quota := quotaFromDBOrUnlimited(ctx, e.UID, e.Quota)
+		quota, err := unmarshalQuotaFromDB(e.Quota)
+		if err != nil {
+			return nil, fmt.Errorf("decode api-key quota for %q: %w", e.UID, err)
+		}
 		tk.Quota = models.WireFromQuotaSpec(quota)
 		out = append(out, tk)
 	}
@@ -574,8 +568,7 @@ func (k *mysqlKeyStorage) ListLimited(ctx context.Context) ([]*models.CreatedTea
 	for i := range rows {
 		apiKey, err := k.createdKeyFromJoinedRow(ctx, &rows[i])
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "skip invalid limited key row", "uid", rows[i].UID)
-			continue
+			return nil, err
 		}
 		if apiKey.QuotaSpec == nil || !apiKey.QuotaSpec.IsLimited() {
 			continue
@@ -753,7 +746,10 @@ func (k *mysqlKeyStorage) createdKeyFromJoinedRow(ctx context.Context, row *join
 		Name: row.TeamName,
 	}
 	k.cachePutTeam(team)
-	quota := quotaFromDBOrUnlimited(ctx, row.UID, row.Quota)
+	quota, err := unmarshalQuotaFromDB(row.Quota)
+	if err != nil {
+		return nil, fmt.Errorf("decode api-key quota for %q: %w", row.UID, err)
+	}
 	apiKey := &models.CreatedTeamAPIKey{
 		CreatedAt: row.CreatedAt,
 		ID:        id,

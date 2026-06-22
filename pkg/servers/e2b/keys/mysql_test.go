@@ -573,33 +573,38 @@ func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
 	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), byID.QuotaSpec)
 }
 
-func TestMySQL_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
+func TestMySQL_InvalidQuotaPayloadIsRejected(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
-		name     string
-		quotaRaw string
+		name        string
+		quotaRaw    string
+		expectError string
 	}{
 		{
-			name:     "quota string is ignored",
-			quotaRaw: `"bad"`,
+			name:        "quota string is rejected",
+			quotaRaw:    `"bad"`,
+			expectError: "unmarshal quota",
 		},
 		{
-			name:     "internal limit string is ignored",
-			quotaRaw: `{"limits":[{"dimension":"sandbox.count","limit":"bad"}]}`,
+			name:        "internal limit string is rejected",
+			quotaRaw:    `{"limits":[{"dimension":"sandbox.count","limit":"bad"}]}`,
+			expectError: "unmarshal quota",
 		},
 		{
-			name:     "public nested quota shape is ignored",
-			quotaRaw: `{"sandbox":{"count":2}}`,
+			name:        "public nested quota shape is rejected",
+			quotaRaw:    `{"running":{"count":2}}`,
+			expectError: "missing limits",
 		},
 		{
-			name:     "unsupported internal dimension is ignored",
-			quotaRaw: `{"limits":[{"dimension":"cpu","limit":2}]}`,
+			name:        "unsupported internal dimension is rejected",
+			quotaRaw:    `{"limits":[{"dimension":"cpu","limit":2}]}`,
+			expectError: "unsupported quota dimension",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Run("load by uid returns key with nil quota", func(t *testing.T) {
+			t.Run("load by uid returns error", func(t *testing.T) {
 				st, mock, done := newMockStorage(t)
 				defer done()
 
@@ -610,13 +615,12 @@ func TestMySQL_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
 					).AddRow(1, now, now, nil, keyID.String(), "invalid-quota", st.hashKey("invalid-quota"), 9, nil, tt.quotaRaw, AdminTeamUID.String(), "admin"))
 
 				out, err := st.loadCreatedKeyByUIDFromDB(context.Background(), keyID.String())
-				require.NoError(t, err)
-				require.NotNil(t, out)
-				require.Nil(t, out.QuotaSpec)
-				require.Nil(t, out.Quota)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectError)
+				require.Nil(t, out)
 			})
 
-			t.Run("list by owner returns row with nil quota", func(t *testing.T) {
+			t.Run("list by owner returns error", func(t *testing.T) {
 				st, mock, done := newMockStorage(t)
 				defer done()
 
@@ -630,12 +634,12 @@ func TestMySQL_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
 						AddRow(now, uuid.NewString(), "invalid-quota", nil, tt.quotaRaw))
 
 				keys, err := st.ListByOwnerTeam(context.Background(), owner)
-				require.NoError(t, err)
-				require.Len(t, keys, 1)
-				require.Nil(t, keys[0].Quota)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectError)
+				require.Nil(t, keys)
 			})
 
-			t.Run("list limited treats invalid row as unlimited", func(t *testing.T) {
+			t.Run("list limited returns error", func(t *testing.T) {
 				st, mock, done := newMockStorage(t)
 				defer done()
 
@@ -645,8 +649,9 @@ func TestMySQL_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
 					).AddRow(1, now, now, nil, uuid.NewString(), "invalid-quota", st.hashKey("invalid-quota"), 7, nil, tt.quotaRaw, AdminTeamUID.String(), "admin"))
 
 				limitedKeys, err := st.ListLimited(context.Background())
-				require.NoError(t, err)
-				require.Empty(t, limitedKeys)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectError)
+				require.Nil(t, limitedKeys)
 			})
 		})
 	}

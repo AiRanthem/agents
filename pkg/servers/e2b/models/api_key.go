@@ -105,18 +105,3 @@ type ListedTeam struct {
 type UpdateTeamAPIKey struct {
 	Name string `json:"name"`
 }
-
-func (k CreatedTeamAPIKey) MarshalJSON() ([]byte, error) {
-	type alias CreatedTeamAPIKey
-
-	out := alias(k)
-	if k.QuotaSpec != nil {
-		normalized, err := NormalizeQuotaSpec(k.QuotaSpec)
-		if err != nil {
-			return nil, err
-		}
-		out.Quota = WireFromQuotaSpec(normalized)
-	}
-
-	return json.Marshal(out)
-}

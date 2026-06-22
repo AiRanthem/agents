@@ -730,19 +730,27 @@ func TestSecretKeyStorage_ListByOwnerTeamIncludesQuota(t *testing.T) {
 	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(target.Quota))
 }
 
-func TestSecretKeyStorage_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
+func TestSecretKeyStorage_InvalidQuotaPayloadIsRejected(t *testing.T) {
 	keyID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	tests := []struct {
-		name     string
-		quotaRaw string
+		name        string
+		quotaRaw    string
+		expectError string
 	}{
 		{
-			name:     "quota limit string is ignored",
-			quotaRaw: `{"limits":[{"dimension":"sandbox.count","limit":"bad"}]}`,
+			name:        "quota limit string is rejected",
+			quotaRaw:    `{"limits":[{"dimension":"sandbox.count","limit":"bad"}]}`,
+			expectError: "unmarshal quota",
 		},
 		{
-			name:     "quota string is ignored",
-			quotaRaw: `"bad"`,
+			name:        "quota string is rejected",
+			quotaRaw:    `"bad"`,
+			expectError: "unmarshal quota",
+		},
+		{
+			name:        "public nested quota shape is rejected",
+			quotaRaw:    `{"running":{"count":2}}`,
+			expectError: "missing limits",
 		},
 	}
 
@@ -761,21 +769,17 @@ func TestSecretKeyStorage_InvalidQuotaPayloadDoesNotPoisonKey(t *testing.T) {
 
 			require.NoError(t, storage.refresh(context.Background(), c))
 
-			stored, ok := storage.LoadByID(context.Background(), keyID.String())
-			require.True(t, ok)
-			require.NotNil(t, stored)
-			require.Equal(t, "poison-test", stored.Name)
-			require.Nil(t, stored.QuotaSpec)
-			require.Nil(t, stored.Quota)
+			_, ok := storage.LoadByID(context.Background(), keyID.String())
+			require.False(t, ok)
 
 			limitedKeys, err := storage.ListLimited(context.Background())
-			require.NoError(t, err)
-			require.Empty(t, limitedKeys)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+			require.Nil(t, limitedKeys)
 
 			team, found := findTeamByNameInSecret(getSecretForTest(t, c), "team-a")
-			require.True(t, found)
-			require.NotNil(t, team)
-			require.Equal(t, "team-a", team.Name)
+			require.False(t, found)
+			require.Nil(t, team)
 		})
 	}
 }

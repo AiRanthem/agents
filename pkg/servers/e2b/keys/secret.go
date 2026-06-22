@@ -77,8 +77,7 @@ func marshalStoredAPIKey(v any) ([]byte, error) {
 }
 
 func unmarshalStoredAPIKey(data []byte) (*models.CreatedTeamAPIKey, error) {
-	apiKey, err, _ := decodeStoredAPIKey(data)
-	return apiKey, err
+	return decodeStoredAPIKey(data)
 }
 
 func marshalStoredTeamAPIKey(apiKey *models.CreatedTeamAPIKey) ([]byte, error) {
@@ -127,17 +126,20 @@ func storedTeamAPIKeyToModel(stored *storedTeamAPIKey) *models.CreatedTeamAPIKey
 	return apiKey
 }
 
-func decodeStoredAPIKey(data []byte) (*models.CreatedTeamAPIKey, error, error) {
+func decodeStoredAPIKey(data []byte) (*models.CreatedTeamAPIKey, error) {
 	var stored storedTeamAPIKey
 	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, err, nil
+		return nil, err
 	}
 
 	apiKey := storedTeamAPIKeyToModel(&stored)
-	quotaSpec, quotaErr := decodeStoredQuotaSpec(stored.Quota)
+	quotaSpec, err := decodeStoredQuotaSpec(stored.Quota)
+	if err != nil {
+		return nil, fmt.Errorf("decode stored api-key quota: %w", err)
+	}
 	apiKey.QuotaSpec = quotaSpec
 	apiKey.Quota = models.WireFromQuotaSpec(quotaSpec)
-	return apiKey, nil, quotaErr
+	return apiKey, nil
 }
 
 func decodeStoredQuotaSpec(raw json.RawMessage) (*models.QuotaSpec, error) {
@@ -225,13 +227,10 @@ func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) er
 	// newly created key or restore a newly deleted key on the auth path.
 	var ids, keys, teamNames = sets.NewString(), sets.NewString(), sets.NewString()
 	for id, bytes := range secret.Data {
-		apiKey, err, quotaErr := decodeStoredAPIKey(bytes)
+		apiKey, err := decodeStoredAPIKey(bytes)
 		if err != nil {
-			log.Error(err, "failed to unmarshal api-key", "id", id)
+			log.Error(err, "failed to decode api-key", "id", id)
 			continue
-		}
-		if quotaErr != nil {
-			log.Error(quotaErr, "failed to decode api-key quota, treat key as unlimited", "id", id)
 		}
 		k.storeKey(apiKey)
 		keys.Insert(apiKey.Key)
@@ -405,7 +404,6 @@ func (k *secretKeyStorage) updateSecret(ctx context.Context, id string, apiKey *
 	}
 	if apiKey != nil {
 		keyToStore := cloneCreatedTeamAPIKey(apiKey)
-		keyToStore.QuotaSpec = normalizeStoredQuotaSpec(ctx, id, keyToStore.QuotaSpec)
 		keyToStore.Quota = models.WireFromQuotaSpec(keyToStore.QuotaSpec)
 		marshaled, err := marshalAPIKey(keyToStore)
 		if err != nil {
@@ -432,7 +430,6 @@ func (k *secretKeyStorage) createKeyInSecret(ctx context.Context, id string, api
 	if existingTeam, ok := findTeamByNameInSecret(secret, keyToStore.Team.Name); ok {
 		keyToStore.Team = existingTeam
 	}
-	keyToStore.QuotaSpec = normalizeStoredQuotaSpec(ctx, id, keyToStore.QuotaSpec)
 	keyToStore.Quota = models.WireFromQuotaSpec(keyToStore.QuotaSpec)
 
 	marshaled, err := marshalAPIKey(&keyToStore)
@@ -452,7 +449,7 @@ func (k *secretKeyStorage) createKeyInSecret(ctx context.Context, id string, api
 // the cache here could miss teams created by other replicas between retries.
 func findTeamByNameInSecret(secret *corev1.Secret, teamName string) (*models.Team, bool) {
 	for _, bytes := range secret.Data {
-		apiKey, err, _ := decodeStoredAPIKey(bytes)
+		apiKey, err := decodeStoredAPIKey(bytes)
 		if err != nil {
 			continue
 		}
@@ -579,13 +576,9 @@ func (k *secretKeyStorage) ListLimited(ctx context.Context) ([]*models.CreatedTe
 
 	limitedKeys := make([]*models.CreatedTeamAPIKey, 0)
 	for id, raw := range secret.Data {
-		apiKey, err, quotaErr := decodeStoredAPIKey(raw)
+		apiKey, err := decodeStoredAPIKey(raw)
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "failed to unmarshal api-key while listing limited keys", "id", id)
-			continue
-		}
-		if quotaErr != nil {
-			klog.FromContext(ctx).Error(quotaErr, "failed to decode api-key quota while listing limited keys, treat key as unlimited", "id", id)
+			return nil, fmt.Errorf("decode stored api-key %q: %w", id, err)
 		}
 		if apiKey.QuotaSpec == nil || !apiKey.QuotaSpec.IsLimited() {
 			continue
@@ -632,13 +625,4 @@ func (k *secretKeyStorage) FindTeamByName(_ context.Context, teamName string) (*
 		return nil, false, nil
 	}
 	return cloneTeam(value.(*models.Team)), true, nil
-}
-
-func normalizeStoredQuotaSpec(ctx context.Context, id string, spec *models.QuotaSpec) *models.QuotaSpec {
-	normalized, err := models.NormalizeQuotaSpec(spec)
-	if err != nil {
-		klog.FromContext(ctx).Error(err, "failed to normalize api-key quota, treat key as unlimited", "id", id)
-		return nil
-	}
-	return normalized
 }

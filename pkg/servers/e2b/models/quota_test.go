@@ -176,13 +176,14 @@ func TestQuotaSpecWireRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMarshalCreatedTeamAPIKeyQuotaUsesWireJSON(t *testing.T) {
+func TestMarshalCreatedTeamAPIKeyQuotaKeepsExistingRawMessage(t *testing.T) {
 	key := CreatedTeamAPIKey{
-		QuotaSpec: &QuotaSpec{Limits: []QuotaLimit{
-			{Dimension: DimLimitsCPU, Scope: ScopeRunning, Limit: 8000},
-			{Dimension: DimLimitsMemory, Scope: ScopeRunning, Limit: 16384},
-			{Dimension: DimSandboxCount, Scope: ScopeAll, Limit: 50},
-		}},
+		Quota: json.RawMessage(`{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`),
+		QuotaSpec: &QuotaSpec{Limits: []QuotaLimit{{
+			Dimension: QuotaDimension("limits.gpu"),
+			Scope:     ScopeRunning,
+			Limit:     1,
+		}}},
 	}
 
 	raw, err := json.Marshal(key)
