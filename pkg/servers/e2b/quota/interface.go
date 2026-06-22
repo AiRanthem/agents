@@ -20,7 +20,7 @@ import (
 	"context"
 	"time"
 
-	cachepkg "github.com/openkruise/agents/pkg/cache"
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
@@ -74,9 +74,9 @@ type LimitedKeyStore interface {
 	ListLimited(ctx context.Context) ([]*models.CreatedTeamAPIKey, error)
 }
 
-type LiveLockstringCache interface {
-	ListLiveLockstringsByOwner(ctx context.Context, opts cachepkg.ListLiveLockstringsByOwnerOptions) ([]cachepkg.LiveLockstring, error)
-	RemoveSafe() bool
+type LiveSandboxCache interface {
+	ListLiveSandboxesByOwner(ctx context.Context, owner string) ([]*agentsv1alpha1.Sandbox, error)
+	SandboxInformerHealthy() bool
 }
 
 type PrimaryChecker interface {

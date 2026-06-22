@@ -232,7 +232,7 @@ func (c *quotaInitCache) CountActiveSandboxes(context.Context, infracache.ListSa
 	return 0, nil
 }
 
-func (c *quotaInitCache) ListLiveLockstringsByOwner(context.Context, infracache.ListLiveLockstringsByOwnerOptions) ([]infracache.LiveLockstring, error) {
+func (c *quotaInitCache) ListLiveSandboxesByOwner(context.Context, string) ([]*agentsv1alpha1.Sandbox, error) {
 	return nil, nil
 }
 
@@ -269,7 +269,7 @@ func (c *quotaInitCache) AddSandboxEventHandler(_ context.Context, handler tools
 	return quotaInitRegistration{}, nil
 }
 
-func (c *quotaInitCache) RemoveSafe() bool { return true }
+func (c *quotaInitCache) SandboxInformerHealthy() bool { return true }
 
 func (c *quotaInitCache) Run(context.Context) error { return nil }
 
