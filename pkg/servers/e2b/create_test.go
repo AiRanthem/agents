@@ -33,10 +33,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/cache"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
@@ -589,5 +593,276 @@ func TestMapInfraErrorToApiError(t *testing.T) {
 			assert.Equal(t, tt.expectedCode, apiErr.Code)
 			assert.Contains(t, apiErr.Message, tt.err.Error())
 		})
+	}
+}
+
+func TestResolveCreateFootprint(t *testing.T) {
+	tests := []struct {
+		name            string
+		setup           func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey)
+		request         models.NewSandboxRequest
+		user            *models.CreatedTeamAPIKey
+		expectFootprint map[models.QuotaDimension]int64
+		expectError     string
+	}{
+		{
+			name: "claim resolves cpu from template ref",
+			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
+				createSandboxSetTemplateRefFixture(t, controller, Namespace, "claim-template", "claim-template-ref", "2000m", "0Mi")
+			},
+			request: models.NewSandboxRequest{TemplateID: "claim-template"},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimLimitsCPU,
+				Scope:     models.ScopeRunning,
+				Limit:     4000,
+			}}),
+			expectFootprint: map[models.QuotaDimension]int64{
+				models.DimLimitsCPU:    2000,
+				models.DimLimitsMemory: 0,
+			},
+		},
+		{
+			name: "claim override wins",
+			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
+				createSandboxSetTemplateRefFixture(t, controller, Namespace, "claim-template", "claim-template-ref", "2000m", "0Mi")
+			},
+			request: models.NewSandboxRequest{
+				TemplateID: "claim-template",
+				Extensions: models.NewSandboxRequestExtension{
+					InplaceUpdate: models.InplaceUpdateExtension{
+						Resources: &models.InplaceUpdateResourcesExtension{
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU: resource.MustParse("4000m"),
+							},
+						},
+					},
+				},
+			},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimLimitsCPU,
+				Scope:     models.ScopeRunning,
+				Limit:     4000,
+			}}),
+			expectFootprint: map[models.QuotaDimension]int64{
+				models.DimLimitsCPU:    4000,
+				models.DimLimitsMemory: 0,
+			},
+		},
+		{
+			name: "clone resolves checkpoint template without override",
+			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
+				createCheckpointTemplateWithLimitsFixture(t, controller, user.Team.Name, "clone-template", "checkpoint-1", user.ID.String(), "source-sandbox", "2026-06-19T00:00:00Z", "2000m", "0Mi")
+			},
+			request: models.NewSandboxRequest{TemplateID: "checkpoint-1"},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimLimitsCPU,
+				Scope:     models.ScopeRunning,
+				Limit:     4000,
+			}}),
+			expectFootprint: map[models.QuotaDimension]int64{
+				models.DimLimitsCPU:    2000,
+				models.DimLimitsMemory: 0,
+			},
+		},
+		{
+			name:    "count only key skips template read",
+			request: models.NewSandboxRequest{TemplateID: "missing-template"},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimSandboxCount,
+				Scope:     models.ScopeRunning,
+				Limit:     2,
+			}}),
+			expectFootprint: nil,
+		},
+		{
+			name: "limited key returns error when template ref is missing",
+			setup: func(t *testing.T, controller *Controller, user *models.CreatedTeamAPIKey) {
+				createSandboxSetWithoutTemplateRefFixture(t, controller, Namespace, "claim-template", "missing-template-ref")
+			},
+			request: models.NewSandboxRequest{TemplateID: "claim-template"},
+			user: quotaLimitedUser([]models.QuotaLimit{{
+				Dimension: models.DimLimitsCPU,
+				Scope:     models.ScopeRunning,
+				Limit:     4000,
+			}}),
+			expectError: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller, _, teardown := Setup(t)
+			defer teardown()
+			if tt.user.Team == nil {
+				tt.user.Team = models.AdminTeam()
+			}
+			if tt.setup != nil {
+				tt.setup(t, controller, tt.user)
+			}
+
+			got, err := controller.resolveCreateFootprint(t.Context(), tt.request, tt.user)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectFootprint, got)
+		})
+	}
+}
+
+func TestCreateSandbox_ResolverFailureReturnsTemplateNotFoundBeforeQuotaAcquire(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+
+	fakeQuota := &fakeQuotaManager{}
+	controller.quota = fakeQuota
+	user := quotaLimitedUser([]models.QuotaLimit{{
+		Dimension: models.DimLimitsCPU,
+		Scope:     models.ScopeRunning,
+		Limit:     4000,
+	}})
+	createSandboxSetWithoutTemplateRefFixture(t, controller, Namespace, "claim-template", "missing-template-ref")
+
+	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: "claim-template",
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+		},
+	}, nil, user))
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
+	assert.Contains(t, apiErr.Message, "Template or Checkpoint not found")
+	assert.Zero(t, resp.Code)
+	assert.Equal(t, int64(0), fakeQuota.acquireCalls.Load())
+}
+
+func quotaLimitedUser(limits []models.QuotaLimit) *models.CreatedTeamAPIKey {
+	return &models.CreatedTeamAPIKey{
+		ID:   uuid.New(),
+		Key:  uuid.NewString(),
+		Name: "limited",
+		Team: models.AdminTeam(),
+		QuotaSpec: &models.QuotaSpec{
+			Limits: limits,
+		},
+	}
+}
+
+func createSandboxSetTemplateRefFixture(t *testing.T, controller *Controller, namespace, sandboxSetName, templateRefName, cpu, memory string) {
+	t.Helper()
+	fc := getTestCRClient(controller)
+
+	sbt := &agentsv1alpha1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      templateRefName,
+			Namespace: namespace,
+			UID:       types.UID(uuid.NewString()),
+		},
+		Spec: agentsv1alpha1.SandboxTemplateSpec{
+			Template: podTemplateWithLimits(cpu, memory),
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), sbt))
+
+	sbs := &agentsv1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sandboxSetName,
+			Namespace: namespace,
+		},
+		Spec: agentsv1alpha1.SandboxSetSpec{
+			Replicas: 0,
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+				TemplateRef: &agentsv1alpha1.SandboxTemplateRef{Name: templateRefName},
+			},
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), sbs))
+}
+
+func createSandboxSetWithoutTemplateRefFixture(t *testing.T, controller *Controller, namespace, sandboxSetName, templateRefName string) {
+	t.Helper()
+	fc := getTestCRClient(controller)
+
+	sbs := &agentsv1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sandboxSetName,
+			Namespace: namespace,
+		},
+		Spec: agentsv1alpha1.SandboxSetSpec{
+			Replicas: 0,
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+				TemplateRef: &agentsv1alpha1.SandboxTemplateRef{Name: templateRefName},
+			},
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), sbs))
+}
+
+func createCheckpointTemplateWithLimitsFixture(t *testing.T, controller *Controller, namespace, name, checkpointID, owner, sandboxID, creationTime, cpu, memory string) {
+	t.Helper()
+	fc := getTestCRClient(controller)
+	createdAt, err := time.Parse(time.RFC3339, creationTime)
+	require.NoError(t, err)
+
+	sbt := &agentsv1alpha1.SandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			UID:       types.UID(uuid.NewString()),
+		},
+		Spec: agentsv1alpha1.SandboxTemplateSpec{
+			Template: podTemplateWithLimits(cpu, memory),
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), sbt))
+
+	cp := &agentsv1alpha1.Checkpoint{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         namespace,
+			UID:               types.UID(uuid.NewString()),
+			CreationTimestamp: metav1.NewTime(createdAt),
+			Labels: map[string]string{
+				agentsv1alpha1.LabelSandboxTemplate: name,
+			},
+			Annotations: map[string]string{
+				agentsv1alpha1.AnnotationOwner:     owner,
+				agentsv1alpha1.AnnotationSandboxID: sandboxID,
+			},
+		},
+		Status: agentsv1alpha1.CheckpointStatus{
+			Phase:        agentsv1alpha1.CheckpointSucceeded,
+			CheckpointId: checkpointID,
+		},
+	}
+	require.NoError(t, fc.Create(t.Context(), cp))
+	require.NoError(t, fc.Status().Update(t.Context(), cp))
+	require.Eventually(t, func() bool {
+		_, err := controller.cache.GetCheckpoint(t.Context(), cache.GetCheckpointOptions{
+			Namespace:    namespace,
+			CheckpointID: checkpointID,
+		})
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+}
+
+func podTemplateWithLimits(cpu, memory string) *corev1.PodTemplateSpec {
+	return &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "main",
+				Image: "test-image",
+				Resources: corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse(cpu),
+						corev1.ResourceMemory: resource.MustParse(memory),
+					},
+				},
+			}},
+		},
 	}
 }
