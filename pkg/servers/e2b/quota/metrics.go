@@ -36,6 +36,13 @@ var (
 		},
 		[]string{"operation"},
 	)
+	breakerStateTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "e2b_quota_breaker_state_total",
+			Help: "Total quota backend breaker state transitions.",
+		},
+		[]string{"state"},
+	)
 	releaseTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "e2b_quota_release_total",
@@ -70,6 +77,7 @@ func init() {
 	metrics.Registry.MustRegister(
 		acquireTotal,
 		backendErrorsTotal,
+		breakerStateTotal,
 		releaseTotal,
 		antiDriftSkippedTotal,
 		antiDriftErrorsTotal,

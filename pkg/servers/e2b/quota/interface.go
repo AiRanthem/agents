@@ -30,6 +30,8 @@ type Config struct {
 	RedisPassword     string
 	RedisDB           int
 	OperationTimeout  time.Duration
+	BreakerN          int
+	BreakerD          time.Duration
 	AntiDriftInterval time.Duration
 	AntiDriftGrace    time.Duration
 }
