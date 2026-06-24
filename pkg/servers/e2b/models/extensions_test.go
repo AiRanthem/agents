@@ -820,6 +820,11 @@ func TestParseExtensionSandboxNaming(t *testing.T) {
 			expectGenerateName: "good-prefix-",
 		},
 		{
+			name:               "truncation at max prefix length ok",
+			metadata:           map[string]string{v1alpha1.E2BPrefix + "sandbox-generate-name": "a-very-long-sandbox-generate-name-that-exceeds-max-prefix-len-"},
+			expectGenerateName: "a-very-long-sandbox-generate-name-that-exceeds-max-prefix-len-",
+		},
+		{
 			name:       "keys stripped from metadata",
 			metadata:   map[string]string{v1alpha1.E2BPrefix + "sandbox-name": "x"},
 			expectName: "x",
