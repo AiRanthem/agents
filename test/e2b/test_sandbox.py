@@ -17,6 +17,7 @@ from utils import list_sandbox, connect_sandbox, run_code_sandbox
 # parameter, so auto-pause cannot be requested through that SDK.
 _E2B_CODE_INTERPRETER_VERSION = _pkg_version("e2b-code-interpreter")
 _SDK_LACKS_AUTO_PAUSE = _E2B_CODE_INTERPRETER_VERSION.startswith("2.4.")
+_SDK_LACKS_SANDBOX_PAUSE = not hasattr(Sandbox, "pause")
 
 
 def _get_sandbox_json(name: str) -> dict:
@@ -414,6 +415,13 @@ def test_auto_pause_respects_custom_paused_retention(sandbox_context):
     )
 
 
+@pytest.mark.skipif(
+    _SDK_LACKS_SANDBOX_PAUSE,
+    reason=(
+        f"e2b-code-interpreter {_E2B_CODE_INTERPRETER_VERSION} does not support "
+        "Sandbox.pause(headers=...); manual pause header cannot be exercised."
+    ),
+)
 def test_manual_pause_header_respects_custom_paused_retention(sandbox_context):
     paused_retention = timedelta(minutes=3)
     skew_tolerance = timedelta(seconds=10)
