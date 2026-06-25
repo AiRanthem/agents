@@ -55,6 +55,8 @@ import (
 
 var DefaultCleanupTimeout = 30 * time.Second
 
+const quotaReleaseTimeout = infra.SandboxAdmissionReleaseTimeout
+
 func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSandboxOptions, error) {
 	if opts.User == "" {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("user is required")
@@ -77,6 +79,11 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 			return infra.ClaimSandboxOptions{}, fmt.Errorf("resources must specify at least one of requests or limits")
 		}
 		for _, rl := range []corev1.ResourceList{res.Requests, res.Limits} {
+			for resName := range rl {
+				if !supportedResizeResources[resName] {
+					return infra.ClaimSandboxOptions{}, fmt.Errorf("inplace update supports only cpu resource resize")
+				}
+			}
 			if cpu, ok := rl[corev1.ResourceCPU]; ok {
 				if cpu.IsZero() || cpu.Cmp(resource.Quantity{}) < 0 {
 					return infra.ClaimSandboxOptions{}, fmt.Errorf("target cpu must be a positive value")
@@ -87,7 +94,7 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 	if opts.CandidateCounts <= 0 {
 		opts.CandidateCounts = consts.DefaultPoolingCandidateCounts
 	}
-	if opts.LockString == "" {
+	if opts.LockString == "" && opts.Admission == nil {
 		opts.LockString = utils.NewLockString()
 	}
 	if opts.ClaimTimeout <= 0 {
@@ -100,6 +107,44 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 		opts.ReserveFailedSandboxFor = ptr.To(DefaultReserveFailedSandboxFor)
 	}
 	return opts, nil
+}
+
+func chooseAttemptLockString(opts infra.ClaimSandboxOptions) string {
+	if opts.Admission != nil || opts.LockString == "" {
+		return utils.NewLockString()
+	}
+	return opts.LockString
+}
+
+func releaseAdmission(ctx context.Context, admission *infra.SandboxAdmission, lockString string) {
+	if admission == nil || admission.Release == nil || lockString == "" {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)
+	defer cancel()
+	if err := admission.Release(releaseCtx, lockString); err != nil {
+		klog.FromContext(releaseCtx).Error(err, "failed to release sandbox admission", "lockString", lockString)
+	}
+}
+
+func shouldReleaseAdmissionAfterLockError(lockType infra.LockType, err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsConflict(err) {
+		return true
+	}
+	return isKnownRejectedSandboxWrite(err)
+}
+
+func isKnownRejectedSandboxWrite(err error) bool {
+	return apierrors.IsInvalid(err) ||
+		apierrors.IsBadRequest(err) ||
+		apierrors.IsForbidden(err) ||
+		apierrors.IsUnauthorized(err) ||
+		apierrors.IsNotFound(err) ||
+		apierrors.IsAlreadyExists(err) ||
+		apierrors.IsMethodNotSupported(err)
 }
 
 // TryClaimSandbox attempts to claim a sandbox based on the provided Options.
@@ -135,6 +180,8 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		log.Info("got a free claim worker", "cost", metrics.Wait)
 	}
 	var pickedSandboxKey string
+	attemptLockString := chooseAttemptLockString(opts)
+	opts.LockString = attemptLockString
 	defer func() {
 		freeWorkerOnce()
 		if err != nil {
@@ -146,7 +193,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		}
 		metrics.LastError = err
 		log.Info("try claim sandbox result", "metrics", metrics.String())
-		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor)
+		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor, opts.Admission, attemptLockString)
 	}()
 	// Step 1: Pick an available sandbox
 	var sbx *Sandbox
@@ -170,6 +217,13 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	}()
 	log.Info("sandbox picked", "sandbox", klog.KObj(sbx.Sandbox), "lockType", lockType)
 
+	if lockType == infra.LockTypeCreate && createLimiter != nil {
+		if !createLimiter.Allow() {
+			err = NoAvailableError(opts.Template, "sandbox creation is not allowed by rate limiter")
+			return
+		}
+	}
+
 	// Step 2: Modify and lock sandbox. All modifications to be applied to the Sandbox should be performed here.
 	if err = modifyPickedSandbox(sbx, lockType, opts); err != nil {
 		log.Error(err, "failed to modify picked sandbox")
@@ -177,9 +231,29 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		return
 	}
 
+	admitted := false
+	lockAttempted := false
+	if opts.Admission != nil && opts.Admission.Acquire != nil {
+		if err = opts.Admission.Acquire(ctx, attemptLockString, sbx.GetResource()); err != nil {
+			log.Error(err, "failed to acquire sandbox admission", "lockString", attemptLockString)
+			return
+		}
+		admitted = true
+	}
+	defer func() {
+		if admitted && err != nil && !lockAttempted {
+			releaseAdmission(ctx, opts.Admission, attemptLockString)
+		}
+	}()
+
+	lockAttempted = true
 	err = performLockSandbox(ctx, sbx, lockType, opts, cache)
 	if err != nil {
 		log.Error(err, "failed to lock sandbox")
+		if admitted && shouldReleaseAdmissionAfterLockError(lockType, err) {
+			releaseAdmission(ctx, opts.Admission, attemptLockString)
+			admitted = false
+		}
 		if apierrors.IsConflict(err) {
 			expectations.ResourceVersionExpectationExpect(&metav1.ObjectMeta{
 				UID:             sbx.GetUID(),
@@ -288,7 +362,7 @@ func processSecurityToken(ctx context.Context, opts infra.ClaimSandboxOptions, s
 
 // clearFailedSandbox cleans up (or reserves) a failed sandbox according to
 // reserveFor. A nil reserveFor falls back to DefaultReserveFailedSandboxFor.
-func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserveFor *time.Duration) {
+func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reserveFor *time.Duration, admission *infra.SandboxAdmission, lockString string) {
 	if err == nil || sbx == nil {
 		return
 	}
@@ -318,6 +392,7 @@ func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reser
 		log.Error(killErr, "failed to delete failed sandbox")
 	} else {
 		log.Info("sandbox deleted")
+		releaseAdmission(ctx, admission, lockString)
 	}
 }
 
@@ -501,12 +576,7 @@ func issueSecurityToken(ctx context.Context, sbx *Sandbox, opts *infra.SecurityT
 
 var FilteredAnnotationsOnCreation []string
 
-func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOptions, cache infracache.Provider, limiter *rate.Limiter) (*Sandbox, infra.LockType, error) {
-	if limiter != nil {
-		if !limiter.Allow() {
-			return nil, "", NoAvailableError(opts.Template, "sandbox creation is not allowed by rate limiter")
-		}
-	}
+func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOptions, cache infracache.Provider, _ *rate.Limiter) (*Sandbox, infra.LockType, error) {
 	sbs, err := cache.PickSandboxSet(ctx, infracache.PickSandboxSetOptions{Namespace: opts.Namespace, Name: opts.Template})
 	if err != nil {
 		return nil, "", NoAvailableError(opts.Template, "cannot create new sandbox: "+err.Error())

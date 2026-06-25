@@ -19,11 +19,13 @@ package e2b
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 
@@ -33,6 +35,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/csiutils"
@@ -47,21 +50,42 @@ import (
 // unchanged. ~100 years is indistinguishable from unlimited for any real
 // request and stays well within time.Duration's int64 range (max ~292 years).
 const noServerTimeout = 100 * 365 * 24 * time.Hour
+const quotaReleaseTimeout = infra.SandboxAdmissionReleaseTimeout
 
 // mapInfraErrorToApiError converts an infra-layer error to an ApiError with the
 // appropriate HTTP status code based on managererrors.ErrorCode.
 func mapInfraErrorToApiError(err error) *web.ApiError {
-	// The E2B POST /sandboxes spec only defines 400/401/500, so client-side
-	// errors (bad request, not found) map to 400 and everything else to 500.
+	// The create API maps validation/lookups to 400, quota misses to 403, and
+	// everything else to 500.
 	switch managererrors.GetErrCode(err) {
 	case managererrors.ErrorBadRequest, managererrors.ErrorNotFound:
 		return &web.ApiError{Code: http.StatusBadRequest, Message: err.Error()}
 	case managererrors.ErrorConflict:
 		return &web.ApiError{Code: http.StatusConflict, Message: err.Error()}
+	case managererrors.ErrorQuotaExceeded:
+		return &web.ApiError{Code: http.StatusForbidden, Message: err.Error()}
 	default:
 		// ErrorInternal, ErrorUnknown, or untyped errors (e.g., retry exhausted) → 500
 		return &web.ApiError{Code: http.StatusInternalServerError, Message: err.Error()}
 	}
+}
+
+func quotaRequestReleaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)
+}
+
+func validateCreateResourceOverride(request models.NewSandboxRequest) *web.ApiError {
+	res := request.Extensions.InplaceUpdate.Resources
+	if res == nil {
+		return nil
+	}
+	if _, ok := res.Requests[corev1.ResourceMemory]; ok {
+		return &web.ApiError{Code: http.StatusBadRequest, Message: "memory inplace update is not supported"}
+	}
+	if _, ok := res.Limits[corev1.ResourceMemory]; ok {
+		return &web.ApiError{Code: http.StatusBadRequest, Message: "memory inplace update is not supported"}
+	}
+	return nil
 }
 
 // resolveServerTimeout maps an extension-provided seconds value to a server-side
@@ -72,6 +96,43 @@ func resolveServerTimeout(seconds int) time.Duration {
 		return time.Duration(seconds) * time.Second
 	}
 	return noServerTimeout
+}
+
+func quotaFootprintFromResource(resource infra.SandboxResource) map[models.QuotaDimension]int64 {
+	return map[models.QuotaDimension]int64{
+		models.DimLimitsCPU:    resource.Limits.CPUMilli,
+		models.DimLimitsMemory: resource.Limits.MemoryMB,
+	}
+}
+
+func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey) *infra.SandboxAdmission {
+	if sc.quota == nil || user == nil || user.QuotaSpec == nil || !user.QuotaSpec.IsLimited() {
+		return nil
+	}
+
+	apiKeyID := user.ID.String()
+	quotaSpec := user.QuotaSpec.DeepCopy()
+	return &infra.SandboxAdmission{
+		Acquire: func(ctx context.Context, lockString string, resource infra.SandboxResource) error {
+			err := sc.quota.Acquire(ctx, quota.AcquireRequest{
+				APIKeyID:   apiKeyID,
+				LockString: lockString,
+				Quota:      quotaSpec,
+				Footprint:  quotaFootprintFromResource(resource),
+				Scopes:     []models.QuotaScope{models.ScopeRunning},
+			})
+			if errors.Is(err, quota.ErrQuotaExceeded) {
+				return managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
+			}
+			return err
+		},
+		Release: func(ctx context.Context, lockString string) error {
+			return sc.quota.Release(ctx, quota.ReleaseRequest{
+				APIKeyID:   apiKeyID,
+				LockString: lockString,
+			})
+		},
+	}
 }
 
 // CreateSandbox allocates a Pod as a new sandbox
@@ -88,6 +149,9 @@ func (sc *Controller) CreateSandbox(r *http.Request) (web.ApiResponse[*models.Sa
 	request, parseErr := sc.parseCreateSandboxRequest(r)
 	if parseErr != nil {
 		return web.ApiResponse[*models.Sandbox]{}, parseErr
+	}
+	if validateErr := validateCreateResourceOverride(request); validateErr != nil {
+		return web.ApiResponse[*models.Sandbox]{}, validateErr
 	}
 	namespace := sc.getNamespaceOfUser(user)
 	log.Info("create sandbox request received", "request", request)
@@ -125,6 +189,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		Namespace:    sc.getNamespaceOfUser(user),
 		Template:     request.TemplateID,
 		User:         user.ID.String(),
+		Admission:    sc.quotaAdmission(user),
 		ClaimTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
@@ -206,6 +271,7 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 	opts := infra.CloneSandboxOptions{
 		Namespace:    sc.getNamespaceOfUser(user),
 		User:         user.ID.String(),
+		Admission:    sc.quotaAdmission(user),
 		CheckPointID: request.TemplateID,
 		CloneTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
