@@ -76,4 +76,6 @@ type LiveSandboxCache interface {
 
 type PrimaryChecker interface {
 	IsPrimary() bool
+	WaitPrimary(ctx context.Context) error
+	PrimaryChanged() <-chan struct{}
 }

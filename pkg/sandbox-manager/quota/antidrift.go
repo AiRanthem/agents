@@ -122,13 +122,35 @@ func (d *AntiDriftDriver) Run(ctx context.Context) {
 
 		go func() {
 			defer close(d.runDone)
-			d.runLoop(ctx)
+			// Derive a context that cancels when stopCh closes, so WaitPrimary
+			// unblocks on Stop() even if the parent context is still alive.
+			runCtx, cancel := context.WithCancel(ctx)
+			go func() {
+				select {
+				case <-d.stopCh:
+					cancel()
+				case <-runCtx.Done():
+				}
+			}()
+			defer cancel()
+			d.runLoop(runCtx)
 		}()
 	})
 }
 
 func (d *AntiDriftDriver) runLoop(ctx context.Context) {
-	d.runCycle(ctx)
+	for {
+		if err := d.primary.WaitPrimary(ctx); err != nil {
+			return
+		}
+		if !d.runWhilePrimary(ctx) {
+			return
+		}
+	}
+}
+
+func (d *AntiDriftDriver) runWhilePrimary(ctx context.Context) bool {
+	d.runCycle(ctx) // immediate cycle on primary acquire
 
 	ticker := time.NewTicker(d.cfg.Interval)
 	defer ticker.Stop()
@@ -136,13 +158,30 @@ func (d *AntiDriftDriver) runLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case <-d.stopCh:
-			return
+			return false
+		case <-d.primary.PrimaryChanged():
+			if !d.primary.IsPrimary() {
+				d.cancelActiveCycleAndClearLeaked()
+				return true // outer loop waits for primary again
+			}
 		case <-ticker.C:
 			d.runCycle(ctx)
 		}
 	}
+}
+
+func (d *AntiDriftDriver) cancelActiveCycleAndClearLeaked() {
+	d.mu.Lock()
+	cycleCancel := d.cycleCancel
+	d.cycleCancel = nil
+	clear(d.seenLeaked)
+	d.mu.Unlock()
+	if cycleCancel != nil {
+		cycleCancel()
+	}
+	antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
 }
 
 func (d *AntiDriftDriver) runCycle(ctx context.Context) {

@@ -335,6 +335,22 @@ func (m *SandboxManager) IsPrimary() bool {
 	return m.primary.IsPrimary()
 }
 
+func (m *SandboxManager) WaitPrimary(ctx context.Context) error {
+	if m == nil || m.primary == nil {
+		return nil
+	}
+	return m.primary.WaitPrimary(ctx)
+}
+
+func (m *SandboxManager) PrimaryChanged() <-chan struct{} {
+	if m == nil || m.primary == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return m.primary.PrimaryChanged()
+}
+
 // GetQuotaAntiDrift returns the anti-drift driver, primarily for testing.
 func (m *SandboxManager) GetQuotaAntiDrift() *quota.AntiDriftDriver {
 	if m == nil {

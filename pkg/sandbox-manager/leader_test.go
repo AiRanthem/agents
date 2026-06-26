@@ -300,3 +300,74 @@ func TestNewSandboxManagerBuilderPrimaryDefaults(t *testing.T) {
 	assert.Nil(t, manager.elector)
 	assert.True(t, manager.IsPrimary())
 }
+
+func TestPrimaryStateWaitPrimary(t *testing.T) {
+	state := &primaryState{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- state.WaitPrimary(ctx) }()
+
+	select {
+	case <-done:
+		t.Fatal("WaitPrimary returned before primary")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	state.set(true)
+	require.NoError(t, <-done)
+}
+
+func TestPrimaryStateWaitPrimaryAlreadyPrimary(t *testing.T) {
+	state := &primaryState{}
+	state.set(true)
+	require.NoError(t, state.WaitPrimary(context.Background()))
+}
+
+func TestPrimaryStateWaitPrimaryContextCancel(t *testing.T) {
+	state := &primaryState{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- state.WaitPrimary(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("WaitPrimary did not return on context cancel")
+	}
+}
+
+func TestPrimaryStateChangedNotifiesOnDemotion(t *testing.T) {
+	state := &primaryState{}
+	state.set(true)
+
+	ch := state.PrimaryChanged()
+	state.set(false)
+
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("PrimaryChanged did not notify on demotion")
+	}
+}
+
+func TestPrimaryStateChangedNilSafe(t *testing.T) {
+	var state *primaryState
+	ch := state.PrimaryChanged()
+	require.NotNil(t, ch)
+	select {
+	case <-ch:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("nil primaryState PrimaryChanged should return closed channel")
+	}
+}
+
+func TestPrimaryStateWaitPrimaryNilSafe(t *testing.T) {
+	var state *primaryState
+	require.NoError(t, state.WaitPrimary(context.Background()))
+}

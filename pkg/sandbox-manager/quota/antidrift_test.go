@@ -38,6 +38,8 @@ import (
 
 type mutablePrimary struct {
 	primary atomic.Bool
+	mu      sync.Mutex
+	changed chan struct{}
 }
 
 func newMutablePrimary(primary bool) *mutablePrimary {
@@ -51,7 +53,42 @@ func (p *mutablePrimary) IsPrimary() bool {
 }
 
 func (p *mutablePrimary) SetPrimary(primary bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.primary.Load() == primary {
+		return
+	}
 	p.primary.Store(primary)
+	if p.changed != nil {
+		close(p.changed)
+	}
+	p.changed = make(chan struct{})
+}
+
+func (p *mutablePrimary) WaitPrimary(ctx context.Context) error {
+	if p.IsPrimary() {
+		return nil
+	}
+	for {
+		ch := p.PrimaryChanged()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ch:
+			if p.IsPrimary() {
+				return nil
+			}
+		}
+	}
+}
+
+func (p *mutablePrimary) PrimaryChanged() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.changed == nil {
+		p.changed = make(chan struct{})
+	}
+	return p.changed
 }
 
 type fakeSubjectLister struct {
@@ -991,4 +1028,105 @@ func entryForSandbox(sbx *agentsv1alpha1.Sandbox) Entry {
 		Footprint: FootprintOf(sbx),
 		Scopes:    ConditionalScopesOf(sbx),
 	}
+}
+
+func TestAntiDriftRunWaitsForPrimary(t *testing.T) {
+	primary := newMutablePrimary(false)
+	owner := uuid.NewString()
+	backend := &fakeBackend{}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: time.Minute},
+		primary,
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	driver.Run(ctx)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Zero(t, backend.listEntriesCalls.Load(), "no cycles should run while not primary")
+
+	primary.SetPrimary(true)
+	require.Eventually(t, func() bool {
+		return backend.listEntriesCalls.Load() > 0
+	}, time.Second, 10*time.Millisecond, "cycle should run after becoming primary")
+
+	cancel()
+	driver.Stop()
+}
+
+func TestAntiDriftPrimaryLossCancelsCycleAndClearsLeaked(t *testing.T) {
+	owner := uuid.NewString()
+	primary := newMutablePrimary(true)
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	backend := &fakeBackend{entriesByKey: map[string]map[string]Entry{owner: {"leaked-lock": {}}}}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
+		primary,
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+	driver.now = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	driver.Run(ctx)
+
+	// Wait for first cycle to complete (leaked entry observed)
+	require.Eventually(t, func() bool {
+		driver.mu.Lock()
+		defer driver.mu.Unlock()
+		return len(driver.seenLeaked) > 0
+	}, time.Second, 10*time.Millisecond)
+
+	// Lose primary — triggers cancelActiveCycleAndClearLeaked
+	primary.SetPrimary(false)
+
+	require.Eventually(t, func() bool {
+		driver.mu.Lock()
+		defer driver.mu.Unlock()
+		return len(driver.seenLeaked) == 0
+	}, time.Second, 10*time.Millisecond, "seenLeaked must be cleared on primary loss")
+
+	cancel()
+	driver.Stop()
+}
+
+func TestAntiDriftRunsImmediateCycleOnPrimaryAcquire(t *testing.T) {
+	primary := newMutablePrimary(false)
+	owner := uuid.NewString()
+	backend := &fakeBackend{}
+	driver := NewAntiDriftDriver(
+		AntiDriftConfig{Interval: time.Hour, Grace: time.Minute},
+		primary,
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
+		&fakeLiveSandboxCache{healthy: true},
+		backend,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	driver.Run(ctx)
+
+	time.Sleep(30 * time.Millisecond)
+	assert.Zero(t, backend.listEntriesCalls.Load())
+
+	primary.SetPrimary(true)
+	require.Eventually(t, func() bool {
+		return backend.listEntriesCalls.Load() >= 1
+	}, time.Second, 10*time.Millisecond, "immediate cycle on primary acquire")
+
+	// With interval=time.Hour, no further cycles should run quickly
+	time.Sleep(100 * time.Millisecond)
+	assert.LessOrEqual(t, backend.listEntriesCalls.Load(), int64(2))
+
+	cancel()
+	driver.Stop()
 }

@@ -41,6 +41,8 @@ const (
 
 type primaryState struct {
 	primary atomic.Bool
+	mu      sync.Mutex
+	changed chan struct{} // lazily allocated; never nil after first PrimaryChanged()
 }
 
 func (s *primaryState) IsPrimary() bool {
@@ -50,11 +52,51 @@ func (s *primaryState) IsPrimary() bool {
 	return s.primary.Load()
 }
 
+func (s *primaryState) PrimaryChanged() <-chan struct{} {
+	if s == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.changed == nil {
+		s.changed = make(chan struct{})
+	}
+	return s.changed
+}
+
 func (s *primaryState) set(v bool) {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.primary.Load() == v {
+		return
+	}
 	s.primary.Store(v)
+	if s.changed != nil {
+		close(s.changed)
+	}
+	s.changed = make(chan struct{})
+}
+
+func (s *primaryState) WaitPrimary(ctx context.Context) error {
+	if s.IsPrimary() {
+		return nil
+	}
+	for {
+		ch := s.PrimaryChanged()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ch:
+			if s.IsPrimary() {
+				return nil
+			}
+		}
+	}
 }
 
 type leaderElectionRunner interface {
