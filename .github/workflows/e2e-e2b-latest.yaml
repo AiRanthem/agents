@@ -162,6 +162,9 @@ jobs:
                 echo "- op: add"
                 echo "  path: /spec/template/spec/containers/0/args/-"
                 echo "  value: --e2b-quota-redis-addr=redis.sandbox-system.svc.cluster.local:6379"
+                echo "- op: add"
+                echo "  path: /spec/template/spec/containers/0/args/-"
+                echo "  value: --e2b-quota-redis-operation-timeout=1s"
               fi
               if [ "${{ matrix.quota_profile }}" = "redis-fault" ]; then
                 echo "- op: add"
