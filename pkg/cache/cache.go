@@ -42,6 +42,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/controllers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandbox/lifecycle"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -406,13 +407,6 @@ func (c *Cache) CountActiveSandboxes(ctx context.Context, opts ListSandboxesOpti
 	return cnt, nil
 }
 
-func IsLiveForQuota(sbx *agentsv1alpha1.Sandbox) bool {
-	if sbx == nil {
-		return false
-	}
-	return sbx.GetDeletionTimestamp() == nil && sbx.Status.Phase != agentsv1alpha1.SandboxTerminating
-}
-
 func (c *Cache) ListLiveSandboxesByOwner(ctx context.Context, owner string) ([]*agentsv1alpha1.Sandbox, error) {
 	if owner == "" {
 		return nil, nil
@@ -424,7 +418,7 @@ func (c *Cache) ListLiveSandboxesByOwner(ctx context.Context, owner string) ([]*
 	result := make([]*agentsv1alpha1.Sandbox, 0, len(list.Items))
 	for i := range list.Items {
 		sbx := &list.Items[i]
-		if !IsLiveForQuota(sbx) {
+		if !lifecycle.IsNotTerminating(sbx) {
 			continue
 		}
 		result = append(result, sbx)

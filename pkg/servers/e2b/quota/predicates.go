@@ -18,18 +18,21 @@ package quota
 
 import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/cache"
+	"github.com/openkruise/agents/pkg/sandbox/lifecycle"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 const bytesPerMiB = int64(1024 * 1024)
 
 func IsLiveForQuota(sbx *agentsv1alpha1.Sandbox) bool {
-	return cache.IsLiveForQuota(sbx)
+	return lifecycle.IsNotTerminating(sbx)
 }
 
+// InRunningScope uses Spec.Paused (pause request), matching current production behavior.
+// Design §5 pseudocode uses Status.Phase; §15 leaves the exact transition-phase boundary to
+// implementation. Do not change this predicate during the refactor.
 func InRunningScope(sbx *agentsv1alpha1.Sandbox) bool {
-	return cache.IsLiveForQuota(sbx) && !sbx.Spec.Paused
+	return lifecycle.IsNotTerminating(sbx) && !sbx.Spec.Paused
 }
 
 func ConditionalScopesOf(sbx *agentsv1alpha1.Sandbox) []models.QuotaScope {
