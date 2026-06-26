@@ -174,8 +174,8 @@ type SandboxManager struct {
 	primary *primaryState
 	elector *primaryElector
 
-	quota            quotaEnforcer            // nil until InitQuota or test injection
-	quotaAntiDrift   *quota.AntiDriftDriver   // nil when Redis is not configured
+	quota            quotaEnforcer              // nil until InitQuota or test injection
+	quotaAntiDrift   *quota.AntiDriftDriver     // nil when Redis is not configured
 	quotaRedisClient interface{ Close() error } // nil when Redis is not configured
 }
 

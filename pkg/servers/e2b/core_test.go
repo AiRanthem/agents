@@ -185,8 +185,8 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 
 type quotaInitRegistration struct{}
 
-func (quotaInitRegistration) HasSynced() bool  { return true }
-func (quotaInitRegistration) Remove() error { return nil }
+func (quotaInitRegistration) HasSynced() bool { return true }
+func (quotaInitRegistration) Remove() error   { return nil }
 
 type quotaInitCache struct {
 	addCalls    atomic.Int64
@@ -194,19 +194,45 @@ type quotaInitCache struct {
 	addErr      error
 }
 
-func (c *quotaInitCache) GetClaimedSandbox(context.Context, infracache.GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) { return nil, nil }
-func (c *quotaInitCache) GetCheckpoint(context.Context, infracache.GetCheckpointOptions) (*agentsv1alpha1.Checkpoint, error) { return nil, nil }
-func (c *quotaInitCache) PickSandboxSet(context.Context, infracache.PickSandboxSetOptions) (*agentsv1alpha1.SandboxSet, error) { return nil, nil }
-func (c *quotaInitCache) ListSandboxSets(context.Context, infracache.ListSandboxSetsOptions) ([]*agentsv1alpha1.SandboxSet, error) { return nil, nil }
-func (c *quotaInitCache) ListSandboxes(context.Context, infracache.ListSandboxesOptions) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
-func (c *quotaInitCache) CountActiveSandboxes(context.Context, infracache.ListSandboxesOptions) (int32, error) { return 0, nil }
-func (c *quotaInitCache) ListLiveSandboxesByOwner(context.Context, string) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
-func (c *quotaInitCache) ListCheckpoints(context.Context, infracache.ListCheckpointsOptions) ([]*agentsv1alpha1.Checkpoint, error) { return nil, nil }
-func (c *quotaInitCache) ListSandboxesInPool(context.Context, infracache.ListSandboxesInPoolOptions) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
-func (c *quotaInitCache) NewSandboxPauseTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) { return nil, nil }
-func (c *quotaInitCache) NewSandboxResumeTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) { return nil, nil }
-func (c *quotaInitCache) NewSandboxWaitReadyTask(context.Context, *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] { return nil }
-func (c *quotaInitCache) NewCheckpointTask(context.Context, *agentsv1alpha1.Checkpoint) *cacheutils.WaitTask[*agentsv1alpha1.Checkpoint] { return nil }
+func (c *quotaInitCache) GetClaimedSandbox(context.Context, infracache.GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) GetCheckpoint(context.Context, infracache.GetCheckpointOptions) (*agentsv1alpha1.Checkpoint, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) PickSandboxSet(context.Context, infracache.PickSandboxSetOptions) (*agentsv1alpha1.SandboxSet, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) ListSandboxSets(context.Context, infracache.ListSandboxSetsOptions) ([]*agentsv1alpha1.SandboxSet, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) ListSandboxes(context.Context, infracache.ListSandboxesOptions) ([]*agentsv1alpha1.Sandbox, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) CountActiveSandboxes(context.Context, infracache.ListSandboxesOptions) (int32, error) {
+	return 0, nil
+}
+func (c *quotaInitCache) ListLiveSandboxesByOwner(context.Context, string) ([]*agentsv1alpha1.Sandbox, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) ListCheckpoints(context.Context, infracache.ListCheckpointsOptions) ([]*agentsv1alpha1.Checkpoint, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) ListSandboxesInPool(context.Context, infracache.ListSandboxesInPoolOptions) ([]*agentsv1alpha1.Sandbox, error) {
+	return nil, nil
+}
+func (c *quotaInitCache) NewSandboxPauseTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) {
+	return nil, nil
+}
+func (c *quotaInitCache) NewSandboxResumeTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) {
+	return nil, nil
+}
+func (c *quotaInitCache) NewSandboxWaitReadyTask(context.Context, *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
+	return nil
+}
+func (c *quotaInitCache) NewCheckpointTask(context.Context, *agentsv1alpha1.Checkpoint) *cacheutils.WaitTask[*agentsv1alpha1.Checkpoint] {
+	return nil
+}
 func (c *quotaInitCache) AddSandboxEventHandler(_ context.Context, handler toolscache.ResourceEventHandler) (infracache.SandboxEventHandlerRegistration, error) {
 	c.addCalls.Add(1)
 	if c.addErr != nil {
@@ -215,12 +241,12 @@ func (c *quotaInitCache) AddSandboxEventHandler(_ context.Context, handler tools
 	c.lastHandler = handler
 	return quotaInitRegistration{}, nil
 }
-func (c *quotaInitCache) SandboxInformerHealthy() bool { return true }
-func (c *quotaInitCache) Run(context.Context) error    { return nil }
-func (c *quotaInitCache) Stop(context.Context)         {}
-func (c *quotaInitCache) GetClient() ctrlclient.Client { return nil }
+func (c *quotaInitCache) SandboxInformerHealthy() bool    { return true }
+func (c *quotaInitCache) Run(context.Context) error       { return nil }
+func (c *quotaInitCache) Stop(context.Context)            {}
+func (c *quotaInitCache) GetClient() ctrlclient.Client    { return nil }
 func (c *quotaInitCache) GetAPIReader() ctrlclient.Reader { return nil }
-func (c *quotaInitCache) GetCache() ctrlcache.Cache      { return nil }
+func (c *quotaInitCache) GetCache() ctrlcache.Cache       { return nil }
 
 // quotaInitSubjectLister is a minimal SubjectLister for InitQuota tests.
 type quotaInitSubjectLister struct{}
@@ -234,8 +260,8 @@ func (*quotaInitSubjectLister) Load(context.Context, string) (quota.Subject, boo
 func buildQuotaTestManager(t *testing.T, spyCache *quotaInitCache) *sandboxmanager.SandboxManager {
 	t.Helper()
 	opts := config.InitOptions(config.SandboxManagerOptions{
-		SystemNamespace:      "sandbox-system",
-		MemberlistBindPort:   config.DefaultMemberlistBindPort,
+		SystemNamespace:            "sandbox-system",
+		MemberlistBindPort:         config.DefaultMemberlistBindPort,
 		DisableRouteReconciliation: true,
 	})
 	proxyServer := proxy.NewServer(opts)

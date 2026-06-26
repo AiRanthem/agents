@@ -231,9 +231,9 @@ func TestListEntriesNormalizesFootprintDimensions(t *testing.T) {
 		User:       "K",
 		LockString: "l1",
 		Footprint: map[QuotaDimension]int64{
-			DimSandboxCount:              1,
-			DimLimitsCPU:                 2000,
-			DimLimitsMemory:              4096,
+			DimSandboxCount:               1,
+			DimLimitsCPU:                  2000,
+			DimLimitsMemory:               4096,
 			QuotaDimension("limits.gpu"):  8,
 			QuotaDimension("unknown.dim"): -1,
 		},

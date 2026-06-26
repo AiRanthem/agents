@@ -2146,4 +2146,3 @@ func TestCloneSandboxAdmissionUsesPersistedLockString(t *testing.T) {
 	require.NotEmpty(t, acquired)
 	assert.Equal(t, acquired, sbx.GetAnnotations()[v1alpha1.AnnotationLock])
 }
-
