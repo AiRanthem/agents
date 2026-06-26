@@ -171,7 +171,7 @@ func (sc *Controller) DeleteAPIKey(r *http.Request) (web.ApiResponse[struct{}], 
 				Message: fmt.Sprintf("Failed to delete API key: %v", err),
 			}
 		}
-		if sc.quota != nil && key.QuotaSpec != nil && key.QuotaSpec.IsLimited() {
+		if key.QuotaSpec != nil && key.QuotaSpec.IsLimited() {
 			// Deleted-key quota cleanup is bounded best-effort. If Redis stays
 			// unavailable past the retry window, the leftover q:live/q:sum keys become
 			// dead memory because API-key IDs are never reused and deleted keys are no
@@ -187,7 +187,7 @@ func (sc *Controller) DeleteAPIKey(r *http.Request) (web.ApiResponse[struct{}], 
 }
 
 func (sc *Controller) cleanupDeletedAPIKeyQuota(ctx context.Context, apiKeyID string) {
-	if sc == nil || sc.quota == nil || apiKeyID == "" {
+	if sc == nil || apiKeyID == "" {
 		return
 	}
 
@@ -198,7 +198,7 @@ func (sc *Controller) cleanupDeletedAPIKeyQuota(ctx context.Context, apiKeyID st
 	var lastErr error
 
 	for {
-		err := sc.quota.Cleanup(cleanupCtx, apiKeyID)
+		err := sc.manager.CleanupQuota(cleanupCtx, apiKeyID)
 		if err == nil {
 			return
 		}

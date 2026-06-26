@@ -609,7 +609,7 @@ func TestCreateSandbox_QuotaExceededReturns403WithoutRetry(t *testing.T) {
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "tmpl",
@@ -646,7 +646,7 @@ func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "tmpl",
@@ -704,7 +704,7 @@ func TestCreateSandbox_CloneQuotaExceededReturns403WithoutRetry(t *testing.T) {
 	defer cleanup()
 
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "checkpoint-1",
@@ -726,7 +726,7 @@ func TestCreateSandbox_UnlimitedKeyDoesNotCallQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  uuid.NewString(),
@@ -1744,7 +1744,7 @@ func TestDeleteSandbox_ReleasesQuotaAfterAcceptedDelete(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
-	controller.setQuota(&fakeQuotaManager{})
+	controller.manager.SetQuotaEnforcer(&fakeQuotaManager{})
 	user := &models.CreatedTeamAPIKey{
 		ID:        uuid.New(),
 		Key:       InitKey,
@@ -1765,7 +1765,7 @@ func TestDeleteSandbox_ReleasesQuotaAfterAcceptedDelete(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.NotNil(t, createResp.Body)
 
-	fakeQuota := controller.quota.(*fakeQuotaManager)
+	fakeQuota := controller.manager.GetQuotaEnforcer().(*fakeQuotaManager)
 	deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
 		"sandboxID": createResp.Body.SandboxID,
 	}, user))
@@ -1783,7 +1783,7 @@ func TestDeleteSandbox_UnlimitedKeyDoesNotReleaseQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  InitKey,
@@ -1883,7 +1883,7 @@ func TestDeleteSandbox_ReleaseErrorsStillReturnAcceptedDelete(t *testing.T) {
 					return tt.release(t, ctx, req)
 				},
 			}
-			controller.setQuota(fakeQuota)
+			controller.manager.SetQuotaEnforcer(fakeQuota)
 			user := &models.CreatedTeamAPIKey{
 				ID:        uuid.New(),
 				Key:       InitKey,
@@ -1956,7 +1956,7 @@ func TestDeleteSandbox_MissingSandboxOrLookupFailureDoesNotReleaseQuota(t *testi
 			defer teardown()
 
 			fakeQuota := &fakeQuotaManager{}
-			controller.setQuota(fakeQuota)
+			controller.manager.SetQuotaEnforcer(fakeQuota)
 			cleanup := CreateSandboxPool(t, controller, "test-template", 1)
 			defer cleanup()
 
@@ -1974,7 +1974,7 @@ func TestDeleteSandbox_DeleteFailureDoesNotReleaseQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  InitKey,

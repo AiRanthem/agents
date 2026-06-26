@@ -29,7 +29,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"reflect"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -58,10 +57,10 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	quotapkg "github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/utils/testutils"
 )
 
@@ -87,18 +86,12 @@ func refreshKeyStorageForTest(t *testing.T, controller *Controller) {
 	require.NoError(t, controller.keys.Init(t.Context()))
 }
 
-// SetupWithMinResumeTimeout mirrors Setup but lets the caller override
-// Controller.minResumeTimeout so floor-enforcement assertions can use a
-// non-default value (e.g., 120s with a 60s request to observe the bump).
 func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller, ctrlclient.Client, func()) {
 	testutils.InitLogOutput()
 	namespace := "sandbox-system"
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	// Build infra using the builder pattern (avoids connecting to a real API server).
-	// InitOptions populates defaults (e.g. MaxCreateQPS) that the infra rate limiter
-	// relies on — omitting this previously produced "limiter's burst 0" errors.
 	opts := config.InitOptions(config.SandboxManagerOptions{
 		SystemNamespace:    namespace,
 		MaxClaimWorkers:    10,
@@ -113,24 +106,18 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 			AdminKey:  InitKey,
 			Client:    fc,
 			APIReader: fc,
-		}, nil, quotapkg.Config{})
+		}, nil, config.QuotaOptions{})
 
-	// Create test resources using the controller-runtime fake client
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "sandbox-manager",
 			Namespace: namespace,
-			Labels: map[string]string{
-				"component": "sandbox-manager",
-			},
+			Labels:    map[string]string{"component": "sandbox-manager"},
 		},
 		Status: corev1.PodStatus{
 			Phase: corev1.PodRunning,
 			Conditions: []corev1.PodCondition{
-				{
-					Type:   corev1.PodReady,
-					Status: corev1.ConditionTrue,
-				},
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
 			},
 			PodIP: "127.0.0.1",
 		},
@@ -138,13 +125,9 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 	require.NoError(t, fc.Create(t.Context(), pod))
 	require.NoError(t, fc.Status().Update(t.Context(), pod))
 
-	// create key store secret
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      keys.KeySecretName,
-			Namespace: namespace,
-		},
-		Data: map[string][]byte{},
+		ObjectMeta: metav1.ObjectMeta{Name: keys.KeySecretName, Namespace: namespace},
+		Data:       map[string][]byte{},
 	}
 	require.NoError(t, fc.Create(t.Context(), secret))
 
@@ -154,7 +137,6 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 		WithAPIReader(fc).
 		WithProxy(proxyServer).
 		Build()
-
 	require.NoError(t, infraInstance.Run(t.Context()))
 
 	sandboxManager, err := sandboxmanager.NewSandboxManagerBuilder(opts).
@@ -174,10 +156,14 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 	controller.registerRoutes()
 
 	require.NoError(t, controller.initKeyStorage(t.Context()))
-	require.NoError(t, controller.initQuota(t.Context()))
 
-	// Start HTTP server and stop channel directly (skip controller.Run which
-	// would call manager.Run and try to start memberlist/peersManager).
+	// Initialize quota through the manager (mirrors Init() logic)
+	if controller.keys != nil {
+		require.NoError(t, controller.manager.InitQuota(t.Context(), config.QuotaOptions{}, keys.NewQuotaSubjectLister(controller.keys)))
+	} else {
+		require.NoError(t, controller.manager.InitQuota(t.Context(), config.QuotaOptions{}, nil))
+	}
+
 	controller.stop = make(chan os.Signal, 1)
 	signal.Notify(controller.stop, syscall.SIGINT, syscall.SIGTERM)
 	serverErr := make(chan error, 1)
@@ -199,8 +185,7 @@ func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller,
 
 type quotaInitRegistration struct{}
 
-func (quotaInitRegistration) HasSynced() bool { return true }
-
+func (quotaInitRegistration) HasSynced() bool  { return true }
 func (quotaInitRegistration) Remove() error { return nil }
 
 type quotaInitCache struct {
@@ -209,58 +194,19 @@ type quotaInitCache struct {
 	addErr      error
 }
 
-func (c *quotaInitCache) GetClaimedSandbox(context.Context, infracache.GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) GetCheckpoint(context.Context, infracache.GetCheckpointOptions) (*agentsv1alpha1.Checkpoint, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) PickSandboxSet(context.Context, infracache.PickSandboxSetOptions) (*agentsv1alpha1.SandboxSet, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) ListSandboxSets(context.Context, infracache.ListSandboxSetsOptions) ([]*agentsv1alpha1.SandboxSet, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) ListSandboxes(context.Context, infracache.ListSandboxesOptions) ([]*agentsv1alpha1.Sandbox, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) CountActiveSandboxes(context.Context, infracache.ListSandboxesOptions) (int32, error) {
-	return 0, nil
-}
-
-func (c *quotaInitCache) ListLiveSandboxesByOwner(context.Context, string) ([]*agentsv1alpha1.Sandbox, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) ListCheckpoints(context.Context, infracache.ListCheckpointsOptions) ([]*agentsv1alpha1.Checkpoint, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) ListSandboxesInPool(context.Context, infracache.ListSandboxesInPoolOptions) ([]*agentsv1alpha1.Sandbox, error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) NewSandboxPauseTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) NewSandboxResumeTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) {
-	return nil, nil
-}
-
-func (c *quotaInitCache) NewSandboxWaitReadyTask(context.Context, *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] {
-	return nil
-}
-
-func (c *quotaInitCache) NewCheckpointTask(context.Context, *agentsv1alpha1.Checkpoint) *cacheutils.WaitTask[*agentsv1alpha1.Checkpoint] {
-	return nil
-}
-
+func (c *quotaInitCache) GetClaimedSandbox(context.Context, infracache.GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) { return nil, nil }
+func (c *quotaInitCache) GetCheckpoint(context.Context, infracache.GetCheckpointOptions) (*agentsv1alpha1.Checkpoint, error) { return nil, nil }
+func (c *quotaInitCache) PickSandboxSet(context.Context, infracache.PickSandboxSetOptions) (*agentsv1alpha1.SandboxSet, error) { return nil, nil }
+func (c *quotaInitCache) ListSandboxSets(context.Context, infracache.ListSandboxSetsOptions) ([]*agentsv1alpha1.SandboxSet, error) { return nil, nil }
+func (c *quotaInitCache) ListSandboxes(context.Context, infracache.ListSandboxesOptions) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
+func (c *quotaInitCache) CountActiveSandboxes(context.Context, infracache.ListSandboxesOptions) (int32, error) { return 0, nil }
+func (c *quotaInitCache) ListLiveSandboxesByOwner(context.Context, string) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
+func (c *quotaInitCache) ListCheckpoints(context.Context, infracache.ListCheckpointsOptions) ([]*agentsv1alpha1.Checkpoint, error) { return nil, nil }
+func (c *quotaInitCache) ListSandboxesInPool(context.Context, infracache.ListSandboxesInPoolOptions) ([]*agentsv1alpha1.Sandbox, error) { return nil, nil }
+func (c *quotaInitCache) NewSandboxPauseTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) { return nil, nil }
+func (c *quotaInitCache) NewSandboxResumeTask(context.Context, *agentsv1alpha1.Sandbox) (*cacheutils.WaitTask[*agentsv1alpha1.Sandbox], error) { return nil, nil }
+func (c *quotaInitCache) NewSandboxWaitReadyTask(context.Context, *agentsv1alpha1.Sandbox) *cacheutils.WaitTask[*agentsv1alpha1.Sandbox] { return nil }
+func (c *quotaInitCache) NewCheckpointTask(context.Context, *agentsv1alpha1.Checkpoint) *cacheutils.WaitTask[*agentsv1alpha1.Checkpoint] { return nil }
 func (c *quotaInitCache) AddSandboxEventHandler(_ context.Context, handler toolscache.ResourceEventHandler) (infracache.SandboxEventHandlerRegistration, error) {
 	c.addCalls.Add(1)
 	if c.addErr != nil {
@@ -269,55 +215,127 @@ func (c *quotaInitCache) AddSandboxEventHandler(_ context.Context, handler tools
 	c.lastHandler = handler
 	return quotaInitRegistration{}, nil
 }
-
 func (c *quotaInitCache) SandboxInformerHealthy() bool { return true }
-
-func (c *quotaInitCache) Run(context.Context) error { return nil }
-
-func (c *quotaInitCache) Stop(context.Context) {}
-
+func (c *quotaInitCache) Run(context.Context) error    { return nil }
+func (c *quotaInitCache) Stop(context.Context)         {}
 func (c *quotaInitCache) GetClient() ctrlclient.Client { return nil }
-
 func (c *quotaInitCache) GetAPIReader() ctrlclient.Reader { return nil }
+func (c *quotaInitCache) GetCache() ctrlcache.Cache      { return nil }
 
-func (c *quotaInitCache) GetCache() ctrlcache.Cache { return nil }
+// quotaInitSubjectLister is a minimal SubjectLister for InitQuota tests.
+type quotaInitSubjectLister struct{}
 
-type quotaInitKeyStorage struct{}
-
-func (*quotaInitKeyStorage) Init(context.Context) error { return nil }
-
-func (*quotaInitKeyStorage) Run() {}
-
-func (*quotaInitKeyStorage) Stop() {}
-
-func (*quotaInitKeyStorage) LoadByKey(context.Context, string) (*models.CreatedTeamAPIKey, bool) {
-	return nil, false
+func (*quotaInitSubjectLister) ListLimited(context.Context) ([]quota.Subject, error) { return nil, nil }
+func (*quotaInitSubjectLister) Load(context.Context, string) (quota.Subject, bool) {
+	return quota.Subject{}, false
 }
 
-func (*quotaInitKeyStorage) LoadByID(context.Context, string) (*models.CreatedTeamAPIKey, bool) {
-	return nil, false
+// buildQuotaTestManager creates a SandboxManager backed by the given cache for InitQuota tests.
+func buildQuotaTestManager(t *testing.T, spyCache *quotaInitCache) *sandboxmanager.SandboxManager {
+	t.Helper()
+	opts := config.InitOptions(config.SandboxManagerOptions{
+		SystemNamespace:      "sandbox-system",
+		MemberlistBindPort:   config.DefaultMemberlistBindPort,
+		DisableRouteReconciliation: true,
+	})
+	proxyServer := proxy.NewServer(opts)
+	mgr, err := sandboxmanager.NewSandboxManagerBuilder(opts).
+		WithCustomInfra(func() (infra.Builder, error) {
+			return sandboxcr.NewInfraBuilder(opts).
+				WithCache(spyCache).
+				WithAPIReader(nil).
+				WithProxy(proxyServer), nil
+		}).
+		Build()
+	require.NoError(t, err)
+	return mgr
 }
 
-func (*quotaInitKeyStorage) CreateKey(context.Context, *models.CreatedTeamAPIKey, keys.CreateKeyOptions) (*models.CreatedTeamAPIKey, error) {
-	return nil, nil
+func TestManagerInitQuotaNoKeysDoesNotRegisterAntiDrift(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	mgr := buildQuotaTestManager(t, spyCache)
+
+	require.NoError(t, mgr.InitQuota(context.Background(), config.QuotaOptions{}, nil))
+	assert.Nil(t, mgr.GetQuotaAntiDrift())
+	assert.Equal(t, int64(0), spyCache.addCalls.Load())
+	assert.Nil(t, spyCache.lastHandler)
 }
 
-func (*quotaInitKeyStorage) DeleteKey(context.Context, *models.CreatedTeamAPIKey) error { return nil }
+func TestManagerInitQuotaRedisAbsentDoesNotRegisterAntiDrift(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	mgr := buildQuotaTestManager(t, spyCache)
 
-func (*quotaInitKeyStorage) ListByOwnerTeam(context.Context, *models.CreatedTeamAPIKey) ([]*models.TeamAPIKey, error) {
-	return nil, nil
+	require.NoError(t, mgr.InitQuota(context.Background(), config.QuotaOptions{}, &quotaInitSubjectLister{}))
+	assert.Nil(t, mgr.GetQuotaAntiDrift())
+	assert.Equal(t, int64(0), spyCache.addCalls.Load())
+	assert.Nil(t, spyCache.lastHandler)
 }
 
-func (*quotaInitKeyStorage) ListLimited(context.Context) ([]*models.CreatedTeamAPIKey, error) {
-	return nil, nil
+func TestManagerInitQuotaRedisConfiguredRegistersHandler(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	mgr := buildQuotaTestManager(t, spyCache)
+
+	require.NoError(t, mgr.InitQuota(context.Background(), config.QuotaOptions{
+		RedisAddr:         "127.0.0.1:1",
+		OperationTimeout:  time.Millisecond,
+		AntiDriftInterval: time.Minute,
+		AntiDriftGrace:    time.Minute,
+	}, &quotaInitSubjectLister{}))
+	require.NotNil(t, mgr.GetQuotaAntiDrift())
+	assert.Equal(t, int64(1), spyCache.addCalls.Load(), "Redis configured must register the anti-drift event handler")
+	assert.NotNil(t, spyCache.lastHandler)
 }
 
-func (*quotaInitKeyStorage) ListTeams(context.Context, *models.CreatedTeamAPIKey) ([]*models.ListedTeam, error) {
-	return nil, nil
+func TestManagerInitQuotaRedisConfiguredTransportUnavailableStillFailOpen(t *testing.T) {
+	spyCache := &quotaInitCache{}
+	mgr := buildQuotaTestManager(t, spyCache)
+
+	require.NoError(t, mgr.InitQuota(context.Background(), config.QuotaOptions{
+		RedisAddr:         "127.0.0.1:1",
+		OperationTimeout:  time.Millisecond,
+		AntiDriftInterval: time.Minute,
+		AntiDriftGrace:    time.Minute,
+	}, &quotaInitSubjectLister{}))
+	require.NotNil(t, mgr.GetQuotaAntiDrift(), "transport unavailability must not disable driver construction when Redis is configured")
+
+	// Verify the hot path fails open: Acquire must succeed even with an unreachable Redis.
+	err := mgr.GetQuotaEnforcer().Acquire(context.Background(), quota.AcquireRequest{
+		User:       "test-user",
+		LockString: "test-lock",
+		Quota:      &quota.QuotaSpec{Limits: []quota.QuotaLimit{{Dimension: quota.DimSandboxCount, Scope: quota.ScopeAll, Limit: 1}}},
+		Footprint:  map[quota.QuotaDimension]int64{quota.DimSandboxCount: 1},
+		Scopes:     []quota.QuotaScope{quota.ScopeAll},
+	})
+	require.NoError(t, err, "configured Redis transport errors must fail open on the hot path")
 }
 
-func (*quotaInitKeyStorage) FindTeamByName(context.Context, string) (*models.Team, bool, error) {
-	return nil, false, nil
+func TestManagerInitQuotaRedisConfiguredRequiresCache(t *testing.T) {
+	mgr := &sandboxmanager.SandboxManager{}
+	err := mgr.InitQuota(context.Background(), config.QuotaOptions{
+		RedisAddr:         "127.0.0.1:1",
+		OperationTimeout:  time.Millisecond,
+		AntiDriftInterval: time.Minute,
+		AntiDriftGrace:    time.Minute,
+	}, &quotaInitSubjectLister{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cache is not available")
+}
+
+func TestManagerInitQuotaRedisConfiguredRegistrationErrorDoesNotLeavePartialState(t *testing.T) {
+	spyCache := &quotaInitCache{addErr: errors.New("informer unavailable")}
+	mgr := buildQuotaTestManager(t, spyCache)
+
+	err := mgr.InitQuota(context.Background(), config.QuotaOptions{
+		RedisAddr:         "127.0.0.1:1",
+		OperationTimeout:  time.Millisecond,
+		AntiDriftInterval: time.Minute,
+		AntiDriftGrace:    time.Minute,
+	}, &quotaInitSubjectLister{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "informer unavailable")
+	assert.Equal(t, int64(1), spyCache.addCalls.Load())
+	assert.Nil(t, mgr.GetQuotaAntiDrift())
+	assert.Nil(t, mgr.GetQuotaRedisClient())
 }
 
 type recordingRedisCloser struct {
@@ -329,122 +347,31 @@ func (c *recordingRedisCloser) Close() error {
 	return nil
 }
 
-func TestControllerInitQuotaRedisAbsentWithAuthDisabledDoesNotRegisterAntiDrift(t *testing.T) {
-	spyCache := &quotaInitCache{}
-	sc := &Controller{
-		cache: spyCache,
-	}
-
-	require.NoError(t, sc.initQuota(context.Background()))
-	require.NotNil(t, sc.quota)
-	assert.Nil(t, sc.quotaAntiDrift)
-	assert.Equal(t, int64(0), spyCache.addCalls.Load())
-	assert.Nil(t, spyCache.lastHandler)
-}
-
-func TestControllerInitQuotaRedisAbsentDoesNotRegisterAntiDrift(t *testing.T) {
-	spyCache := &quotaInitCache{}
-	sc := &Controller{
-		keys:  &quotaInitKeyStorage{},
-		cache: spyCache,
-	}
-
-	require.NoError(t, sc.initQuota(context.Background()))
-	require.NotNil(t, sc.quota)
-	assert.Nil(t, sc.quotaAntiDrift)
-	assert.Equal(t, int64(0), spyCache.addCalls.Load())
-	assert.Nil(t, spyCache.lastHandler)
-}
-
-func TestControllerInitQuotaRedisConfiguredRegistersHandler(t *testing.T) {
-	spyCache := &quotaInitCache{}
-	sc := &Controller{
-		keys:  &quotaInitKeyStorage{},
-		cache: spyCache,
-		quotaCfg: quotapkg.Config{
-			RedisAddr:         "127.0.0.1:1",
-			OperationTimeout:  time.Millisecond,
-			AntiDriftInterval: time.Minute,
-			AntiDriftGrace:    time.Minute,
-		},
-	}
-
-	require.NoError(t, sc.initQuota(context.Background()))
-	require.NotNil(t, sc.quota)
-	require.NotNil(t, sc.quotaAntiDrift)
-	assert.Equal(t, int64(1), spyCache.addCalls.Load(), "Redis configured must register the anti-drift event handler")
-	assert.NotNil(t, spyCache.lastHandler)
-	assert.Equal(t, "*quota.breakerBackend", reflect.Indirect(reflect.ValueOf(sc.quota)).FieldByName("backend").Elem().Type().String())
-	assert.Equal(t, "*quota.RedisBackend", reflect.Indirect(reflect.ValueOf(sc.quotaAntiDrift)).FieldByName("backend").Elem().Type().String())
-}
-
-func TestControllerInitQuotaRedisConfiguredTransportUnavailableStillFailOpen(t *testing.T) {
-	spyCache := &quotaInitCache{}
-	sc := &Controller{
-		keys:  &quotaInitKeyStorage{},
-		cache: spyCache,
-		quotaCfg: quotapkg.Config{
-			RedisAddr:         "127.0.0.1:1",
-			OperationTimeout:  time.Millisecond,
-			AntiDriftInterval: time.Minute,
-			AntiDriftGrace:    time.Minute,
-		},
-	}
-
-	require.NoError(t, sc.initQuota(context.Background()))
-
-	limit := int64(1)
-	err := sc.quota.Acquire(context.Background(), quotapkg.AcquireRequest{
-		User:       "key-1",
-		LockString: "lock-1",
-		Quota: &models.QuotaSpec{Limits: []models.QuotaLimit{{
-			Dimension: models.DimSandboxCount,
-			Scope:     models.ScopeRunning,
-			Limit:     limit,
-		}}},
+func TestManagerStopClosesQuotaRedis(t *testing.T) {
+	closer := &recordingRedisCloser{}
+	opts := config.InitOptions(config.SandboxManagerOptions{
+		SystemNamespace:    "sandbox-system",
+		MemberlistBindPort: config.DefaultMemberlistBindPort,
 	})
-	require.NoError(t, err, "configured Redis transport errors must fail open on the hot path")
-	require.NotNil(t, sc.quotaAntiDrift, "transport unavailability must not disable driver construction when Redis is configured")
-}
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
 
-func TestControllerInitQuotaRedisConfiguredRequiresCache(t *testing.T) {
-	sc := &Controller{
-		keys: &quotaInitKeyStorage{},
-		quotaCfg: quotapkg.Config{
-			RedisAddr:         "127.0.0.1:1",
-			OperationTimeout:  time.Millisecond,
-			AntiDriftInterval: time.Minute,
-			AntiDriftGrace:    time.Minute,
-		},
-	}
+	proxyServer := proxy.NewServer(opts)
+	mgr, err := sandboxmanager.NewSandboxManagerBuilder(opts).
+		WithCustomInfra(func() (infra.Builder, error) {
+			return sandboxcr.NewInfraBuilder(opts).
+				WithCache(cache).
+				WithAPIReader(fc).
+				WithProxy(proxyServer), nil
+		}).
+		Build()
+	require.NoError(t, err)
 
-	err := sc.initQuota(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cache is not available")
-	assert.Nil(t, sc.quota)
-	assert.Nil(t, sc.quotaAntiDrift)
-}
+	require.NoError(t, mgr.GetInfra().Run(t.Context()))
+	mgr.SetQuotaRedisClient(closer)
 
-func TestControllerInitQuotaRedisConfiguredRegistrationErrorDoesNotLeavePartialState(t *testing.T) {
-	spyCache := &quotaInitCache{addErr: errors.New("informer unavailable")}
-	sc := &Controller{
-		keys:  &quotaInitKeyStorage{},
-		cache: spyCache,
-		quotaCfg: quotapkg.Config{
-			RedisAddr:         "127.0.0.1:1",
-			OperationTimeout:  time.Millisecond,
-			AntiDriftInterval: time.Minute,
-			AntiDriftGrace:    time.Minute,
-		},
-	}
-
-	err := sc.initQuota(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "informer unavailable")
-	assert.Equal(t, int64(1), spyCache.addCalls.Load())
-	assert.Nil(t, sc.quota)
-	assert.Nil(t, sc.quotaAntiDrift)
-	assert.Nil(t, sc.quotaRedisClient)
+	mgr.Stop(t.Context())
+	assert.True(t, closer.closed.Load())
 }
 
 func TestControllerShutdownClosesQuotaRedisAfterHTTPShutdown(t *testing.T) {
@@ -493,12 +420,32 @@ func TestControllerShutdownClosesQuotaRedisAfterHTTPShutdown(t *testing.T) {
 
 	closer := &recordingRedisCloser{}
 	cancelCalled := atomic.Bool{}
+
+	opts := config.InitOptions(config.SandboxManagerOptions{
+		SystemNamespace:    "sandbox-system",
+		MemberlistBindPort: config.DefaultMemberlistBindPort,
+	})
+	fakeCache, fc, cacheErr := cachetest.NewTestCache(t)
+	require.NoError(t, cacheErr)
+	proxyServer := proxy.NewServer(opts)
+	mgr, err := sandboxmanager.NewSandboxManagerBuilder(opts).
+		WithCustomInfra(func() (infra.Builder, error) {
+			return sandboxcr.NewInfraBuilder(opts).
+				WithCache(fakeCache).
+				WithAPIReader(fc).
+				WithProxy(proxyServer), nil
+		}).
+		Build()
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetInfra().Run(t.Context()))
+	mgr.SetQuotaRedisClient(closer)
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer shutdownCancel()
 	shutdownDone := make(chan struct{})
 	sc := &Controller{
-		server:           server,
-		quotaRedisClient: closer,
+		server:  server,
+		manager: mgr,
 	}
 	go func() {
 		sc.shutdown(shutdownCtx, func() {
@@ -560,7 +507,6 @@ func GetSbsOwnerReference(sbs *agentsv1alpha1.SandboxSet) []metav1.OwnerReferenc
 	return []metav1.OwnerReference{*metav1.NewControllerRef(sbs, agentsv1alpha1.SandboxSetControllerKind)}
 }
 
-// CreateSandboxPoolOptions contains options for creating a sandbox pool
 type CreateSandboxPoolOptions struct {
 	Namespace   string
 	RuntimeURL  string
@@ -578,10 +524,7 @@ func CreateSandboxPool(t *testing.T, controller *Controller, name string, availa
 	if options.Namespace != "" {
 		ns = options.Namespace
 	}
-	container := corev1.Container{
-		Name:  "main",
-		Image: "old-image",
-	}
+	container := corev1.Container{Name: "main", Image: "old-image"}
 	if options.CPURequest != "" || options.Memory != "" {
 		container.Resources.Requests = corev1.ResourceList{}
 		if options.CPURequest != "" {
@@ -593,22 +536,13 @@ func CreateSandboxPool(t *testing.T, controller *Controller, name string, availa
 	}
 	tmpl := agentsv1alpha1.EmbeddedSandboxTemplate{
 		Template: &corev1.PodTemplateSpec{
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{container},
-			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{container}},
 		},
 	}
 	sbs := &agentsv1alpha1.SandboxSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-			UID:       types.UID(uuid.NewString()),
-		},
-		Spec: agentsv1alpha1.SandboxSetSpec{
-			EmbeddedSandboxTemplate: tmpl,
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID(uuid.NewString())},
+		Spec:       agentsv1alpha1.SandboxSetSpec{EmbeddedSandboxTemplate: tmpl},
 	}
-	// Use the controller-runtime client (CacheV2's fake client) for all CRD operations
 	fc := getTestCRClient(controller)
 	err := fc.Create(t.Context(), sbs)
 	if err != nil && !apierrors.IsAlreadyExists(err) {
@@ -625,40 +559,27 @@ func CreateSandboxPool(t *testing.T, controller *Controller, name string, availa
 		}
 		sbx := &agentsv1alpha1.Sandbox{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      fmt.Sprintf("%s-%d", name, i),
-				Namespace: ns,
+				Name: fmt.Sprintf("%s-%d", name, i), Namespace: ns,
 				Labels: map[string]string{
 					agentsv1alpha1.LabelSandboxTemplate:  name,
 					agentsv1alpha1.LabelSandboxIsClaimed: "false",
 				},
-				Annotations:       annotations,
-				OwnerReferences:   GetSbsOwnerReference(sbs),
-				UID:               types.UID(uuid.NewString()),
-				CreationTimestamp: now,
+				Annotations: annotations, OwnerReferences: GetSbsOwnerReference(sbs),
+				UID: types.UID(uuid.NewString()), CreationTimestamp: now,
 			},
-			Spec: agentsv1alpha1.SandboxSpec{
-				EmbeddedSandboxTemplate: tmpl,
-			},
+			Spec: agentsv1alpha1.SandboxSpec{EmbeddedSandboxTemplate: tmpl},
 			Status: agentsv1alpha1.SandboxStatus{
 				Phase: agentsv1alpha1.SandboxRunning,
-				Conditions: []metav1.Condition{
-					{
-						Type:   string(agentsv1alpha1.SandboxConditionReady),
-						Status: metav1.ConditionTrue,
-					},
-				},
-				PodInfo: agentsv1alpha1.PodInfo{
-					PodIP: "1.2.3.4",
-				},
+				Conditions: []metav1.Condition{{
+					Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue,
+				}},
+				PodInfo: agentsv1alpha1.PodInfo{PodIP: "1.2.3.4"},
 			},
 		}
 		CreateSandboxWithStatus(t, fc, sbx)
 	}
 	require.Eventually(t, func() bool {
-		pool, _ := controller.cache.ListSandboxesInPool(t.Context(), infracache.ListSandboxesInPoolOptions{
-			Namespace: ns,
-			Pool:      name,
-		})
+		pool, _ := controller.cache.ListSandboxesInPool(t.Context(), infracache.ListSandboxesInPoolOptions{Namespace: ns, Pool: name})
 		return len(pool) == available
 	}, time.Minute, 100*time.Millisecond)
 	return func() {
@@ -686,45 +607,32 @@ func CreateClaimedSandboxCR(t *testing.T, controller *Controller, namespace, nam
 	}
 	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name: name, Namespace: namespace,
 			Labels: map[string]string{
 				agentsv1alpha1.LabelSandboxTemplate:  template,
 				agentsv1alpha1.LabelSandboxIsClaimed: agentsv1alpha1.True,
 			},
-			Annotations:       copiedAnnotations,
-			UID:               types.UID(uuid.NewString()),
-			CreationTimestamp: now,
+			Annotations: copiedAnnotations, UID: types.UID(uuid.NewString()), CreationTimestamp: now,
 		},
 		Spec: agentsv1alpha1.SandboxSpec{
 			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 				Template: &corev1.PodTemplateSpec{
-					Spec: corev1.PodSpec{
-						Containers: []corev1.Container{{Name: "main", Image: "test-image"}},
-					},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "test-image"}}},
 				},
 			},
 		},
 		Status: agentsv1alpha1.SandboxStatus{
 			Phase: agentsv1alpha1.SandboxRunning,
-			Conditions: []metav1.Condition{
-				{
-					Type:   string(agentsv1alpha1.SandboxConditionReady),
-					Status: metav1.ConditionTrue,
-				},
-			},
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "1.2.3.4",
-			},
+			Conditions: []metav1.Condition{{
+				Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue,
+			}},
+			PodInfo: agentsv1alpha1.PodInfo{PodIP: "1.2.3.4"},
 		},
 	}
 	CreateSandboxWithStatus(t, fc, sbx)
 	sandboxID := fmt.Sprintf("%s--%s", namespace, name)
 	require.Eventually(t, func() bool {
-		_, err := controller.cache.GetClaimedSandbox(t.Context(), infracache.GetClaimedSandboxOptions{
-			Namespace: namespace,
-			SandboxID: sandboxID,
-		})
+		_, err := controller.cache.GetClaimedSandbox(t.Context(), infracache.GetClaimedSandboxOptions{Namespace: namespace, SandboxID: sandboxID})
 		return err == nil
 	}, time.Second, 10*time.Millisecond)
 	return sbx
@@ -735,63 +643,36 @@ func CreateCheckpointAndTemplateInNamespace(t *testing.T, controller *Controller
 	fc := getTestCRClient(controller)
 	createdAt, err := time.Parse(time.RFC3339, creationTime)
 	require.NoError(t, err)
-
 	tmpl := agentsv1alpha1.EmbeddedSandboxTemplate{
 		Template: &corev1.PodTemplateSpec{
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{Name: "main", Image: "checkpoint-image"}},
-			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "checkpoint-image"}}},
 		},
 	}
 	sbt := &agentsv1alpha1.SandboxTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			UID:       types.UID(uuid.NewString()),
-		},
-		Spec: agentsv1alpha1.SandboxTemplateSpec{
-			Template: tmpl.Template,
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(uuid.NewString())},
+		Spec:       agentsv1alpha1.SandboxTemplateSpec{Template: tmpl.Template},
 	}
 	require.NoError(t, fc.Create(t.Context(), sbt))
-
 	cp := &agentsv1alpha1.Checkpoint{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              name,
-			Namespace:         namespace,
-			UID:               types.UID(uuid.NewString()),
-			CreationTimestamp: metav1.NewTime(createdAt),
-			Labels: map[string]string{
-				agentsv1alpha1.LabelSandboxTemplate: name,
-			},
-			Annotations: map[string]string{
-				agentsv1alpha1.AnnotationOwner:     owner,
-				agentsv1alpha1.AnnotationSandboxID: sandboxID,
-			},
+			Name: name, Namespace: namespace, UID: types.UID(uuid.NewString()), CreationTimestamp: metav1.NewTime(createdAt),
+			Labels:      map[string]string{agentsv1alpha1.LabelSandboxTemplate: name},
+			Annotations: map[string]string{agentsv1alpha1.AnnotationOwner: owner, agentsv1alpha1.AnnotationSandboxID: sandboxID},
 		},
-		Status: agentsv1alpha1.CheckpointStatus{
-			Phase:        agentsv1alpha1.CheckpointSucceeded,
-			CheckpointId: checkpointID,
-		},
+		Status: agentsv1alpha1.CheckpointStatus{Phase: agentsv1alpha1.CheckpointSucceeded, CheckpointId: checkpointID},
 	}
 	require.NoError(t, fc.Create(t.Context(), cp))
 	require.NoError(t, fc.Status().Update(t.Context(), cp))
 	require.Eventually(t, func() bool {
-		_, err := controller.cache.GetCheckpoint(t.Context(), infracache.GetCheckpointOptions{
-			Namespace:    namespace,
-			CheckpointID: checkpointID,
-		})
+		_, err := controller.cache.GetCheckpoint(t.Context(), infracache.GetCheckpointOptions{Namespace: namespace, CheckpointID: checkpointID})
 		return err == nil
 	}, time.Second, 10*time.Millisecond)
-
 	return func() {
 		_ = fc.Delete(t.Context(), cp)
 		_ = fc.Delete(t.Context(), sbt)
 	}
 }
 
-// getTestCRClient retrieves the controller-runtime client from the infra.
-// This is the CacheV2's fake client used in tests.
 func getTestCRClient(controller *Controller) ctrlclient.Client {
 	return controller.manager.GetInfra().GetCache().GetClient()
 }
@@ -813,9 +694,7 @@ func EnableWaitSim(t *testing.T, controller *Controller, sandboxID string) {
 type DoFunc func(t *testing.T, c ctrlclient.Client, sbx *agentsv1alpha1.Sandbox)
 type WhenFunc func(sbx *agentsv1alpha1.Sandbox) bool
 
-func Immediately(sbx *agentsv1alpha1.Sandbox) bool {
-	return sbx != nil
-}
+func Immediately(sbx *agentsv1alpha1.Sandbox) bool { return sbx != nil }
 
 func UpdateSandboxWhen(t *testing.T, c ctrlclient.Client, sandboxID string, when WhenFunc, do DoFunc) {
 	require.NotNil(t, do)
@@ -837,14 +716,12 @@ func DoSetSandboxStatus(phase agentsv1alpha1.SandboxPhase, pausedStatus, readySt
 		sbx.Status.Conditions = nil
 		if pausedStatus != "" {
 			sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
-				Type:   string(agentsv1alpha1.SandboxConditionPaused),
-				Status: pausedStatus,
+				Type: string(agentsv1alpha1.SandboxConditionPaused), Status: pausedStatus,
 			})
 		}
 		if readyStatus != "" {
 			sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
-				Type:   string(agentsv1alpha1.SandboxConditionReady),
-				Status: readyStatus,
+				Type: string(agentsv1alpha1.SandboxConditionReady), Status: readyStatus,
 			})
 		}
 		err := c.Status().Update(t.Context(), sbx)

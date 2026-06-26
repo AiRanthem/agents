@@ -33,11 +33,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
+	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/servers/e2b"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 )
@@ -225,7 +225,7 @@ func main() {
 		}
 	}
 
-	quotaCfg := quota.Config{
+	quotaOpts := config.QuotaOptions{
 		RedisAddr:         e2bQuotaRedisAddr,
 		RedisUsername:     e2bQuotaRedisUsername,
 		RedisPassword:     e2bQuotaRedisPassword,
@@ -256,7 +256,7 @@ func main() {
 	}
 
 	sandboxController := e2b.NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSelector, e2bMaxTimeout, e2bMinResumeTimeout, maxClaimWorkers, maxCreateQPS, uint32(extProcMaxConcurrency),
-		port, memberlistBindPort, keyCfg, clientConfig, quotaCfg)
+		port, memberlistBindPort, keyCfg, clientConfig, quotaOpts)
 
 	if err := sandboxController.Init(); err != nil {
 		klog.Fatalf("Failed to initialize sandbox controller: %v", err)

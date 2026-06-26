@@ -18,22 +18,9 @@ package quota
 
 import (
 	"context"
-	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
-
-type Config struct {
-	RedisAddr         string
-	RedisUsername     string
-	RedisPassword     string
-	RedisDB           int
-	OperationTimeout  time.Duration
-	BreakerN          int
-	BreakerD          time.Duration
-	AntiDriftInterval time.Duration
-	AntiDriftGrace    time.Duration
-}
 
 type Entry struct {
 	Footprint map[QuotaDimension]int64

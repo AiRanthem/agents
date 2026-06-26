@@ -1910,6 +1910,10 @@ func (f *fakeManagerQuota) Release(_ context.Context, req quota.ReleaseRequest) 
 	return f.releaseErr
 }
 
+func (f *fakeManagerQuota) Cleanup(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestSandboxManagerBuildsQuotaAdmission(t *testing.T) {
 	quotaMgr := &fakeManagerQuota{}
 	manager, _ := setupTestManager(t)

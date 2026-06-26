@@ -29,28 +29,15 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
-	"github.com/redis/go-redis/v9"
-
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
 	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
-	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 )
-
-type quotaManager interface {
-	Acquire(ctx context.Context, req quota.AcquireRequest) error
-	Release(ctx context.Context, req quota.ReleaseRequest) error
-	Cleanup(ctx context.Context, user string) error
-}
-
-type redisClientCloser interface {
-	Close() error
-}
 
 // Controller handles sandbox-related operations
 type Controller struct {
@@ -68,35 +55,22 @@ type Controller struct {
 	sandboxNamespace      string
 	memberlistBindPort    int
 	keyCfg                *keys.Config
-	quotaCfg              quota.Config
+	quotaOpts             config.QuotaOptions
 
 	// fields
-	mux              *http.ServeMux
-	server           *http.Server
-	stop             chan os.Signal
-	cache            cache.Provider
-	storageRegistry  storages.VolumeMountProviderRegistry
-	clientConfig     *rest.Config
-	domain           string
-	manager          *sandboxmanager.SandboxManager
-	keys             keys.KeyStorage
-	quota            quotaManager
-	quotaAntiDrift   *quota.AntiDriftDriver
-	quotaRedisClient redisClientCloser
-}
-
-// setQuota wires a quota manager into both the E2B controller and the sandbox-manager.
-// Use this instead of assigning sc.quota directly so that the sandbox-manager
-// enforces admission and releases quota on delete.
-func (sc *Controller) setQuota(qm quotaManager) {
-	sc.quota = qm
-	if sc.manager != nil {
-		sc.manager.SetQuotaEnforcer(qm)
-	}
+	mux             *http.ServeMux
+	server          *http.Server
+	stop            chan os.Signal
+	cache           cache.Provider
+	storageRegistry storages.VolumeMountProviderRegistry
+	clientConfig    *rest.Config
+	domain          string
+	manager         *sandboxmanager.SandboxManager
+	keys            keys.KeyStorage
 }
 
 // NewController creates a new E2B Controller
-func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSelector string, maxTimeout, minResumeTimeout, maxClaimWorkers, maxCreateQPS int, extProcMaxConcurrency uint32, port, memberlistBindPort int, keyCfg *keys.Config, clientConfig *rest.Config, quotaCfg quota.Config) *Controller {
+func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSelector string, maxTimeout, minResumeTimeout, maxClaimWorkers, maxCreateQPS int, extProcMaxConcurrency uint32, port, memberlistBindPort int, keyCfg *keys.Config, clientConfig *rest.Config, quotaOpts config.QuotaOptions) *Controller {
 	sc := &Controller{
 		mux:                   http.NewServeMux(),
 		domain:                domain,
@@ -113,7 +87,7 @@ func NewController(domain, sysNs, peerSelector, sandboxNamespace, sandboxLabelSe
 		extProcMaxConcurrency: extProcMaxConcurrency,
 		memberlistBindPort:    memberlistBindPort,
 		keyCfg:                keyCfg,
-		quotaCfg:              quotaCfg,
+		quotaOpts:             quotaOpts,
 	}
 
 	sc.server = &http.Server{
@@ -149,7 +123,18 @@ func (sc *Controller) Init() error {
 	if err := sc.initKeyStorage(ctx); err != nil {
 		return err
 	}
-	return sc.initQuota(ctx)
+
+	// Initialize quota through the sandbox-manager, which owns the runtime lifecycle.
+	if sc.keys != nil {
+		if err := sc.manager.InitQuota(ctx, sc.quotaOpts, keys.NewQuotaSubjectLister(sc.keys)); err != nil {
+			return err
+		}
+	} else {
+		if err := sc.manager.InitQuota(ctx, config.QuotaOptions{}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (sc *Controller) sandboxManagerOptions() config.SandboxManagerOptions {
@@ -163,6 +148,7 @@ func (sc *Controller) sandboxManagerOptions() config.SandboxManagerOptions {
 		MaxCreateQPS:          sc.maxCreateQPS,
 		MemberlistBindPort:    sc.memberlistBindPort,
 		RestConfig:            sc.clientConfig,
+		Quota:                 sc.quotaOpts,
 	}
 }
 
@@ -182,53 +168,6 @@ func (sc *Controller) initKeyStorage(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func (sc *Controller) initQuota(ctx context.Context) error {
-	log := klog.FromContext(ctx)
-	if sc.keys == nil {
-		sc.quota = quota.NewManager(quota.NoopBackend{})
-		log.Info("api-key quota is unenforced because E2B auth is disabled")
-		return nil
-	}
-	if sc.quotaCfg.RedisAddr == "" {
-		sc.quota = quota.NewManager(quota.NoopBackend{})
-		log.Info("api-key quota Redis is not configured; limited keys are accepted but unenforced")
-		return nil
-	}
-	if sc.cache == nil {
-		return fmt.Errorf("api-key quota Redis is configured but cache is not available")
-	}
-
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     sc.quotaCfg.RedisAddr,
-		Username: sc.quotaCfg.RedisUsername,
-		Password: sc.quotaCfg.RedisPassword,
-		DB:       sc.quotaCfg.RedisDB,
-	})
-	redisBackend := quota.NewRedisBackend(redisClient, sc.quotaCfg.OperationTimeout)
-	hotBackend := quota.NewBreakerBackend(
-		redisBackend,
-		sc.quotaCfg.BreakerN,
-		sc.quotaCfg.BreakerD,
-	)
-	driver := quota.NewAntiDriftDriver(quota.AntiDriftConfig{
-		Interval: sc.quotaCfg.AntiDriftInterval,
-		Grace:    sc.quotaCfg.AntiDriftGrace,
-	}, sc.manager, keys.NewQuotaSubjectLister(sc.keys), sc.cache, redisBackend)
-	registration, err := sc.cache.AddSandboxEventHandler(ctx, driver.SandboxEventHandler())
-	if err != nil {
-		if closeErr := redisClient.Close(); closeErr != nil {
-			log.Error(closeErr, "failed to close quota Redis client after anti-drift registration failure")
-		}
-		return err
-	}
-	driver.SetEventRegistration(registration)
-	sc.setQuota(quota.NewManager(hotBackend))
-	sc.quotaAntiDrift = driver
-	sc.quotaRedisClient = redisClient
-	log.Info("api-key quota Redis configured; Redis transport errors fail open", "addr", sc.quotaCfg.RedisAddr)
 	return nil
 }
 
@@ -263,9 +202,6 @@ func (sc *Controller) Run() (context.Context, error) {
 	if sc.keys != nil {
 		sc.keys.Run()
 	}
-	if sc.quotaAntiDrift != nil {
-		sc.quotaAntiDrift.Run(ctx)
-	}
 	return ctx, nil
 }
 
@@ -282,16 +218,8 @@ func (sc *Controller) shutdown(ctx context.Context, cancel context.CancelFunc) {
 	if sc.manager != nil {
 		sc.manager.Stop(ctx)
 	}
-	if sc.quotaAntiDrift != nil {
-		sc.quotaAntiDrift.Stop()
-	}
 	if sc.keys != nil {
 		sc.keys.Stop()
-	}
-	if sc.quotaRedisClient != nil {
-		if err := sc.quotaRedisClient.Close(); err != nil {
-			log.Error(err, "failed to close quota Redis client")
-		}
 	}
 	klog.InfoS("Server exited")
 }

@@ -740,7 +740,7 @@ func TestCreateSandbox_TopLevelMissingTemplateOrCheckpointReturns400(t *testing.
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.setQuota(fakeQuota)
+	controller.manager.SetQuotaEnforcer(fakeQuota)
 	user := quotaLimitedUser([]models.QuotaLimit{{
 		Dimension: models.DimLimitsCPU,
 		Scope:     models.ScopeRunning,
