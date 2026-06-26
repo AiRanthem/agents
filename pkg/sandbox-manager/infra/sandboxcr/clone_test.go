@@ -2088,3 +2088,62 @@ func TestCreateCheckPoint(t *testing.T) {
 		})
 	}
 }
+
+func TestCloneSandboxAdmissionUsesPersistedLockString(t *testing.T) {
+	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{
+		MaxClaimWorkers:            1,
+		MaxCreateQPS:               1000,
+		DisableRouteReconciliation: true,
+	})
+	checkpointID := "clone-lockstring-precondition"
+	createCloneTestCheckpoint(t, fc, testInfra.Cache, checkpointID)
+
+	origCreateSandbox := DefaultCreateSandbox
+	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
+
+	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
+		sbx.Name = "clone-lockstring-sbx"
+		created, err := origCreateSandbox(ctx, sbx, c)
+		if err != nil {
+			return nil, err
+		}
+		created.Status = v1alpha1.SandboxStatus{
+			Phase:              v1alpha1.SandboxRunning,
+			ObservedGeneration: created.Generation,
+			Conditions: []metav1.Condition{{
+				Type:   string(v1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+				Reason: v1alpha1.SandboxReadyReasonPodReady,
+			}},
+			PodInfo: v1alpha1.PodInfo{PodIP: "1.2.3.4"},
+		}
+		require.NoError(t, c.Status().Update(ctx, created))
+		return created, nil
+	}
+
+	var acquired string
+	quota := newCloneAdmissionQuotaTracker(t, 1)
+	origAcquire := quota.admission().Acquire
+	opts, err := ValidateAndInitCloneOptions(infra.CloneSandboxOptions{
+		User:         "user-1",
+		CheckPointID: checkpointID,
+		Admission: &infra.SandboxAdmission{
+			Acquire: func(ctx context.Context, lockString string, res infra.SandboxResource) error {
+				acquired = lockString
+				return origAcquire(ctx, lockString, res)
+			},
+			Release: quota.admission().Release,
+		},
+		WaitReadyTimeout:        20 * time.Millisecond,
+		CloneTimeout:            time.Second,
+		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
+	})
+	require.NoError(t, err)
+
+	sbx, _, err := testInfra.CloneSandbox(t.Context(), opts)
+	require.NoError(t, err)
+	require.NotNil(t, sbx)
+	require.NotEmpty(t, acquired)
+	assert.Equal(t, acquired, sbx.GetAnnotations()[v1alpha1.AnnotationLock])
+}
+
