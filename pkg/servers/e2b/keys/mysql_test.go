@@ -591,7 +591,7 @@ func TestMySQL_ListByOwnerTeamIncludesQuota(t *testing.T) {
 	spec, err := models.QuotaSpecFromWire(keys[0].Quota)
 	require.NoError(t, err)
 	require.Equal(t, mysqlQuotaSpecWithMultipleLimits(), spec)
-	require.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(keys[0].Quota))
+	require.JSONEq(t, `{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}`, string(keys[0].Quota))
 }
 
 func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
@@ -617,7 +617,7 @@ func TestMySQL_CreateKeyReturnsAndCachesQuota(t *testing.T) {
 
 	payload, err := json.Marshal(created)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"createdAt":"`+created.CreatedAt.Format(time.RFC3339Nano)+`","id":"`+created.ID.String()+`","key":"`+created.Key+`","mask":{"maskedValuePrefix":"","maskedValueSuffix":"","prefix":"","valueLength":0},"name":"limited","createdBy":{"email":"","id":"`+user.ID.String()+`"},"team":{"id":"`+userTeam.ID.String()+`","name":"team-a"},"lastUsed":null,"quota":{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}}`, string(payload))
+	require.JSONEq(t, `{"createdAt":"`+created.CreatedAt.Format(time.RFC3339Nano)+`","id":"`+created.ID.String()+`","key":"`+created.Key+`","mask":{"maskedValuePrefix":"","maskedValueSuffix":"","prefix":"","valueLength":0},"name":"limited","createdBy":{"email":"","id":"`+user.ID.String()+`"},"team":{"id":"`+userTeam.ID.String()+`","name":"team-a"},"lastUsed":null,"quota":{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}}`, string(payload))
 	require.NotContains(t, string(payload), `"limits"`)
 
 	byKey, ok := st.LoadByKey(context.Background(), created.Key)

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 
+	quota "github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
@@ -31,7 +32,7 @@ var (
 type CreateKeyOptions struct {
 	Name     string
 	TeamName string
-	Quota    *models.QuotaSpec
+	Quota    *quota.QuotaSpec
 }
 
 // KeyStorage abstracts API key persistence. Implementations must be safe for concurrent use.

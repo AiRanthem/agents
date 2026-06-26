@@ -662,7 +662,7 @@ func TestSecretKeyStorage_QuotaPersistenceAndLimitedList(t *testing.T) {
 	createdQuotaSpec, err := models.QuotaSpecFromWire(created.Quota)
 	require.NoError(t, err)
 	require.Equal(t, quotaSpecWithMultipleLimits(), createdQuotaSpec)
-	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(created.Quota))
+	assert.JSONEq(t, `{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}`, string(created.Quota))
 
 	require.NoError(t, storage.refresh(context.Background(), storage.APIReader))
 	stored, ok := storage.LoadByID(context.Background(), created.ID.String())
@@ -727,7 +727,7 @@ func TestSecretKeyStorage_ListByOwnerTeamIncludesQuota(t *testing.T) {
 	spec, err := models.QuotaSpecFromWire(target.Quota)
 	require.NoError(t, err)
 	require.Equal(t, quotaSpecWithMultipleLimits(), spec)
-	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(target.Quota))
+	assert.JSONEq(t, `{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}`, string(target.Quota))
 }
 
 func TestSecretKeyStorage_InvalidQuotaPayloadLoadsAsUnlimited(t *testing.T) {

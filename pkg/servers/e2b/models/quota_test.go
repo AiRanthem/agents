@@ -131,8 +131,8 @@ func TestQuotaSpecWireRoundTrip(t *testing.T) {
 		expectError string
 	}{
 		{
-			name: "running and all limits round trip",
-			raw:  json.RawMessage(`{"running":{"count":10,"cpu":8000,"memory":16384},"all":{"count":50}}`),
+			name: "full keys running and all round trip",
+			raw:  json.RawMessage(`{"running":{"limits.cpu":8000,"limits.memory":16384,"sandbox.count":10},"all":{"sandbox.count":50}}`),
 			want: &QuotaSpec{Limits: []QuotaLimit{
 				{Dimension: DimSandboxCount, Scope: ScopeRunning, Limit: 10},
 				{Dimension: DimLimitsCPU, Scope: ScopeRunning, Limit: 8000},
@@ -140,17 +140,39 @@ func TestQuotaSpecWireRoundTrip(t *testing.T) {
 				{Dimension: DimSandboxCount, Scope: ScopeAll, Limit: 50},
 			}},
 		},
+		{
+			name: "full key sandbox.count running",
+			raw:  json.RawMessage(`{"running":{"sandbox.count":2}}`),
+			want: &QuotaSpec{Limits: []QuotaLimit{
+				{Dimension: DimSandboxCount, Scope: ScopeRunning, Limit: 2},
+			}},
+		},
 		{name: "null is unlimited", raw: json.RawMessage(`null`)},
 		{name: "empty object is unlimited", raw: json.RawMessage(`{}`)},
 		{
 			name:        "unknown scope rejected",
-			raw:         json.RawMessage(`{"template:x":{"count":1}}`),
+			raw:         json.RawMessage(`{"template:x":{"sandbox.count":1}}`),
 			expectError: "unsupported quota scope",
 		},
 		{
 			name:        "unknown dimension rejected",
 			raw:         json.RawMessage(`{"running":{"gpu":1}}`),
 			expectError: "unsupported quota dimension",
+		},
+		{
+			name:        "short key count rejected",
+			raw:         json.RawMessage(`{"running":{"count":1}}`),
+			expectError: "use full key",
+		},
+		{
+			name:        "short key cpu rejected",
+			raw:         json.RawMessage(`{"running":{"cpu":8000}}`),
+			expectError: "use full key",
+		},
+		{
+			name:        "short key memory rejected",
+			raw:         json.RawMessage(`{"running":{"memory":16384}}`),
+			expectError: "use full key",
 		},
 	}
 
@@ -176,9 +198,25 @@ func TestQuotaSpecWireRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWireFromQuotaSpecEmitsFullKeys(t *testing.T) {
+	spec := &QuotaSpec{Limits: []QuotaLimit{
+		{Dimension: DimSandboxCount, Scope: ScopeRunning, Limit: 2},
+		{Dimension: DimLimitsCPU, Scope: ScopeRunning, Limit: 8000},
+		{Dimension: DimLimitsMemory, Scope: ScopeRunning, Limit: 16384},
+		{Dimension: DimSandboxCount, Scope: ScopeAll, Limit: 50},
+	}}
+	raw := WireFromQuotaSpec(spec)
+	assert.JSONEq(t,
+		`{"running":{"limits.cpu":8000,"limits.memory":16384,"sandbox.count":2},"all":{"sandbox.count":50}}`,
+		string(raw))
+	assert.NotContains(t, string(raw), `"count"`)
+	assert.NotContains(t, string(raw), `"cpu"`)
+	assert.NotContains(t, string(raw), `"memory"`)
+}
+
 func TestMarshalCreatedTeamAPIKeyQuotaKeepsExistingRawMessage(t *testing.T) {
 	key := CreatedTeamAPIKey{
-		Quota: json.RawMessage(`{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`),
+		Quota: json.RawMessage(`{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}`),
 		QuotaSpec: &QuotaSpec{Limits: []QuotaLimit{{
 			Dimension: QuotaDimension("limits.gpu"),
 			Scope:     ScopeRunning,
@@ -191,6 +229,6 @@ func TestMarshalCreatedTeamAPIKeyQuotaKeepsExistingRawMessage(t *testing.T) {
 	var payload map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(raw, &payload))
 	require.Contains(t, payload, "quota")
-	assert.JSONEq(t, `{"running":{"cpu":8000,"memory":16384},"all":{"count":50}}`, string(payload["quota"]))
+	assert.JSONEq(t, `{"running":{"limits.cpu":8000,"limits.memory":16384},"all":{"sandbox.count":50}}`, string(payload["quota"]))
 	assert.NotContains(t, string(raw), `"limits"`)
 }

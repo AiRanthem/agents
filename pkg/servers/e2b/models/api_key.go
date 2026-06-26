@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	quota "github.com/openkruise/agents/pkg/sandbox-manager/quota"
 )
 
 const AdminTeamName = "admin"
@@ -66,7 +68,7 @@ type CreatedTeamAPIKey struct {
 	Team      *Team                    `json:"team,omitempty"`
 	LastUsed  *time.Time               `json:"lastUsed"`
 	Quota     json.RawMessage          `json:"quota,omitempty"`
-	QuotaSpec *QuotaSpec               `json:"-"`
+	QuotaSpec *quota.QuotaSpec         `json:"-"`
 }
 
 // TeamAPIKey represents a team API key
@@ -82,10 +84,10 @@ type TeamAPIKey struct {
 
 // NewTeamAPIKey represents a request to create a new team API key
 type NewTeamAPIKey struct {
-	Name      string          `json:"name"`
-	TeamName  string          `json:"teamName,omitempty"`
-	Quota     json.RawMessage `json:"quota,omitempty"`
-	QuotaSpec *QuotaSpec      `json:"-"`
+	Name      string           `json:"name"`
+	TeamName  string           `json:"teamName,omitempty"`
+	Quota     json.RawMessage  `json:"quota,omitempty"`
+	QuotaSpec *quota.QuotaSpec `json:"-"`
 }
 
 // CompatibleAPIKey represents the SDK-compatible form of an authenticated API key.

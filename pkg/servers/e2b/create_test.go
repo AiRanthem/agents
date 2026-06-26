@@ -43,10 +43,9 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
-	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 	"github.com/openkruise/agents/pkg/servers/web"
 )
 
@@ -83,9 +82,9 @@ func (f *fakeQuotaManager) Release(ctx context.Context, req quota.ReleaseRequest
 	return f.releaseErr
 }
 
-func (f *fakeQuotaManager) Cleanup(_ context.Context, apiKeyID string) error {
+func (f *fakeQuotaManager) Cleanup(_ context.Context, user string) error {
 	f.mu.Lock()
-	f.lastCleanup = apiKeyID
+	f.lastCleanup = user
 	f.mu.Unlock()
 	f.cleanupCalls.Add(1)
 	return nil
@@ -736,54 +735,6 @@ func TestMapInfraErrorToApiError(t *testing.T) {
 		})
 	}
 }
-
-func TestQuotaFootprintFromResourceUsesLimits(t *testing.T) {
-	tests := []struct {
-		name string
-		in   infra.SandboxResource
-		want map[models.QuotaDimension]int64
-	}{
-		{
-			name: "uses limits not requests",
-			in: infra.SandboxResource{
-				Requests: infra.ResourceList{CPUMilli: 500, MemoryMB: 512},
-				Limits:   infra.ResourceList{CPUMilli: 1500, MemoryMB: 1537},
-			},
-			want: map[models.QuotaDimension]int64{
-				models.DimLimitsCPU:    1500,
-				models.DimLimitsMemory: 1537,
-			},
-		},
-		{
-			name: "missing limits produce zeros",
-			in:   infra.SandboxResource{},
-			want: map[models.QuotaDimension]int64{
-				models.DimLimitsCPU:    0,
-				models.DimLimitsMemory: 0,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, quotaFootprintFromResource(tt.in))
-		})
-	}
-}
-
-func TestQuotaFootprintFromCalculatedResourceRoundsLimitMemoryUp(t *testing.T) {
-	res := infra.CalculateResourceFromContainers([]corev1.Container{{
-		Resources: corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: *resource.NewQuantity(1024*1024+1, resource.BinarySI),
-			},
-		},
-	}})
-
-	got := quotaFootprintFromResource(res)
-	assert.Equal(t, int64(2), got[models.DimLimitsMemory])
-}
-
 func TestCreateSandbox_TopLevelMissingTemplateOrCheckpointReturns400(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
