@@ -683,7 +683,7 @@ func TestDeleteAPIKeyQuotaCleanupRetriesBestEffort(t *testing.T) {
 	refreshKeyStorageForTest(t, controller)
 
 	fakeQuota := newRetryCleanupQuotaManager(1)
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 
 	req := NewRequest(t, nil, nil, map[string]string{"apiKeyID": target.ID.String()}, adminUser)
 	req = req.WithContext(context.WithValue(req.Context(), targetAPIKeyContextKey, target))
@@ -718,7 +718,7 @@ func TestDeleteAPIKeyUnlimitedSkipsQuotaCleanup(t *testing.T) {
 	refreshKeyStorageForTest(t, controller)
 
 	fakeQuota := newRetryCleanupQuotaManager(0)
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 
 	req := NewRequest(t, nil, nil, map[string]string{"apiKeyID": target.ID.String()}, adminUser)
 	req = req.WithContext(context.WithValue(req.Context(), targetAPIKeyContextKey, target))

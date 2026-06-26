@@ -37,15 +37,15 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
+	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
-	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 )
 
 type quotaManager interface {
 	Acquire(ctx context.Context, req quota.AcquireRequest) error
 	Release(ctx context.Context, req quota.ReleaseRequest) error
-	Cleanup(ctx context.Context, apiKeyID string) error
+	Cleanup(ctx context.Context, user string) error
 }
 
 type redisClientCloser interface {
@@ -83,6 +83,16 @@ type Controller struct {
 	quota            quotaManager
 	quotaAntiDrift   *quota.AntiDriftDriver
 	quotaRedisClient redisClientCloser
+}
+
+// setQuota wires a quota manager into both the E2B controller and the sandbox-manager.
+// Use this instead of assigning sc.quota directly so that the sandbox-manager
+// enforces admission and releases quota on delete.
+func (sc *Controller) setQuota(qm quotaManager) {
+	sc.quota = qm
+	if sc.manager != nil {
+		sc.manager.SetQuotaEnforcer(qm)
+	}
 }
 
 // NewController creates a new E2B Controller
@@ -206,7 +216,7 @@ func (sc *Controller) initQuota(ctx context.Context) error {
 	driver := quota.NewAntiDriftDriver(quota.AntiDriftConfig{
 		Interval: sc.quotaCfg.AntiDriftInterval,
 		Grace:    sc.quotaCfg.AntiDriftGrace,
-	}, sc.manager, sc.keys, sc.cache, redisBackend)
+	}, sc.manager, keys.NewQuotaSubjectLister(sc.keys), sc.cache, redisBackend)
 	registration, err := sc.cache.AddSandboxEventHandler(ctx, driver.SandboxEventHandler())
 	if err != nil {
 		if closeErr := redisClient.Close(); closeErr != nil {
@@ -215,7 +225,7 @@ func (sc *Controller) initQuota(ctx context.Context) error {
 		return err
 	}
 	driver.SetEventRegistration(registration)
-	sc.quota = quota.NewManager(hotBackend)
+	sc.setQuota(quota.NewManager(hotBackend))
 	sc.quotaAntiDrift = driver
 	sc.quotaRedisClient = redisClient
 	log.Info("api-key quota Redis configured; Redis transport errors fail open", "addr", sc.quotaCfg.RedisAddr)

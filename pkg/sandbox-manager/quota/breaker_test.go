@@ -34,22 +34,22 @@ func TestBreaker(t *testing.T) {
 
 		ctx := context.Background()
 		for i := 0; i < 3; i++ {
-			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l"}), ErrBackendUnavailable)
+			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l"}), ErrBackendUnavailable)
 		}
 		require.Equal(t, 3, backend.acquireCalls)
 
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l2"}), ErrBackendUnavailable)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l2"}), ErrBackendUnavailable)
 		require.Equal(t, 3, backend.acquireCalls, "open breaker must not touch inner")
 
 		clk.t = clk.t.Add(31 * time.Second)
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l3"}), ErrBackendUnavailable)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l3"}), ErrBackendUnavailable)
 		require.Equal(t, 4, backend.acquireCalls)
 
 		backend.acquireErr = nil
 		clk.t = clk.t.Add(31 * time.Second)
-		require.NoError(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l4"}))
+		require.NoError(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l4"}))
 		require.Equal(t, 5, backend.acquireCalls)
-		require.NoError(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l5"}))
+		require.NoError(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l5"}))
 		require.Equal(t, 6, backend.acquireCalls)
 	})
 
@@ -61,11 +61,11 @@ func TestBreaker(t *testing.T) {
 
 		ctx := context.Background()
 		for i := 0; i < 4; i++ {
-			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l"}), ErrQuotaExceeded)
+			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l"}), ErrQuotaExceeded)
 		}
 		require.Equal(t, 4, backend.acquireCalls)
 		clk.t = clk.t.Add(time.Hour)
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l2"}), ErrQuotaExceeded)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l2"}), ErrQuotaExceeded)
 		require.Equal(t, 5, backend.acquireCalls)
 	})
 
@@ -77,14 +77,14 @@ func TestBreaker(t *testing.T) {
 
 		ctx := context.Background()
 		for i := 0; i < 3; i++ {
-			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l"}), ErrBackendUnavailable)
+			require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l"}), ErrBackendUnavailable)
 		}
 		require.Equal(t, 3, backend.acquireCalls)
 
 		clk.t = clk.t.Add(31 * time.Second)
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "probe"}), ErrBackendUnavailable)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "probe"}), ErrBackendUnavailable)
 		require.Equal(t, 4, backend.acquireCalls)
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "blocked"}), ErrBackendUnavailable)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "blocked"}), ErrBackendUnavailable)
 		require.Equal(t, 4, backend.acquireCalls, "failed probe must reopen breaker without touching inner")
 	})
 
@@ -107,7 +107,7 @@ func TestBreaker(t *testing.T) {
 		b.now = clk.now
 
 		ctx := context.Background()
-		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l0"}), ErrBackendUnavailable)
+		require.ErrorIs(t, b.Acquire(ctx, AcquireParams{User: "K", LockString: "l0"}), ErrBackendUnavailable)
 		require.Equal(t, 1, backend.acquireCalls)
 
 		require.ErrorIs(t, b.Release(ctx, "K", "l1"), ErrBackendUnavailable)
@@ -132,30 +132,30 @@ func TestBreakerAcquireAfterInnerPanicDoesNotStayHalfOpen(t *testing.T) {
 	b := NewBreakerBackend(backend, 1, 30*time.Second)
 	b.now = clk.now
 
-	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l0"}), ErrBackendUnavailable)
+	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l0"}), ErrBackendUnavailable)
 
 	backend.acquireErr = nil
 	backend.panicAcquire = true
 	clk.t = clk.t.Add(31 * time.Second)
 	require.Panics(t, func() {
-		_ = b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l1"})
+		_ = b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l1"})
 	})
 
 	backend.panicAcquire = false
 	clk.t = clk.t.Add(31 * time.Second)
-	require.NoError(t, b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l2"}))
+	require.NoError(t, b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l2"}))
 }
 
 func TestBreakerMaintenanceSuccessDoesNotResetAcquireFailures(t *testing.T) {
 	backend := &breakerTestBackend{acquireErr: errors.New("dial tcp")}
 	b := NewBreakerBackend(backend, 2, 30*time.Second)
 
-	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l1"}), ErrBackendUnavailable)
+	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l1"}), ErrBackendUnavailable)
 	_, err := b.ListEntries(context.Background(), "K")
 	require.NoError(t, err)
-	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l2"}), ErrBackendUnavailable)
+	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l2"}), ErrBackendUnavailable)
 	require.Equal(t, 2, backend.acquireCalls)
-	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{APIKeyID: "K", LockString: "l3"}), ErrBackendUnavailable)
+	require.ErrorIs(t, b.Acquire(context.Background(), AcquireParams{User: "K", LockString: "l3"}), ErrBackendUnavailable)
 	require.Equal(t, 2, backend.acquireCalls, "open acquire breaker must not touch inner")
 }
 

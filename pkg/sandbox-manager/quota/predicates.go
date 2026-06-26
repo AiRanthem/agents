@@ -18,11 +18,9 @@ package quota
 
 import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox/lifecycle"
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
-
-const bytesPerMiB = int64(1024 * 1024)
 
 func IsLiveForQuota(sbx *agentsv1alpha1.Sandbox) bool {
 	return lifecycle.IsNotTerminating(sbx)
@@ -35,28 +33,24 @@ func InRunningScope(sbx *agentsv1alpha1.Sandbox) bool {
 	return lifecycle.IsNotTerminating(sbx) && !sbx.Spec.Paused
 }
 
-func ConditionalScopesOf(sbx *agentsv1alpha1.Sandbox) []models.QuotaScope {
+func ConditionalScopesOf(sbx *agentsv1alpha1.Sandbox) []QuotaScope {
 	if !InRunningScope(sbx) {
-		return []models.QuotaScope{}
+		return []QuotaScope{}
 	}
-	return []models.QuotaScope{models.ScopeRunning}
+	return []QuotaScope{ScopeRunning}
 }
 
-func FootprintOf(sbx *agentsv1alpha1.Sandbox) map[models.QuotaDimension]int64 {
-	footprint := map[models.QuotaDimension]int64{
-		models.DimLimitsCPU:    0,
-		models.DimLimitsMemory: 0,
+// FootprintFromResource converts an infra SandboxResource to a quota footprint.
+func FootprintFromResource(resource infra.SandboxResource) map[QuotaDimension]int64 {
+	return map[QuotaDimension]int64{
+		DimLimitsCPU:    resource.Limits.CPUMilli,
+		DimLimitsMemory: resource.Limits.MemoryMB,
 	}
-	if sbx == nil || sbx.Spec.Template == nil {
-		return footprint
-	}
+}
 
-	for _, container := range sbx.Spec.Template.Spec.Containers {
-		footprint[models.DimLimitsCPU] += container.Resources.Limits.Cpu().MilliValue()
-		memoryBytes := container.Resources.Limits.Memory().Value()
-		if memoryBytes > 0 {
-			footprint[models.DimLimitsMemory] += (memoryBytes + bytesPerMiB - 1) / bytesPerMiB
-		}
+func FootprintOf(sbx *agentsv1alpha1.Sandbox) map[QuotaDimension]int64 {
+	if sbx == nil || sbx.Spec.Template == nil {
+		return FootprintFromResource(infra.SandboxResource{})
 	}
-	return footprint
+	return FootprintFromResource(infra.CalculateResourceFromContainers(sbx.Spec.Template.Spec.Containers))
 }

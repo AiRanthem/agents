@@ -32,7 +32,15 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 )
+
+// quotaEnforcer is the minimal surface sandbox-manager needs for admission and delete release.
+// Use an interface so api_test can inject fakes before InitQuota wires a real *quota.Manager.
+type quotaEnforcer interface {
+	Acquire(ctx context.Context, req quota.AcquireRequest) error
+	Release(ctx context.Context, req quota.ReleaseRequest) error
+}
 
 type GetInfraBuilderFunc func() (infra.Builder, error)
 
@@ -162,6 +170,17 @@ type SandboxManager struct {
 
 	primary *primaryState
 	elector *primaryElector
+
+	quota quotaEnforcer // nil until InitQuota (Task 5) or test injection
+}
+
+// SetQuotaEnforcer wires a quota enforcer into the manager.
+// Pass nil to clear the enforcer (e.g. in tests).
+func (m *SandboxManager) SetQuotaEnforcer(qe quotaEnforcer) {
+	if m == nil {
+		return
+	}
+	m.quota = qe
 }
 
 func (m *SandboxManager) Run(ctx context.Context) error {

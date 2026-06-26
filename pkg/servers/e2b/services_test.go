@@ -44,7 +44,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	"github.com/openkruise/agents/pkg/servers/e2b/quota"
+	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"github.com/openkruise/agents/pkg/utils/proxyutils"
 	"github.com/openkruise/agents/pkg/utils/runtime"
@@ -609,7 +609,7 @@ func TestCreateSandbox_QuotaExceededReturns403WithoutRetry(t *testing.T) {
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "tmpl",
@@ -646,7 +646,7 @@ func TestCreateSandbox_QuotaExceededLeavesPooledSandboxClaimable(t *testing.T) {
 		}}},
 	}
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "tmpl",
@@ -704,7 +704,7 @@ func TestCreateSandbox_CloneQuotaExceededReturns403WithoutRetry(t *testing.T) {
 	defer cleanup()
 
 	fakeQuota := &fakeQuotaManager{acquireErr: quota.ErrQuotaExceeded}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 
 	resp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
 		TemplateID: "checkpoint-1",
@@ -726,7 +726,7 @@ func TestCreateSandbox_UnlimitedKeyDoesNotCallQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  uuid.NewString(),
@@ -734,8 +734,10 @@ func TestCreateSandbox_UnlimitedKeyDoesNotCallQuota(t *testing.T) {
 		Team: models.AdminTeam(),
 	}
 
-	admission := controller.quotaAdmission(user)
-	assert.Nil(t, admission)
+	// Unlimited user (no QuotaSpec) must produce nil admission in the manager
+	// and generate zero quota acquire calls.
+	assert.Nil(t, user.QuotaSpec, "user must not have a QuotaSpec")
+	assert.NotNil(t, controller.manager.GetInfra(), "manager infra must be wired")
 	assert.Equal(t, int64(0), fakeQuota.acquireCalls.Load())
 }
 
@@ -1742,7 +1744,7 @@ func TestDeleteSandbox_ReleasesQuotaAfterAcceptedDelete(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()
 
-	controller.quota = &fakeQuotaManager{}
+	controller.setQuota(&fakeQuotaManager{})
 	user := &models.CreatedTeamAPIKey{
 		ID:        uuid.New(),
 		Key:       InitKey,
@@ -1772,7 +1774,7 @@ func TestDeleteSandbox_ReleasesQuotaAfterAcceptedDelete(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, deleteResp.Code)
 	assert.Equal(t, int64(1), fakeQuota.releaseCalls.Load())
 	assert.True(t, fakeQuota.releaseHasDeadline.Load())
-	assert.Equal(t, user.ID.String(), fakeQuota.lastRelease.APIKeyID)
+	assert.Equal(t, user.ID.String(), fakeQuota.lastRelease.User)
 	assert.NotEmpty(t, fakeQuota.lastRelease.LockString)
 }
 
@@ -1781,7 +1783,7 @@ func TestDeleteSandbox_UnlimitedKeyDoesNotReleaseQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  InitKey,
@@ -1845,8 +1847,8 @@ func assertShortQuotaRequestReleaseDeadline(t *testing.T, ctx context.Context) {
 	require.True(t, ok, "release should use a bounded context")
 	remaining := time.Until(deadline)
 	require.Greater(t, remaining, time.Duration(0), "release deadline should not already be expired")
-	require.LessOrEqual(t, remaining, quotaReleaseTimeout+50*time.Millisecond)
-	assert.Less(t, quotaReleaseTimeout, time.Second)
+	require.LessOrEqual(t, remaining, infra.SandboxAdmissionReleaseTimeout+50*time.Millisecond)
+	assert.Less(t, infra.SandboxAdmissionReleaseTimeout, time.Second)
 }
 
 func TestDeleteSandbox_ReleaseErrorsStillReturnAcceptedDelete(t *testing.T) {
@@ -1881,7 +1883,7 @@ func TestDeleteSandbox_ReleaseErrorsStillReturnAcceptedDelete(t *testing.T) {
 					return tt.release(t, ctx, req)
 				},
 			}
-			controller.quota = fakeQuota
+			controller.setQuota(fakeQuota)
 			user := &models.CreatedTeamAPIKey{
 				ID:        uuid.New(),
 				Key:       InitKey,
@@ -1910,7 +1912,7 @@ func TestDeleteSandbox_ReleaseErrorsStillReturnAcceptedDelete(t *testing.T) {
 			assert.Equal(t, http.StatusNoContent, deleteResp.Code)
 			assert.Equal(t, int64(1), fakeQuota.releaseCalls.Load())
 			assert.True(t, fakeQuota.releaseHasDeadline.Load())
-			assert.Equal(t, user.ID.String(), fakeQuota.lastRelease.APIKeyID)
+			assert.Equal(t, user.ID.String(), fakeQuota.lastRelease.User)
 			assert.NotEmpty(t, fakeQuota.lastRelease.LockString)
 		})
 	}
@@ -1954,7 +1956,7 @@ func TestDeleteSandbox_MissingSandboxOrLookupFailureDoesNotReleaseQuota(t *testi
 			defer teardown()
 
 			fakeQuota := &fakeQuotaManager{}
-			controller.quota = fakeQuota
+			controller.setQuota(fakeQuota)
 			cleanup := CreateSandboxPool(t, controller, "test-template", 1)
 			defer cleanup()
 
@@ -1972,7 +1974,7 @@ func TestDeleteSandbox_DeleteFailureDoesNotReleaseQuota(t *testing.T) {
 	defer teardown()
 
 	fakeQuota := &fakeQuotaManager{}
-	controller.quota = fakeQuota
+	controller.setQuota(fakeQuota)
 	user := &models.CreatedTeamAPIKey{
 		ID:   uuid.New(),
 		Key:  InitKey,

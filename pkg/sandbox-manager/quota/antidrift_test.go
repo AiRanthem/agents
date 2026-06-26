@@ -34,7 +34,6 @@ import (
 	toolscache "k8s.io/client-go/tools/cache"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 type mutablePrimary struct {
@@ -55,29 +54,29 @@ func (p *mutablePrimary) SetPrimary(primary bool) {
 	p.primary.Store(primary)
 }
 
-type fakeKeyStore struct {
-	limited  []*models.CreatedTeamAPIKey
-	byID     map[string]*models.CreatedTeamAPIKey
+type fakeSubjectLister struct {
+	subjects []Subject
+	byUser   map[string]Subject
 	err      error
-	loadByID func(string)
+	load     func(string)
 }
 
-func (s *fakeKeyStore) ListLimited(context.Context) ([]*models.CreatedTeamAPIKey, error) {
+func (s *fakeSubjectLister) ListLimited(context.Context) ([]Subject, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return s.limited, nil
+	return s.subjects, nil
 }
 
-func (s *fakeKeyStore) LoadByID(_ context.Context, id string) (*models.CreatedTeamAPIKey, bool) {
-	if s.loadByID != nil {
-		s.loadByID(id)
+func (s *fakeSubjectLister) Load(_ context.Context, user string) (Subject, bool) {
+	if s.load != nil {
+		s.load(user)
 	}
-	if s.byID == nil {
-		return nil, false
+	if s.byUser == nil {
+		return Subject{}, false
 	}
-	key, ok := s.byID[id]
-	return key, ok
+	subject, ok := s.byUser[user]
+	return subject, ok
 }
 
 type fakeLiveSandboxCache struct {
@@ -102,7 +101,7 @@ type acquireCall struct {
 }
 
 type releaseCall struct {
-	apiKeyID   string
+	user       string
 	lockString string
 }
 
@@ -133,7 +132,7 @@ func (b *fakeBackend) Acquire(ctx context.Context, p AcquireParams) error {
 	return nil
 }
 
-func (b *fakeBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
+func (b *fakeBackend) Release(ctx context.Context, user, lockString string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -142,23 +141,23 @@ func (b *fakeBackend) Release(ctx context.Context, apiKeyID, lockString string) 
 	if err := b.releaseErrByLock[lockString]; err != nil {
 		return err
 	}
-	b.releaseCalls = append(b.releaseCalls, releaseCall{apiKeyID: apiKeyID, lockString: lockString})
+	b.releaseCalls = append(b.releaseCalls, releaseCall{user: user, lockString: lockString})
 	return nil
 }
 
-func (b *fakeBackend) ListEntries(_ context.Context, apiKeyID string) (map[string]Entry, error) {
+func (b *fakeBackend) ListEntries(_ context.Context, user string) (map[string]Entry, error) {
 	b.listEntriesCalls.Add(1)
-	if err := b.listEntriesErrByKey[apiKeyID]; err != nil {
+	if err := b.listEntriesErrByKey[user]; err != nil {
 		return nil, err
 	}
-	if b.entriesByKey == nil || b.entriesByKey[apiKeyID] == nil {
+	if b.entriesByKey == nil || b.entriesByKey[user] == nil {
 		if b.afterListEntries != nil {
 			b.afterListEntries()
 		}
 		return map[string]Entry{}, nil
 	}
-	got := make(map[string]Entry, len(b.entriesByKey[apiKeyID]))
-	for lockString, entry := range b.entriesByKey[apiKeyID] {
+	got := make(map[string]Entry, len(b.entriesByKey[user]))
+	for lockString, entry := range b.entriesByKey[user] {
 		got[lockString] = entry
 	}
 	if b.afterListEntries != nil {
@@ -187,7 +186,7 @@ func (r *stubRegistration) Remove() error {
 func TestAntiDriftDiff(t *testing.T) {
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-1")).String()
-	key := limitedKey(owner)
+	subject := limitedSubject(owner)
 
 	tests := []struct {
 		name         string
@@ -241,7 +240,7 @@ func TestAntiDriftDiff(t *testing.T) {
 		{
 			name:        "fresh CR with stale entry corrected immediately",
 			liveCRs:     []*agentsv1alpha1.Sandbox{runningSandbox(now, owner, "l3", time.Minute, 250, 128, false)},
-			haveEntries: map[string]Entry{"l3": {Scopes: []models.QuotaScope{}}},
+			haveEntries: map[string]Entry{"l3": {Scopes: []QuotaScope{}}},
 			healthy:     true,
 			wantCharged: []string{"l3"},
 		},
@@ -257,7 +256,7 @@ func TestAntiDriftDiff(t *testing.T) {
 			driver := NewAntiDriftDriver(
 				AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 				newMutablePrimary(true),
-				&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{key}},
+				&fakeSubjectLister{subjects: []Subject{subject}},
 				liveCache,
 				backend,
 			)
@@ -321,14 +320,14 @@ func TestAntiDriftEventReconcile(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &fakeBackend{}
-			limited := make([]*models.CreatedTeamAPIKey, 0, len(tt.limitedOwners))
+			subjects := make([]Subject, 0, len(tt.limitedOwners))
 			for _, limitedOwner := range tt.limitedOwners {
-				limited = append(limited, limitedKey(limitedOwner))
+				subjects = append(subjects, limitedSubject(limitedOwner))
 			}
 			driver := NewAntiDriftDriver(
 				AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 				newMutablePrimary(true),
-				&fakeKeyStore{limited: limited},
+				&fakeSubjectLister{subjects: subjects},
 				&fakeLiveSandboxCache{
 					healthy:     tt.healthy,
 					liveByOwner: map[string][]*agentsv1alpha1.Sandbox{},
@@ -345,7 +344,7 @@ func TestAntiDriftEventReconcile(t *testing.T) {
 			if len(tt.wantCharged) == 1 {
 				require.Len(t, backend.acquireCalls, 1)
 				got := backend.acquireCalls[0].params
-				assert.Equal(t, owner, got.APIKeyID)
+				assert.Equal(t, owner, got.User)
 				assert.Equal(t, "lock-live", got.LockString)
 				assert.Equal(t, FootprintOf(tt.sbx), got.Footprint)
 				assert.Equal(t, ConditionalScopesOf(tt.sbx), got.Scopes)
@@ -358,7 +357,7 @@ func TestAntiDriftEventReconcile(t *testing.T) {
 func TestAntiDriftAcquiresMissingLiveEntryWithoutGrace(t *testing.T) {
 	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	owner := uuid.NewString()
-	key := limitedKey(owner)
+	subject := limitedSubject(owner)
 	sb := runningSandbox(now, owner, "lock-1", time.Minute, 1000, 512, false)
 	cache := &fakeLiveSandboxCache{
 		liveByOwner: map[string][]*agentsv1alpha1.Sandbox{owner: {sb}},
@@ -368,7 +367,7 @@ func TestAntiDriftAcquiresMissingLiveEntryWithoutGrace(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{key}},
+		&fakeSubjectLister{subjects: []Subject{subject}},
 		cache,
 		backend,
 	)
@@ -383,9 +382,9 @@ func TestAntiDriftStopsCycleWhenPrimaryLost(t *testing.T) {
 	owner1 := uuid.NewString()
 	owner2 := uuid.NewString()
 	primary := newMutablePrimary(true)
-	keys := &fakeKeyStore{limited: []*models.CreatedTeamAPIKey{
-		limitedKey(owner1),
-		limitedKey(owner2),
+	subjects := &fakeSubjectLister{subjects: []Subject{
+		limitedSubject(owner1),
+		limitedSubject(owner2),
 	}}
 	cache := &fakeLiveSandboxCache{
 		liveByOwner: map[string][]*agentsv1alpha1.Sandbox{
@@ -395,10 +394,8 @@ func TestAntiDriftStopsCycleWhenPrimaryLost(t *testing.T) {
 		healthy: true,
 	}
 	backend := &fakeBackend{entriesByKey: map[string]map[string]Entry{owner1: {}, owner2: {}}}
-	// Lose leadership right after the first ListEntries; the re-check before
-	// Acquire must abort the cycle before any Redis write.
 	backend.afterListEntries = func() { primary.SetPrimary(false) }
-	driver := NewAntiDriftDriver(AntiDriftConfig{Grace: time.Minute}, primary, keys, cache, backend)
+	driver := NewAntiDriftDriver(AntiDriftConfig{Grace: time.Minute}, primary, subjects, cache, backend)
 
 	require.NoError(t, driver.RunOnce(context.Background()))
 	require.Empty(t, backend.acquireLockstrings())
@@ -406,13 +403,14 @@ func TestAntiDriftStopsCycleWhenPrimaryLost(t *testing.T) {
 
 func TestAntiDriftEventReconcileLooksUpUnknownLimitedOwner(t *testing.T) {
 	now := time.Now()
-	key := limitedKey(uuid.NewString())
-	sb := runningSandbox(now, key.ID.String(), "lock-1", time.Hour, 1000, 512, false)
+	owner := uuid.NewString()
+	subject := limitedSubject(owner)
+	sb := runningSandbox(now, owner, "lock-1", time.Hour, 1000, 512, false)
 	backend := &fakeBackend{}
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{byID: map[string]*models.CreatedTeamAPIKey{key.ID.String(): key}},
+		&fakeSubjectLister{byUser: map[string]Subject{owner: subject}},
 		&fakeLiveSandboxCache{healthy: true},
 		backend,
 	)
@@ -421,7 +419,7 @@ func TestAntiDriftEventReconcileLooksUpUnknownLimitedOwner(t *testing.T) {
 
 	calls := backend.acquireCallsSnapshot()
 	require.Len(t, calls, 1)
-	assert.Equal(t, key.ID.String(), calls[0].params.APIKeyID)
+	assert.Equal(t, owner, calls[0].params.User)
 	assert.Equal(t, "lock-1", calls[0].params.LockString)
 }
 
@@ -461,13 +459,13 @@ func TestAntiDriftEventReconcileSkipsWriteWhenPrimaryLostBeforeWrite(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			owner := tt.sbx.GetAnnotations()[agentsv1alpha1.AnnotationOwner]
-			key := limitedKey(owner)
+			subject := limitedSubject(owner)
 			primary := newMutablePrimary(true)
-			keyStore := &fakeKeyStore{
-				byID: map[string]*models.CreatedTeamAPIKey{
-					owner: key,
+			subjectLister := &fakeSubjectLister{
+				byUser: map[string]Subject{
+					owner: subject,
 				},
-				loadByID: func(string) {
+				load: func(string) {
 					primary.SetPrimary(false)
 				},
 			}
@@ -475,7 +473,7 @@ func TestAntiDriftEventReconcileSkipsWriteWhenPrimaryLostBeforeWrite(t *testing.
 			driver := NewAntiDriftDriver(
 				AntiDriftConfig{Interval: time.Hour, Grace: time.Minute},
 				primary,
-				keyStore,
+				subjectLister,
 				tt.cache,
 				backend,
 			)
@@ -495,8 +493,9 @@ func TestAntiDriftEventReconcileSkipsWriteWhenPrimaryLostBeforeWrite(t *testing.
 
 func TestAntiDriftDriver_DeleteEventReleasesTombstone(t *testing.T) {
 	now := time.Now()
-	key := limitedKey(uuid.NewString())
-	sb := runningSandbox(now, key.ID.String(), "lock-1", time.Hour, 1000, 512, false)
+	owner := uuid.NewString()
+	subject := limitedSubject(owner)
+	sb := runningSandbox(now, owner, "lock-1", time.Hour, 1000, 512, false)
 	tests := []struct {
 		name string
 		obj  any
@@ -517,13 +516,13 @@ func TestAntiDriftDriver_DeleteEventReleasesTombstone(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &fakeBackend{}
-			keys := &fakeKeyStore{
-				byID: map[string]*models.CreatedTeamAPIKey{
-					key.ID.String(): key,
+			subjects := &fakeSubjectLister{
+				byUser: map[string]Subject{
+					owner: subject,
 				},
 			}
 			cache := &fakeLiveSandboxCache{healthy: true}
-			driver := NewAntiDriftDriver(AntiDriftConfig{}, nil, keys, cache, backend)
+			driver := NewAntiDriftDriver(AntiDriftConfig{}, nil, subjects, cache, backend)
 
 			handler := driver.SandboxEventHandler()
 			handler.OnDelete(tt.obj)
@@ -541,7 +540,7 @@ func TestAntiDriftKeyStoreErrorSkipsCycle(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{err: errors.New("boom")},
+		&fakeSubjectLister{err: errors.New("boom")},
 		&fakeLiveSandboxCache{healthy: true},
 		backend,
 	)
@@ -552,15 +551,16 @@ func TestAntiDriftKeyStoreErrorSkipsCycle(t *testing.T) {
 }
 
 func TestAntiDriftUnhealthyReleasePassDoesNotConfirmLeakedEntry(t *testing.T) {
-	key := limitedKey(uuid.NewString())
+	owner := uuid.NewString()
+	subject := limitedSubject(owner)
 	backend := &fakeBackend{entriesByKey: map[string]map[string]Entry{
-		key.ID.String(): {"leaked-lock": {}},
+		owner: {"leaked-lock": {}},
 	}}
 	liveCache := &fakeLiveSandboxCache{healthy: false}
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{key}},
+		&fakeSubjectLister{subjects: []Subject{subject}},
 		liveCache,
 		backend,
 	)
@@ -579,14 +579,14 @@ func TestAntiDriftUnhealthyReleasePassDoesNotConfirmLeakedEntry(t *testing.T) {
 func TestAntiDriftKeyStoreErrorDoesNotCountAsPreviousPass(t *testing.T) {
 	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
 	owner := uuid.NewSHA1(uuid.Nil, []byte("owner-key-store-error")).String()
-	keyStore := &fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}}
+	subjectLister := &fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}}
 	backend := &fakeBackend{entriesByKey: map[string]map[string]Entry{
 		owner: {"lock-1": {}},
 	}}
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		keyStore,
+		subjectLister,
 		&fakeLiveSandboxCache{healthy: true},
 		backend,
 	)
@@ -597,10 +597,10 @@ func TestAntiDriftKeyStoreErrorDoesNotCountAsPreviousPass(t *testing.T) {
 	require.Len(t, driver.seenLeaked, 1)
 
 	currentNow = currentNow.Add(11 * time.Minute)
-	keyStore.err = errors.New("boom")
+	subjectLister.err = errors.New("boom")
 	require.NoError(t, driver.RunOnce(context.Background()))
 
-	keyStore.err = nil
+	subjectLister.err = nil
 	require.NoError(t, driver.RunOnce(context.Background()))
 	assert.Empty(t, backend.releaseLockstrings())
 }
@@ -616,7 +616,7 @@ func TestAntiDriftListEntriesErrorDoesNotCountAsPreviousPass(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		&fakeLiveSandboxCache{healthy: true},
 		backend,
 	)
@@ -646,7 +646,7 @@ func TestAntiDriftReleaseErrorDoesNotCountAsPreviousPass(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		&fakeLiveSandboxCache{healthy: true},
 		backend,
 	)
@@ -677,7 +677,7 @@ func TestAntiDriftAcquireErrorDoesNotResetUnrelatedLeakedConfirmation(t *testing
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		&fakeLiveSandboxCache{
 			healthy:     true,
 			liveByOwner: map[string][]*agentsv1alpha1.Sandbox{owner: {live}},
@@ -702,14 +702,14 @@ func TestEntriesEqualNormalizesLiveEntry(t *testing.T) {
 		{
 			name: "nil and empty scopes",
 			have: Entry{Scopes: nil},
-			want: Entry{Scopes: []models.QuotaScope{}},
+			want: Entry{Scopes: []QuotaScope{}},
 		},
 		{
 			name: "missing and explicit zero footprint dimensions",
-			have: Entry{Footprint: map[models.QuotaDimension]int64{models.DimLimitsCPU: 250}},
-			want: Entry{Footprint: map[models.QuotaDimension]int64{
-				models.DimLimitsCPU:    250,
-				models.DimLimitsMemory: 0,
+			have: Entry{Footprint: map[QuotaDimension]int64{DimLimitsCPU: 250}},
+			want: Entry{Footprint: map[QuotaDimension]int64{
+				DimLimitsCPU:    250,
+				DimLimitsMemory: 0,
 			}},
 		},
 	}
@@ -752,7 +752,7 @@ func TestAntiDriftEventReconcileUsesShortDeadline(t *testing.T) {
 			driver := NewAntiDriftDriver(
 				AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute, CycleTimeout: 30 * time.Second},
 				newMutablePrimary(true),
-				&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+				&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 				&fakeLiveSandboxCache{
 					healthy:     true,
 					liveByOwner: map[string][]*agentsv1alpha1.Sandbox{},
@@ -782,7 +782,7 @@ func TestAntiDriftReappearingEntryClearsLeakedMemory(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		liveCache,
 		backend,
 	)
@@ -806,7 +806,7 @@ func TestAntiDriftRunOnceNotPrimaryClearsLeakedState(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: 10 * time.Minute},
 		primary,
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		&fakeLiveSandboxCache{healthy: true},
 		&fakeBackend{entriesByKey: map[string]map[string]Entry{owner: {"lock-1": {}}}},
 	)
@@ -857,7 +857,7 @@ func TestAntiDriftRunExecutesInitialCycleBeforeInterval(t *testing.T) {
 	driver := NewAntiDriftDriver(
 		AntiDriftConfig{Interval: time.Hour, Grace: time.Minute},
 		newMutablePrimary(true),
-		&fakeKeyStore{limited: []*models.CreatedTeamAPIKey{limitedKey(owner)}},
+		&fakeSubjectLister{subjects: []Subject{limitedSubject(owner)}},
 		&fakeLiveSandboxCache{
 			healthy:     true,
 			liveByOwner: map[string][]*agentsv1alpha1.Sandbox{owner: nil},
@@ -939,12 +939,12 @@ func (b *fakeBackend) resetCalls() {
 	b.releaseTimeouts = nil
 }
 
-func limitedKey(owner string) *models.CreatedTeamAPIKey {
-	return &models.CreatedTeamAPIKey{
-		ID: uuid.MustParse(owner),
-		QuotaSpec: &models.QuotaSpec{Limits: []models.QuotaLimit{{
-			Dimension: models.DimSandboxCount,
-			Scope:     models.ScopeRunning,
+func limitedSubject(user string) Subject {
+	return Subject{
+		User: user,
+		Quota: &QuotaSpec{Limits: []QuotaLimit{{
+			Dimension: DimSandboxCount,
+			Scope:     ScopeRunning,
 			Limit:     1,
 		}}},
 	}

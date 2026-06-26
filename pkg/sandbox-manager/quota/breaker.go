@@ -72,17 +72,17 @@ func (b *breakerBackend) Acquire(ctx context.Context, p AcquireParams) (err erro
 	return err
 }
 
-func (b *breakerBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
-	return breakerError(b.inner.Release(ctx, apiKeyID, lockString))
+func (b *breakerBackend) Release(ctx context.Context, user, lockString string) error {
+	return breakerError(b.inner.Release(ctx, user, lockString))
 }
 
-func (b *breakerBackend) ListEntries(ctx context.Context, apiKeyID string) (map[string]Entry, error) {
-	entries, err := b.inner.ListEntries(ctx, apiKeyID)
+func (b *breakerBackend) ListEntries(ctx context.Context, user string) (map[string]Entry, error) {
+	entries, err := b.inner.ListEntries(ctx, user)
 	return entries, breakerError(err)
 }
 
-func (b *breakerBackend) Cleanup(ctx context.Context, apiKeyID string) error {
-	return breakerError(b.inner.Cleanup(ctx, apiKeyID))
+func (b *breakerBackend) Cleanup(ctx context.Context, user string) error {
+	return breakerError(b.inner.Cleanup(ctx, user))
 }
 
 func (b *breakerBackend) beforeCall() error {

@@ -21,7 +21,6 @@ import (
 	"time"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 type Config struct {
@@ -37,42 +36,50 @@ type Config struct {
 }
 
 type Entry struct {
-	Footprint map[models.QuotaDimension]int64
-	Scopes    []models.QuotaScope
+	Footprint map[QuotaDimension]int64
+	Scopes    []QuotaScope
 }
 
 type AcquireParams struct {
-	APIKeyID   string
+	User       string
 	LockString string
-	Footprint  map[models.QuotaDimension]int64
-	Scopes     []models.QuotaScope
+	Footprint  map[QuotaDimension]int64
+	Scopes     []QuotaScope
 	Enforce    bool
-	Limits     map[models.QuotaDimension]map[models.QuotaScope]int64
+	Limits     map[QuotaDimension]map[QuotaScope]int64
 }
 
 type Backend interface {
 	Acquire(ctx context.Context, p AcquireParams) error
-	Release(ctx context.Context, apiKeyID, lockString string) error
-	ListEntries(ctx context.Context, apiKeyID string) (map[string]Entry, error)
-	Cleanup(ctx context.Context, apiKeyID string) error
+	Release(ctx context.Context, user, lockString string) error
+	ListEntries(ctx context.Context, user string) (map[string]Entry, error)
+	Cleanup(ctx context.Context, user string) error
 }
 
 type AcquireRequest struct {
-	APIKeyID   string
+	User       string
 	LockString string
-	Quota      *models.QuotaSpec
-	Footprint  map[models.QuotaDimension]int64
-	Scopes     []models.QuotaScope
+	Quota      *QuotaSpec
+	Footprint  map[QuotaDimension]int64
+	Scopes     []QuotaScope
 }
 
 type ReleaseRequest struct {
-	APIKeyID   string
+	User       string
 	LockString string
 }
 
-type LimitedKeyStore interface {
-	ListLimited(ctx context.Context) ([]*models.CreatedTeamAPIKey, error)
-	LoadByID(ctx context.Context, id string) (*models.CreatedTeamAPIKey, bool)
+// Subject is a quota-bearing identity (user/api-key) with its resolved limits.
+type Subject struct {
+	User  string
+	Quota *QuotaSpec
+}
+
+// SubjectLister enumerates and loads limited subjects without coupling to any
+// specific key-store implementation.
+type SubjectLister interface {
+	ListLimited(ctx context.Context) ([]Subject, error)
+	Load(ctx context.Context, user string) (Subject, bool)
 }
 
 type LiveSandboxCache interface {

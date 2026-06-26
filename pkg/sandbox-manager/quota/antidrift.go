@@ -29,7 +29,6 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	cachepkg "github.com/openkruise/agents/pkg/cache"
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 const eventReconcileTimeout = 2 * time.Second
@@ -46,11 +45,11 @@ type leakedObservation struct {
 }
 
 type AntiDriftDriver struct {
-	cfg     AntiDriftConfig
-	primary PrimaryChecker
-	keys    LimitedKeyStore
-	cache   LiveSandboxCache
-	backend Backend
+	cfg      AntiDriftConfig
+	primary  PrimaryChecker
+	subjects SubjectLister
+	cache    LiveSandboxCache
+	backend  Backend
 
 	mu            sync.Mutex
 	registration  cachepkg.SandboxEventHandlerRegistration
@@ -66,7 +65,7 @@ type AntiDriftDriver struct {
 	stopCh   chan struct{}
 }
 
-func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, keys LimitedKeyStore, liveCache LiveSandboxCache, backend Backend) *AntiDriftDriver {
+func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, subjects SubjectLister, liveCache LiveSandboxCache, backend Backend) *AntiDriftDriver {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 5 * time.Minute
 	}
@@ -79,7 +78,7 @@ func NewAntiDriftDriver(cfg AntiDriftConfig, primary PrimaryChecker, keys Limite
 	return &AntiDriftDriver{
 		cfg:           cfg,
 		primary:       primary,
-		keys:          keys,
+		subjects:      subjects,
 		cache:         liveCache,
 		backend:       backend,
 		seenLeaked:    map[string]leakedObservation{},
@@ -168,22 +167,22 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		d.clearLeaked()
 		return nil
 	}
-	if d.keys == nil || d.cache == nil || d.backend == nil {
+	if d.subjects == nil || d.cache == nil || d.backend == nil {
 		antiDriftSkippedTotal.WithLabelValues("not_ready").Inc()
 		return nil
 	}
 
-	limitedKeys, err := d.keys.ListLimited(ctx)
+	subjects, err := d.subjects.ListLimited(ctx)
 	if err != nil {
 		antiDriftSkippedTotal.WithLabelValues("key_store_error").Inc()
 		d.clearLeaked()
 		return nil
 	}
-	d.replaceLimitedOwners(limitedOwnerIDs(limitedKeys))
+	d.replaceLimitedOwners(limitedOwnerIDs(subjects))
 
 	now := d.now()
 	var firstErr error
-	for _, key := range limitedKeys {
+	for _, subject := range subjects {
 		if !d.stillPrimary() {
 			antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
 			d.clearLeaked()
@@ -192,10 +191,10 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !isLimitedKey(key) {
+		if subject.Quota == nil || !subject.Quota.IsLimited() {
 			continue
 		}
-		stop, err := d.reconcileLimitedKey(ctx, key, now)
+		stop, err := d.reconcileLimitedSubject(ctx, subject, now)
 		if stop {
 			return err
 		}
@@ -207,33 +206,29 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 	return firstErr
 }
 
-func limitedOwnerIDs(limitedKeys []*models.CreatedTeamAPIKey) map[string]struct{} {
+func limitedOwnerIDs(subjects []Subject) map[string]struct{} {
 	limitedOwners := map[string]struct{}{}
-	for _, key := range limitedKeys {
-		if isLimitedKey(key) {
-			limitedOwners[key.ID.String()] = struct{}{}
+	for _, subject := range subjects {
+		if subject.Quota != nil && subject.Quota.IsLimited() {
+			limitedOwners[subject.User] = struct{}{}
 		}
 	}
 	return limitedOwners
 }
 
-func isLimitedKey(key *models.CreatedTeamAPIKey) bool {
-	return key != nil && key.QuotaSpec != nil && key.QuotaSpec.IsLimited()
-}
-
-func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.CreatedTeamAPIKey, now time.Time) (bool, error) {
-	apiKeyID := key.ID.String()
-	liveSandboxes, err := d.cache.ListLiveSandboxesByOwner(ctx, apiKeyID)
+func (d *AntiDriftDriver) reconcileLimitedSubject(ctx context.Context, subject Subject, now time.Time) (bool, error) {
+	user := subject.User
+	liveSandboxes, err := d.cache.ListLiveSandboxesByOwner(ctx, user)
 	if err != nil {
 		antiDriftErrorsTotal.WithLabelValues("list_live").Inc()
-		d.clearLeakedForKey(apiKeyID)
+		d.clearLeakedForKey(user)
 		return false, err
 	}
 
-	haveEntries, err := d.backend.ListEntries(ctx, apiKeyID)
+	haveEntries, err := d.backend.ListEntries(ctx, user)
 	if err != nil {
 		antiDriftErrorsTotal.WithLabelValues("list_entries").Inc()
-		d.clearLeakedForKey(apiKeyID)
+		d.clearLeakedForKey(user)
 		return false, err
 	}
 
@@ -259,12 +254,12 @@ func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.C
 			return true, nil
 		}
 		if err := d.backend.Acquire(ctx, AcquireParams{
-			APIKeyID:   apiKeyID,
+			User:       user,
 			LockString: lockString,
 			Footprint:  want.Footprint,
 			Scopes:     want.Scopes,
 			Enforce:    false,
-			Limits:     key.QuotaSpec.LimitedPairs(),
+			Limits:     subject.Quota.LimitedPairs(),
 		}); err != nil {
 			antiDriftErrorsTotal.WithLabelValues("acquire").Inc()
 			if firstErr == nil {
@@ -282,7 +277,7 @@ func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.C
 			continue
 		}
 
-		obs := d.leakedObservation(apiKeyID, lockString)
+		obs := d.leakedObservation(user, lockString)
 		if obs.firstSeen.IsZero() {
 			obs.firstSeen = now
 		}
@@ -298,7 +293,7 @@ func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.C
 			d.clearLeaked()
 			return true, nil
 		}
-		if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
+		if err := d.backend.Release(ctx, user, lockString); err != nil {
 			antiDriftErrorsTotal.WithLabelValues("release").Inc()
 			if firstErr == nil {
 				firstErr = err
@@ -308,7 +303,7 @@ func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.C
 		delete(nextLeaked, lockString)
 	}
 
-	d.replaceLeakedForKey(apiKeyID, nextLeaked)
+	d.replaceLeakedForKey(user, nextLeaked)
 	return false, firstErr
 }
 
@@ -395,14 +390,14 @@ func (d *AntiDriftDriver) reconcileSandboxEvent(sbx *agentsv1alpha1.Sandbox, del
 		return
 	}
 
-	apiKeyID := sbx.GetAnnotations()[agentsv1alpha1.AnnotationOwner]
+	user := sbx.GetAnnotations()[agentsv1alpha1.AnnotationOwner]
 	lockString := lockStringOf(sbx)
-	if apiKeyID == "" || lockString == "" {
+	if user == "" || lockString == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), eventReconcileTimeout)
 	defer cancel()
-	if !d.ensureKnownLimited(ctx, apiKeyID) {
+	if !d.ensureKnownLimited(ctx, user) {
 		return
 	}
 
@@ -416,7 +411,7 @@ func (d *AntiDriftDriver) reconcileSandboxEvent(sbx *agentsv1alpha1.Sandbox, del
 			d.clearLeaked()
 			return
 		}
-		if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
+		if err := d.backend.Release(ctx, user, lockString); err != nil {
 			antiDriftErrorsTotal.WithLabelValues("event_release").Inc()
 			antiDriftEventReleaseTotal.WithLabelValues("error").Inc()
 			return
@@ -431,7 +426,7 @@ func (d *AntiDriftDriver) reconcileSandboxEvent(sbx *agentsv1alpha1.Sandbox, del
 		return
 	}
 	if err := d.backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   apiKeyID,
+		User:       user,
 		LockString: lockString,
 		Footprint:  FootprintOf(sbx),
 		Scopes:     ConditionalScopesOf(sbx),
@@ -453,53 +448,53 @@ func (d *AntiDriftDriver) replaceLimitedOwners(limitedOwners map[string]struct{}
 	d.limitedOwners = limitedOwners
 }
 
-func (d *AntiDriftDriver) isKnownLimited(apiKeyID string) bool {
+func (d *AntiDriftDriver) isKnownLimited(user string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	_, ok := d.limitedOwners[apiKeyID]
+	_, ok := d.limitedOwners[user]
 	return ok
 }
 
-func (d *AntiDriftDriver) ensureKnownLimited(ctx context.Context, apiKeyID string) bool {
-	if d.isKnownLimited(apiKeyID) {
+func (d *AntiDriftDriver) ensureKnownLimited(ctx context.Context, user string) bool {
+	if d.isKnownLimited(user) {
 		return true
 	}
-	if d.keys == nil {
+	if d.subjects == nil {
 		return false
 	}
-	key, ok := d.keys.LoadByID(ctx, apiKeyID)
-	if !ok || key == nil || key.QuotaSpec == nil || !key.QuotaSpec.IsLimited() {
+	subject, ok := d.subjects.Load(ctx, user)
+	if !ok || subject.Quota == nil || !subject.Quota.IsLimited() {
 		return false
 	}
 	d.mu.Lock()
-	d.limitedOwners[apiKeyID] = struct{}{}
+	d.limitedOwners[user] = struct{}{}
 	d.mu.Unlock()
 	return true
 }
 
-func (d *AntiDriftDriver) leakedObservation(apiKeyID, lockString string) leakedObservation {
+func (d *AntiDriftDriver) leakedObservation(user, lockString string) leakedObservation {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.seenLeaked[leakedKey(apiKeyID, lockString)]
+	return d.seenLeaked[leakedKey(user, lockString)]
 }
 
-func (d *AntiDriftDriver) clearLeakedForKey(apiKeyID string) {
+func (d *AntiDriftDriver) clearLeakedForKey(user string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.deleteLeakedForKeyLocked(apiKeyID)
+	d.deleteLeakedForKeyLocked(user)
 }
 
-func (d *AntiDriftDriver) replaceLeakedForKey(apiKeyID string, leaked map[string]leakedObservation) {
+func (d *AntiDriftDriver) replaceLeakedForKey(user string, leaked map[string]leakedObservation) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.deleteLeakedForKeyLocked(apiKeyID)
+	d.deleteLeakedForKeyLocked(user)
 	for lockString, obs := range leaked {
-		d.seenLeaked[leakedKey(apiKeyID, lockString)] = obs
+		d.seenLeaked[leakedKey(user, lockString)] = obs
 	}
 }
 
-func (d *AntiDriftDriver) deleteLeakedForKeyLocked(apiKeyID string) {
-	prefix := apiKeyID + "\x00"
+func (d *AntiDriftDriver) deleteLeakedForKeyLocked(user string) {
+	prefix := user + "\x00"
 	for key := range d.seenLeaked {
 		if strings.HasPrefix(key, prefix) {
 			delete(d.seenLeaked, key)
@@ -507,8 +502,8 @@ func (d *AntiDriftDriver) deleteLeakedForKeyLocked(apiKeyID string) {
 	}
 }
 
-func leakedKey(apiKeyID, lockString string) string {
-	return apiKeyID + "\x00" + lockString
+func leakedKey(user, lockString string) string {
+	return user + "\x00" + lockString
 }
 
 func sandboxFromEvent(obj any) *agentsv1alpha1.Sandbox {

@@ -27,8 +27,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 func TestAcquireUpsert(t *testing.T) {
@@ -42,12 +40,12 @@ func TestAcquireUpsert(t *testing.T) {
 		{
 			name: "first create charges count all and running",
 			op: AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 				Enforce:    true,
-				Limits: map[models.QuotaDimension]map[models.QuotaScope]int64{
-					models.DimSandboxCount: {models.ScopeAll: 10},
+				Limits: map[QuotaDimension]map[QuotaScope]int64{
+					DimSandboxCount: {ScopeAll: 10},
 				},
 			},
 			wantSum: map[string]map[string]int64{
@@ -57,14 +55,14 @@ func TestAcquireUpsert(t *testing.T) {
 		{
 			name: "idempotent reacquire is zero delta",
 			seed: []AcquireParams{{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			}},
 			op: AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			},
 			wantSum: map[string]map[string]int64{
 				"sandbox.count": {"all": 1, "running": 1},
@@ -73,12 +71,12 @@ func TestAcquireUpsert(t *testing.T) {
 		{
 			name: "pause drops running and keeps all",
 			seed: []AcquireParams{{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			}},
 			op: AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
 			},
 			wantSum: map[string]map[string]int64{
@@ -88,17 +86,17 @@ func TestAcquireUpsert(t *testing.T) {
 		{
 			name: "enforce rejects at all scope cap",
 			seed: []AcquireParams{{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			}},
 			op: AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l2",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 				Enforce:    true,
-				Limits: map[models.QuotaDimension]map[models.QuotaScope]int64{
-					models.DimSandboxCount: {models.ScopeAll: 1},
+				Limits: map[QuotaDimension]map[QuotaScope]int64{
+					DimSandboxCount: {ScopeAll: 1},
 				},
 			},
 			expectError: "quota exceeded",
@@ -106,12 +104,12 @@ func TestAcquireUpsert(t *testing.T) {
 		{
 			name: "cpu footprint charges all and running",
 			op: AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Footprint: map[models.QuotaDimension]int64{
-					models.DimLimitsCPU: 2000,
+				Footprint: map[QuotaDimension]int64{
+					DimLimitsCPU: 2000,
 				},
-				Scopes: []models.QuotaScope{models.ScopeRunning},
+				Scopes: []QuotaScope{ScopeRunning},
 			},
 			wantSum: map[string]map[string]int64{
 				"sandbox.count": {"all": 1, "running": 1},
@@ -139,7 +137,7 @@ func TestAcquireUpsert(t *testing.T) {
 
 			for dim, scopes := range tt.wantSum {
 				for scope, want := range scopes {
-					assert.Equal(t, want, readSum(t, client, "K", models.QuotaDimension(dim), models.QuotaScope(scope)))
+					assert.Equal(t, want, readSum(t, client, "K", QuotaDimension(dim), QuotaScope(scope)))
 				}
 			}
 		})
@@ -151,24 +149,24 @@ func TestReleaseSubtractsAllScopes(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l1",
-		Footprint: map[models.QuotaDimension]int64{
-			models.DimLimitsCPU:    2000,
-			models.DimLimitsMemory: 4096,
+		Footprint: map[QuotaDimension]int64{
+			DimLimitsCPU:    2000,
+			DimLimitsMemory: 4096,
 		},
-		Scopes: []models.QuotaScope{models.ScopeRunning},
+		Scopes: []QuotaScope{ScopeRunning},
 	}))
 
 	require.NoError(t, backend.Release(ctx, "K", "l1"))
 	require.NoError(t, backend.Release(ctx, "K", "l1"))
 
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeAll))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeRunning))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeAll))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeRunning))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsMemory, models.ScopeAll))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsMemory, models.ScopeRunning))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimSandboxCount, ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimSandboxCount, ScopeRunning))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimLimitsCPU, ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimLimitsCPU, ScopeRunning))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimLimitsMemory, ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimLimitsMemory, ScopeRunning))
 
 	entries, err := backend.ListEntries(ctx, "K")
 	require.NoError(t, err)
@@ -180,15 +178,15 @@ func TestListEntriesReturnsDecodedEntries(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l1",
-		Footprint: map[models.QuotaDimension]int64{
-			models.DimLimitsCPU: 2000,
+		Footprint: map[QuotaDimension]int64{
+			DimLimitsCPU: 2000,
 		},
-		Scopes: []models.QuotaScope{models.ScopeRunning},
+		Scopes: []QuotaScope{ScopeRunning},
 	}))
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l2",
 		Scopes:     nil,
 	}))
@@ -197,8 +195,8 @@ func TestListEntriesReturnsDecodedEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, Entry{
-		Footprint: map[models.QuotaDimension]int64{models.DimLimitsCPU: 2000},
-		Scopes:    []models.QuotaScope{models.ScopeRunning},
+		Footprint: map[QuotaDimension]int64{DimLimitsCPU: 2000},
+		Scopes:    []QuotaScope{ScopeRunning},
 	}, entries["l1"])
 	assert.Equal(t, Entry{}, entries["l2"])
 }
@@ -208,12 +206,12 @@ func TestListEntriesNormalizesConditionalScopesOnly(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l1",
-		Scopes: []models.QuotaScope{
-			models.ScopeAll,
-			models.ScopeRunning,
-			models.ScopeRunning,
+		Scopes: []QuotaScope{
+			ScopeAll,
+			ScopeRunning,
+			ScopeRunning,
 		},
 	}))
 
@@ -221,7 +219,7 @@ func TestListEntriesNormalizesConditionalScopesOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, entries, "l1")
 	assert.Equal(t, Entry{
-		Scopes: []models.QuotaScope{models.ScopeRunning},
+		Scopes: []QuotaScope{ScopeRunning},
 	}, entries["l1"])
 }
 
@@ -230,14 +228,14 @@ func TestListEntriesNormalizesFootprintDimensions(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l1",
-		Footprint: map[models.QuotaDimension]int64{
-			models.DimSandboxCount:               1,
-			models.DimLimitsCPU:                  2000,
-			models.DimLimitsMemory:               4096,
-			models.QuotaDimension("limits.gpu"):  8,
-			models.QuotaDimension("unknown.dim"): -1,
+		Footprint: map[QuotaDimension]int64{
+			DimSandboxCount:              1,
+			DimLimitsCPU:                 2000,
+			DimLimitsMemory:              4096,
+			QuotaDimension("limits.gpu"):  8,
+			QuotaDimension("unknown.dim"): -1,
 		},
 	}))
 
@@ -245,9 +243,9 @@ func TestListEntriesNormalizesFootprintDimensions(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, entries, "l1")
 	assert.Equal(t, Entry{
-		Footprint: map[models.QuotaDimension]int64{
-			models.DimLimitsCPU:    2000,
-			models.DimLimitsMemory: 4096,
+		Footprint: map[QuotaDimension]int64{
+			DimLimitsCPU:    2000,
+			DimLimitsMemory: 4096,
 		},
 	}, entries["l1"])
 }
@@ -259,10 +257,10 @@ func TestListEntriesSkipsMalformedEntries(t *testing.T) {
 	ctx := context.Background()
 	beforeDecodeErrors := testutil.ToFloat64(backendErrorsTotal.WithLabelValues("list_entries_decode"))
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "good",
-		Footprint:  map[models.QuotaDimension]int64{models.DimLimitsCPU: 1000},
-		Scopes:     []models.QuotaScope{models.ScopeRunning},
+		Footprint:  map[QuotaDimension]int64{DimLimitsCPU: 1000},
+		Scopes:     []QuotaScope{ScopeRunning},
 	}))
 	srv.HSet(liveKey("K"), "bad", "{")
 
@@ -278,28 +276,28 @@ func TestCleanupDeletesLiveAndAllSums(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, backend.Acquire(ctx, AcquireParams{
-		APIKeyID:   "K",
+		User:       "K",
 		LockString: "l1",
-		Footprint: map[models.QuotaDimension]int64{
-			models.DimLimitsCPU: 2000,
+		Footprint: map[QuotaDimension]int64{
+			DimLimitsCPU: 2000,
 		},
-		Scopes: []models.QuotaScope{models.ScopeRunning},
+		Scopes: []QuotaScope{ScopeRunning},
 	}))
 	require.NoError(t, backend.Cleanup(ctx, "K"))
 
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimSandboxCount, models.ScopeAll))
-	assert.Equal(t, int64(0), readSum(t, client, "K", models.DimLimitsCPU, models.ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimSandboxCount, ScopeAll))
+	assert.Equal(t, int64(0), readSum(t, client, "K", DimLimitsCPU, ScopeAll))
 	assert.False(t, keyExists(t, client, liveKey("K")))
-	assert.False(t, keyExists(t, client, sumKey("K", models.DimSandboxCount)))
-	assert.False(t, keyExists(t, client, sumKey("K", models.DimLimitsCPU)))
-	assert.False(t, keyExists(t, client, sumKey("K", models.DimLimitsMemory)))
+	assert.False(t, keyExists(t, client, sumKey("K", DimSandboxCount)))
+	assert.False(t, keyExists(t, client, sumKey("K", DimLimitsCPU)))
+	assert.False(t, keyExists(t, client, sumKey("K", DimLimitsMemory)))
 }
 
 func TestNoopBackend(t *testing.T) {
 	backend := NoopBackend{}
 	ctx := context.Background()
 
-	require.NoError(t, backend.Acquire(ctx, AcquireParams{APIKeyID: "K", LockString: "l1"}))
+	require.NoError(t, backend.Acquire(ctx, AcquireParams{User: "K", LockString: "l1"}))
 	require.NoError(t, backend.Release(ctx, "K", "l1"))
 	require.NoError(t, backend.Cleanup(ctx, "K"))
 
@@ -320,10 +318,10 @@ func newTestRedisBackend(t *testing.T) (*RedisBackend, *redis.Client) {
 	return NewRedisBackend(client, 50*time.Millisecond), client
 }
 
-func readSum(t *testing.T, client *redis.Client, apiKeyID string, dimension models.QuotaDimension, scope models.QuotaScope) int64 {
+func readSum(t *testing.T, client *redis.Client, user string, dimension QuotaDimension, scope QuotaScope) int64 {
 	t.Helper()
 
-	value, err := client.HGet(context.Background(), sumKey(apiKeyID, dimension), string(scope)).Result()
+	value, err := client.HGet(context.Background(), sumKey(user, dimension), string(scope)).Result()
 	if err == redis.Nil {
 		return 0
 	}

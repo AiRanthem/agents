@@ -24,8 +24,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 type managerTestBackend struct {
@@ -46,9 +44,9 @@ func (b *managerTestBackend) Acquire(_ context.Context, p AcquireParams) error {
 	return b.acquireErr
 }
 
-func (b *managerTestBackend) Release(_ context.Context, apiKeyID, lockString string) error {
+func (b *managerTestBackend) Release(_ context.Context, user, lockString string) error {
 	b.releaseCalls++
-	b.releaseArgs = append(b.releaseArgs, ReleaseRequest{APIKeyID: apiKeyID, LockString: lockString})
+	b.releaseArgs = append(b.releaseArgs, ReleaseRequest{User: user, LockString: lockString})
 	return b.releaseErr
 }
 
@@ -56,20 +54,20 @@ func (b *managerTestBackend) ListEntries(context.Context, string) (map[string]En
 	return map[string]Entry{}, nil
 }
 
-func (b *managerTestBackend) Cleanup(_ context.Context, apiKeyID string) error {
+func (b *managerTestBackend) Cleanup(_ context.Context, user string) error {
 	b.cleanupCalls++
-	b.cleanupKeys = append(b.cleanupKeys, apiKeyID)
+	b.cleanupKeys = append(b.cleanupKeys, user)
 	return b.cleanupErr
 }
 
 func TestManagerAcquire(t *testing.T) {
-	quota := &models.QuotaSpec{Limits: []models.QuotaLimit{{
-		Dimension: models.DimSandboxCount,
-		Scope:     models.ScopeAll,
+	quota := &QuotaSpec{Limits: []QuotaLimit{{
+		Dimension: DimSandboxCount,
+		Scope:     ScopeAll,
 		Limit:     2,
 	}, {
-		Dimension: models.DimLimitsCPU,
-		Scope:     models.ScopeRunning,
+		Dimension: DimLimitsCPU,
+		Scope:     ScopeRunning,
 		Limit:     4000,
 	}}}
 
@@ -86,32 +84,32 @@ func TestManagerAcquire(t *testing.T) {
 		{
 			name: "unlimited short circuits without backend io",
 			req: AcquireRequest{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			},
 			expectMetric: "unlimited",
 		},
 		{
 			name: "limited forwards full request to backend",
 			req: AcquireRequest{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
 				Quota:      quota,
-				Footprint: map[models.QuotaDimension]int64{
-					models.DimLimitsCPU: 2000,
+				Footprint: map[QuotaDimension]int64{
+					DimLimitsCPU: 2000,
 				},
-				Scopes: []models.QuotaScope{models.ScopeRunning},
+				Scopes: []QuotaScope{ScopeRunning},
 			},
 			expectMetric:       "allowed",
 			expectBackendCalls: 1,
 			wantParams: &AcquireParams{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
-				Footprint: map[models.QuotaDimension]int64{
-					models.DimLimitsCPU: 2000,
+				Footprint: map[QuotaDimension]int64{
+					DimLimitsCPU: 2000,
 				},
-				Scopes:  []models.QuotaScope{models.ScopeRunning},
+				Scopes:  []QuotaScope{ScopeRunning},
 				Enforce: true,
 				Limits:  quota.LimitedPairs(),
 			},
@@ -119,10 +117,10 @@ func TestManagerAcquire(t *testing.T) {
 		{
 			name: "quota exceeded propagates",
 			req: AcquireRequest{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
 				Quota:      quota,
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			},
 			acquireErr:         ErrQuotaExceeded,
 			expectError:        "quota exceeded",
@@ -132,10 +130,10 @@ func TestManagerAcquire(t *testing.T) {
 		{
 			name: "backend transport error fails open",
 			req: AcquireRequest{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
 				Quota:      quota,
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			},
 			acquireErr:          ErrBackendUnavailable,
 			expectMetric:        "fail_open",
@@ -145,10 +143,10 @@ func TestManagerAcquire(t *testing.T) {
 		{
 			name: "unexpected backend error fails open",
 			req: AcquireRequest{
-				APIKeyID:   "K",
+				User:       "K",
 				LockString: "l1",
 				Quota:      quota,
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
+				Scopes:     []QuotaScope{ScopeRunning},
 			},
 			acquireErr:          errors.New("boom"),
 			expectMetric:        "fail_open",
@@ -203,24 +201,24 @@ func TestManagerRelease(t *testing.T) {
 		expectMetric        string
 	}{
 		{
-			name:         "empty api key id is no op",
+			name:         "empty user is no op",
 			req:          ReleaseRequest{LockString: "l1"},
 			expectMetric: "skipped",
 		},
 		{
 			name:         "empty lock string is no op",
-			req:          ReleaseRequest{APIKeyID: "K"},
+			req:          ReleaseRequest{User: "K"},
 			expectMetric: "skipped",
 		},
 		{
 			name:               "release delegates to backend",
-			req:                ReleaseRequest{APIKeyID: "K", LockString: "l1"},
+			req:                ReleaseRequest{User: "K", LockString: "l1"},
 			expectBackendCalls: 1,
 			expectMetric:       "released",
 		},
 		{
 			name:                "release propagates backend error",
-			req:                 ReleaseRequest{APIKeyID: "K", LockString: "l1"},
+			req:                 ReleaseRequest{User: "K", LockString: "l1"},
 			releaseErr:          ErrBackendUnavailable,
 			expectError:         "quota backend unavailable",
 			expectBackendCalls:  1,
@@ -254,23 +252,23 @@ func TestManagerRelease(t *testing.T) {
 func TestManagerCleanup(t *testing.T) {
 	tests := []struct {
 		name                string
-		apiKeyID            string
+		user                string
 		cleanupErr          error
 		expectError         string
 		expectBackendCalls  int
 		expectBackendErrors int
 	}{
 		{
-			name: "empty api key id is no op",
+			name: "empty user is no op",
 		},
 		{
 			name:               "cleanup delegates to backend",
-			apiKeyID:           "K",
+			user:               "K",
 			expectBackendCalls: 1,
 		},
 		{
 			name:                "cleanup propagates backend error",
-			apiKeyID:            "K",
+			user:                "K",
 			cleanupErr:          ErrBackendUnavailable,
 			expectError:         "quota backend unavailable",
 			expectBackendCalls:  1,
@@ -284,7 +282,7 @@ func TestManagerCleanup(t *testing.T) {
 			manager := NewManager(backend)
 			beforeBackendErrors := testutil.ToFloat64(backendErrorsTotal.WithLabelValues("cleanup"))
 
-			err := manager.Cleanup(context.Background(), tt.apiKeyID)
+			err := manager.Cleanup(context.Background(), tt.user)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)

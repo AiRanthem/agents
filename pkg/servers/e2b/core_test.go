@@ -61,7 +61,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	quotapkg "github.com/openkruise/agents/pkg/servers/e2b/quota"
+	quotapkg "github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	"github.com/openkruise/agents/pkg/utils/testutils"
 )
 
@@ -395,7 +395,7 @@ func TestControllerInitQuotaRedisConfiguredTransportUnavailableStillFailOpen(t *
 
 	limit := int64(1)
 	err := sc.quota.Acquire(context.Background(), quotapkg.AcquireRequest{
-		APIKeyID:   "key-1",
+		User:       "key-1",
 		LockString: "lock-1",
 		Quota: &models.QuotaSpec{Limits: []models.QuotaLimit{{
 			Dimension: models.DimSandboxCount,

@@ -19,7 +19,6 @@ package e2b
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -30,12 +29,12 @@ import (
 	"k8s.io/klog/v2"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
-	"github.com/openkruise/agents/pkg/servers/e2b/quota"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/csiutils"
@@ -50,7 +49,6 @@ import (
 // unchanged. ~100 years is indistinguishable from unlimited for any real
 // request and stays well within time.Duration's int64 range (max ~292 years).
 const noServerTimeout = 100 * 365 * 24 * time.Hour
-const quotaReleaseTimeout = infra.SandboxAdmissionReleaseTimeout
 
 // mapInfraErrorToApiError converts an infra-layer error to an ApiError with the
 // appropriate HTTP status code based on managererrors.ErrorCode.
@@ -68,10 +66,6 @@ func mapInfraErrorToApiError(err error) *web.ApiError {
 		// ErrorInternal, ErrorUnknown, or untyped errors (e.g., retry exhausted) → 500
 		return &web.ApiError{Code: http.StatusInternalServerError, Message: err.Error()}
 	}
-}
-
-func quotaRequestReleaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), quotaReleaseTimeout)
 }
 
 func validateCreateResourceOverride(request models.NewSandboxRequest) *web.ApiError {
@@ -96,43 +90,6 @@ func resolveServerTimeout(seconds int) time.Duration {
 		return time.Duration(seconds) * time.Second
 	}
 	return noServerTimeout
-}
-
-func quotaFootprintFromResource(resource infra.SandboxResource) map[models.QuotaDimension]int64 {
-	return map[models.QuotaDimension]int64{
-		models.DimLimitsCPU:    resource.Limits.CPUMilli,
-		models.DimLimitsMemory: resource.Limits.MemoryMB,
-	}
-}
-
-func (sc *Controller) quotaAdmission(user *models.CreatedTeamAPIKey) *infra.SandboxAdmission {
-	if sc.quota == nil || user == nil || user.QuotaSpec == nil || !user.QuotaSpec.IsLimited() {
-		return nil
-	}
-
-	apiKeyID := user.ID.String()
-	quotaSpec := user.QuotaSpec.DeepCopy()
-	return &infra.SandboxAdmission{
-		Acquire: func(ctx context.Context, lockString string, resource infra.SandboxResource) error {
-			err := sc.quota.Acquire(ctx, quota.AcquireRequest{
-				APIKeyID:   apiKeyID,
-				LockString: lockString,
-				Quota:      quotaSpec,
-				Footprint:  quotaFootprintFromResource(resource),
-				Scopes:     []models.QuotaScope{models.ScopeRunning},
-			})
-			if errors.Is(err, quota.ErrQuotaExceeded) {
-				return managererrors.NewError(managererrors.ErrorQuotaExceeded, "api-key quota exceeded")
-			}
-			return err
-		},
-		Release: func(ctx context.Context, lockString string) error {
-			return sc.quota.Release(ctx, quota.ReleaseRequest{
-				APIKeyID:   apiKeyID,
-				LockString: lockString,
-			})
-		},
-	}
 }
 
 // CreateSandbox allocates a Pod as a new sandbox
@@ -185,11 +142,10 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 	log := klog.FromContext(ctx)
 	claimStart := time.Now()
 	var accessToken string
-	opts := infra.ClaimSandboxOptions{
+	infraOpts := infra.ClaimSandboxOptions{
 		Namespace:    sc.getNamespaceOfUser(user),
 		Template:     request.TemplateID,
 		User:         user.ID.String(),
-		Admission:    sc.quotaAdmission(user),
 		ClaimTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
 			sc.basicSandboxCreateModifier(ctx, sbx, request)
@@ -203,25 +159,25 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 
 	if !request.Extensions.SkipInitRuntime {
 		accessToken = config.NewDefaultAccessToken()
-		opts.InitRuntime = &config.InitRuntimeOptions{
+		infraOpts.InitRuntime = &config.InitRuntimeOptions{
 			EnvVars:     request.EnvVars,
 			AccessToken: accessToken,
 		}
 	}
 
 	if extension := request.Extensions.InplaceUpdate; extension.Image != "" || extension.Resources != nil {
-		opts.InplaceUpdate = &config.InplaceUpdateOptions{
+		infraOpts.InplaceUpdate = &config.InplaceUpdateOptions{
 			Image: extension.Image,
 		}
 		if extension.Resources != nil && (len(extension.Resources.Requests) > 0 || len(extension.Resources.Limits) > 0) {
-			opts.InplaceUpdate.Resources = &config.InplaceUpdateResourcesOptions{
+			infraOpts.InplaceUpdate.Resources = &config.InplaceUpdateResourcesOptions{
 				Requests: extension.Resources.Requests,
 				Limits:   extension.Resources.Limits,
 			}
 		}
 	}
 
-	opts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
+	infraOpts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
 
 	if len(request.Extensions.CSIMount.MountConfigs) != 0 {
 		csiMountOptions := make([]config.MountConfig, 0, len(request.Extensions.CSIMount.MountConfigs))
@@ -239,9 +195,14 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 				RequestRaw: csiReqConfigRaw,
 			})
 		}
-		opts.CSIMount = &config.CSIMountOptions{
+		infraOpts.CSIMount = &config.CSIMountOptions{
 			MountOptionList: csiMountOptions,
 		}
+	}
+
+	opts := sandboxmanager.ClaimSandboxOptions{
+		Infra: infraOpts,
+		Quota: user.QuotaSpec.DeepCopy(),
 	}
 
 	sbx, err := sc.manager.ClaimSandbox(ctx, opts)
@@ -268,10 +229,9 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 		}
 	}
 
-	opts := infra.CloneSandboxOptions{
+	infraOpts := infra.CloneSandboxOptions{
 		Namespace:    sc.getNamespaceOfUser(user),
 		User:         user.ID.String(),
-		Admission:    sc.quotaAdmission(user),
 		CheckPointID: request.TemplateID,
 		CloneTimeout: resolveServerTimeout(request.Extensions.TimeoutSeconds),
 		Modifier: func(sbx infra.Sandbox) {
@@ -281,7 +241,7 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 		Name:                    request.Extensions.Name,
 		GenerateName:            request.Extensions.GenerateName,
 	}
-	opts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
+	infraOpts.WaitReadyTimeout = resolveServerTimeout(request.Extensions.WaitReadySeconds)
 
 	if len(request.Extensions.CSIMount.MountConfigs) != 0 {
 		csiMountOptions := make([]config.MountConfig, 0, len(request.Extensions.CSIMount.MountConfigs))
@@ -298,10 +258,15 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 				Driver:     driverName,
 				RequestRaw: csiReqConfigRaw,
 			})
-			opts.CSIMount = &config.CSIMountOptions{
+			infraOpts.CSIMount = &config.CSIMountOptions{
 				MountOptionList: csiMountOptions,
 			}
 		}
+	}
+
+	opts := sandboxmanager.CloneSandboxOptions{
+		Infra: infraOpts,
+		Quota: user.QuotaSpec.DeepCopy(),
 	}
 
 	sbx, err := sc.manager.CloneSandbox(ctx, opts)

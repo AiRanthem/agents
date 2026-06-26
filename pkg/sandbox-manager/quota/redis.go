@@ -24,8 +24,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 const (
@@ -185,8 +183,8 @@ type RedisBackend struct {
 }
 
 type redisEntry struct {
-	Footprint map[models.QuotaDimension]int64 `json:"d"`
-	Scopes    []models.QuotaScope             `json:"s"`
+	Footprint map[QuotaDimension]int64 `json:"d"`
+	Scopes    []QuotaScope             `json:"s"`
 }
 
 func NewRedisBackend(client *redis.Client, timeout time.Duration) *RedisBackend {
@@ -214,7 +212,7 @@ func (b *RedisBackend) Acquire(ctx context.Context, p AcquireParams) error {
 	acquireCtx, cancel := context.WithTimeout(ctx, b.acquireTimeout())
 	defer cancel()
 
-	result, err := acquireRedisScript.Run(acquireCtx, client, redisKeys(p.APIKeyID), p.LockString, entryJSON, boolToLuaFlag(p.Enforce), limitsJSON).Text()
+	result, err := acquireRedisScript.Run(acquireCtx, client, redisKeys(p.User), p.LockString, entryJSON, boolToLuaFlag(p.Enforce), limitsJSON).Text()
 	if err != nil {
 		return fmt.Errorf("%w: acquire quota in redis: %v", ErrBackendUnavailable, err)
 	}
@@ -227,7 +225,7 @@ func (b *RedisBackend) Acquire(ctx context.Context, p AcquireParams) error {
 	return nil
 }
 
-func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string) error {
+func (b *RedisBackend) Release(ctx context.Context, user, lockString string) error {
 	client, err := b.redisClient("release")
 	if err != nil {
 		return err
@@ -236,7 +234,7 @@ func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string)
 	releaseCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
 	defer cancel()
 
-	result, err := releaseRedisScript.Run(releaseCtx, client, redisKeys(apiKeyID), lockString).Text()
+	result, err := releaseRedisScript.Run(releaseCtx, client, redisKeys(user), lockString).Text()
 	if err != nil {
 		return fmt.Errorf("%w: release quota in redis: %v", ErrBackendUnavailable, err)
 	}
@@ -247,7 +245,7 @@ func (b *RedisBackend) Release(ctx context.Context, apiKeyID, lockString string)
 	return nil
 }
 
-func (b *RedisBackend) ListEntries(ctx context.Context, apiKeyID string) (map[string]Entry, error) {
+func (b *RedisBackend) ListEntries(ctx context.Context, user string) (map[string]Entry, error) {
 	client, err := b.redisClient("list_entries")
 	if err != nil {
 		return nil, err
@@ -256,7 +254,7 @@ func (b *RedisBackend) ListEntries(ctx context.Context, apiKeyID string) (map[st
 	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
 	defer cancel()
 
-	values, err := client.HGetAll(opCtx, liveKey(apiKeyID)).Result()
+	values, err := client.HGetAll(opCtx, liveKey(user)).Result()
 	if err != nil {
 		backendErrorsTotal.WithLabelValues("list_entries").Inc()
 		return nil, fmt.Errorf("%w: list quota entries in redis: %v", ErrBackendUnavailable, err)
@@ -274,7 +272,7 @@ func (b *RedisBackend) ListEntries(ctx context.Context, apiKeyID string) (map[st
 	return entries, nil
 }
 
-func (b *RedisBackend) Cleanup(ctx context.Context, apiKeyID string) error {
+func (b *RedisBackend) Cleanup(ctx context.Context, user string) error {
 	client, err := b.redisClient("cleanup")
 	if err != nil {
 		return err
@@ -283,7 +281,7 @@ func (b *RedisBackend) Cleanup(ctx context.Context, apiKeyID string) error {
 	opCtx, cancel := withOperationTimeout(ctx, defaultMaintenanceOperationTimeout)
 	defer cancel()
 
-	if err := client.Del(opCtx, redisKeys(apiKeyID)...).Err(); err != nil {
+	if err := client.Del(opCtx, redisKeys(user)...).Err(); err != nil {
 		return fmt.Errorf("%w: cleanup quota keys in redis: %v", ErrBackendUnavailable, err)
 	}
 	return nil
@@ -316,10 +314,10 @@ func marshalEntry(entry Entry) (string, error) {
 		Scopes:    normalizeScopes(entry.Scopes),
 	}
 	if payload.Footprint == nil {
-		payload.Footprint = map[models.QuotaDimension]int64{}
+		payload.Footprint = map[QuotaDimension]int64{}
 	}
 	if payload.Scopes == nil {
-		payload.Scopes = []models.QuotaScope{}
+		payload.Scopes = []QuotaScope{}
 	}
 
 	raw, err := json.Marshal(payload)
@@ -340,7 +338,7 @@ func unmarshalEntry(raw string) (Entry, error) {
 	}, nil
 }
 
-func marshalLimits(limits map[models.QuotaDimension]map[models.QuotaScope]int64) (string, error) {
+func marshalLimits(limits map[QuotaDimension]map[QuotaScope]int64) (string, error) {
 	if len(limits) == 0 {
 		return "", nil
 	}
@@ -351,13 +349,13 @@ func marshalLimits(limits map[models.QuotaDimension]map[models.QuotaScope]int64)
 	return string(raw), nil
 }
 
-func normalizeFootprint(in map[models.QuotaDimension]int64) map[models.QuotaDimension]int64 {
+func normalizeFootprint(in map[QuotaDimension]int64) map[QuotaDimension]int64 {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[models.QuotaDimension]int64, len(in))
+	out := make(map[QuotaDimension]int64, len(in))
 	for dim, amount := range in {
-		if dim != models.DimLimitsCPU && dim != models.DimLimitsMemory {
+		if dim != DimLimitsCPU && dim != DimLimitsMemory {
 			continue
 		}
 		if amount == 0 {
@@ -371,14 +369,14 @@ func normalizeFootprint(in map[models.QuotaDimension]int64) map[models.QuotaDime
 	return out
 }
 
-func normalizeScopes(in []models.QuotaScope) []models.QuotaScope {
+func normalizeScopes(in []QuotaScope) []QuotaScope {
 	if len(in) == 0 {
 		return nil
 	}
-	seen := make(map[models.QuotaScope]struct{}, len(in))
-	out := make([]models.QuotaScope, 0, len(in))
+	seen := make(map[QuotaScope]struct{}, len(in))
+	out := make([]QuotaScope, 0, len(in))
 	for _, scope := range in {
-		if scope == models.ScopeAll {
+		if scope == ScopeAll {
 			continue
 		}
 		if _, ok := seen[scope]; ok {
@@ -393,21 +391,21 @@ func normalizeScopes(in []models.QuotaScope) []models.QuotaScope {
 	return out
 }
 
-func redisKeys(apiKeyID string) []string {
+func redisKeys(user string) []string {
 	return []string{
-		liveKey(apiKeyID),
-		sumKey(apiKeyID, models.DimSandboxCount),
-		sumKey(apiKeyID, models.DimLimitsCPU),
-		sumKey(apiKeyID, models.DimLimitsMemory),
+		liveKey(user),
+		sumKey(user, DimSandboxCount),
+		sumKey(user, DimLimitsCPU),
+		sumKey(user, DimLimitsMemory),
 	}
 }
 
-func liveKey(apiKeyID string) string {
-	return "q:live:{" + apiKeyID + "}"
+func liveKey(user string) string {
+	return "q:live:{" + user + "}"
 }
 
-func sumKey(apiKeyID string, dimension models.QuotaDimension) string {
-	return "q:sum:{" + apiKeyID + "}:" + string(dimension)
+func sumKey(user string, dimension QuotaDimension) string {
+	return "q:sum:{" + user + "}:" + string(dimension)
 }
 
 func boolToLuaFlag(v bool) string {

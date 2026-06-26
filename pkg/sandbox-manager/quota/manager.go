@@ -40,13 +40,13 @@ func (m *Manager) Acquire(ctx context.Context, req AcquireRequest) error {
 		acquireTotal.WithLabelValues("unlimited").Inc()
 		return nil
 	}
-	if req.APIKeyID == "" || req.LockString == "" {
+	if req.User == "" || req.LockString == "" {
 		acquireTotal.WithLabelValues("error").Inc()
-		return fmt.Errorf("%w: apiKeyID=%q lockString=%q", ErrMissingIdentity, req.APIKeyID, req.LockString)
+		return fmt.Errorf("%w: user=%q lockString=%q", ErrMissingIdentity, req.User, req.LockString)
 	}
 
 	err := m.backendOrNoop().Acquire(ctx, AcquireParams{
-		APIKeyID:   req.APIKeyID,
+		User:       req.User,
 		LockString: req.LockString,
 		Footprint:  req.Footprint,
 		Scopes:     req.Scopes,
@@ -64,32 +64,32 @@ func (m *Manager) Acquire(ctx context.Context, req AcquireRequest) error {
 
 	backendErrorsTotal.WithLabelValues("acquire").Inc()
 	acquireTotal.WithLabelValues("fail_open").Inc()
-	klog.FromContext(ctx).Error(err, "quota acquire backend failed, fail open", "apiKeyID", req.APIKeyID)
+	klog.FromContext(ctx).Error(err, "quota acquire backend failed, fail open", "user", req.User)
 	return nil
 }
 
 func (m *Manager) Release(ctx context.Context, req ReleaseRequest) error {
-	if req.APIKeyID == "" || req.LockString == "" {
+	if req.User == "" || req.LockString == "" {
 		releaseTotal.WithLabelValues("skipped").Inc()
 		return nil
 	}
-	if err := m.backendOrNoop().Release(ctx, req.APIKeyID, req.LockString); err != nil {
+	if err := m.backendOrNoop().Release(ctx, req.User, req.LockString); err != nil {
 		backendErrorsTotal.WithLabelValues("release").Inc()
 		releaseTotal.WithLabelValues("error").Inc()
-		klog.FromContext(ctx).Error(err, "quota release backend failed", "apiKeyID", req.APIKeyID)
+		klog.FromContext(ctx).Error(err, "quota release backend failed", "user", req.User)
 		return err
 	}
 	releaseTotal.WithLabelValues("released").Inc()
 	return nil
 }
 
-func (m *Manager) Cleanup(ctx context.Context, apiKeyID string) error {
-	if apiKeyID == "" {
+func (m *Manager) Cleanup(ctx context.Context, user string) error {
+	if user == "" {
 		return nil
 	}
-	if err := m.backendOrNoop().Cleanup(ctx, apiKeyID); err != nil {
+	if err := m.backendOrNoop().Cleanup(ctx, user); err != nil {
 		backendErrorsTotal.WithLabelValues("cleanup").Inc()
-		klog.FromContext(ctx).Error(err, "quota cleanup backend failed", "apiKeyID", apiKeyID)
+		klog.FromContext(ctx).Error(err, "quota cleanup backend failed", "user", user)
 		return err
 	}
 	return nil
