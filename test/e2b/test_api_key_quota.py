@@ -26,8 +26,6 @@ QUOTA_NO_REDIS_TEST = "test_quota_is_accepted_and_unenforced_without_redis"
 REDIS_NAMESPACE = "sandbox-system"
 REDIS_SELECTOR = "app.kubernetes.io/name=redis"
 REDIS_DEPLOYMENT = "redis"
-MANAGER_DEPLOYMENT = "sandbox-manager"
-MANAGER_SCALE_TARGET = 2
 
 pytestmark = pytest.mark.skipif(
     QUOTA_E2E_PROFILE not in QUOTA_E2E_PROFILES,
@@ -45,15 +43,24 @@ def api_url():
     return os.environ.get("E2B_API_URL") or f"http://{os.environ.get('E2B_DOMAIN', 'localhost')}/kruise/api"
 
 
-def admin_headers():
-    return {
-        "X-API-KEY": os.environ.get("E2B_API_KEY", "e2b_00000000"),
-        "Content-Type": "application/json",
-    }
+def with_request_id(headers, request_id):
+    if not request_id:
+        return headers
+    return {**headers, "x-request-id": request_id}
 
 
-def key_headers(api_key):
-    return {"X-API-KEY": api_key, "Content-Type": "application/json"}
+def admin_headers(request_id=None):
+    return with_request_id(
+        {
+            "X-API-KEY": os.environ.get("E2B_API_KEY", "e2b_00000000"),
+            "Content-Type": "application/json",
+        },
+        request_id,
+    )
+
+
+def key_headers(api_key, request_id=None):
+    return with_request_id({"X-API-KEY": api_key, "Content-Type": "application/json"}, request_id)
 
 
 def assert_static_quota_response(payload, expected_quota):
@@ -71,27 +78,27 @@ def create_api_key(name, quota_marker, quota=ABSENT_QUOTA, headers=None, team_na
         payload["teamName"] = team_name
     if quota is not ABSENT_QUOTA:
         payload["quota"] = quota
-    resp = requests.post(f"{api_url()}/api-keys", json=payload, headers=headers or admin_headers())
+    resp = requests.post(f"{api_url()}/api-keys", json=payload, headers=with_request_id(headers or admin_headers(), quota_marker))
     if resp.status_code == 201:
         key = resp.json().get("key")
         if key:
-            wait_until(lambda: assert_api_key_usable(key), timeout=120)
+            wait_until(lambda: assert_api_key_usable(key, quota_marker), timeout=120)
     return resp
 
 
-def assert_api_key_usable(api_key):
-    resp = requests.get(f"{api_url()}/api-keys/compatible", headers=key_headers(api_key), timeout=10)
+def assert_api_key_usable(api_key, marker=None):
+    resp = requests.get(f"{api_url()}/api-keys/compatible", headers=key_headers(api_key, marker), timeout=10)
     assert resp.status_code == 200, resp.text
 
 
-def assert_api_key_rejected(api_key):
-    resp = requests.get(f"{api_url()}/api-keys/compatible", headers=key_headers(api_key), timeout=10)
+def assert_api_key_rejected(api_key, marker=None):
+    resp = requests.get(f"{api_url()}/api-keys/compatible", headers=key_headers(api_key, marker), timeout=10)
     assert resp.status_code in (401, 403), resp.text
 
 
-def delete_api_key(key_id):
+def delete_api_key(key_id, marker=None):
     if key_id:
-        requests.delete(f"{api_url()}/api-keys/{key_id}", headers=admin_headers())
+        requests.delete(f"{api_url()}/api-keys/{key_id}", headers=admin_headers(marker))
 
 
 def create_sandbox_with_key(api_key, template, marker, timeout=600):
@@ -117,9 +124,9 @@ def create_snapshot_with_key(api_key, sbx, marker):
     return checkpoint_id
 
 
-def delete_template_or_snapshot(api_key, checkpoint_id):
+def delete_template_or_snapshot(api_key, checkpoint_id, marker=None):
     try:
-        requests.delete(f"{api_url()}/templates/{checkpoint_id}", headers=key_headers(api_key), timeout=10)
+        requests.delete(f"{api_url()}/templates/{checkpoint_id}", headers=key_headers(api_key, marker), timeout=10)
     except Exception as exc:
         print(f"checkpoint cleanup ignored for {checkpoint_id}: {exc}")
 
@@ -212,31 +219,6 @@ def assert_redis_ping():
     assert value == "PONG"
 
 
-@contextmanager
-def scaled_sandbox_manager():
-    deploy = kubectl_json("get", "deployment", MANAGER_DEPLOYMENT, "-n", "sandbox-system")
-    original = deploy["spec"].get("replicas", 1)
-    subprocess.run(
-        ["kubectl", "scale", f"deployment/{MANAGER_DEPLOYMENT}", "-n", "sandbox-system", f"--replicas={MANAGER_SCALE_TARGET}"],
-        check=True,
-    )
-    subprocess.run(
-        ["kubectl", "rollout", "status", f"deployment/{MANAGER_DEPLOYMENT}", "-n", "sandbox-system", "--timeout=180s"],
-        check=True,
-    )
-    try:
-        yield
-    finally:
-        subprocess.run(
-            ["kubectl", "scale", f"deployment/{MANAGER_DEPLOYMENT}", "-n", "sandbox-system", f"--replicas={original}"],
-            check=True,
-        )
-        subprocess.run(
-            ["kubectl", "rollout", "status", f"deployment/{MANAGER_DEPLOYMENT}", "-n", "sandbox-system", "--timeout=180s"],
-            check=True,
-        )
-
-
 def wait_until(assertion, timeout=120, interval=2):
     deadline = time.time() + timeout
     last_error = None
@@ -306,7 +288,7 @@ def force_delete_sandbox(sbx):
         print(f"quota cleanup CR delete did not finish for {name}: {exc}")
 
 
-def cleanup_quota_case(key_id, owned):
+def cleanup_quota_case(key_id, owned, marker=None):
     for sbx in reversed(owned):
         try:
             sbx.kill()
@@ -319,7 +301,8 @@ def cleanup_quota_case(key_id, owned):
         except Exception as exc:
             print(f"quota cleanup wait fell back to kubectl for {getattr(sbx, 'sandbox_id', '<unknown>')}: {exc}")
             force_delete_sandbox(sbx)
-    delete_api_key(key_id)
+    delete_api_key(key_id, marker)
+    wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=180)
 
 
 def assert_quota_http_create_rejected(api_key, template, marker):
@@ -508,7 +491,7 @@ def assert_ready_sandbox_count(sandboxset_name, minimum):
     ],
 )
 def test_api_key_quota_create_list_static_response(sandbox_context, case_name, quota, expected_quota):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -518,7 +501,7 @@ def test_api_key_quota_create_list_static_response(sandbox_context, case_name, q
         created_id = body["id"]
         assert_static_quota_response(body, expected_quota)
 
-        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers())
+        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers(marker))
         assert listed.status_code == 200, listed.text
         match = next(item for item in listed.json() if item["id"] == created_id)
         assert_static_quota_response(match, expected_quota)
@@ -527,7 +510,7 @@ def test_api_key_quota_create_list_static_response(sandbox_context, case_name, q
             sbx = track_sandbox(owned, sandbox_context.add(create_sandbox_with_key(body["key"], QUOTA_SMALL_TEMPLATE, marker)))
             assert sbx.get_info().state == SandboxState.RUNNING
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 @pytest.mark.parametrize(
@@ -548,13 +531,13 @@ def test_api_key_quota_create_list_static_response(sandbox_context, case_name, q
 def test_api_key_quota_validation_rejects_invalid_values(case_name, raw_body, expected_fragment):
     marker = str(uuid.uuid4())
     raw_body["name"] = f"quota-invalid-{case_name}-{marker}"
-    resp = requests.post(f"{api_url()}/api-keys", json=raw_body, headers=admin_headers())
+    resp = requests.post(f"{api_url()}/api-keys", json=raw_body, headers=admin_headers(marker))
     assert resp.status_code == 400, resp.text
     assert expected_fragment in resp.text.lower()
 
 
 def test_api_key_quota_zero_limit_is_valid_and_blocks_create(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -573,11 +556,11 @@ def test_api_key_quota_zero_limit_is_valid_and_blocks_create(sandbox_context):
             track_sandbox(owned, sbx)
             raise AssertionError("hard-zero quota unexpectedly allowed a sandbox create")
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_count_all_limit_blocks_then_delete_releases(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -596,14 +579,15 @@ def test_count_all_limit_blocks_then_delete_releases(sandbox_context):
         first.kill()
         wait_until(lambda: assert_sandbox_gone(first), timeout=120)
 
-        second = track_sandbox(owned, create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, marker))
+        wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=1), timeout=180)
+        second = track_sandbox(owned, create_sandbox_eventually_allowed(api_key, QUOTA_SMALL_TEMPLATE, marker))
         assert second.get_info().state == SandboxState.RUNNING
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_count_all_limit_still_counts_paused_sandbox(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -619,11 +603,11 @@ def test_count_all_limit_still_counts_paused_sandbox(sandbox_context):
 
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_count_running_limit_pause_frees_running_scope(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -642,11 +626,11 @@ def test_count_running_limit_pause_frees_running_scope(sandbox_context):
         second = track_sandbox(owned, create_sandbox_eventually_allowed(api_key, QUOTA_SMALL_TEMPLATE, marker))
         assert second.get_info().state == SandboxState.RUNNING
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_running_resume_can_exceed_limit_and_blocks_new_creates(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -668,11 +652,11 @@ def test_running_resume_can_exceed_limit_and_blocks_new_creates(sandbox_context)
         assert first.get_info().state == SandboxState.RUNNING
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_cpu_all_limit_uses_millicore_footprint(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -686,11 +670,11 @@ def test_cpu_all_limit_uses_millicore_footprint(sandbox_context):
         assert sbx.get_info().state == SandboxState.RUNNING
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_memory_all_limit_uses_mib_footprint(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -704,11 +688,11 @@ def test_memory_all_limit_uses_mib_footprint(sandbox_context):
         assert sbx.get_info().state == SandboxState.RUNNING
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_running_resource_limits_pause_and_resume(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -734,11 +718,11 @@ def test_running_resource_limits_pause_and_resume(sandbox_context):
         assert second.get_info().state == SandboxState.RUNNING
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_no_stock_path_stamps_owner_lockstring_and_counts_quota(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -759,12 +743,12 @@ def test_no_stock_path_stamps_owner_lockstring_and_counts_quota(sandbox_context)
         assert annotations.get("agents.kruise.io/lock")
         assert_quota_create_rejected(api_key, QUOTA_NOSTOCK_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 @pytest.mark.skipif(QUOTA_E2E_PROFILE != "redis-clone", reason="requires checkpoint clone quota profile")
 def test_checkpoint_clone_path_stamps_owner_and_lockstring(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     api_key = None
     checkpoint_id = None
@@ -794,12 +778,12 @@ def test_checkpoint_clone_path_stamps_owner_and_lockstring(sandbox_context):
         assert_quota_create_rejected(api_key, checkpoint_id, f"{marker}-clone-over")
     finally:
         if checkpoint_id and api_key:
-            delete_template_or_snapshot(api_key, checkpoint_id)
-        cleanup_quota_case(created_id, owned)
+            delete_template_or_snapshot(api_key, checkpoint_id, marker)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_concurrent_creates_do_not_exceed_count_limit(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     successes = []
     owned = []
@@ -810,28 +794,24 @@ def test_concurrent_creates_do_not_exceed_count_limit(sandbox_context):
         created_id = body["id"]
         api_key = body["key"]
 
-        # Create the key and wait for it to authenticate before scaling out. New
-        # manager pods load the already-persisted key during startup, avoiding
-        # false 401s from informer lag in the concurrency assertion.
-        assert_api_key_usable(api_key)
-        with scaled_sandbox_manager():
-            # Pre-warm the pool to at least the count limit so every quota-admitted
-            # create is a warm claim. Otherwise a create-on-no-stock cold start could
-            # exceed the SDK request timeout and land in the unexpected-error bucket,
-            # making the strict `successes == 3, quota_misses == 7` assertion flaky.
-            wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=3), timeout=180)
+        assert_api_key_usable(api_key, marker)
+        # Pre-warm the pool to at least the count limit so every quota-admitted
+        # create is a warm claim. Otherwise a create-on-no-stock cold start could
+        # exceed the SDK request timeout and land in the unexpected-error bucket,
+        # making the strict `successes == 3, quota_misses == 7` assertion flaky.
+        wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=3), timeout=180)
 
-            def attempt(i):
-                try:
-                    return ("ok", create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, f"{marker}-{i}"))
-                except Exception as exc:
-                    text = str(exc).lower()
-                    if "403" in text or "quota" in text:
-                        return ("quota", text)
-                    return ("error", text)
+        def attempt(i):
+            try:
+                return ("ok", create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, f"{marker}-{i}"))
+            except Exception as exc:
+                text = str(exc).lower()
+                if "403" in text or "quota" in text:
+                    return ("quota", text)
+                return ("error", text)
 
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                results = [future.result() for future in as_completed([pool.submit(attempt, i) for i in range(10)])]
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            results = [future.result() for future in as_completed([pool.submit(attempt, i) for i in range(10)])]
 
         successes = [value for status, value in results if status == "ok"]
         quota_misses = [value for status, value in results if status == "quota"]
@@ -844,7 +824,7 @@ def test_concurrent_creates_do_not_exceed_count_limit(sandbox_context):
         assert len(quota_misses) == 7, results
         assert not unexpected, unexpected
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 def test_quota_miss_returns_e2b_error_body_and_does_not_lock_pooled_sandbox():
@@ -872,7 +852,7 @@ def test_quota_miss_returns_e2b_error_body_and_does_not_lock_pooled_sandbox():
                 ["kubectl", "delete", "sbx", name, "--ignore-not-found=true", "--wait=false"],
                 check=False,
             )
-        delete_api_key(created_id)
+        delete_api_key(created_id, marker)
 
 
 def test_api_key_quota_create_requires_admin_permission():
@@ -891,7 +871,7 @@ def test_api_key_quota_create_requires_admin_permission():
         allowed = create_api_key(
             "quota-non-admin-allowed",
             marker,
-            headers=key_headers(source_body["key"]),
+            headers=key_headers(source_body["key"], marker),
         )
         assert allowed.status_code == 201, allowed.text
         allowed_key_id = allowed.json()["id"]
@@ -900,15 +880,15 @@ def test_api_key_quota_create_requires_admin_permission():
             "quota-non-admin-target",
             marker,
             quota={"all": {"count": 1}},
-            headers=key_headers(source_body["key"]),
+            headers=key_headers(source_body["key"], marker),
         )
         if resp.status_code == 201:
             target_key_id = resp.json().get("id")
         assert resp.status_code == 403, resp.text
     finally:
-        delete_api_key(target_key_id)
-        delete_api_key(allowed_key_id)
-        delete_api_key(source_key_id)
+        delete_api_key(target_key_id, marker)
+        delete_api_key(allowed_key_id, marker)
+        delete_api_key(source_key_id, marker)
         subprocess.run(["kubectl", "delete", "namespace", team_name, "--ignore-not-found=true", "--wait=false"], check=False)
 
 
@@ -926,21 +906,21 @@ def test_api_key_quota_patch_is_not_supported():
         patch = requests.patch(
             f"{api_url()}/api-keys/{created_id}",
             json={"quota": {"all": {"count": 99}}},
-            headers=admin_headers(),
+            headers=admin_headers(marker),
         )
         assert 400 <= patch.status_code < 500, patch.text
 
-        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers())
+        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers(marker))
         assert listed.status_code == 200, listed.text
         match = next(item for item in listed.json() if item["id"] == created_id)
         assert_static_quota_response(match, expected_quota)
     finally:
-        delete_api_key(created_id)
+        delete_api_key(created_id, marker)
 
 
 @pytest.mark.skipif(not redis_faults_enabled(), reason="requires Redis inspection")
 def test_api_key_delete_cleans_quota_state_but_keeps_sandbox(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     sbx_name = None
     owned = []
     resp = create_api_key("quota-delete-cleanup", marker, quota={"all": {"count": 2}})
@@ -955,13 +935,13 @@ def test_api_key_delete_cleans_quota_state_but_keeps_sandbox(sandbox_context):
         wait_until(lambda: assert_redis_count(key_id, "all", 1), timeout=120)
 
         # This case deletes the key first on purpose to verify quota cleanup does not reap an existing sandbox CR.
-        delete_resp = requests.delete(f"{api_url()}/api-keys/{key_id}", headers=admin_headers())
+        delete_resp = requests.delete(f"{api_url()}/api-keys/{key_id}", headers=admin_headers(marker))
         assert delete_resp.status_code == 204, delete_resp.text
         cr = kubectl_json("get", "sbx", sbx_name)
         assert cr["metadata"]["name"] == sbx_name
 
         wait_until(lambda: assert_redis_deleted(key_id), timeout=120)
-        wait_until(lambda: assert_api_key_rejected(api_key), timeout=120)
+        wait_until(lambda: assert_api_key_rejected(api_key, marker), timeout=120)
         wait_until(
             lambda: assert_deleted_key_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker, owned),
             timeout=120,
@@ -976,7 +956,7 @@ def test_api_key_delete_cleans_quota_state_but_keeps_sandbox(sandbox_context):
 
 @pytest.mark.skipif(not redis_faults_enabled(), reason="requires Redis inspection")
 def test_antidrift_releases_non_manager_deleted_sandbox(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -1004,12 +984,12 @@ def test_antidrift_releases_non_manager_deleted_sandbox(sandbox_context):
         assert replacement.get_info().state == SandboxState.RUNNING
         wait_until(lambda: assert_redis_count(created_id, "all", 1), timeout=120)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 @pytest.mark.skipif(not redis_faults_enabled(), reason="requires Redis inspection")
 def test_redis_data_loss_rebuilds_from_live_crs_and_reenforces(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -1034,12 +1014,12 @@ def test_redis_data_loss_rebuilds_from_live_crs_and_reenforces(sandbox_context):
         assert_quota_http_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
         assert_quota_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 @pytest.mark.skipif(QUOTA_E2E_PROFILE != "no-redis", reason="requires no-Redis quota profile")
 def test_quota_is_accepted_and_unenforced_without_redis(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     expected_quota = {"all": {"count": 0}}
@@ -1051,7 +1031,7 @@ def test_quota_is_accepted_and_unenforced_without_redis(sandbox_context):
         api_key = body["key"]
         assert_static_quota_response(body, expected_quota)
 
-        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers())
+        listed = requests.get(f"{api_url()}/api-keys", headers=admin_headers(marker))
         assert listed.status_code == 200, listed.text
         match = next(item for item in listed.json() if item["id"] == created_id)
         assert_static_quota_response(match, expected_quota)
@@ -1059,12 +1039,12 @@ def test_quota_is_accepted_and_unenforced_without_redis(sandbox_context):
         sbx = track_sandbox(owned, create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, marker))
         assert sbx.get_info().state == SandboxState.RUNNING
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
 
 
 @pytest.mark.skipif(not redis_faults_enabled(), reason="requires Redis fault profile")
 def test_redis_outage_fails_open_then_reenforces_after_rebuild(sandbox_context):
-    marker = str(uuid.uuid4())
+    marker = sandbox_context.request_id
     created_id = None
     owned = []
     try:
@@ -1117,4 +1097,4 @@ def test_redis_outage_fails_open_then_reenforces_after_rebuild(sandbox_context):
         replacement = track_sandbox(owned, create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, f"{marker}-replacement"))
         assert replacement.get_info().state == SandboxState.RUNNING
     finally:
-        cleanup_quota_case(created_id, owned)
+        cleanup_quota_case(created_id, owned, marker)
