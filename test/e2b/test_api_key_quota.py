@@ -137,6 +137,18 @@ def kubectl(*args):
     return subprocess.run(["kubectl", *args], capture_output=True, text=True, check=True).stdout
 
 
+def dump_quota_template_state():
+    commands = (
+        ["get", "sandboxset", QUOTA_SMALL_TEMPLATE, QUOTA_NOSTOCK_TEMPLATE, "-o", "wide"],
+        ["get", "sbx", "-l", f"agents.kruise.io/sandbox-template={QUOTA_SMALL_TEMPLATE}", "-o", "wide"],
+        ["describe", "sbx", "-l", f"agents.kruise.io/sandbox-template={QUOTA_SMALL_TEMPLATE}"],
+        ["get", "pod", "-o", "wide"],
+    )
+    for args in commands:
+        print(f"$ kubectl {' '.join(args)}")
+        subprocess.run(["kubectl", *args], check=False)
+
+
 def redis_faults_enabled():
     return QUOTA_E2E_PROFILE == "redis-fault"
 
@@ -445,9 +457,13 @@ def quota_templates():
     assert limitranges.get("items", []) == [], "quota E2E requires no LimitRange in default namespace"
     for asset in ("sandboxset-quota-small.yaml", "sandboxset-quota-nostock.yaml"):
         subprocess.run(["kubectl", "apply", "-f", str(ASSETS_DIR / asset)], check=True)
-    assert_sandboxset_limits(QUOTA_SMALL_TEMPLATE, "100m", "128Mi")
-    assert_sandboxset_limits(QUOTA_NOSTOCK_TEMPLATE, "200m", "256Mi")
-    wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=180)
+    assert_sandboxset_limits(QUOTA_SMALL_TEMPLATE, "500m", "512Mi")
+    assert_sandboxset_limits(QUOTA_NOSTOCK_TEMPLATE, "500m", "512Mi")
+    try:
+        wait_until(lambda: assert_ready_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=180)
+    except AssertionError:
+        dump_quota_template_state()
+        raise
 
 
 def assert_sandboxset_limits(name, cpu, memory):
@@ -660,7 +676,7 @@ def test_cpu_all_limit_uses_millicore_footprint(sandbox_context):
     created_id = None
     owned = []
     try:
-        resp = create_api_key("quota-cpu-all", marker, quota={"all": {"cpu": 150}})
+        resp = create_api_key("quota-cpu-all", marker, quota={"all": {"cpu": 750}})
         assert resp.status_code == 201, resp.text
         body = resp.json()
         created_id = body["id"]
@@ -678,7 +694,7 @@ def test_memory_all_limit_uses_mib_footprint(sandbox_context):
     created_id = None
     owned = []
     try:
-        resp = create_api_key("quota-memory-all", marker, quota={"all": {"memory": 192}})
+        resp = create_api_key("quota-memory-all", marker, quota={"all": {"memory": 768}})
         assert resp.status_code == 201, resp.text
         body = resp.json()
         created_id = body["id"]
@@ -699,7 +715,7 @@ def test_running_resource_limits_pause_and_resume(sandbox_context):
         resp = create_api_key(
             "quota-running-resources",
             marker,
-            quota={"running": {"cpu": 150, "memory": 192}},
+            quota={"running": {"cpu": 750, "memory": 768}},
         )
         assert resp.status_code == 201, resp.text
         body = resp.json()

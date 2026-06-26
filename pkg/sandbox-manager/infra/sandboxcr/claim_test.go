@@ -1717,8 +1717,7 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 	tests := []struct {
 		name        string
 		opts        infra.ClaimSandboxOptions
-		expectErr   bool
-		errContains string
+		expectError string
 	}{
 		{
 			name: "inplace update requires image or resources",
@@ -1727,8 +1726,7 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 				Template:      "t",
 				InplaceUpdate: &config.InplaceUpdateOptions{},
 			},
-			expectErr:   true,
-			errContains: "requires at least one of image or resources",
+			expectError: "requires at least one of image or resources",
 		},
 		{
 			name: "resources require requests or limits",
@@ -1739,8 +1737,7 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 					Resources: &config.InplaceUpdateResourcesOptions{},
 				},
 			},
-			expectErr:   true,
-			errContains: "resources must specify at least one of requests or limits",
+			expectError: "resources must specify at least one of requests or limits",
 		},
 		{
 			name: "negative cpu request rejected",
@@ -1753,8 +1750,7 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 					},
 				},
 			},
-			expectErr:   true,
-			errContains: "target cpu must be a positive value",
+			expectError: "target cpu must be a positive value",
 		},
 		{
 			name: "cpu limit only is allowed",
@@ -1767,7 +1763,6 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 					},
 				},
 			},
-			expectErr: false,
 		},
 		{
 			name: "image only is allowed",
@@ -1778,16 +1773,34 @@ func TestValidateAndInitClaimOptions_InplaceUpdateValidation(t *testing.T) {
 					Image: "nginx:stable",
 				},
 			},
-			expectErr: false,
+		},
+		{
+			name: "cpu with memory is allowed",
+			opts: infra.ClaimSandboxOptions{
+				User:     "u",
+				Template: "t",
+				InplaceUpdate: &config.InplaceUpdateOptions{
+					Resources: &config.InplaceUpdateResourcesOptions{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("500m"),
+							corev1.ResourceMemory: resource.MustParse("512Mi"),
+						},
+						Limits: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("1"),
+							corev1.ResourceMemory: resource.MustParse("1Gi"),
+						},
+					},
+				},
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ValidateAndInitClaimOptions(tt.opts)
-			if tt.expectErr {
+			if tt.expectError != "" {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errContains)
+				assert.Contains(t, err.Error(), tt.expectError)
 				return
 			}
 			require.NoError(t, err)
@@ -4639,4 +4652,3 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 		})
 	}
 }
-

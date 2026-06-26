@@ -79,11 +79,6 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 			return infra.ClaimSandboxOptions{}, fmt.Errorf("resources must specify at least one of requests or limits")
 		}
 		for _, rl := range []corev1.ResourceList{res.Requests, res.Limits} {
-			for resName := range rl {
-				if !supportedResizeResources[resName] {
-					return infra.ClaimSandboxOptions{}, fmt.Errorf("inplace update supports only cpu resource resize")
-				}
-			}
 			if cpu, ok := rl[corev1.ResourceCPU]; ok {
 				if cpu.IsZero() || cpu.Cmp(resource.Quantity{}) < 0 {
 					return infra.ClaimSandboxOptions{}, fmt.Errorf("target cpu must be a positive value")
@@ -165,20 +160,12 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	default:
 	}
 
-	log.Info("waiting for a free claim worker")
-	startWaiting := time.Now()
-	freeWorkerOnce := sync.OnceFunc(func() {
-		<-claimLockChannel // free the worker
-	})
-	select {
-	case <-ctx.Done():
-		err = fmt.Errorf("context canceled before getting a free claim worker: %v", ctx.Err())
-		log.Error(ctx.Err(), "failed to get a free claim worker")
+	var freeWorkerOnce func()
+	freeWorkerOnce, metrics.Wait, err = acquireClaimWorker(ctx, claimLockChannel)
+	if err != nil {
 		return
-	case claimLockChannel <- struct{}{}:
-		metrics.Wait = time.Since(startWaiting)
-		log.Info("got a free claim worker", "cost", metrics.Wait)
 	}
+
 	var pickedSandboxKey string
 	attemptLockString := chooseAttemptLockString(opts)
 	opts.LockString = attemptLockString
@@ -231,43 +218,7 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		return
 	}
 
-	admitted := false
-	lockAttempted := false
-	if opts.Admission != nil && opts.Admission.Acquire != nil {
-		if err = opts.Admission.Acquire(ctx, attemptLockString, sbx.GetResource()); err != nil {
-			log.Error(err, "failed to acquire sandbox admission", "lockString", attemptLockString)
-			return
-		}
-		admitted = true
-	}
-	defer func() {
-		if admitted && err != nil && !lockAttempted {
-			releaseAdmission(ctx, opts.Admission, attemptLockString)
-		}
-	}()
-
-	lockAttempted = true
-	err = performLockSandbox(ctx, sbx, lockType, opts, cache)
-	if err != nil {
-		log.Error(err, "failed to lock sandbox")
-		if admitted && shouldReleaseAdmissionAfterLockError(lockType, err) {
-			releaseAdmission(ctx, opts.Admission, attemptLockString)
-			admitted = false
-		}
-		if apierrors.IsConflict(err) {
-			expectations.ResourceVersionExpectationExpect(&metav1.ObjectMeta{
-				UID:             sbx.GetUID(),
-				ResourceVersion: expectations.GetNewerResourceVersion(sbx),
-			})
-		}
-		if lockType == infra.LockTypeCreate {
-			err = classifyCreateError(err, "failed to lock sandbox via create")
-		} else {
-			if apierrors.IsConflict(err) {
-				err = retriableError{Message: fmt.Sprintf("failed to lock sandbox: %s", err)}
-			}
-			// Non-conflict update errors: keep raw (already stops retry loop)
-		}
+	if err = lockPickedSandbox(ctx, sbx, lockType, opts, cache, attemptLockString); err != nil {
 		return
 	}
 	// The picked sandbox key may be changed after lock, for example, when lockType is LockTypeCreate
@@ -284,47 +235,108 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	freeWorkerOnce() // free worker early
 
 	// Step 3: Built-in post processes. The locked sandbox must be always returned to be cleared properly.
+	err = runClaimPostProcesses(ctx, sbx, lockType, opts, cache, &metrics)
+	return
+}
+
+func acquireClaimWorker(ctx context.Context, claimLockChannel chan struct{}) (func(), time.Duration, error) {
+	log := klog.FromContext(ctx)
+	log.Info("waiting for a free claim worker")
+	startWaiting := time.Now()
+	freeWorkerOnce := sync.OnceFunc(func() {
+		<-claimLockChannel // free the worker
+	})
+	select {
+	case <-ctx.Done():
+		err := fmt.Errorf("context canceled before getting a free claim worker: %v", ctx.Err())
+		log.Error(ctx.Err(), "failed to get a free claim worker")
+		return func() {}, 0, err
+	case claimLockChannel <- struct{}{}:
+		wait := time.Since(startWaiting)
+		log.Info("got a free claim worker", "cost", wait)
+		return freeWorkerOnce, wait, nil
+	}
+}
+
+func lockPickedSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions,
+	cache infracache.Provider, attemptLockString string) error {
+	log := klog.FromContext(ctx)
+	admitted := false
+	if opts.Admission != nil && opts.Admission.Acquire != nil {
+		if err := opts.Admission.Acquire(ctx, attemptLockString, sbx.GetResource()); err != nil {
+			log.Error(err, "failed to acquire sandbox admission", "lockString", attemptLockString)
+			return err
+		}
+		admitted = true
+	}
+
+	err := performLockSandbox(ctx, sbx, lockType, opts, cache)
+	if err == nil {
+		return nil
+	}
+	log.Error(err, "failed to lock sandbox")
+	if admitted && shouldReleaseAdmissionAfterLockError(lockType, err) {
+		releaseAdmission(ctx, opts.Admission, attemptLockString)
+	}
+	if apierrors.IsConflict(err) {
+		expectations.ResourceVersionExpectationExpect(&metav1.ObjectMeta{
+			UID:             sbx.GetUID(),
+			ResourceVersion: expectations.GetNewerResourceVersion(sbx),
+		})
+	}
+	if lockType == infra.LockTypeCreate {
+		return classifyCreateError(err, "failed to lock sandbox via create")
+	}
+	if apierrors.IsConflict(err) {
+		return retriableError{Message: fmt.Sprintf("failed to lock sandbox: %s", err)}
+	}
+	// Non-conflict update errors: keep raw (already stops retry loop)
+	return err
+}
+
+func runClaimPostProcesses(ctx context.Context, sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions,
+	cache infracache.Provider, metrics *infra.ClaimMetrics) error {
+	log := klog.FromContext(ctx)
 	if lockType == infra.LockTypeCreate || lockType == infra.LockTypeSpeculate || opts.InplaceUpdate != nil {
 		log.Info("should wait for sandbox ready", "inplaceUpdate", opts.InplaceUpdate != nil)
+		var err error
 		metrics.WaitReady, err = waitForSandboxReady(ctx, sbx, opts, cache)
 		metrics.Total += metrics.WaitReady
 		if err != nil {
 			log.Error(err, "failed to wait for sandbox ready", "cost", metrics.WaitReady)
-			err = retriableError{Message: fmt.Sprintf("failed to wait for sandbox ready: %s", err)}
-			return
+			return retriableError{Message: fmt.Sprintf("failed to wait for sandbox ready: %s", err)}
 		}
 		log.Info("sandbox is ready", "cost", metrics.WaitReady)
 	}
 
 	if opts.InitRuntime != nil {
 		log.Info("starting to init runtime", "opts", opts.InitRuntime)
+		var err error
 		metrics.InitRuntime, err = runtime.InitRuntime(ctx, sbx.Sandbox, *opts.InitRuntime, sbx.refreshFunc())
 		if err != nil {
 			log.Error(err, "failed to init runtime")
-			err = retriableError{Message: fmt.Sprintf("failed to init runtime: %s", err)}
-			return
+			return retriableError{Message: fmt.Sprintf("failed to init runtime: %s", err)}
 		}
 		metrics.Total += metrics.InitRuntime
 		log.Info("runtime inited", "cost", metrics.InitRuntime)
 	}
 
-	if err = processSecurityToken(ctx, opts, sbx, cache, &metrics); err != nil {
-		return
+	if err := processSecurityToken(ctx, opts, sbx, cache, metrics); err != nil {
+		return err
 	}
 
 	if opts.CSIMount != nil {
 		log.Info("starting to perform csi mount")
+		var err error
 		metrics.CSIMount, err = runtime.ProcessCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount)
 		if err != nil {
 			log.Error(err, "failed to perform csi mount")
-			err = fmt.Errorf("failed to perform csi mount: %s", err)
-			return
+			return fmt.Errorf("failed to perform csi mount: %s", err)
 		}
 		metrics.Total += metrics.CSIMount
 		log.Info("csi mount completed", "cost", metrics.CSIMount)
 	}
-
-	return
+	return nil
 }
 
 // processSecurityToken issues and propagates a sandbox security token when the

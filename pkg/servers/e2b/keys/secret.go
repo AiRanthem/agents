@@ -40,11 +40,10 @@ import (
 )
 
 var (
-	KeySecretName   = "e2b-key-store"
-	AdminKeyID      uuid.UUID
-	generateUUID    = uuid.New
-	marshalAPIKey   = marshalStoredAPIKey
-	unmarshalAPIKey = unmarshalStoredAPIKey
+	KeySecretName = "e2b-key-store"
+	AdminKeyID    uuid.UUID
+	generateUUID  = uuid.New
+	marshalAPIKey = marshalStoredAPIKey
 
 	errInvalidQuotaSpec = errors.New("invalid api-key quota")
 )
@@ -76,10 +75,6 @@ func marshalStoredAPIKey(v any) ([]byte, error) {
 	default:
 		return json.Marshal(v)
 	}
-}
-
-func unmarshalStoredAPIKey(data []byte) (*models.CreatedTeamAPIKey, error) {
-	return decodeStoredAPIKey(data)
 }
 
 func marshalStoredTeamAPIKey(apiKey *models.CreatedTeamAPIKey) ([]byte, error) {

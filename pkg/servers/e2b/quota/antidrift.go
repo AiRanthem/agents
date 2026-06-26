@@ -29,6 +29,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	cachepkg "github.com/openkruise/agents/pkg/cache"
+	"github.com/openkruise/agents/pkg/servers/e2b/models"
 )
 
 const eventReconcileTimeout = 2 * time.Second
@@ -178,14 +179,7 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		d.clearLeaked()
 		return nil
 	}
-	limitedOwners := map[string]struct{}{}
-	for _, key := range limitedKeys {
-		if key == nil || key.QuotaSpec == nil || !key.QuotaSpec.IsLimited() {
-			continue
-		}
-		limitedOwners[key.ID.String()] = struct{}{}
-	}
-	d.replaceLimitedOwners(limitedOwners)
+	d.replaceLimitedOwners(limitedOwnerIDs(limitedKeys))
 
 	now := d.now()
 	var firstErr error
@@ -198,105 +192,124 @@ func (d *AntiDriftDriver) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if key == nil || key.QuotaSpec == nil || !key.QuotaSpec.IsLimited() {
+		if !isLimitedKey(key) {
 			continue
 		}
-
-		apiKeyID := key.ID.String()
-		liveSandboxes, err := d.cache.ListLiveSandboxesByOwner(ctx, apiKeyID)
-		if err != nil {
-			antiDriftErrorsTotal.WithLabelValues("list_live").Inc()
-			d.clearLeakedForKey(apiKeyID)
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+		stop, err := d.reconcileLimitedKey(ctx, key, now)
+		if stop {
+			return err
 		}
-
-		haveEntries, err := d.backend.ListEntries(ctx, apiKeyID)
-		if err != nil {
-			antiDriftErrorsTotal.WithLabelValues("list_entries").Inc()
-			d.clearLeakedForKey(apiKeyID)
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
-
-		liveLocks := make(map[string]struct{}, len(liveSandboxes))
-		nextLeaked := map[string]leakedObservation{}
-		for _, sbx := range liveSandboxes {
-			lockString := lockStringOf(sbx)
-			if lockString == "" {
-				continue
-			}
-			liveLocks[lockString] = struct{}{}
-
-			want := liveEntryForSandbox(sbx)
-			have, ok := haveEntries[lockString]
-			if ok && entriesEqual(have, want) {
-				continue
-			}
-
-			if !d.stillPrimary() {
-				antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
-				d.clearLeaked()
-				return nil
-			}
-			if err := d.backend.Acquire(ctx, AcquireParams{
-				APIKeyID:   apiKeyID,
-				LockString: lockString,
-				Footprint:  want.Footprint,
-				Scopes:     want.Scopes,
-				Enforce:    false,
-				Limits:     key.QuotaSpec.LimitedPairs(),
-			}); err != nil {
-				antiDriftErrorsTotal.WithLabelValues("acquire").Inc()
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		}
-
-		healthy := d.cache.SandboxInformerHealthy()
-		for lockString := range haveEntries {
-			if _, ok := liveLocks[lockString]; ok {
-				continue
-			}
-			if !healthy {
-				continue
-			}
-
-			obs := d.leakedObservation(apiKeyID, lockString)
-			if obs.firstSeen.IsZero() {
-				obs.firstSeen = now
-			}
-			seenPreviousSuccessfulPass := obs.confirmed
-			obs.confirmed = true
-			nextLeaked[lockString] = obs
-
-			if !seenPreviousSuccessfulPass || now.Sub(obs.firstSeen) < d.cfg.Grace {
-				continue
-			}
-			if !d.stillPrimary() {
-				antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
-				d.clearLeaked()
-				return nil
-			}
-			if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
-				antiDriftErrorsTotal.WithLabelValues("release").Inc()
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-			delete(nextLeaked, lockString)
-		}
-
-		d.replaceLeakedForKey(apiKeyID, nextLeaked)
 	}
 
 	return firstErr
+}
+
+func limitedOwnerIDs(limitedKeys []*models.CreatedTeamAPIKey) map[string]struct{} {
+	limitedOwners := map[string]struct{}{}
+	for _, key := range limitedKeys {
+		if isLimitedKey(key) {
+			limitedOwners[key.ID.String()] = struct{}{}
+		}
+	}
+	return limitedOwners
+}
+
+func isLimitedKey(key *models.CreatedTeamAPIKey) bool {
+	return key != nil && key.QuotaSpec != nil && key.QuotaSpec.IsLimited()
+}
+
+func (d *AntiDriftDriver) reconcileLimitedKey(ctx context.Context, key *models.CreatedTeamAPIKey, now time.Time) (bool, error) {
+	apiKeyID := key.ID.String()
+	liveSandboxes, err := d.cache.ListLiveSandboxesByOwner(ctx, apiKeyID)
+	if err != nil {
+		antiDriftErrorsTotal.WithLabelValues("list_live").Inc()
+		d.clearLeakedForKey(apiKeyID)
+		return false, err
+	}
+
+	haveEntries, err := d.backend.ListEntries(ctx, apiKeyID)
+	if err != nil {
+		antiDriftErrorsTotal.WithLabelValues("list_entries").Inc()
+		d.clearLeakedForKey(apiKeyID)
+		return false, err
+	}
+
+	var firstErr error
+	liveLocks := make(map[string]struct{}, len(liveSandboxes))
+	nextLeaked := map[string]leakedObservation{}
+	for _, sbx := range liveSandboxes {
+		lockString := lockStringOf(sbx)
+		if lockString == "" {
+			continue
+		}
+		liveLocks[lockString] = struct{}{}
+
+		want := liveEntryForSandbox(sbx)
+		have, ok := haveEntries[lockString]
+		if ok && entriesEqual(have, want) {
+			continue
+		}
+
+		if !d.stillPrimary() {
+			antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
+			d.clearLeaked()
+			return true, nil
+		}
+		if err := d.backend.Acquire(ctx, AcquireParams{
+			APIKeyID:   apiKeyID,
+			LockString: lockString,
+			Footprint:  want.Footprint,
+			Scopes:     want.Scopes,
+			Enforce:    false,
+			Limits:     key.QuotaSpec.LimitedPairs(),
+		}); err != nil {
+			antiDriftErrorsTotal.WithLabelValues("acquire").Inc()
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	healthy := d.cache.SandboxInformerHealthy()
+	for lockString := range haveEntries {
+		if _, ok := liveLocks[lockString]; ok {
+			continue
+		}
+		if !healthy {
+			continue
+		}
+
+		obs := d.leakedObservation(apiKeyID, lockString)
+		if obs.firstSeen.IsZero() {
+			obs.firstSeen = now
+		}
+		seenPreviousSuccessfulPass := obs.confirmed
+		obs.confirmed = true
+		nextLeaked[lockString] = obs
+
+		if !seenPreviousSuccessfulPass || now.Sub(obs.firstSeen) < d.cfg.Grace {
+			continue
+		}
+		if !d.stillPrimary() {
+			antiDriftSkippedTotal.WithLabelValues("not_primary").Inc()
+			d.clearLeaked()
+			return true, nil
+		}
+		if err := d.backend.Release(ctx, apiKeyID, lockString); err != nil {
+			antiDriftErrorsTotal.WithLabelValues("release").Inc()
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		delete(nextLeaked, lockString)
+	}
+
+	d.replaceLeakedForKey(apiKeyID, nextLeaked)
+	return false, firstErr
 }
 
 func (d *AntiDriftDriver) SandboxEventHandler() toolscache.ResourceEventHandler {
@@ -515,13 +528,6 @@ func lockStringOf(sbx *agentsv1alpha1.Sandbox) string {
 		return ""
 	}
 	return sbx.GetAnnotations()[agentsv1alpha1.AnnotationLock]
-}
-
-func sandboxOlderThan(sbx *agentsv1alpha1.Sandbox, now time.Time, grace time.Duration) bool {
-	if sbx == nil {
-		return false
-	}
-	return now.Sub(sbx.CreationTimestamp.Time) > grace
 }
 
 func liveEntryForSandbox(sbx *agentsv1alpha1.Sandbox) Entry {
