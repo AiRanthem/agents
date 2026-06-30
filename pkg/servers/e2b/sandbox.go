@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openkruise/agents/pkg/utils/sandboxlabels"
 	"k8s.io/klog/v2"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
@@ -62,6 +63,13 @@ func (sc *Controller) getSandboxOfUser(ctx context.Context, sandboxID string, ex
 		return nil, &web.ApiError{
 			Code:    http.StatusNotFound,
 			Message: fmt.Sprintf("Cannot get sandbox %s: %v", sandboxID, err),
+		}
+	}
+	if isReservedFailedSandbox(sbx) {
+		log.Info("sandbox is reserved after failure")
+		return nil, &web.ApiError{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf("Cannot get sandbox %s: sandbox not found", sandboxID),
 		}
 	}
 	log.Info("sandbox found", "sandbox", klog.KObj(sbx))
@@ -131,6 +139,10 @@ func ValidateMetadataKey(key string) bool {
 		}
 	}
 	return true
+}
+
+func isReservedFailedSandbox(sbx infra.Sandbox) bool {
+	return sandboxlabels.IsReservedFailedSandbox(sbx.GetLabels())
 }
 
 func ParseTimeout(sbx infra.Sandbox) (autoPause bool, timeoutAt time.Time) {

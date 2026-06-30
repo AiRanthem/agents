@@ -251,6 +251,28 @@ func TestListSandboxes(t *testing.T) {
 	}
 }
 
+func TestListSandboxesSkipsReservedFailedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	visible := CreateClaimedSandboxCR(t, controller, Namespace, "visible-sandbox", "test-template", user.ID.String(), nil)
+	hidden := CreateClaimedSandboxCR(t, controller, Namespace, "reserved-failed-sandbox", "test-template", user.ID.String(), nil)
+	hidden.Labels[agentsv1alpha1.LabelSandboxReservedFailed] = agentsv1alpha1.True
+	require.NoError(t, fc.Update(t.Context(), hidden))
+
+	resp, apiErr := controller.ListSandboxes(NewRequest(t, nil, nil, nil, user))
+
+	require.Nil(t, apiErr)
+	require.Len(t, resp.Body, 1)
+	assert.Equal(t, fmt.Sprintf("%s--%s", visible.Namespace, visible.Name), resp.Body[0].SandboxID)
+}
+
 func TestListSnapshotsNamespaceIsolationWithSameCheckpointID(t *testing.T) {
 	controller, _, teardown := Setup(t)
 	defer teardown()

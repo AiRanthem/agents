@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/openkruise/agents/pkg/utils/sandboxlabels"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -302,6 +303,9 @@ func (c *Cache) CountActiveSandboxes(ctx context.Context, opts ListSandboxesOpti
 	}
 	var cnt int32
 	for i := range list.Items {
+		if sandboxlabels.IsReservedFailedSandbox(list.Items[i].Labels) {
+			continue
+		}
 		state, _ := utils.GetSandboxState(&list.Items[i])
 		if state != agentsv1alpha1.SandboxStateDead {
 			cnt++

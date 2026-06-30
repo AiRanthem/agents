@@ -158,7 +158,7 @@ func TestValidateAndInitClaimOptions_ReserveFailedSandboxFor(t *testing.T) {
 				User:     "test-user",
 				Template: "test-template",
 			},
-			expectFor: DefaultReserveFailedSandboxFor,
+			expectFor: consts.ReserveFailedSandboxNever,
 		},
 		{
 			name: "explicit never deletes immediately",
@@ -655,14 +655,16 @@ func TestClaimSandboxFailed(t *testing.T) {
 	existTemplate := "test-template"
 
 	// Test cases
+	existingShutdownTime := metav1.NewTime(time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC))
 	tests := []struct {
-		name           string
-		options        infra.ClaimSandboxOptions
-		preModifier    func(sbx *v1alpha1.Sandbox)
-		expectError    string
-		expectDeleted  bool
-		expectShutdown bool
-		getContext     func() context.Context
+		name                   string
+		options                infra.ClaimSandboxOptions
+		preModifier            func(sbx *v1alpha1.Sandbox)
+		expectError            string
+		expectDeleted          bool
+		expectShutdown         bool
+		expectExistingShutdown *metav1.Time
+		getContext             func() context.Context
 	}{
 		{
 			name: "start container failed, reserved",
@@ -684,6 +686,29 @@ func TestClaimSandboxFailed(t *testing.T) {
 				}
 			},
 			expectError: "sandbox start container failed",
+		},
+		{
+			name: "start container failed, reserved forever keeps existing shutdown time",
+			options: infra.ClaimSandboxOptions{
+				User:                    "test-user",
+				Template:                existTemplate,
+				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
+				InplaceUpdate: &config.InplaceUpdateOptions{
+					Image: "new-image",
+				},
+			},
+			preModifier: func(sbx *v1alpha1.Sandbox) {
+				sbx.Spec.ShutdownTime = existingShutdownTime.DeepCopy()
+				sbx.Status.Conditions = []metav1.Condition{
+					{
+						Type:   string(v1alpha1.SandboxConditionReady),
+						Status: metav1.ConditionTrue,
+						Reason: v1alpha1.SandboxReadyReasonStartContainerFailed,
+					},
+				}
+			},
+			expectError:            "sandbox start container failed",
+			expectExistingShutdown: &existingShutdownTime,
 		},
 		{
 			name: "start container failed, reserved for duration",
@@ -872,9 +897,51 @@ func TestClaimSandboxFailed(t *testing.T) {
 			if tt.expectShutdown {
 				require.NotNil(t, got.Spec.ShutdownTime)
 				assert.WithinDuration(t, time.Now().Add(time.Hour), got.Spec.ShutdownTime.Time, 5*time.Second)
+				assert.Equal(t, v1alpha1.True, got.Labels[v1alpha1.LabelSandboxReservedFailed])
+			} else if tt.expectExistingShutdown != nil {
+				require.NotNil(t, got.Spec.ShutdownTime)
+				assert.True(t, got.Spec.ShutdownTime.Time.Equal(tt.expectExistingShutdown.Time))
+				assert.Equal(t, v1alpha1.True, got.Labels[v1alpha1.LabelSandboxReservedFailed])
 			} else {
 				assert.Nil(t, got.Spec.ShutdownTime)
+				if tt.options.ReserveFailedSandboxFor != nil && *tt.options.ReserveFailedSandboxFor == consts.ReserveFailedSandboxForever {
+					assert.Equal(t, v1alpha1.True, got.Labels[v1alpha1.LabelSandboxReservedFailed])
+				}
 			}
+		})
+	}
+}
+
+func TestClearFailedSandboxReserveUpdateFailureDeletesSandbox(t *testing.T) {
+	tests := []struct {
+		name       string
+		reserveFor time.Duration
+	}{
+		{
+			name:       "reserve forever falls back to delete",
+			reserveFor: consts.ReserveFailedSandboxForever,
+		},
+		{
+			name:       "reserve for duration falls back to delete",
+			reserveFor: time.Hour,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := createTestSandboxWithDefaults("test-sbx", "default")
+			testCache, fc := newRetryUpdateTestCache(t, sbx, sbx.DeepCopy(), func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				if _, ok := obj.(*v1alpha1.Sandbox); ok {
+					return apierrors.NewInternalError(errors.New("reserve update failed"))
+				}
+				return c.Update(ctx, obj, opts...)
+			})
+
+			clearFailedSandbox(t.Context(), AsSandbox(sbx, testCache), errors.New("claim failed"), ptr.To(tt.reserveFor))
+
+			got := &v1alpha1.Sandbox{}
+			err := fc.Get(t.Context(), client.ObjectKeyFromObject(sbx), got)
+			assert.True(t, apierrors.IsNotFound(err))
 		})
 	}
 }
@@ -3845,4 +3912,3 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 		})
 	}
 }
-

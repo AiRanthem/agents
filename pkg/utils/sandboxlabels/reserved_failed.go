@@ -14,22 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package sandboxcr
+package sandboxlabels
 
-import (
-	"time"
+import agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
-)
-
-var (
-	DefaultClaimTimeout            = time.Minute
-	DefaultCloneTimeout            = time.Minute
-	DefaultReserveFailedSandboxFor = consts.ReserveFailedSandboxNever
-	RetryInterval                  = 25 * time.Millisecond
-	CreateRetryInterval            = 1 * time.Second
-	CreateRetryBackoffFactor       = 2.0
-	CreateRetryJitter              = 0.3
-	CreateRetryIntervalCap         = 16 * time.Second
-	CreateMaxRetrySteps            = 10
-)
+func IsReservedFailedSandbox(labels map[string]string) bool {
+	return labels[agentsv1alpha1.LabelSandboxReservedFailed] == agentsv1alpha1.True
+}

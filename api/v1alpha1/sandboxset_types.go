@@ -34,6 +34,8 @@ const (
 	// LabelSandboxClaimName indicates the name of the SandboxClaim that claimed this sandbox
 	LabelSandboxClaimName = InternalPrefix + "claim-name"
 	LabelTemplateHash     = InternalPrefix + "template-hash"
+	// LabelSandboxReservedFailed marks a failed sandbox retained for debugging.
+	LabelSandboxReservedFailed = InternalPrefix + "reserved-failed-sandbox"
 
 	AnnotationLock               = InternalPrefix + "lock"
 	AnnotationOwner              = InternalPrefix + "owner"

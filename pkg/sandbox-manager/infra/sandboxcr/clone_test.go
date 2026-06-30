@@ -136,7 +136,7 @@ func TestValidateAndInitCloneOptions_ReserveFailedSandboxFor(t *testing.T) {
 				User:         "test-user",
 				CheckPointID: "test-checkpoint",
 			},
-			expectFor: DefaultReserveFailedSandboxFor,
+			expectFor: consts.ReserveFailedSandboxNever,
 		},
 		{
 			name: "explicit never deletes immediately",
@@ -473,9 +473,13 @@ func TestCloneSandbox_CleansFailedCreatedSandbox(t *testing.T) {
 			if tt.expectShutdown {
 				require.NotNil(t, got.Spec.ShutdownTime)
 				assert.WithinDuration(t, time.Now().Add(time.Hour), got.Spec.ShutdownTime.Time, 5*time.Second)
+				assert.Equal(t, v1alpha1.True, got.Labels[v1alpha1.LabelSandboxReservedFailed])
 				return
 			}
 			assert.Nil(t, got.Spec.ShutdownTime)
+			if tt.reserveFor == consts.ReserveFailedSandboxForever {
+				assert.Equal(t, v1alpha1.True, got.Labels[v1alpha1.LabelSandboxReservedFailed])
+			}
 		})
 	}
 }
