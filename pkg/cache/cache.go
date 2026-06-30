@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/openkruise/agents/pkg/utils/sandboxlabels"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -291,6 +290,9 @@ func (c *Cache) ListSandboxes(ctx context.Context, opts ListSandboxesOptions) ([
 	}
 	result := make([]*agentsv1alpha1.Sandbox, 0, len(list.Items))
 	for i := range list.Items {
+		if utils.IsReservedFailedSandbox(list.Items[i].Labels) {
+			continue
+		}
 		result = append(result, &list.Items[i])
 	}
 	return result, nil
@@ -303,7 +305,7 @@ func (c *Cache) CountActiveSandboxes(ctx context.Context, opts ListSandboxesOpti
 	}
 	var cnt int32
 	for i := range list.Items {
-		if sandboxlabels.IsReservedFailedSandbox(list.Items[i].Labels) {
+		if utils.IsReservedFailedSandbox(list.Items[i].Labels) {
 			continue
 		}
 		state, _ := utils.GetSandboxState(&list.Items[i])

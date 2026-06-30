@@ -530,14 +530,13 @@ func TestCache_CountActiveSandboxes(t *testing.T) {
 		})
 	}
 
-	// Verify CountActiveSandboxes matches ListSandboxes result length (minus dead and reserved-failed) for user-1
+	// Verify CountActiveSandboxes matches non-dead ListSandboxes count for user-1.
 	list, err := c.ListSandboxes(t.Context(), cache.ListSandboxesOptions{User: "user-1"})
 	require.NoError(t, err)
 	var listActive int32
 	for _, sbx := range list {
 		state, _ := utils.GetSandboxState(sbx)
-		if state != agentsv1alpha1.SandboxStateDead &&
-			sbx.Labels[agentsv1alpha1.LabelSandboxReservedFailed] != agentsv1alpha1.True {
+		if state != agentsv1alpha1.SandboxStateDead {
 			listActive++
 		}
 	}

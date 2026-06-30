@@ -44,7 +44,8 @@ type Provider interface {
 
 	ListSandboxSets(ctx context.Context, opts ListSandboxSetsOptions) ([]*agentsv1alpha1.SandboxSet, error)
 
-	// ListSandboxes returns Sandbox CRD objects filtered by namespace and optional owner.
+	// ListSandboxes returns Sandbox CRD objects filtered by namespace and optional owner,
+	// excluding reserved-failed sandboxes kept for debugging.
 	// Ownership is determined by the AnnotationOwner annotation on the Sandbox resource when User is set.
 	ListSandboxes(ctx context.Context, opts ListSandboxesOptions) ([]*agentsv1alpha1.Sandbox, error)
 

@@ -298,7 +298,7 @@ func clearFailedSandbox(ctx context.Context, sbx infra.Sandbox, err error, reser
 	log := klog.FromContext(cleanupCtx).WithValues("sandbox", klog.KObj(sbx))
 
 	if effective < 0 {
-		log.Info("the failed sandbox is reserved forever for debugging", "reason", err)
+		log.Info("reserving failed sandbox forever for debugging", "reason", err)
 		// Keep any existing ShutdownTime as the original upper bound for debug retention.
 		if updateErr := reserveFailedSandbox(cleanupCtx, sbx, timeoututils.Options{}); updateErr != nil {
 			log.Error(updateErr, "failed to mark failed sandbox as reserved, deleting it instead")
@@ -348,10 +348,14 @@ func reserveFailedSandbox(ctx context.Context, sbx infra.Sandbox, opts timeoutut
 
 func deleteFailedSandbox(ctx context.Context, sbx infra.Sandbox, log klog.Logger) {
 	if killErr := sbx.Kill(ctx); killErr != nil {
+		if apierrors.IsNotFound(killErr) {
+			log.Info("sandbox already deleted")
+			return
+		}
 		log.Error(killErr, "failed to delete failed sandbox")
-	} else {
-		log.Info("sandbox deleted")
+		return
 	}
+	log.Info("sandbox deleted")
 }
 
 func getPickKey(sbx *v1alpha1.Sandbox) string {
