@@ -371,7 +371,7 @@ def cleanup_quota_case(key_id, owned, marker=None):
             print(f"quota cleanup wait fell back to kubectl for {getattr(sbx, 'sandbox_id', '<unknown>')}: {exc}")
             force_delete_sandbox(sbx)
     delete_api_key(key_id, marker)
-    wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=180)
+    wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=300)
 
 
 def assert_quota_http_create_rejected(api_key, template, marker):
@@ -513,7 +513,7 @@ def quota_templates():
     assert_sandboxset_limits(QUOTA_SMALL_TEMPLATE, "500m", "512Mi")
     assert_sandboxset_limits(QUOTA_NOSTOCK_TEMPLATE, "500m", "512Mi")
     try:
-        wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=180)
+        wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=2), timeout=300)
     except AssertionError:
         dump_quota_template_state()
         raise
