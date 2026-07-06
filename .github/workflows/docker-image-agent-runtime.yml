@@ -14,6 +14,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Login to Docker Hub
@@ -25,5 +27,7 @@ jobs:
         run: |
           docker buildx create --use --platform=linux/amd64,linux/arm64,linux/ppc64le --name multi-platform-builder
           docker buildx ls
-          RUNTIME_IMG=openkruise/agent-runtime:${{ github.ref_name }} make docker-build-runtime
-          docker push openkruise/agent-runtime:${{ github.ref_name }}
+          RUNTIME_IMG=openkruise/agent-runtime:${{ github.ref_name }} make docker-buildx-runtime
+      - name: Push the Docker image
+        run: |
+          RUNTIME_IMG=openkruise/agent-runtime:${{ github.ref_name }} make docker-pushx-runtime
