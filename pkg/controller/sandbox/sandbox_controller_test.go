@@ -1046,17 +1046,17 @@ func TestSandboxReconciler_CheckTimers(t *testing.T) {
 	}{
 		{
 			name:        "reuse in progress skips expired pause and shutdown timers",
-			reuseReason: agentsv1alpha1.SandboxReusingReasonStarted,
+			reuseReason: agentsv1alpha1.SandboxRecyclingReasonStarted,
 		},
 		{
 			name:          "reuse failed allows expired shutdown deletion",
-			reuseReason:   agentsv1alpha1.SandboxReusingReasonFailed,
+			reuseReason:   agentsv1alpha1.SandboxRecyclingReasonFailed,
 			expectDone:    true,
 			expectDeleted: true,
 		},
 		{
 			name:          "reuse timeout allows expired shutdown deletion",
-			reuseReason:   agentsv1alpha1.SandboxReusingReasonTimeout,
+			reuseReason:   agentsv1alpha1.SandboxRecyclingReasonTimeout,
 			expectDone:    true,
 			expectDeleted: true,
 		},
@@ -1075,10 +1075,10 @@ func TestSandboxReconciler_CheckTimers(t *testing.T) {
 					ShutdownTime: &past,
 				},
 				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxReusing,
+					Phase: agentsv1alpha1.SandboxRecycling,
 					Conditions: []metav1.Condition{
 						{
-							Type:   string(agentsv1alpha1.SandboxConditionReusing),
+							Type:   string(agentsv1alpha1.SandboxConditionRecycling),
 							Status: metav1.ConditionFalse,
 							Reason: tt.reuseReason,
 						},

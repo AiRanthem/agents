@@ -623,7 +623,7 @@ func (r *SandboxReconciler) ensureVolumeClaimTemplates(ctx context.Context, box 
 	return nil
 }
 
-func (r *SandboxReconciler) checkTimers(ctx context.Context, box *agentsv1alpha1.Sandbox) (ctrl.Result, bool, error) {
+func (r *SandboxReconciler) checkTimers(ctx context.Context, box *agentsv1alpha1.Sandbox, now metav1.Time) (ctrl.Result, bool, error) {
 	// Skip timers during reuse unless the reuse has reached a terminal
 	// failure state. Only then can ShutdownTime set by reuse failure be handled.
 	// handleRecycleFailed be processed. Using != avoids needing to update
