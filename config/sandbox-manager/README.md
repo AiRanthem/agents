@@ -24,3 +24,23 @@ If deploying to a real K8s cluster, please modify to an appropriate tag and push
     kustomize build config/sandbox-manager > bin/sandbox-manager.yaml
     kubectl apply -f bin/sandbox-manager.yaml
     ```
+
+## API Key Quota
+
+API keys may carry static quotas across `sandbox.count`, `limits.cpu`, and `limits.memory`, scoped by `running` or
+`all`. Public API payloads, Kubernetes Secrets, and MySQL storage all use the canonical `QuotaSpec` limits shape,
+such as
+`{"limits":[{"dimension":"sandbox.count","scope":"running","limit":10},{"dimension":"limits.cpu","scope":"running","limit":8000},{"dimension":"limits.memory","scope":"running","limit":16384},{"dimension":"sandbox.count","scope":"all","limit":50}]}`.
+Dynamic enforcement uses Redis only. If `--quota-redis-addr`
+is empty, or Redis is configured but unavailable, sandbox-manager intentionally fails open: limited keys are accepted
+and stored, but create requests are temporarily unenforced. Metrics and logs expose fail-open events.
+
+When Redis requires authentication, inject `QUOTA_REDIS_USERNAME` and `QUOTA_REDIS_PASSWORD` from a Kubernetes
+Secret rather than writing credentials directly into deployment patches.
+
+When using MySQL key storage with `--e2b-key-storage-disable-schema-auto-update=true`, the startup schema check requires
+the `team_api_keys.quota` column to exist. Apply the manual migration from `hack/mysql-schema.sql` before starting:
+
+```sql
+ALTER TABLE team_api_keys ADD COLUMN quota JSON DEFAULT NULL AFTER created_by_uid;
+```
