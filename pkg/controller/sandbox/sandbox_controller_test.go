@@ -1166,7 +1166,7 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			name:         "past shutdown time with annotation and nil pause time deletes",
 			shutdownTime: &past,
 			annotations: map[string]string{
-				agentsv1alpha1.AnnotationReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 			expectDone:    true,
 			expectDeleted: true,
@@ -1176,7 +1176,7 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			shutdownTime: &past,
 			pauseTime:    &future,
 			annotations: map[string]string{
-				agentsv1alpha1.AnnotationReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 			expectDone:    true,
 			expectDeleted: true,
@@ -1186,7 +1186,7 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			shutdownTime: &past,
 			pauseTime:    &exact,
 			annotations: map[string]string{
-				agentsv1alpha1.AnnotationReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -1195,7 +1195,7 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			pauseTime:    &past,
 			paused:       true,
 			annotations: map[string]string{
-				agentsv1alpha1.AnnotationReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 			expectDone:    true,
 			expectDeleted: true,
@@ -1226,9 +1226,8 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 				},
 			}
 
-			result, done, err := reconciler.handleShutdownTimeout(context.Background(), box, now)
+			done, err := reconciler.handleShutdownTimeout(context.Background(), box, now)
 			require.NoError(t, err)
-			assert.Equal(t, ctrl.Result{}, result)
 			assert.Equal(t, tt.expectDone, done)
 			if tt.expectDeleted {
 				assert.Equal(t, 1, deleteCalls)
@@ -1264,7 +1263,6 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 		expectPauseUnchanged bool
 		expectShutdown       string
 		expectRetention      time.Duration
-		expectEvent          string
 	}{
 		{
 			name:                 "nil pause time skips handling",
@@ -1312,12 +1310,12 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 			name:            "default annotation recalculates shutdown and pause time",
 			pauseTime:       &exact,
 			shutdownTime:    &shutdown,
-			annotationValue: ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue: ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			expectDone:      true,
 			expectPatch:     true,
 			expectPaused:    true,
 			expectShutdown:  "retention",
-			expectRetention: timeout.DefaultReservePausedSandboxFor,
+			expectRetention: timeout.ForeverReservePausedSandboxDuration,
 		},
 		{
 			name:            "custom annotation recalculates shutdown and pause time",
@@ -1333,7 +1331,7 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 		{
 			name:                 "annotation with nil shutdown does not create shutdown",
 			pauseTime:            &exact,
-			annotationValue:      ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue:      ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			expectDone:           true,
 			expectPatch:          true,
 			expectPaused:         true,
@@ -1344,13 +1342,12 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 			name:            "invalid annotation uses default retention without backfilling",
 			pauseTime:       &exact,
 			shutdownTime:    &shutdown,
-			annotationValue: ptr.To("forever"),
+			annotationValue: ptr.To("invalid"),
 			expectDone:      true,
 			expectPatch:     true,
 			expectPaused:    true,
 			expectShutdown:  "retention",
-			expectRetention: timeout.DefaultReservePausedSandboxFor,
-			expectEvent:     "InvalidReservePausedSandboxFor",
+			expectRetention: timeout.ForeverReservePausedSandboxDuration,
 		},
 		{
 			name:                 "patch conflict requeues and leaves spec unchanged",
@@ -1369,7 +1366,7 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			annotations := map[string]string{}
 			if tt.annotationValue != nil {
-				annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.annotationValue
+				annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = *tt.annotationValue
 			}
 			box := &agentsv1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
@@ -1386,7 +1383,6 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 			}
 
 			patchCalls := 0
-			fakeRecorder := record.NewFakeRecorder(100)
 			cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(box).WithInterceptorFuncs(interceptor.Funcs{
 				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 					if _, ok := obj.(*agentsv1alpha1.Sandbox); ok {
@@ -1401,7 +1397,7 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 					return c.Patch(ctx, obj, patch, opts...)
 				},
 			}).Build()
-			reconciler := &SandboxReconciler{Client: cli, recorder: fakeRecorder}
+			reconciler := &SandboxReconciler{Client: cli}
 
 			result, done, err := reconciler.handlePauseTimeout(context.Background(), box, now)
 			require.NoError(t, err)
@@ -1442,19 +1438,10 @@ func TestSandboxReconciler_HandlePauseTimeout(t *testing.T) {
 			}
 
 			if tt.annotationValue == nil {
-				_, hasAnnotation := updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]
+				_, hasAnnotation := updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]
 				assert.False(t, hasAnnotation)
 			} else {
-				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
-			}
-
-			if tt.expectEvent != "" {
-				select {
-				case event := <-fakeRecorder.Events:
-					assert.Contains(t, event, tt.expectEvent)
-				case <-time.After(time.Second):
-					t.Fatalf("expected warning event %q", tt.expectEvent)
-				}
+				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 			}
 		})
 	}
@@ -1668,11 +1655,10 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 		expectRequeue        bool
 		expectDeleted        bool
 		expectShutdownChange bool
-		expectEvent          string
 	}{
 		{
 			name:                 "default annotation recalculates shutdown",
-			annotationValue:      ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue:      ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
 			expectPaused:         true,
 			expectShutdownChange: true,
@@ -1704,18 +1690,17 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 		},
 		{
 			name:                 "annotation with nil shutdown preserves never-timeout",
-			annotationValue:      ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue:      ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			initialShutdown:      nil,
 			expectPaused:         true,
 			expectShutdownChange: false,
 		},
 		{
-			name:                 "invalid annotation patches paused without backfilling default and records warning",
-			annotationValue:      ptr.To("forever"),
+			name:                 "invalid annotation patches paused without backfilling default",
+			annotationValue:      ptr.To("invalid"),
 			initialShutdown:      ptr.To(metav1.NewTime(time.Now().Add(time.Hour))),
 			expectPaused:         true,
 			expectShutdownChange: true,
-			expectEvent:          "InvalidReservePausedSandboxFor",
 		},
 		{
 			name:                "patch conflict requeues and leaves spec unchanged",
@@ -1726,14 +1711,14 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 		},
 		{
 			name:            "annotation present but nil pause time with expired shutdown deletes",
-			annotationValue: ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue: ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			initialShutdown: ptr.To(metav1.NewTime(time.Now().Add(-time.Second))),
 			nilPauseTime:    true,
 			expectDeleted:   true,
 		},
 		{
 			name:            "annotation present with future pause time and expired shutdown deletes",
-			annotationValue: ptr.To(timeout.ReservePausedSandboxForDefaultValue),
+			annotationValue: ptr.To(timeout.ReservePausedSandboxDurationForeverValue),
 			initialShutdown: ptr.To(metav1.NewTime(time.Now().Add(-time.Second))),
 			futurePauseTime: true,
 			expectDeleted:   true,
@@ -1744,7 +1729,7 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			annotations := map[string]string{}
 			if tt.annotationValue != nil {
-				annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.annotationValue
+				annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = *tt.annotationValue
 			}
 			var pauseTime *metav1.Time
 			if tt.futurePauseTime {
@@ -1849,9 +1834,9 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			require.NoError(t, cli.Get(context.TODO(), req.NamespacedName, updated))
 			assert.Equal(t, tt.expectPaused, updated.Spec.Paused)
 			if tt.expectAnnotation != "" {
-				assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+				assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 			} else if tt.annotationValue != nil {
-				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+				assert.Equal(t, *tt.annotationValue, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 			}
 
 			if tt.injectPatchConflict {
@@ -1868,7 +1853,7 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			if tt.expectShutdownChange {
 				require.NotNil(t, updated.Spec.ShutdownTime)
 				require.NotNil(t, updated.Spec.PauseTime)
-				retention := timeout.DefaultReservePausedSandboxFor
+				retention := timeout.ForeverReservePausedSandboxDuration
 				if tt.annotationValue != nil && *tt.annotationValue == "30m" {
 					retention = 30 * time.Minute
 				}
@@ -1879,15 +1864,6 @@ func TestSandboxReconciler_AutoPauseReservePausedRetention(t *testing.T) {
 			} else {
 				require.NotNil(t, updated.Spec.ShutdownTime)
 				assert.True(t, timeout.NormalizeTime(updated.Spec.ShutdownTime.Time).Equal(timeout.NormalizeTime(tt.initialShutdown.Time)))
-			}
-
-			if tt.expectEvent != "" {
-				select {
-				case event := <-fakeRecorder.Events:
-					assert.Contains(t, event, tt.expectEvent)
-				case <-time.After(time.Second):
-					t.Fatalf("expected warning event %q", tt.expectEvent)
-				}
 			}
 		})
 	}

@@ -141,9 +141,9 @@ The project has two distinct paths for managing sandbox timeout/pause lifecycle:
 
 - **K8s path** (controller, ops manual annotation): Annotation absent → `hasAnnotation=false`, controller MUST NOT
   modify `ShutdownTime`. Only when the annotation is explicitly present does the controller recalculate timeout.
-  Invalid annotations trigger a warning event and use the default retention, but absent annotations mean "no policy"
+  Invalid annotations are logged and use the default retention, but absent annotations mean "no policy"
   and the controller leaves CRD fields untouched.
-- **Sandbox-manager path** (preset operational config): Annotation absent → use default value (`"default"`), always
+- **Sandbox-manager path** (preset operational config): Annotation absent → use default value (`"forever"`), always
   ensure the annotation is present on manager-created sandboxes. Missing annotation is treated as "use built-in
   default retention".
 
@@ -151,7 +151,7 @@ The shared parsing package (`pkg/pausedretention`) MUST remain a stateless, poli
 annotation says (`duration, present, error`) without applying any default-when-absent policy. Policy lives at each
 boundary:
 
-- Controller boundary (`pkg/controller/sandbox/`): uses `ResolveReservePausedSandboxForAnnotation` and only acts when
+- Controller boundary (`pkg/controller/sandbox/`): uses `ResolveReservePausedSandboxDurationAnnotation` and only acts when
   `managed=true`. Never backfills the annotation.
 - Sandbox-manager boundary (`pkg/servers/`): resolves with default-when-absent policy and may backfill the annotation
   on accepted writes.

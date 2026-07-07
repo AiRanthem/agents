@@ -87,7 +87,7 @@ Every E2B route is registered twice via `RegisterE2BRoute`: once for the native 
   safety rules.
 
 ### Timeout Semantics
-- **Pause**: for timed sandboxes, writes the paused retention deadline (`now + retention`) while flipping `Spec.Paused=true`; the default retention is 100 years and can be overridden by `x-e2b-kruise-reserve-paused-sandbox-for`. Never-timeout sandboxes keep nil timeout fields.
+- **Pause**: for timed sandboxes, writes the paused retention deadline (`now + retention`) while flipping `Spec.Paused=true`; the default retention is 100 years and can be overridden by `x-e2b-kruise-reserve-paused-sandbox-duration`. Never-timeout sandboxes keep nil timeout fields.
 - **Resume**: for timed sandboxes, writes an effective timeout while flipping `Spec.Paused=false`; the effective timeout is the request value after the resume floor. Never-timeout sandboxes keep nil timeout fields.
 - **Connect (Running)**: extend-only — never shortens the effective deadline. If the requested deadline is earlier than the current one, the update is silently skipped.
 - **Connect (Paused → Resume)**: resumes with an effective timeout placeholder, then applies the post-resume timeout with `UpdatePolicyExtendOnly`.

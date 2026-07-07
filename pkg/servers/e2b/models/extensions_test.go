@@ -45,8 +45,8 @@ func TestParseExtensions(t *testing.T) {
 			metadata: nil,
 			wantErr:  false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -54,45 +54,45 @@ func TestParseExtensions(t *testing.T) {
 			metadata: map[string]string{},
 			wantErr:  false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
 			name:     "reserve paused sandbox defaults when metadata absent",
 			metadata: map[string]string{},
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
-			name: "reserve paused sandbox explicit default",
+			name: "reserve paused sandbox explicit forever",
 			metadata: map[string]string{
-				ExtensionKeyReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				ExtensionKeyReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
 			name: "reserve paused sandbox custom duration",
 			metadata: map[string]string{
-				ExtensionKeyReservePausedSandboxFor: "240h",
+				ExtensionKeyReservePausedSandboxDuration: "240h",
 			},
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: "240h",
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: "240h",
 			},
 		},
 		{
 			name: "reserve paused sandbox rejects invalid value",
 			metadata: map[string]string{
-				ExtensionKeyReservePausedSandboxFor: "forever",
+				ExtensionKeyReservePausedSandboxDuration: "invalid",
 			},
 			wantErr:     true,
-			errContains: "use \"default\"",
+			errContains: "use \"forever\"",
 		},
 		{
 			name: "valid image extension",
@@ -101,8 +101,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				InplaceUpdate: InplaceUpdateExtension{
 					Image: "nginx:latest",
 				},
@@ -115,8 +115,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -126,7 +126,7 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -136,9 +136,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(consts.ReserveFailedSandboxNever),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -148,9 +148,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(consts.ReserveFailedSandboxForever),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -160,9 +160,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(10 * time.Minute),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(10 * time.Minute),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -172,9 +172,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(consts.ReserveFailedSandboxNever),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -200,9 +200,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxForever),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(consts.ReserveFailedSandboxForever),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -213,9 +213,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReserveFailedSandboxFor:      ptr.To(consts.ReserveFailedSandboxNever),
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -225,9 +225,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
-				ReturnPodIP:             true,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+				ReturnPodIP:                  true,
 			},
 		},
 		{
@@ -237,8 +237,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 			},
 		},
 		{
@@ -262,9 +262,9 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
-				WaitReadySeconds:        1234,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+				WaitReadySeconds:             1234,
 			},
 		},
 		{
@@ -275,8 +275,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				InplaceUpdate: InplaceUpdateExtension{
 					Resources: &InplaceUpdateResourcesExtension{
 						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
@@ -293,8 +293,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				InplaceUpdate: InplaceUpdateExtension{
 					Resources: &InplaceUpdateResourcesExtension{
 						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1500m")},
@@ -318,8 +318,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				CSIMount: CSIMountExtension{
 					MountConfigs: []v1alpha1.CSIMountConfig{
 						{
@@ -367,8 +367,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				CSIMount: CSIMountExtension{
 					MountConfigs: []v1alpha1.CSIMountConfig{
 						{
@@ -389,8 +389,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				CSIMount: CSIMountExtension{
 					MountConfigs: []v1alpha1.CSIMountConfig{
 						{
@@ -411,8 +411,8 @@ func TestParseExtensions(t *testing.T) {
 			},
 			wantErr: false,
 			expectExtension: NewSandboxRequestExtension{
-				CreateOnNoStock:         true,
-				ReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue,
+				CreateOnNoStock:              true,
+				ReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
 				CSIMount: CSIMountExtension{
 					MountConfigs: []v1alpha1.CSIMountConfig{
 						{

@@ -880,16 +880,16 @@ func TestCreateSandboxRetentionSemantics(t *testing.T) {
 				models.ExtensionKeySkipInitRuntime: v1alpha1.True,
 			},
 			autoPause:      true,
-			wantAnnotation: timeout.ReservePausedSandboxForDefaultValue,
+			wantAnnotation: timeout.ReservePausedSandboxDurationForeverValue,
 			wantShutdownFrom: func(pauseTime time.Time) time.Time {
-				return pauseTime.Add(timeout.DefaultReservePausedSandboxFor)
+				return pauseTime.Add(timeout.ForeverReservePausedSandboxDuration)
 			},
 		},
 		{
 			name: "custom retention persisted",
 			metadata: map[string]string{
-				models.ExtensionKeySkipInitRuntime:         v1alpha1.True,
-				models.ExtensionKeyReservePausedSandboxFor: "240h",
+				models.ExtensionKeySkipInitRuntime:              v1alpha1.True,
+				models.ExtensionKeyReservePausedSandboxDuration: "240h",
 			},
 			autoPause:      true,
 			wantAnnotation: "240h",
@@ -905,12 +905,12 @@ func TestCreateSandboxRetentionSemantics(t *testing.T) {
 			},
 			autoPause:      true,
 			neverTimeout:   true,
-			wantAnnotation: timeout.ReservePausedSandboxForDefaultValue,
+			wantAnnotation: timeout.ReservePausedSandboxDurationForeverValue,
 		},
 		{
 			name: "invalid retention metadata returns bad request",
 			metadata: map[string]string{
-				models.ExtensionKeyReservePausedSandboxFor: "0s",
+				models.ExtensionKeyReservePausedSandboxDuration: "0s",
 			},
 			expectCreateErr: "Bad extension param",
 		},
@@ -941,9 +941,9 @@ func TestCreateSandboxRetentionSemantics(t *testing.T) {
 			require.NotNil(t, createResp.Body)
 
 			sbx := GetSandbox(t, createResp.Body.SandboxID, client)
-			assert.Equal(t, tt.wantAnnotation, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
-			assert.NotContains(t, createResp.Body.Metadata, v1alpha1.AnnotationReservePausedSandboxFor)
-			assert.NotContains(t, createResp.Body.Metadata, models.ExtensionKeyReservePausedSandboxFor)
+			assert.Equal(t, tt.wantAnnotation, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
+			assert.NotContains(t, createResp.Body.Metadata, v1alpha1.AnnotationReservePausedSandboxDuration)
+			assert.NotContains(t, createResp.Body.Metadata, models.ExtensionKeyReservePausedSandboxDuration)
 			if tt.neverTimeout {
 				assert.Nil(t, sbx.Spec.PauseTime)
 				assert.Nil(t, sbx.Spec.ShutdownTime)
@@ -988,8 +988,8 @@ func TestPausedSandboxRetentionLifecycle(t *testing.T) {
 				AutoPause:  true,
 				Timeout:    300,
 				Metadata: map[string]string{
-					models.ExtensionKeySkipInitRuntime:         v1alpha1.True,
-					models.ExtensionKeyReservePausedSandboxFor: tt.createRetention,
+					models.ExtensionKeySkipInitRuntime:              v1alpha1.True,
+					models.ExtensionKeyReservePausedSandboxDuration: tt.createRetention,
 				},
 			}, nil, user))
 			require.Nil(t, apiErr)
@@ -1033,7 +1033,7 @@ func TestPausedSandboxRetentionLifecycle(t *testing.T) {
 			assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(tt.createRetentionPeriod), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 
 			req := NewRequest(t, nil, nil, map[string]string{"sandboxID": createResp.Body.SandboxID}, user)
-			req.Header.Set(models.ExtensionHeaderReservePausedSandboxFor, tt.manualRetention)
+			req.Header.Set(models.ExtensionHeaderReservePausedSandboxDuration, tt.manualRetention)
 			go UpdateSandboxWhen(t, client, createResp.Body.SandboxID, func(s *v1alpha1.Sandbox) bool {
 				return s.Spec.Paused
 			}, DoSetSandboxStatus(v1alpha1.SandboxPaused, metav1.ConditionTrue, metav1.ConditionFalse))
@@ -1041,7 +1041,7 @@ func TestPausedSandboxRetentionLifecycle(t *testing.T) {
 			_, apiErr = controller.PauseSandbox(req)
 			require.Nil(t, apiErr)
 			sbx = GetSandbox(t, createResp.Body.SandboxID, client)
-			assert.Equal(t, tt.manualRetention, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+			assert.Equal(t, tt.manualRetention, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
 			assert.WithinDuration(t, beforeManualPause.Add(tt.manualRetentionPeriod), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 			assert.WithinDuration(t, beforeManualPause.Add(tt.manualRetentionPeriod), sbx.Spec.PauseTime.Time, 5*time.Second)
 		})
@@ -1723,7 +1723,7 @@ func TestAutoPause(t *testing.T) {
 	timeoutSeconds := 300
 	now := time.Now()
 	timeoutTime := now.Add(time.Duration(timeoutSeconds) * time.Second)
-	timeoutAfterPaused := now.Add(timeout.DefaultReservePausedSandboxFor)
+	timeoutAfterPaused := now.Add(timeout.ForeverReservePausedSandboxDuration)
 	templateName := "auto-pause"
 	user := &models.CreatedTeamAPIKey{
 		ID:   keys.AdminKeyID,
@@ -1772,7 +1772,7 @@ func TestAutoPause(t *testing.T) {
 				}
 				assert.NotNil(t, sbx.Spec.ShutdownTime)
 				if sbx.Spec.PauseTime != nil && sbx.Spec.ShutdownTime != nil {
-					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.ForeverReservePausedSandboxDuration), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 				}
 			},
 			pauseChecker: func(t *testing.T, sbx *v1alpha1.Sandbox) {
@@ -1792,7 +1792,7 @@ func TestAutoPause(t *testing.T) {
 				}
 				assert.NotNil(t, sbx.Spec.ShutdownTime)
 				if sbx.Spec.PauseTime != nil && sbx.Spec.ShutdownTime != nil {
-					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+					assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeout.ForeverReservePausedSandboxDuration), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 				}
 			},
 		},

@@ -24,29 +24,29 @@ import (
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
-func ParseReservePausedSandboxFor(raw string) (time.Duration, error) {
-	if raw == timeout.ReservePausedSandboxForDefaultValue {
-		return timeout.DefaultReservePausedSandboxFor, nil
+func ParseReservePausedSandboxDuration(raw string) (time.Duration, error) {
+	if raw == timeout.ReservePausedSandboxDurationForeverValue {
+		return timeout.ForeverReservePausedSandboxDuration, nil
 	}
 	retention, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, fmt.Errorf("invalid reserve paused sandbox duration %q: %w; use %q for the built-in 100-year retention", raw, err, timeout.ReservePausedSandboxForDefaultValue)
+		return 0, fmt.Errorf("invalid reserve paused sandbox duration %q: %w; use %q for the built-in 100-year retention", raw, err, timeout.ReservePausedSandboxDurationForeverValue)
 	}
 	if retention <= 0 {
-		return 0, fmt.Errorf("reserve paused sandbox duration %q must be positive; use %q for the built-in 100-year retention", raw, timeout.ReservePausedSandboxForDefaultValue)
+		return 0, fmt.Errorf("reserve paused sandbox duration %q must be positive; use %q for the built-in 100-year retention", raw, timeout.ReservePausedSandboxDurationForeverValue)
 	}
 	return retention, nil
 }
 
-func ResolveReservePausedSandboxForAnnotation(annotations map[string]string) (time.Duration, bool, error) {
+func ResolveReservePausedSandboxDurationAnnotation(annotations map[string]string) (time.Duration, bool, error) {
 	if annotations == nil {
 		return 0, false, nil
 	}
-	raw, ok := annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]
+	raw, ok := annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]
 	if !ok {
 		return 0, false, nil
 	}
-	retention, err := ParseReservePausedSandboxFor(raw)
+	retention, err := ParseReservePausedSandboxDuration(raw)
 	if err != nil {
 		return 0, true, err
 	}

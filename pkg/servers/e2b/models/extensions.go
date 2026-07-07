@@ -59,7 +59,7 @@ const (
 	ExtensionKeySkipInitRuntime               = v1alpha1.E2BPrefix + "skip-init-runtime"
 	ExtensionKeyReserveFailedSandbox          = v1alpha1.E2BPrefix + "reserve-failed-sandbox"
 	ExtensionKeyReserveFailedSandboxFor       = v1alpha1.E2BPrefix + "reserve-failed-sandbox-for"
-	ExtensionKeyReservePausedSandboxFor       = v1alpha1.E2BPrefix + "reserve-paused-sandbox-for"
+	ExtensionKeyReservePausedSandboxDuration  = v1alpha1.E2BPrefix + "reserve-paused-sandbox-duration"
 	ExtensionKeyCreateOnNoStock               = v1alpha1.E2BPrefix + "create-on-no-stock"
 	ExtensionKeyNeverTimeout                  = v1alpha1.E2BPrefix + "never-timeout"
 	ExtensionKeyReturnPodIP                   = v1alpha1.E2BPrefix + "return-sandbox-ip"
@@ -69,16 +69,16 @@ const (
 )
 
 const (
-	ExtensionHeaderPrefix                     = "x-e2b-kruise-"
-	ExtensionHeaderSnapshotKeepRunning        = ExtensionHeaderPrefix + "snapshot-keep-running"
-	ExtensionHeaderSnapshotTTL                = ExtensionHeaderPrefix + "snapshot-ttl"
-	ExtensionHeaderSnapshotPersistentContents = ExtensionHeaderPrefix + "snapshot-persistent-contents"
-	ExtensionHeaderWaitSuccessSeconds         = ExtensionHeaderPrefix + "snapshot-wait-success-seconds"
-	ExtensionHeaderVolumeSize                 = ExtensionHeaderPrefix + "volume-size"
-	ExtensionHeaderVolumeStorageClass         = ExtensionHeaderPrefix + "volume-storage-class"
-	ExtensionHeaderVolumeAccessMode           = ExtensionHeaderPrefix + "volume-access-mode"
-	ExtensionHeaderVolumeWaitSuccessSeconds   = ExtensionHeaderPrefix + "volume-wait-success-seconds"
-	ExtensionHeaderReservePausedSandboxFor    = ExtensionHeaderPrefix + "reserve-paused-sandbox-for"
+	ExtensionHeaderPrefix                       = "x-e2b-kruise-"
+	ExtensionHeaderSnapshotKeepRunning          = ExtensionHeaderPrefix + "snapshot-keep-running"
+	ExtensionHeaderSnapshotTTL                  = ExtensionHeaderPrefix + "snapshot-ttl"
+	ExtensionHeaderSnapshotPersistentContents   = ExtensionHeaderPrefix + "snapshot-persistent-contents"
+	ExtensionHeaderWaitSuccessSeconds           = ExtensionHeaderPrefix + "snapshot-wait-success-seconds"
+	ExtensionHeaderVolumeSize                   = ExtensionHeaderPrefix + "volume-size"
+	ExtensionHeaderVolumeStorageClass           = ExtensionHeaderPrefix + "volume-storage-class"
+	ExtensionHeaderVolumeAccessMode             = ExtensionHeaderPrefix + "volume-access-mode"
+	ExtensionHeaderVolumeWaitSuccessSeconds     = ExtensionHeaderPrefix + "volume-wait-success-seconds"
+	ExtensionHeaderReservePausedSandboxDuration = ExtensionHeaderPrefix + "reserve-paused-sandbox-duration"
 )
 
 const sandboxGenerateNameValidationSuffix = "abcde"
@@ -115,7 +115,7 @@ func (r *NewSandboxRequest) parseCommonExtensions() error {
 	} else if r.Metadata[ExtensionKeyReserveFailedSandbox] == v1alpha1.True {
 		r.Extensions.ReserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
 	}
-	r.Extensions.ReservePausedSandboxFor, err = r.parseAndRemoveReservePausedSandboxFor()
+	r.Extensions.ReservePausedSandboxDuration, err = r.parseAndRemoveReservePausedSandboxDuration()
 	if err != nil {
 		return err
 	}
@@ -379,13 +379,13 @@ func (r *NewSandboxRequest) parseAndRemoveReserveFailedSandboxFor() (*time.Durat
 	return &duration, true, nil
 }
 
-func (r *NewSandboxRequest) parseAndRemoveReservePausedSandboxFor() (string, error) {
-	raw, ok := r.Metadata[ExtensionKeyReservePausedSandboxFor]
+func (r *NewSandboxRequest) parseAndRemoveReservePausedSandboxDuration() (string, error) {
+	raw, ok := r.Metadata[ExtensionKeyReservePausedSandboxDuration]
 	if !ok {
-		return timeout.ReservePausedSandboxForDefaultValue, nil
+		return timeout.ReservePausedSandboxDurationForeverValue, nil
 	}
-	defer delete(r.Metadata, ExtensionKeyReservePausedSandboxFor)
-	if _, err := pausedretention.ParseReservePausedSandboxFor(raw); err != nil {
+	defer delete(r.Metadata, ExtensionKeyReservePausedSandboxDuration)
+	if _, err := pausedretention.ParseReservePausedSandboxDuration(raw); err != nil {
 		return "", err
 	}
 	return raw, nil

@@ -414,7 +414,7 @@ var _ = Describe("Sandbox", func() {
 				if latestSandbox.Annotations == nil {
 					latestSandbox.Annotations = map[string]string{}
 				}
-				latestSandbox.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = "3m"
+				latestSandbox.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = "3m"
 				latestSandbox.Spec.PauseTime = &pastPauseTime
 				latestSandbox.Spec.ShutdownTime = &pastShutdownTime
 				return k8sClient.Update(ctx, latestSandbox)

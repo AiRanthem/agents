@@ -637,8 +637,8 @@ func (r *SandboxReconciler) checkTimers(ctx context.Context, box *agentsv1alpha1
 		}
 	}
 
-	if result, done, err := r.handleShutdownTimeout(ctx, box, now); done {
-		return result, true, err
+	if done, err := r.handleShutdownTimeout(ctx, box, now); done {
+		return ctrl.Result{}, true, err
 	}
 	if result, done, err := r.handlePauseTimeout(ctx, box, now); done {
 		return result, true, err
@@ -670,7 +670,7 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 		if box.Spec.ShutdownTime != nil {
 			newShutdown := metav1.NewTime(pausedretention.PausedShutdownTime(now.Time, retention))
 			modified.Spec.ShutdownTime = &newShutdown
-			// Clear PauseTime to the same value so it won't re-trigger on the next reconcile.
+			// Keep PauseTime aligned so the next connect/resume can preserve auto-pause mode.
 			modified.Spec.PauseTime = &newShutdown
 		}
 	}
@@ -687,12 +687,12 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 // handleShutdownTimeout deletes the sandbox when ShutdownTime has been reached.
 // When a paused-retention annotation is present, the shutdown is deferred until
 // after pause has had a chance to execute (pause extends ShutdownTime).
-func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agentsv1alpha1.Sandbox, now metav1.Time) (ctrl.Result, bool, error) {
+func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agentsv1alpha1.Sandbox, now metav1.Time) (bool, error) {
 	if box.Spec.ShutdownTime == nil || !box.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, false, nil
+		return false, nil
 	}
 	if !box.Spec.ShutdownTime.Before(&now) {
-		return ctrl.Result{}, false, nil
+		return false, nil
 	}
 
 	// When the paused-retention annotation is present, the sandbox has not
@@ -702,14 +702,14 @@ func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agen
 	// We only skip when pauseTimeReached so that handlePauseTimeout can
 	// actually act in the same loop. If PauseTime is nil or still in the
 	// future, we must proceed with deletion.
-	if _, hasRetention := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; hasRetention &&
+	if _, hasRetention := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]; hasRetention &&
 		!box.Spec.Paused &&
 		pauseTimeReached(box.Spec.PauseTime, now) {
-		return ctrl.Result{}, false, nil
+		return false, nil
 	}
 
 	klog.InfoS("sandbox shutdown time reached, deleting", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
-	return ctrl.Result{}, true, r.Delete(ctx, box)
+	return true, r.Delete(ctx, box)
 }
 
 // calcTimeoutRequeue returns the nearest requeue duration based on pending
@@ -730,22 +730,18 @@ func (r *SandboxReconciler) calcTimeoutRequeue(box *agentsv1alpha1.Sandbox, now 
 }
 
 // resolveRetentionAnnotationOrDefault parses the paused-retention annotation value.
-// On parse failure, it logs a warning, emits an event, and returns the default
-// retention duration without mutating the annotation.
+// On parse failure, it logs a warning and returns the default retention duration
+// without mutating the annotation.
 func (r *SandboxReconciler) resolveRetentionAnnotationOrDefault(box *agentsv1alpha1.Sandbox) (time.Duration, bool) {
-	retention, managed, err := pausedretention.ResolveReservePausedSandboxForAnnotation(box.Annotations)
+	retention, managed, err := pausedretention.ResolveReservePausedSandboxDurationAnnotation(box.Annotations)
 	if err == nil {
 		return retention, managed
 	}
-	raw := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]
+	raw := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]
 
 	klog.ErrorS(err, "invalid reserve paused sandbox annotation, using default",
 		"sandbox", klog.KObj(box),
-		"annotation", agentsv1alpha1.AnnotationReservePausedSandboxFor,
+		"annotation", agentsv1alpha1.AnnotationReservePausedSandboxDuration,
 		"value", raw)
-	if r.recorder != nil {
-		r.recorder.Eventf(box, corev1.EventTypeWarning, "InvalidReservePausedSandboxFor",
-			"Invalid %s=%q: %v", agentsv1alpha1.AnnotationReservePausedSandboxFor, raw, err)
-	}
-	return timeoututils.DefaultReservePausedSandboxFor, true
+	return timeoututils.ForeverReservePausedSandboxDuration, true
 }

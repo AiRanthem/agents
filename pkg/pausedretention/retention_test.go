@@ -27,26 +27,25 @@ import (
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
-func TestParseReservePausedSandboxFor(t *testing.T) {
+func TestParseReservePausedSandboxDuration(t *testing.T) {
 	tests := []struct {
 		name        string
 		raw         string
 		want        time.Duration
 		expectError string
 	}{
-		{name: "default", raw: timeout.ReservePausedSandboxForDefaultValue, want: timeout.DefaultReservePausedSandboxFor},
+		{name: "forever", raw: timeout.ReservePausedSandboxDurationForeverValue, want: timeout.ForeverReservePausedSandboxDuration},
 		{name: "positive duration", raw: "240h", want: 240 * time.Hour},
-		{name: "empty explicit value", raw: "", expectError: "use \"default\""},
-		{name: "zero without unit", raw: "0", expectError: "use \"default\""},
-		{name: "zero duration", raw: "0s", expectError: "use \"default\""},
-		{name: "negative duration", raw: "-1h", expectError: "use \"default\""},
-		{name: "never rejected", raw: "never", expectError: "use \"default\""},
-		{name: "forever rejected", raw: "forever", expectError: "use \"default\""},
-		{name: "invalid duration", raw: "abc", expectError: "use \"default\""},
+		{name: "empty explicit value", raw: "", expectError: "use \"forever\""},
+		{name: "zero without unit", raw: "0", expectError: "use \"forever\""},
+		{name: "zero duration", raw: "0s", expectError: "use \"forever\""},
+		{name: "negative duration", raw: "-1h", expectError: "use \"forever\""},
+		{name: "never rejected", raw: "never", expectError: "use \"forever\""},
+		{name: "invalid duration", raw: "abc", expectError: "use \"forever\""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseReservePausedSandboxFor(tt.raw)
+			got, err := ParseReservePausedSandboxDuration(tt.raw)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
@@ -58,7 +57,7 @@ func TestParseReservePausedSandboxFor(t *testing.T) {
 	}
 }
 
-func TestResolveReservePausedSandboxForAnnotation(t *testing.T) {
+func TestResolveReservePausedSandboxDurationAnnotation(t *testing.T) {
 	tests := []struct {
 		name        string
 		annotations map[string]string
@@ -68,27 +67,27 @@ func TestResolveReservePausedSandboxForAnnotation(t *testing.T) {
 	}{
 		{name: "absent", annotations: nil, wantManaged: false},
 		{
-			name:        "default",
-			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxFor: timeout.ReservePausedSandboxForDefaultValue},
-			want:        timeout.DefaultReservePausedSandboxFor,
+			name:        "forever",
+			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue},
+			want:        timeout.ForeverReservePausedSandboxDuration,
 			wantManaged: true,
 		},
 		{
 			name:        "custom duration",
-			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxFor: "30m"},
+			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxDuration: "30m"},
 			want:        30 * time.Minute,
 			wantManaged: true,
 		},
 		{
 			name:        "invalid persisted annotation",
-			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxFor: "forever"},
+			annotations: map[string]string{agentsv1alpha1.AnnotationReservePausedSandboxDuration: "invalid"},
 			wantManaged: true,
-			expectError: "use \"default\"",
+			expectError: "use \"forever\"",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, managed, err := ResolveReservePausedSandboxForAnnotation(tt.annotations)
+			got, managed, err := ResolveReservePausedSandboxDurationAnnotation(tt.annotations)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)

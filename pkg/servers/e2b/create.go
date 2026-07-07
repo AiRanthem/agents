@@ -352,7 +352,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	now := time.Now()
 	timeoutOptions := timeout.Options{}
 	if !request.Extensions.NeverTimeout {
-		retention, _ := pausedretention.ParseReservePausedSandboxFor(request.Extensions.ReservePausedSandboxFor)
+		retention, _ := pausedretention.ParseReservePausedSandboxDuration(request.Extensions.ReservePausedSandboxDuration)
 		timeoutOptions = computeTimeoutOptions(request.AutoPause, now, request.Timeout, retention)
 	}
 	sbx.SetTimeout(timeoutOptions)
@@ -363,7 +363,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = request.Extensions.ReservePausedSandboxFor
+	annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = request.Extensions.ReservePausedSandboxDuration
 	for k, v := range request.Metadata {
 		annotations[k] = v
 	}

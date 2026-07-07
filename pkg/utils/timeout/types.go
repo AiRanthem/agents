@@ -32,6 +32,6 @@ const (
 )
 
 const (
-	ReservePausedSandboxForDefaultValue = "default"
-	DefaultReservePausedSandboxFor      = 100 * 365 * 24 * time.Hour
+	ReservePausedSandboxDurationForeverValue = "forever"
+	ForeverReservePausedSandboxDuration      = 100 * 365 * 24 * time.Hour
 )

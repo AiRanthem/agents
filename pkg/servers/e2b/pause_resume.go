@@ -25,6 +25,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
@@ -47,8 +48,8 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 	}
 	var headerRetention *time.Duration
 	var reservePausedFor *string
-	if headerValues := r.Header.Values(models.ExtensionHeaderReservePausedSandboxFor); len(headerValues) > 0 {
-		retention, err := pausedretention.ParseReservePausedSandboxFor(headerValues[0])
+	if headerValues := r.Header.Values(models.ExtensionHeaderReservePausedSandboxDuration); len(headerValues) > 0 {
+		retention, err := pausedretention.ParseReservePausedSandboxDuration(headerValues[0])
 		if err != nil {
 			return web.ApiResponse[struct{}]{}, &web.ApiError{
 				Code:    http.StatusBadRequest,
@@ -99,23 +100,17 @@ func resumeSandboxErrorCode(err error) int {
 
 func resolvePersistedPauseRetention(ctx context.Context, sandboxID string, annotations map[string]string) (time.Duration, *string) {
 	log := klog.FromContext(ctx).WithValues("sandboxID", sandboxID)
-	retention, managed, err := pausedretention.ResolveReservePausedSandboxForAnnotation(annotations)
+	retention, managed, err := pausedretention.ResolveReservePausedSandboxDurationAnnotation(annotations)
 	if err != nil {
 		log.Error(err, "invalid persisted reserve paused sandbox annotation, using default and backfilling default",
-			"annotation", v1alpha1.AnnotationReservePausedSandboxFor,
-			"value", annotations[v1alpha1.AnnotationReservePausedSandboxFor])
-		return timeout.DefaultReservePausedSandboxFor, defaultReservePausedForValue()
+			"annotation", v1alpha1.AnnotationReservePausedSandboxDuration,
+			"value", annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
+		return timeout.ForeverReservePausedSandboxDuration, ptr.To(timeout.ReservePausedSandboxDurationForeverValue)
 	}
 	if managed {
 		return retention, nil
 	}
-	return timeout.DefaultReservePausedSandboxFor, defaultReservePausedForValue()
-}
-
-// defaultReservePausedForValue copies ReservePausedSandboxForDefaultValue for safety.
-func defaultReservePausedForValue() *string {
-	value := timeout.ReservePausedSandboxForDefaultValue
-	return &value
+	return timeout.ForeverReservePausedSandboxDuration, ptr.To(timeout.ReservePausedSandboxDurationForeverValue)
 }
 
 func reservePausedForAnnotations(value *string) map[string]string {
@@ -123,7 +118,7 @@ func reservePausedForAnnotations(value *string) map[string]string {
 		return nil
 	}
 	return map[string]string{
-		v1alpha1.AnnotationReservePausedSandboxFor: *value,
+		v1alpha1.AnnotationReservePausedSandboxDuration: *value,
 	}
 }
 
@@ -150,6 +145,7 @@ func buildPauseTimeoutOptions(opts timeout.Options, now time.Time, pausedRetenti
 		endAt := pausedretention.PausedShutdownTime(now, pausedRetention)
 		opts.ShutdownTime = endAt
 		if !opts.PauseTime.IsZero() {
+			// Keep PauseTime aligned so the next connect/resume can preserve auto-pause mode.
 			opts.PauseTime = endAt
 		}
 	}

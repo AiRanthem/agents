@@ -519,7 +519,7 @@ func TestSandbox_PauseWritesExtraAnnotationsWhenUpdateWins(t *testing.T) {
 			require.NoError(t, s.Pause(pauseCtx, infra.PauseOptions{
 				Timeout: &timeout.Options{ShutdownTime: now.Add(time.Hour)},
 				ExtraAnnotations: map[string]string{
-					v1alpha1.AnnotationReservePausedSandboxFor: tt.reserveValue,
+					v1alpha1.AnnotationReservePausedSandboxDuration: tt.reserveValue,
 				},
 			}))
 
@@ -527,7 +527,7 @@ func TestSandbox_PauseWritesExtraAnnotationsWhenUpdateWins(t *testing.T) {
 			require.NoError(t, fc.Get(t.Context(), types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}, &updated))
 			assert.True(t, updated.Spec.Paused)
 			assert.Equal(t, "kept", updated.Annotations["existing"])
-			assert.Equal(t, tt.reserveValue, updated.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+			assert.Equal(t, tt.reserveValue, updated.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
 		})
 	}
 }
@@ -546,7 +546,7 @@ func TestSandbox_PauseSkipsSideEffectsWhenLatestAlreadyPaused(t *testing.T) {
 					PauseTime:    time.Now().Add(90 * time.Minute),
 				},
 				ExtraAnnotations: map[string]string{
-					v1alpha1.AnnotationReservePausedSandboxFor: value,
+					v1alpha1.AnnotationReservePausedSandboxDuration: value,
 				},
 			},
 		},
@@ -644,7 +644,7 @@ func TestSandbox_PauseSkipsSideEffectsWhenLatestAlreadyPaused(t *testing.T) {
 			require.NotNil(t, updatedSbx.Spec.PauseTime)
 			assert.WithinDuration(t, now.Add(2*time.Hour), updatedSbx.Spec.ShutdownTime.Time, time.Second)
 			assert.WithinDuration(t, now.Add(time.Hour), updatedSbx.Spec.PauseTime.Time, time.Second)
-			_, gotAnnotation := updatedSbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor]
+			_, gotAnnotation := updatedSbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration]
 			assert.False(t, gotAnnotation)
 		})
 	}
@@ -1552,12 +1552,12 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 	}
 
 	cases := []struct {
-		name              string
-		initialPaused     bool
-		initialPauseAt    *metav1.Time
-		initialShutAt     *metav1.Time
-		optsTimeout *timeout.Options
-		want        expected
+		name           string
+		initialPaused  bool
+		initialPauseAt *metav1.Time
+		initialShutAt  *metav1.Time
+		optsTimeout    *timeout.Options
+		want           expected
 	}{
 		{
 			name:           "winner-with-realTimeout",
@@ -1706,7 +1706,7 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 			assertTimePtrEqual(t, tc.want.pauseTime, final.Spec.PauseTime, "final PauseTime must match expected")
 			assertTimePtrEqual(t, tc.want.shutdownTime, final.Spec.ShutdownTime, "final ShutdownTime must match expected")
 			// Resume must never write the reserve-paused annotation.
-			_, gotAnnotationSet := final.Annotations[v1alpha1.AnnotationReservePausedSandboxFor]
+			_, gotAnnotationSet := final.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration]
 			assert.False(t, gotAnnotationSet, "Resume must not write reserve paused annotation")
 		})
 	}

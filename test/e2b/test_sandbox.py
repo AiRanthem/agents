@@ -49,9 +49,9 @@ def _parse_rfc3339_utc(s: str) -> datetime:
 
 RETURN_POD_IP_METADATA_KEY = "e2b.agents.kruise.io/return-sandbox-ip"
 POD_IP_METADATA_KEY = "e2b.agents.kruise.io/sandbox-ip"
-RESERVE_PAUSED_SANDBOX_FOR_METADATA_KEY = "e2b.agents.kruise.io/reserve-paused-sandbox-for"
-RESERVE_PAUSED_SANDBOX_FOR_HEADER = "x-e2b-kruise-reserve-paused-sandbox-for"
-RESERVE_PAUSED_SANDBOX_FOR_ANNOTATION = "agents.kruise.io/reserve-paused-sandbox-for"
+RESERVE_PAUSED_SANDBOX_FOR_METADATA_KEY = "e2b.agents.kruise.io/reserve-paused-sandbox-duration"
+RESERVE_PAUSED_SANDBOX_FOR_HEADER = "x-e2b-kruise-reserve-paused-sandbox-duration"
+RESERVE_PAUSED_SANDBOX_FOR_ANNOTATION = "agents.kruise.io/reserve-paused-sandbox-duration"
 
 
 def assert_pod_ip_metadata(info, expected_pod_ip: str | None = None) -> str:
@@ -856,4 +856,3 @@ def test_sandbox_with_labels_and_command(sandbox_context, config):
     # The label: prefixed keys must not leak into metadata.
     assert "label:app" not in info.metadata
     assert "label:env" not in info.metadata
-

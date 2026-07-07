@@ -191,7 +191,7 @@ func TestSetTimeout(t *testing.T) {
 			timeout:   30,
 			checker: func(t *testing.T, sbx *v1alpha1.Sandbox, timeout time.Duration) {
 				assert.WithinDuration(t, start.Add(timeout), sbx.Spec.PauseTime.Time, 2*time.Second)
-				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.ForeverReservePausedSandboxDuration), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 			},
 		},
 		{
@@ -213,10 +213,10 @@ func TestSetTimeout(t *testing.T) {
 			timeout:                       600,
 			removeAnnotationBeforeRequest: true,
 			checker: func(t *testing.T, sbx *v1alpha1.Sandbox, timeout time.Duration) {
-				assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+				assert.Equal(t, timeoututils.ReservePausedSandboxDurationForeverValue, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
 				require.NotNil(t, sbx.Spec.PauseTime)
 				require.NotNil(t, sbx.Spec.ShutdownTime)
-				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.ForeverReservePausedSandboxDuration), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 			},
 		},
 		{
@@ -224,12 +224,12 @@ func TestSetTimeout(t *testing.T) {
 			phase:             v1alpha1.SandboxRunning,
 			autoPause:         true,
 			timeout:           600,
-			initialAnnotation: "forever",
+			initialAnnotation: "invalid",
 			checker: func(t *testing.T, sbx *v1alpha1.Sandbox, timeout time.Duration) {
-				assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor])
+				assert.Equal(t, timeoututils.ReservePausedSandboxDurationForeverValue, sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration])
 				require.NotNil(t, sbx.Spec.PauseTime)
 				require.NotNil(t, sbx.Spec.ShutdownTime)
-				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), sbx.Spec.ShutdownTime.Time, 5*time.Second)
+				assert.WithinDuration(t, sbx.Spec.PauseTime.Time.Add(timeoututils.ForeverReservePausedSandboxDuration), sbx.Spec.ShutdownTime.Time, 5*time.Second)
 			},
 		},
 		{
@@ -265,9 +265,9 @@ func TestSetTimeout(t *testing.T) {
 					sbx.Annotations = map[string]string{}
 				}
 				if tt.removeAnnotationBeforeRequest {
-					delete(sbx.Annotations, v1alpha1.AnnotationReservePausedSandboxFor)
+					delete(sbx.Annotations, v1alpha1.AnnotationReservePausedSandboxDuration)
 				} else {
-					sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxFor] = tt.initialAnnotation
+					sbx.Annotations[v1alpha1.AnnotationReservePausedSandboxDuration] = tt.initialAnnotation
 				}
 				require.NoError(t, client.Update(t.Context(), sbx))
 			}

@@ -90,7 +90,7 @@ func TestPauseSandbox(t *testing.T) {
 	assert.Equal(t, models.SandboxStatePaused, describeResp.Body.State)
 	endAt, parseErr := time.Parse(time.RFC3339, describeResp.Body.EndAt)
 	assert.NoError(t, parseErr)
-	expectEndAt := start.Add(timeoututils.DefaultReservePausedSandboxFor)
+	expectEndAt := start.Add(timeoututils.ForeverReservePausedSandboxDuration)
 	assert.WithinDuration(t, expectEndAt, endAt, 5*time.Second, "expect end at: %s, but got %s", expectEndAt, endAt)
 }
 
@@ -115,18 +115,18 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 	}{
 		{
 			name:             "no header no annotation uses default and persists default",
-			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+			expectAnnotation: timeoututils.ReservePausedSandboxDurationForeverValue,
 			expectShutdown: func(now time.Time) time.Time {
-				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+				return now.Add(timeoututils.ForeverReservePausedSandboxDuration)
 			},
 		},
 		{
 			name:             "header default uses default and persists default",
 			headerPresent:    true,
-			headerValue:      timeoututils.ReservePausedSandboxForDefaultValue,
-			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+			headerValue:      timeoututils.ReservePausedSandboxDurationForeverValue,
+			expectAnnotation: timeoututils.ReservePausedSandboxDurationForeverValue,
 			expectShutdown: func(now time.Time) time.Time {
-				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+				return now.Add(timeoututils.ForeverReservePausedSandboxDuration)
 			},
 		},
 		{
@@ -153,7 +153,7 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 		},
 		{
 			name:              "no header existing valid annotation uses annotation",
-			initialAnnotation: stringPtr("30m"),
+			initialAnnotation: ptr.To("30m"),
 			expectAnnotation:  "30m",
 			expectShutdown: func(now time.Time) time.Time {
 				return now.Add(30 * time.Minute)
@@ -161,17 +161,17 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 		},
 		{
 			name:              "invalid annotation fails open and backfills default",
-			initialAnnotation: stringPtr("forever"),
-			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
+			initialAnnotation: ptr.To("invalid"),
+			expectAnnotation:  timeoututils.ReservePausedSandboxDurationForeverValue,
 			expectShutdown: func(now time.Time) time.Time {
-				return now.Add(timeoututils.DefaultReservePausedSandboxFor)
+				return now.Add(timeoututils.ForeverReservePausedSandboxDuration)
 			},
 		},
 		{
 			name:              "valid header overrides invalid annotation",
 			headerPresent:     true,
 			headerValue:       "30m",
-			initialAnnotation: stringPtr("forever"),
+			initialAnnotation: ptr.To("invalid"),
 			expectAnnotation:  "30m",
 			expectShutdown: func(now time.Time) time.Time {
 				return now.Add(30 * time.Minute)
@@ -190,15 +190,15 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 		{
 			name:             "never timeout pause does not set deadline",
 			neverTimeout:     true,
-			expectAnnotation: timeoututils.ReservePausedSandboxForDefaultValue,
+			expectAnnotation: timeoututils.ReservePausedSandboxDurationForeverValue,
 		},
 		{
 			name:              "already paused keeps first writer annotation",
 			headerPresent:     true,
 			headerValue:       "1h",
-			initialAnnotation: stringPtr(timeoututils.ReservePausedSandboxForDefaultValue),
+			initialAnnotation: ptr.To(timeoututils.ReservePausedSandboxDurationForeverValue),
 			alreadyPaused:     true,
-			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
+			expectAnnotation:  timeoututils.ReservePausedSandboxDurationForeverValue,
 		},
 	}
 
@@ -231,9 +231,9 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 				sbx.Annotations = map[string]string{}
 			}
 			if tt.initialAnnotation != nil {
-				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.initialAnnotation
+				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = *tt.initialAnnotation
 			} else {
-				delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+				delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxDuration)
 			}
 			if tt.alreadyPaused {
 				sbx.Spec.Paused = true
@@ -262,7 +262,7 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 
 			req := NewRequest(t, nil, nil, map[string]string{"sandboxID": sandboxID}, user)
 			if tt.headerPresent {
-				req.Header.Set(models.ExtensionHeaderReservePausedSandboxFor, tt.headerValue)
+				req.Header.Set(models.ExtensionHeaderReservePausedSandboxDuration, tt.headerValue)
 			}
 			beforePause := time.Now()
 			pauseResp, apiErr := controller.PauseSandbox(req)
@@ -276,7 +276,7 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 			assert.Equal(t, http.StatusNoContent, pauseResp.Code)
 
 			updated := GetSandbox(t, sandboxID, fc)
-			assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+			assert.Equal(t, tt.expectAnnotation, updated.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 			if tt.neverTimeout {
 				assert.Nil(t, updated.Spec.PauseTime)
 				assert.Nil(t, updated.Spec.ShutdownTime)
@@ -304,10 +304,6 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 			}
 		})
 	}
-}
-
-func stringPtr(value string) *string {
-	return &value
 }
 
 func TestPauseSandboxConflict(t *testing.T) {
@@ -679,7 +675,7 @@ func TestConnectSandboxExtendOnlySkipDoesNotBackfillReservePausedAnnotation(t *t
 			before := GetSandbox(t, createResp.Body.SandboxID, fc)
 			require.NotNil(t, before.Spec.PauseTime)
 			require.NotNil(t, before.Spec.ShutdownTime)
-			delete(before.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+			delete(before.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxDuration)
 			require.NoError(t, fc.Update(t.Context(), before))
 			pauseBefore := before.Spec.PauseTime.Time
 			shutdownBefore := before.Spec.ShutdownTime.Time
@@ -697,7 +693,7 @@ func TestConnectSandboxExtendOnlySkipDoesNotBackfillReservePausedAnnotation(t *t
 			require.NotNil(t, after.Spec.ShutdownTime)
 			assert.WithinDuration(t, pauseBefore, after.Spec.PauseTime.Time, time.Second)
 			assert.WithinDuration(t, shutdownBefore, after.Spec.ShutdownTime.Time, time.Second)
-			assert.NotContains(t, after.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+			assert.NotContains(t, after.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxDuration)
 		})
 	}
 }
@@ -848,7 +844,7 @@ func TestResumeSandboxMissingRetentionUsesDefault(t *testing.T) {
 	// Remove the annotation AFTER pause so we can verify Resume does not recreate it.
 	// Pause may have backfilled it; we explicitly remove it post-pause to isolate Resume behavior.
 	sbx := GetSandbox(t, createResp.Body.SandboxID, fc)
-	delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxFor)
+	delete(sbx.Annotations, agentsv1alpha1.AnnotationReservePausedSandboxDuration)
 	require.NoError(t, fc.Update(t.Context(), sbx))
 
 	go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
@@ -864,14 +860,14 @@ func TestResumeSandboxMissingRetentionUsesDefault(t *testing.T) {
 	require.Nil(t, apiErr)
 
 	after := GetSandbox(t, createResp.Body.SandboxID, fc)
-	if got, ok := after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor]; ok {
-		assert.Equal(t, timeoututils.ReservePausedSandboxForDefaultValue, got)
+	if got, ok := after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]; ok {
+		assert.Equal(t, timeoututils.ReservePausedSandboxDurationForeverValue, got)
 	}
 	// Placeholder timeout math still works using default retention
 	require.NotNil(t, after.Spec.PauseTime)
 	require.NotNil(t, after.Spec.ShutdownTime)
 	assert.WithinDuration(t, beforeResume.Add(600*time.Second), after.Spec.PauseTime.Time, 5*time.Second)
-	assert.WithinDuration(t, after.Spec.PauseTime.Time.Add(timeoututils.DefaultReservePausedSandboxFor), after.Spec.ShutdownTime.Time, 5*time.Second)
+	assert.WithinDuration(t, after.Spec.PauseTime.Time.Add(timeoututils.ForeverReservePausedSandboxDuration), after.Spec.ShutdownTime.Time, 5*time.Second)
 }
 
 // TestResumeSandboxCustomRetentionPlaceholderDoesNotBackfillAnnotation verifies
@@ -910,7 +906,7 @@ func TestResumeSandboxCustomRetentionPlaceholderDoesNotBackfillAnnotation(t *tes
 	if sbx.Annotations == nil {
 		sbx.Annotations = map[string]string{}
 	}
-	sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = "30m"
+	sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = "30m"
 	require.NoError(t, fc.Update(t.Context(), sbx))
 
 	go UpdateSandboxWhen(t, fc, createResp.Body.SandboxID, func(sbx *agentsv1alpha1.Sandbox) bool {
@@ -927,7 +923,7 @@ func TestResumeSandboxCustomRetentionPlaceholderDoesNotBackfillAnnotation(t *tes
 
 	after := GetSandbox(t, createResp.Body.SandboxID, fc)
 	// Annotation remains "30m" — not overwritten by Resume
-	assert.Equal(t, "30m", after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+	assert.Equal(t, "30m", after.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 	// Placeholder timeout uses 30m retention math
 	require.NotNil(t, after.Spec.PauseTime)
 	require.NotNil(t, after.Spec.ShutdownTime)
@@ -1229,8 +1225,8 @@ func TestUpdateConnectTimeout(t *testing.T) {
 			timeoutSeconds:    600,
 			preConnectState:   agentsv1alpha1.SandboxStateRunning,
 			autoPause:         true,
-			initialAnnotation: stringPtr("forever"),
-			expectAnnotation:  timeoututils.ReservePausedSandboxForDefaultValue,
+			initialAnnotation: ptr.To("invalid"),
+			expectAnnotation:  timeoututils.ReservePausedSandboxDurationForeverValue,
 			expectUpdated:     true,
 		},
 		{
@@ -1267,7 +1263,7 @@ func TestUpdateConnectTimeout(t *testing.T) {
 				if sbx.Annotations == nil {
 					sbx.Annotations = map[string]string{}
 				}
-				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor] = *tt.initialAnnotation
+				sbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = *tt.initialAnnotation
 				require.NoError(t, fc.Update(t.Context(), sbx))
 			}
 
@@ -1295,14 +1291,14 @@ func TestUpdateConnectTimeout(t *testing.T) {
 				if tt.autoPause {
 					// For auto-pause: ShutdownTime follows the persisted paused retention from PauseTime.
 					require.NotNil(t, updatedSbx.Spec.ShutdownTime)
-					assert.WithinDuration(t, expectedEndAt.Add(timeoututils.DefaultReservePausedSandboxFor),
+					assert.WithinDuration(t, expectedEndAt.Add(timeoututils.ForeverReservePausedSandboxDuration),
 						updatedSbx.Spec.ShutdownTime.Time, 5*time.Second,
 						"ShutdownTime should be PauseTime plus default paused retention")
 					require.NotNil(t, updatedSbx.Spec.PauseTime)
 					assert.WithinDuration(t, expectedEndAt, updatedSbx.Spec.PauseTime.Time, 5*time.Second,
 						"PauseTime should be updated to requested timeout")
 					if tt.expectAnnotation != "" {
-						assert.Equal(t, tt.expectAnnotation, updatedSbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxFor])
+						assert.Equal(t, tt.expectAnnotation, updatedSbx.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration])
 					}
 				} else {
 					require.NotNil(t, updatedSbx.Spec.ShutdownTime)
