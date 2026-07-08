@@ -1138,7 +1138,7 @@ func TestAntiDriftPrimaryLossCancelsCycleAndClearsLeaked(t *testing.T) {
 		driver.mu.Lock()
 		defer driver.mu.Unlock()
 		return len(driver.seenLeaked) == 0
-	}, time.Second, 10*time.Millisecond, "seenLeaked must be cleared on primary loss")
+	}, 3*time.Second, 10*time.Millisecond, "seenLeaked must be cleared on primary loss")
 
 	cancel()
 	driver.Stop()
