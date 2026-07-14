@@ -25,46 +25,35 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/pkg/peers"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
-	"github.com/openkruise/agents/pkg/utils/expectations"
-	"github.com/openkruise/agents/pkg/utils/proxyutils"
 )
 
-// Route is re-exported from pkg/utils/proxyutils for backward compatibility.
-// New code should import pkg/utils/proxyutils directly.
-type Route = proxyutils.Route
+// Route is re-exported from pkg/sandboxroute for backward compatibility.
+type Route = sandboxroute.Route
 
-func (s *Server) SetRoute(ctx context.Context, route Route) {
+func (s *Server) SetRoute(ctx context.Context, route Route) sandboxroute.MutationResult {
 	log := klog.FromContext(ctx)
 	log.Info("try to set route", "new", route)
-	for {
-		old, loaded := s.routes.LoadOrStore(route.ID, route)
-		if !loaded {
-			// First write, success directly
-			routeCount.Inc()
-			return
-		}
-
-		oldRoute := old.(Route)
-		if !expectations.IsResourceVersionNewer(oldRoute.ResourceVersion, route.ResourceVersion) {
-			// New version is not newer than old version, skip write
-			log.Info("received route is not newer than the existing one, skip write", "old", oldRoute)
-			return
-		}
-
-		// Attempt CAS update
-		if s.routes.CompareAndSwap(route.ID, old, route) {
-			// Successfully replaced
-			log.Info("successfully set route", "route", route)
-			return
-		}
-		// CAS failed, modified by another goroutine, retry
+	shape, err := route.Shape()
+	var result sandboxroute.MutationResult
+	if err != nil {
+		result = s.store.UpsertFull(route)
+	} else if shape == sandboxroute.ShapeFull {
+		result = s.store.UpsertFull(route)
+	} else {
+		result = s.store.UpsertIDOnly(route)
 	}
+	s.enqueueMutation(result)
+	s.updateRouteCount()
+	log.V(5).Info("route mutation completed", "result", result.Result, "reason", result.Reason)
+	return result
 }
 
 func (s *Server) SyncRouteWithPeers(route Route) error {
@@ -121,20 +110,18 @@ func (s *Server) SyncRouteWithPeers(route Route) error {
 }
 
 func (s *Server) LoadRoute(id string) (Route, bool) {
-	raw, ok := s.routes.Load(id)
-	if !ok {
-		return Route{}, false
-	}
-	return raw.(Route), true
+	return s.store.Get(id)
+}
+
+// RouteResourceVersion exposes the version of an opaque route key without
+// leaking route projection into infra.
+func (s *Server) RouteResourceVersion(id string) (string, bool) {
+	route, ok := s.store.Get(id)
+	return route.ResourceVersion, ok
 }
 
 func (s *Server) ListRoutes() []Route {
-	routes := make([]Route, 0)
-	s.routes.Range(func(key, value any) bool {
-		routes = append(routes, value.(Route))
-		return true
-	})
-	return routes
+	return s.store.List()
 }
 
 func (s *Server) ListPeers() []peers.Peer {
@@ -145,9 +132,33 @@ func (s *Server) ListPeers() []peers.Peer {
 }
 
 func (s *Server) DeleteRoute(id string) {
-	if _, loaded := s.routes.LoadAndDelete(id); loaded {
-		routeCount.Dec()
+	route, ok := s.store.Get(id)
+	if !ok {
+		return
 	}
+	shape, err := route.Shape()
+	if err != nil {
+		return
+	}
+	var result sandboxroute.MutationResult
+	if shape == sandboxroute.ShapeFull {
+		key, _ := route.ObjectKey()
+		result = s.store.DeleteAuthoritativeByObjectKey(key, "")
+	} else {
+		result = s.store.DeleteIDOnlyConditionally(route)
+	}
+	s.enqueueMutation(result)
+	s.updateRouteCount()
+}
+
+// DeleteAuthoritativeByObjectKey removes the current full route for a locally
+// observed object absence. The separately resolved legacy ID is used only to
+// drain an old ID-only peer record when no full record exists.
+func (s *Server) DeleteAuthoritativeByObjectKey(key types.NamespacedName, legacyFallbackID string) sandboxroute.MutationResult {
+	result := s.store.DeleteAuthoritativeByObjectKey(key, legacyFallbackID)
+	s.enqueueMutation(result)
+	s.updateRouteCount()
+	return result
 }
 
 // RequestAdapter is used to register the mapping from business-side sandbox requests to internal logic

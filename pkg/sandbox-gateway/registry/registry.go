@@ -17,71 +17,161 @@ limitations under the License.
 package registry
 
 import (
+	"errors"
 	"sync"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/openkruise/agents/pkg/proxy"
-	"github.com/openkruise/agents/pkg/utils/expectations"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
+// ErrNotReady indicates that the gateway route lifecycle is not active.
+var ErrNotReady = errors.New("gateway route registry is not ready")
+
+// Registry is the sandbox-gateway facade over its process-local route Store.
 type Registry struct {
-	entries sync.Map
+	mu      sync.RWMutex
+	store   *sandboxroute.Store
+	enqueue func(sandboxroute.MutationResult)
 }
 
-var registryInstance Registry
+var registryInstance = mustNewRegistry()
 
+func mustNewRegistry() *Registry {
+	store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+	if err != nil {
+		panic(err)
+	}
+	registry, err := NewRegistry(store)
+	if err != nil {
+		panic(err)
+	}
+	return registry
+}
+
+// NewRegistry creates a gateway Registry around the supplied shared Store.
+func NewRegistry(store *sandboxroute.Store) (*Registry, error) {
+	if store == nil {
+		return nil, errors.New("gateway route Store must not be nil")
+	}
+	if store.Surface() != sandboxroute.SurfaceGateway {
+		return nil, errors.New("gateway Registry requires a gateway route Store")
+	}
+	return &Registry{store: store}, nil
+}
+
+// GetRegistry returns the process-local gateway Registry.
 func GetRegistry() *Registry {
-	return &registryInstance
+	return registryInstance
 }
 
-// Get returns the full route.
+// Store returns the shared Store wrapped by the Registry.
+func (r *Registry) Store() *sandboxroute.Store {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.store
+}
+
+// SetRepairEnqueuer installs the non-blocking targeted-repair handoff.
+func (r *Registry) SetRepairEnqueuer(enqueue func(sandboxroute.MutationResult)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.enqueue = enqueue
+}
+
+// Ready reports whether route reads and mutations have an active repair handoff.
+func (r *Registry) Ready() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enqueue != nil
+}
+
+// Get returns the unique active route for an opaque Sandbox ID.
 func (r *Registry) Get(id string) (proxy.Route, bool) {
-	raw, ok := r.entries.Load(id)
-	if !ok {
-		return proxy.Route{}, false
+	return r.Store().Get(id)
+}
+
+// GetIfReady atomically checks lifecycle readiness and reads one active route.
+func (r *Registry) GetIfReady(id string) (proxy.Route, bool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.enqueue == nil {
+		return proxy.Route{}, false, false
 	}
-	return raw.(proxy.Route), true
+	route, found := r.store.Get(id)
+	return route, found, true
 }
 
-// Update sets the route with resourceVersion check using CAS pattern.
-// Returns true if the update was applied, false if skipped due to older resourceVersion.
-func (r *Registry) Update(id string, route proxy.Route) bool {
-	for {
-		old, loaded := r.entries.LoadOrStore(id, route)
-		if !loaded {
-			// First write, success directly
-			return true
-		}
-
-		oldRoute := old.(proxy.Route)
-		if !expectations.IsResourceVersionNewer(oldRoute.ResourceVersion, route.ResourceVersion) {
-			// New version is not newer than old version, skip write
-			return false
-		}
-
-		// Attempt CAS update
-		if r.entries.CompareAndSwap(id, old, route) {
-			// Successfully replaced
-			return true
-		}
-		// CAS failed, modified by another goroutine, retry
-	}
-}
-
-// Delete removes the entry for the given sandbox ID.
-func (r *Registry) Delete(id string) {
-	r.entries.Delete(id)
-}
-
-// List returns all routes in the registry.
-func (r *Registry) List() map[string]proxy.Route {
-	result := make(map[string]proxy.Route)
-	r.entries.Range(func(key, value any) bool {
-		result[key.(string)] = value.(proxy.Route)
-		return true
+// UpsertFull applies an ObjectKey-backed route update.
+func (r *Registry) UpsertFull(route proxy.Route) (sandboxroute.MutationResult, error) {
+	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
+		return store.UpsertFull(route)
 	})
+}
+
+// UpsertIDOnly applies an old-peer compatibility update.
+func (r *Registry) UpsertIDOnly(route proxy.Route) (sandboxroute.MutationResult, error) {
+	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
+		return store.UpsertIDOnly(route)
+	})
+}
+
+// DeleteAuthoritativeByObjectKey applies a local authoritative deletion.
+func (r *Registry) DeleteAuthoritativeByObjectKey(
+	key types.NamespacedName,
+	legacyFallbackID string,
+) (sandboxroute.MutationResult, error) {
+	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
+		return store.DeleteAuthoritativeByObjectKey(key, legacyFallbackID)
+	})
+}
+
+// DeleteFullConditionally applies a full peer deletion.
+func (r *Registry) DeleteFullConditionally(route proxy.Route) (sandboxroute.MutationResult, error) {
+	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
+		return store.DeleteFullConditionally(route)
+	})
+}
+
+// DeleteIDOnlyConditionally applies an ID-only peer deletion.
+func (r *Registry) DeleteIDOnlyConditionally(route proxy.Route) (sandboxroute.MutationResult, error) {
+	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
+		return store.DeleteIDOnlyConditionally(route)
+	})
+}
+
+// List returns a snapshot of all active routes keyed by opaque Sandbox ID.
+func (r *Registry) List() map[string]proxy.Route {
+	routes := r.Store().List()
+	result := make(map[string]proxy.Route, len(routes))
+	for _, route := range routes {
+		result[route.ID] = route
+	}
 	return result
 }
 
+func (r *Registry) mutate(
+	mutateStore func(*sandboxroute.Store) sandboxroute.MutationResult,
+) (sandboxroute.MutationResult, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.enqueue == nil {
+		return sandboxroute.MutationResult{}, ErrNotReady
+	}
+	result := mutateStore(r.store)
+	r.enqueue(result)
+	return result, nil
+}
+
+// Clear resets the process-local Store. It is intended for isolated tests only.
 func (r *Registry) Clear() {
-	r.entries = sync.Map{}
+	store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+	if err != nil {
+		panic(err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.store = store
+	r.enqueue = nil
 }

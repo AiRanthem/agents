@@ -138,7 +138,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 	infraInstance := sandboxcr.NewInfraBuilder(opts).
 		WithCache(cache).
 		WithAPIReader(fc).
-		WithProxy(proxyServer).
+		WithRouteVersionReader(proxyServer).
 		Build()
 	require.NoError(t, infraInstance.Run(t.Context()))
 
@@ -149,7 +149,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(cache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer), nil
+				WithRouteVersionReader(proxyServer), nil
 		}).
 		Build()
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestControllerShutdownStopsManagerAfterHTTPShutdown(t *testing.T) {
 			builder := sandboxcr.NewInfraBuilder(opts).
 				WithCache(fakeCache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer)
+				WithRouteVersionReader(proxyServer)
 			return stopProbeInfraBuilder{
 				base: builder,
 				stop: func() {

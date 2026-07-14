@@ -74,11 +74,20 @@ func newTestServer(pm peers.Peers) *Server {
 	return server
 }
 
+func testProxyRoute(id, ip, resourceVersion string) Route {
+	return Route{
+		ID:              id,
+		IP:              ip,
+		UID:             types.UID("uid-" + id),
+		ResourceVersion: resourceVersion,
+	}
+}
+
 // ---- SetRoute tests ----
 
 func TestSetRoute_FirstWrite(t *testing.T) {
 	s := newTestServer(nil)
-	route := Route{ID: "sb-1", IP: "1.2.3.4", UID: types.UID("uid-1"), ResourceVersion: "1"}
+	route := testProxyRoute("sb-1", "1.2.3.4", "1")
 
 	s.SetRoute(context.Background(), route)
 
@@ -90,8 +99,8 @@ func TestSetRoute_FirstWrite(t *testing.T) {
 func TestSetRoute_NewerVersionOverwrites(t *testing.T) {
 	s := newTestServer(nil)
 	ctx := context.Background()
-	old := Route{ID: "sb-1", IP: "1.2.3.4", ResourceVersion: "1"}
-	newer := Route{ID: "sb-1", IP: "5.6.7.8", ResourceVersion: "2"}
+	old := testProxyRoute("sb-1", "1.2.3.4", "1")
+	newer := testProxyRoute("sb-1", "5.6.7.8", "2")
 
 	s.SetRoute(ctx, old)
 	s.SetRoute(ctx, newer)
@@ -103,8 +112,8 @@ func TestSetRoute_NewerVersionOverwrites(t *testing.T) {
 func TestSetRoute_OlderVersionSkipped(t *testing.T) {
 	s := newTestServer(nil)
 	ctx := context.Background()
-	current := Route{ID: "sb-1", IP: "5.6.7.8", ResourceVersion: "5"}
-	older := Route{ID: "sb-1", IP: "1.1.1.1", ResourceVersion: "3"}
+	current := testProxyRoute("sb-1", "5.6.7.8", "5")
+	older := testProxyRoute("sb-1", "1.1.1.1", "3")
 
 	s.SetRoute(ctx, current)
 	s.SetRoute(ctx, older)
@@ -125,7 +134,7 @@ func TestSetRoute_ConcurrentWrites(t *testing.T) {
 		ip := fmt.Sprintf("10.0.0.%d", i)
 		go func() {
 			defer wg.Done()
-			s.SetRoute(ctx, Route{ID: "sb-1", IP: ip, ResourceVersion: rv})
+			s.SetRoute(ctx, testProxyRoute("sb-1", ip, rv))
 		}()
 	}
 	wg.Wait()
@@ -146,7 +155,7 @@ func TestLoadRoute_NotFound(t *testing.T) {
 
 func TestLoadRoute_Found(t *testing.T) {
 	s := newTestServer(nil)
-	route := Route{ID: "sb-2", IP: "9.9.9.9", ResourceVersion: "1"}
+	route := testProxyRoute("sb-2", "9.9.9.9", "1")
 	s.SetRoute(context.Background(), route)
 
 	got, ok := s.LoadRoute("sb-2")
@@ -164,9 +173,9 @@ func TestListRoutes_Empty(t *testing.T) {
 func TestListRoutes_MultipleRoutes(t *testing.T) {
 	s := newTestServer(nil)
 	ctx := context.Background()
-	s.SetRoute(ctx, Route{ID: "sb-1", IP: "1.1.1.1", ResourceVersion: "1"})
-	s.SetRoute(ctx, Route{ID: "sb-2", IP: "2.2.2.2", ResourceVersion: "1"})
-	s.SetRoute(ctx, Route{ID: "sb-3", IP: "3.3.3.3", ResourceVersion: "1"})
+	s.SetRoute(ctx, testProxyRoute("sb-1", "1.1.1.1", "1"))
+	s.SetRoute(ctx, testProxyRoute("sb-2", "2.2.2.2", "1"))
+	s.SetRoute(ctx, testProxyRoute("sb-3", "3.3.3.3", "1"))
 
 	routes := s.ListRoutes()
 	assert.Len(t, routes, 3)
@@ -177,7 +186,7 @@ func TestListRoutes_MultipleRoutes(t *testing.T) {
 func TestDeleteRoute(t *testing.T) {
 	s := newTestServer(nil)
 	ctx := context.Background()
-	s.SetRoute(ctx, Route{ID: "sb-1", IP: "1.1.1.1", ResourceVersion: "1"})
+	s.SetRoute(ctx, testProxyRoute("sb-1", "1.1.1.1", "1"))
 
 	s.DeleteRoute("sb-1")
 
@@ -261,7 +270,7 @@ func (rp *recordingPeer) getReceived() []Route {
 func TestSyncRouteWithPeers_NoPeers(t *testing.T) {
 	s := newTestServer(newMockPeers())
 
-	route := Route{ID: "sb-1", IP: "1.2.3.4", ResourceVersion: "1"}
+	route := testProxyRoute("sb-1", "1.2.3.4", "1")
 	err := s.SyncRouteWithPeers(route)
 	assert.NoError(t, err)
 }
@@ -269,7 +278,7 @@ func TestSyncRouteWithPeers_NoPeers(t *testing.T) {
 func TestSyncRouteWithPeers_NilPeersManager(t *testing.T) {
 	s := newTestServer(nil)
 
-	route := Route{ID: "sb-1", IP: "1.2.3.4", ResourceVersion: "1"}
+	route := testProxyRoute("sb-1", "1.2.3.4", "1")
 	err := s.SyncRouteWithPeers(route)
 	assert.NoError(t, err)
 }
@@ -307,7 +316,7 @@ func TestSyncRouteWithPeers_TwoNodes_Success(t *testing.T) {
 	)
 	s := newTestServer(pm)
 
-	route := Route{ID: "sb-test", IP: "10.0.0.5", UID: types.UID("uid-test"), ResourceVersion: "1"}
+	route := testProxyRoute("sb-test", "10.0.0.5", "1")
 	err := s.SyncRouteWithPeers(route)
 	require.NoError(t, err)
 
@@ -341,7 +350,7 @@ func TestSyncRouteWithPeers_TwoNodes_OneFails(t *testing.T) {
 	)
 	s := newTestServer(pm)
 
-	route := Route{ID: "sb-fail", IP: "1.2.3.4", ResourceVersion: "1"}
+	route := testProxyRoute("sb-fail", "1.2.3.4", "1")
 	err := s.SyncRouteWithPeers(route)
 	assert.Error(t, err, "should return error when one peer fails")
 
@@ -371,8 +380,8 @@ func (m *muxRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	// Start two real HTTP servers (acting as proxy system servers on dynamic ports)
-	server1 := &Server{}
-	server2 := &Server{}
+	server1 := NewServer(config.SandboxManagerOptions{})
+	server2 := NewServer(config.SandboxManagerOptions{})
 
 	// Set up HTTP handlers for /refresh on both servers
 	mux1 := http.NewServeMux()
@@ -444,7 +453,7 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	// Use ml1 as the peers manager for server1
 	server1.peersManager = ml1.peer
 
-	route := Route{ID: "sb-ml", IP: "192.168.1.100", UID: types.UID("uid-ml"), ResourceVersion: "1"}
+	route := testProxyRoute("sb-ml", "192.168.1.100", "1")
 	err := server1.SyncRouteWithPeers(route)
 	require.NoError(t, err)
 

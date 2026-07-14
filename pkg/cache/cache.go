@@ -43,6 +43,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/controllers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandboxidmetrics"
 )
 
 // watchErrorSettle is how long sandbox informer health stays conservative after
@@ -242,13 +243,19 @@ func NewCache(mgr ctrl.Manager) (*Cache, error) {
 // NewCacheWithHealth creates a cache backed by the given manager and informer
 // health gate.
 func NewCacheWithHealth(mgr ctrl.Manager, health *InformerHealth) (*Cache, error) {
+	return NewCacheWithOptions(mgr, health, Options{})
+}
+
+// NewCacheWithOptions creates a cache backed by the given manager, informer
+// health gate, and optional behavior overrides.
+func NewCacheWithOptions(mgr ctrl.Manager, health *InformerHealth, options Options) (*Cache, error) {
 	waitHooks := &sync.Map{}
 	handlers, err := controllers.SetupCacheControllersWithManager(mgr, waitHooks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup cache controllers: %w", err)
 	}
 	// Register field indexes
-	if err := AddIndexesToCache(mgr.GetCache()); err != nil {
+	if err := AddIndexesToCacheWithOptions(mgr.GetCache(), options); err != nil {
 		return nil, fmt.Errorf("failed to add indexes to cache: %w", err)
 	}
 
@@ -298,11 +305,20 @@ func (c *Cache) Stop(ctx context.Context) {
 func (c *Cache) GetClaimedSandbox(ctx context.Context, opts GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) {
 	resultVal, err, _ := c.indexGetGroup.Do("claimed-sandbox:"+opts.Namespace+":"+opts.SandboxID, func() (any, error) {
 		list := &agentsv1alpha1.SandboxList{}
-		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(1)); err != nil {
+		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(2)); err != nil {
 			return nil, err
 		}
 		if len(list.Items) == 0 {
 			return nil, fmt.Errorf("%w: sandbox %s not found in cache", ErrSandboxNotFound, opts.SandboxID)
+		}
+		if len(list.Items) > 1 {
+			sandboxidmetrics.RecordCollision("cache")
+			objectKeys := make([]ctrlclient.ObjectKey, 0, len(list.Items))
+			for index := range list.Items {
+				objectKeys = append(objectKeys, ctrlclient.ObjectKeyFromObject(&list.Items[index]))
+			}
+			klog.FromContext(ctx).Error(ErrSandboxIDCollision, "multiple claimed Sandboxes share a Sandbox ID", "reason", "duplicate_sandbox_id", "objectKeys", objectKeys, "matches", len(list.Items))
+			return nil, ErrSandboxIDCollision
 		}
 		return &list.Items[0], nil
 	})

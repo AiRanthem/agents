@@ -127,7 +127,7 @@ func TestSandboxManagerBuilder_WithCustomInfra(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			})
 
 		manager, err := builder.Build()
@@ -150,7 +150,7 @@ func TestSandboxManagerBuilder_WithCustomInfra(t *testing.T) {
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(cache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer), nil
+				WithRouteVersionReader(proxyServer), nil
 		})
 
 		assert.Same(t, builder, result, "should return same builder instance for chaining")
@@ -220,7 +220,7 @@ func TestSandboxManagerBuilder_WithMemberlistPeers(t *testing.T) {
 					return sandboxcr.NewInfraBuilder(opts).
 						WithCache(cache).
 						WithAPIReader(fc).
-						WithProxy(proxyServer), nil
+						WithRouteVersionReader(proxyServer), nil
 				}).
 				WithMemberlistPeers()
 
@@ -288,7 +288,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			}).
 			WithRequestAdapter(adapter)
 
@@ -319,7 +319,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			}).
 			WithMemberlistPeers()
 
@@ -345,7 +345,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			})
 
 		_, err = builder.Build()
@@ -365,7 +365,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			}).
 			WithCustomPeers(func(args NewPeerArgs) (peers.Peers, error) {
 				return nil, assert.AnError
@@ -398,7 +398,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 				return sandboxcr.NewInfraBuilder(opts).
 					WithCache(cache).
 					WithAPIReader(fc).
-					WithProxy(proxyServer), nil
+					WithRouteVersionReader(proxyServer), nil
 			}).
 			WithMemberlistPeers().
 			WithRequestAdapter(adapter)
@@ -435,7 +435,7 @@ func TestSandboxManagerBuilder_Chaining(t *testing.T) {
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(cache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer), nil
+				WithRouteVersionReader(proxyServer), nil
 		})
 		assert.Same(t, builder, result1)
 

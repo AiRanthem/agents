@@ -17,127 +17,282 @@ limitations under the License.
 package registry
 
 import (
-	"strconv"
-	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/openkruise/agents/pkg/proxy"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
-func TestGetUpdateDelete(t *testing.T) {
-	r := GetRegistry()
-	defer r.Clear()
+func TestNewRegistry(t *testing.T) {
+	gatewayStore, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+	require.NoError(t, err)
+	managerStore, err := sandboxroute.NewStore(sandboxroute.SurfaceManager)
+	require.NoError(t, err)
 
-	// Get missing key
-	if _, ok := r.Get("default--app1"); ok {
-		t.Fatal("expected not found for missing key")
+	tests := []struct {
+		name        string
+		store       *sandboxroute.Store
+		expectError string
+	}{
+		{name: "gateway Store accepted", store: gatewayStore},
+		{name: "nil Store rejected", expectError: "must not be nil"},
+		{name: "manager Store rejected", store: managerStore, expectError: "requires a gateway"},
 	}
-
-	// Update with version and Get
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1000"})
-	route, ok := r.Get("default--app1")
-	if !ok || route.IP != "10.0.0.1" {
-		t.Fatalf("expected 10.0.0.1, got %q (ok=%v)", route.IP, ok)
-	}
-
-	// Get should return resourceVersion
-	if route.ResourceVersion != "1000" {
-		t.Fatalf("expected resourceVersion 1000, got %q", route.ResourceVersion)
-	}
-
-	// Overwrite with newer version
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.2", ResourceVersion: "1001"})
-	route, ok = r.Get("default--app1")
-	if !ok || route.IP != "10.0.0.2" {
-		t.Fatalf("expected 10.0.0.2, got %q", route.IP)
-	}
-
-	// Update with older version should be skipped
-	if r.Update("default--app1", proxy.Route{IP: "10.0.0.3", ResourceVersion: "999"}) {
-		t.Fatal("expected update with older version to be skipped")
-	}
-	route, ok = r.Get("default--app1")
-	if !ok || route.IP != "10.0.0.2" {
-		t.Fatalf("expected 10.0.0.2 after skipped update, got %q", route.IP)
-	}
-
-	// Delete
-	r.Delete("default--app1")
-	if _, ok := r.Get("default--app1"); ok {
-		t.Fatal("expected not found after delete")
-	}
-
-	// Delete non-existent key should not panic
-	r.Delete("nonexistent--key")
-}
-
-func TestUpdate(t *testing.T) {
-	r := GetRegistry()
-	defer r.Clear()
-
-	// First write should succeed
-	if !r.Update("ns--app", proxy.Route{IP: "10.0.0.1", ResourceVersion: "100"}) {
-		t.Fatal("expected first write to succeed")
-	}
-
-	// Same version should succeed (>= check)
-	if !r.Update("ns--app", proxy.Route{IP: "10.0.0.2", ResourceVersion: "100"}) {
-		t.Fatal("expected update with same version to succeed")
-	}
-
-	// Newer version should succeed
-	if !r.Update("ns--app", proxy.Route{IP: "10.0.0.3", ResourceVersion: "101"}) {
-		t.Fatal("expected update with newer version to succeed")
-	}
-
-	// Older version should be skipped
-	if r.Update("ns--app", proxy.Route{IP: "10.0.0.4", ResourceVersion: "99"}) {
-		t.Fatal("expected update with older version to be skipped")
-	}
-
-	// Verify final value
-	route, ok := r.Get("ns--app")
-	if !ok || route.IP != "10.0.0.3" {
-		t.Fatalf("expected 10.0.0.3, got %q", route.IP)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewRegistry(tt.store)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Same(t, tt.store, got.Store())
+		})
 	}
 }
 
-func TestList(t *testing.T) {
-	r := GetRegistry()
-	defer r.Clear()
-
-	// Add routes
-	r.Update("ns1--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "100"})
-	r.Update("ns2--app2", proxy.Route{IP: "10.0.0.2", ResourceVersion: "200"})
-
-	// List should return all routes
-	list := r.List()
-	if len(list) != 2 {
-		t.Fatalf("expected 2 routes, got %d", len(list))
+func TestRegistryMutationAdapters(t *testing.T) {
+	tests := []struct {
+		name            string
+		mutate          func(*Registry) (sandboxroute.MutationResult, error)
+		expectResult    sandboxroute.EventResult
+		expectID        string
+		expectPresent   bool
+		expectRepairs   int
+		expectCallbacks int
+	}{
+		{
+			name: "full route is active",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				return registry.UpsertFull(fullRoute("short-a", "ns", "a", "uid-a", "1"))
+			},
+			expectResult:    sandboxroute.EventResultApplied,
+			expectID:        "short-a",
+			expectPresent:   true,
+			expectCallbacks: 1,
+		},
+		{
+			name: "ID-only route is active",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				return registry.UpsertIDOnly(idOnlyRoute("ns--a", "uid-a", "1"))
+			},
+			expectResult:    sandboxroute.EventResultApplied,
+			expectID:        "ns--a",
+			expectPresent:   true,
+			expectCallbacks: 1,
+		},
+		{
+			name: "stale full route is ignored",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				_, _ = registry.UpsertFull(fullRoute("short-a", "ns", "a", "uid-a", "2"))
+				return registry.UpsertFull(fullRoute("short-a", "ns", "a", "uid-a", "1"))
+			},
+			expectResult:    sandboxroute.EventResultIgnored,
+			expectID:        "short-a",
+			expectPresent:   true,
+			expectCallbacks: 2,
+		},
+		{
+			name: "authoritative ObjectKey delete removes full route",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				_, _ = registry.UpsertFull(fullRoute("short-a", "ns", "a", "uid-a", "1"))
+				return registry.DeleteAuthoritativeByObjectKey(types.NamespacedName{Namespace: "ns", Name: "a"}, "ns--a")
+			},
+			expectResult:    sandboxroute.EventResultApplied,
+			expectID:        "short-a",
+			expectCallbacks: 2,
+		},
+		{
+			name: "authoritative fallback removes only ID-only route",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				_, _ = registry.UpsertIDOnly(idOnlyRoute("ns--a", "uid-a", "1"))
+				return registry.DeleteAuthoritativeByObjectKey(types.NamespacedName{Namespace: "ns", Name: "a"}, "ns--a")
+			},
+			expectResult:    sandboxroute.EventResultApplied,
+			expectID:        "ns--a",
+			expectCallbacks: 2,
+		},
+		{
+			name: "cross ObjectKey collision is quarantined and enqueued",
+			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
+				_, _ = registry.UpsertFull(fullRoute("duplicate", "ns", "a", "uid-a", "1"))
+				return registry.UpsertFull(fullRoute("duplicate", "ns", "b", "uid-b", "2"))
+			},
+			expectResult:    sandboxroute.EventResultCollision,
+			expectID:        "duplicate",
+			expectRepairs:   2,
+			expectCallbacks: 2,
+		},
 	}
-	if route, ok := list["ns1--app1"]; !ok || route.IP != "10.0.0.1" {
-		t.Fatal("expected ns1--app1 with IP 10.0.0.1")
-	}
-	if route, ok := list["ns2--app2"]; !ok || route.IP != "10.0.0.2" {
-		t.Fatal("expected ns2--app2 with IP 10.0.0.2")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+			require.NoError(t, err)
+			registry, err := NewRegistry(store)
+			require.NoError(t, err)
+			var enqueued []sandboxroute.RepairRequest
+			var callbackResults []sandboxroute.MutationResult
+			registry.SetRepairEnqueuer(func(result sandboxroute.MutationResult) {
+				callbackResults = append(callbackResults, result)
+				enqueued = append(enqueued, result.RepairRequests...)
+			})
+
+			result, err := tt.mutate(registry)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectResult, result.Result)
+			_, present := registry.Get(tt.expectID)
+			assert.Equal(t, tt.expectPresent, present)
+			assert.Len(t, enqueued, tt.expectRepairs)
+			assert.Len(t, callbackResults, tt.expectCallbacks)
+			assert.Equal(t, result, callbackResults[len(callbackResults)-1])
+		})
 	}
 }
 
-func TestConcurrentAccess(t *testing.T) {
-	r := GetRegistry()
-	defer r.Clear()
-
-	var wg sync.WaitGroup
-	// Concurrent writers with versioned updates
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			key := "ns--app"
-			r.Update(key, proxy.Route{IP: "10.0.0.1", ResourceVersion: strconv.Itoa(i)})
-			r.Get(key)
-			r.Delete(key)
-		}(i)
+func TestRegistryListAndClear(t *testing.T) {
+	tests := []struct {
+		name        string
+		clear       bool
+		expectCount int
+	}{
+		{name: "list active routes", expectCount: 2},
+		{name: "clear replaces test Store", clear: true, expectCount: 0},
 	}
-	wg.Wait()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+			require.NoError(t, err)
+			registry, err := NewRegistry(store)
+			require.NoError(t, err)
+			registry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
+			_, err = registry.UpsertIDOnly(idOnlyRoute("a", "uid-a", "1"))
+			require.NoError(t, err)
+			_, err = registry.UpsertIDOnly(idOnlyRoute("b", "uid-b", "1"))
+			require.NoError(t, err)
+			if tt.clear {
+				registry.Clear()
+			}
+			assert.Len(t, registry.List(), tt.expectCount)
+		})
+	}
+}
+
+func TestRegistryLifecycleReadiness(t *testing.T) {
+	tests := []struct {
+		name          string
+		activate      bool
+		teardown      bool
+		expectReady   bool
+		expectError   string
+		expectPresent bool
+	}{
+		{
+			name:        "startup before repair handoff rejects mutation",
+			expectError: ErrNotReady.Error(),
+		},
+		{
+			name:          "active repair handoff accepts mutation and read",
+			activate:      true,
+			expectReady:   true,
+			expectPresent: true,
+		},
+		{
+			name:        "teardown rejects later mutation and read",
+			activate:    true,
+			teardown:    true,
+			expectError: ErrNotReady.Error(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+			require.NoError(t, err)
+			registry, err := NewRegistry(store)
+			require.NoError(t, err)
+			if tt.activate {
+				registry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
+			}
+			if tt.teardown {
+				registry.SetRepairEnqueuer(nil)
+			}
+
+			_, err = registry.UpsertIDOnly(idOnlyRoute("opaque-id", "uid-a", "1"))
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrNotReady)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				require.NoError(t, err)
+			}
+			_, present, ready := registry.GetIfReady("opaque-id")
+			assert.Equal(t, tt.expectReady, ready)
+			assert.Equal(t, tt.expectPresent, present)
+			assert.Equal(t, tt.expectReady, registry.Ready())
+			_, stored := registry.Get("opaque-id")
+			assert.Equal(t, tt.expectPresent, stored)
+		})
+	}
+}
+
+func TestRegistryHandoffPreservesAppliedRepairRequests(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{name: "applied mutation forwards displaced claimant repair"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+			require.NoError(t, err)
+			registry, err := NewRegistry(store)
+			require.NoError(t, err)
+			var handedOff []sandboxroute.MutationResult
+			registry.SetRepairEnqueuer(func(result sandboxroute.MutationResult) {
+				handedOff = append(handedOff, result)
+			})
+
+			first := fullRoute("same", "ns", "one", "uid-a", "1")
+			second := fullRoute("same", "ns", "two", "uid-a", "2")
+			_, err = registry.UpsertFull(first)
+			require.NoError(t, err)
+			collision, err := registry.UpsertFull(second)
+			require.NoError(t, err)
+			require.Len(t, collision.RepairRequests, 2)
+			confirmed := store.ApplyAuthoritativeRepair(
+				collision.RepairRequests[0],
+				sandboxroute.AuthoritativeObservation{Present: true, Route: first},
+			)
+			require.Equal(t, sandboxroute.EventResultCollision, confirmed.Result)
+			handedOff = nil
+
+			applied, err := registry.UpsertFull(fullRoute("new", "ns", "two", "uid-b", "3"))
+
+			require.NoError(t, err)
+			require.Equal(t, sandboxroute.EventResultApplied, applied.Result)
+			require.Len(t, applied.RepairRequests, 1)
+			require.Len(t, handedOff, 1)
+			assert.Equal(t, applied, handedOff[0])
+			assert.Equal(t, types.NamespacedName{Namespace: "ns", Name: "one"}, handedOff[0].RepairRequests[0].ObjectKey)
+		})
+	}
+}
+
+func fullRoute(id, namespace, name, uid, resourceVersion string) proxy.Route {
+	return proxy.Route{
+		ID:              id,
+		Namespace:       namespace,
+		Name:            name,
+		UID:             types.UID(uid),
+		ResourceVersion: resourceVersion,
+	}
+}
+
+func idOnlyRoute(id, uid, resourceVersion string) proxy.Route {
+	return proxy.Route{ID: id, UID: types.UID(uid), ResourceVersion: resourceVersion}
 }

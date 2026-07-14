@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -36,6 +37,8 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
+	"github.com/openkruise/agents/pkg/sandbox-manager/sandboxid"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
 // QuotaEnforcer is the minimal surface sandbox-manager needs for admission, delete release, and cleanup.
@@ -70,6 +73,8 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 	return &SandboxManagerBuilder{
 		instance: &SandboxManager{
 			proxy:              proxy.NewServer(opts),
+			routeProjector:     newManagerRouteProjector(),
+			routeNamespace:     opts.SandboxNamespace,
 			memberlistBindPort: opts.MemberlistBindPort,
 			enableShortID:      opts.EnableShortSandboxID,
 			primary:            &primaryState{},
@@ -84,13 +89,13 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 		if err != nil {
 			return nil, err
 		}
-		cache, err := infracache.NewCacheWithHealth(mgr, health)
+		cache, err := infracache.NewCacheWithOptions(mgr, health, infracache.Options{SandboxIDResolver: sandboxid.Resolve})
 		if err != nil {
 			return nil, err
 		}
 		return sandboxcr.NewInfraBuilder(b.opts).
 			WithCache(cache).
-			WithProxy(b.instance.proxy).
+			WithRouteVersionReader(b.instance.proxy).
 			WithAPIReader(mgr.GetAPIReader()), nil
 	}
 	return b
@@ -148,6 +153,22 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 	}
 	b.instance.infra = builder.Build()
 	reader := b.instance.infra.GetCache().GetAPIReader()
+	routeSelector, err := labels.Parse(b.opts.SandboxLabelSelector)
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorInternal, "invalid sandbox route label selector: %v", err)
+	}
+	b.instance.routeSelector = routeSelector
+	routeRepairer, err := sandboxroute.NewRepairer(
+		b.instance.proxy.Store(),
+		b.instance.observeRoute(reader),
+		sandboxroute.RepairerOptions{},
+	)
+	if err != nil {
+		return nil, errors.NewError(errors.ErrorInternal, "failed to initialize manager route repairer: %v", err)
+	}
+	b.instance.routeRepairer = routeRepairer
+	b.instance.proxy.SetRepairEnqueuer(routeRepairer.Enqueue)
+	b.instance.registerRouteFeeder()
 
 	// Build peers manager
 	if b.getPeersFunc != nil {
@@ -183,6 +204,11 @@ type SandboxManager struct {
 
 	infra infra.Infrastructure
 	proxy *proxy.Server
+
+	routeProjector *sandboxroute.Projector
+	routeRepairer  *sandboxroute.Repairer
+	routeNamespace string
+	routeSelector  labels.Selector
 
 	enableShortID bool
 
@@ -295,6 +321,13 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 
 	if err := m.infra.Run(ctx); err != nil {
 		return err
+	}
+	if m.routeRepairer != nil {
+		go func() {
+			if err := m.routeRepairer.Start(ctx); err != nil {
+				log.Error(err, "manager route repairer stopped")
+			}
+		}()
 	}
 	if m.quotaAntiDrift != nil {
 		m.quotaAntiDrift.Run(ctx)

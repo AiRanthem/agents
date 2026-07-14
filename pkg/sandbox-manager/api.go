@@ -19,10 +19,12 @@ package sandbox_manager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -39,12 +41,9 @@ import (
 
 // ResolveSandboxID returns the final public ID of a Sandbox for server-facing use.
 func (m *SandboxManager) ResolveSandboxID(sandbox metav1.Object) string {
-	format := "legacy"
-	if sandbox.GetLabels()[sandboxid.LabelKey] != "" {
-		format = "short"
-	}
+	id, format := sandboxid.ResolveWithFormat(sandbox)
 	sandboxidmetrics.RecordResolved(format, "e2b")
-	return sandboxid.Resolve(sandbox)
+	return id
 }
 
 // ClaimSandboxOptions wraps infra-level claim options with an optional quota spec.
@@ -137,6 +136,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts ClaimSandboxOpti
 	log := klog.FromContext(ctx)
 	infraOpts := opts.Infra
 	infraOpts.Admission = m.quotaAdmission(infraOpts.User, opts.Quota)
+	infraOpts, assignmentState := m.prepareClaimSandboxIdentity(infraOpts)
 
 	if !m.infra.HasTemplate(ctx, infra.HasTemplateOptions{Namespace: infraOpts.Namespace, Name: infraOpts.Template}) {
 		// Template lookup failed before any sandbox was picked, so lock_type is unknown.
@@ -145,6 +145,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts ClaimSandboxOpti
 		return nil, managererrors.NewError(managererrors.ErrorNotFound, "template %s not found", infraOpts.Template)
 	}
 	sandbox, claimMetrics, err := m.infra.ClaimSandbox(ctx, infraOpts)
+	recordSandboxIDAssignment(ctx, assignmentState, claimMetrics.PostModifier, err)
 	if err != nil {
 		log.Error(err, "failed to claim sandbox", "metrics", claimMetrics.String())
 		// claimMetrics may carry the actual lock_type even on failure; fall back to
@@ -180,8 +181,10 @@ func (m *SandboxManager) CloneSandbox(ctx context.Context, opts CloneSandboxOpti
 	log := klog.FromContext(ctx)
 	infraOpts := opts.Infra
 	infraOpts.Admission = m.quotaAdmission(infraOpts.User, opts.Quota)
+	infraOpts, assignmentState := m.prepareCloneSandboxIdentity(infraOpts)
 
 	sandbox, cloneMetrics, err := m.infra.CloneSandbox(ctx, infraOpts)
+	recordSandboxIDAssignment(ctx, assignmentState, cloneMetrics.PostModifier, err)
 	if err != nil {
 		log.Error(err, "failed to clone sandbox", "metrics", cloneMetrics)
 		sandboxCloneTotal.WithLabelValues(infraOpts.Namespace, "failure").Inc()
@@ -215,12 +218,15 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	sbx, err := m.infra.GetSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "failed to get sandbox from cache")
+		if errors.Is(err, cache.ErrSandboxIDCollision) {
+			return nil, managererrors.WrapError(managererrors.ErrorInternal, err, "sandbox lookup is ambiguous")
+		}
 		return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found", opts.SandboxID)
 	}
 
 	state, reason := sbx.GetState()
 
-	if sbx.GetRoute().Owner != user {
+	if sbx.GetAnnotations()[v1alpha1.AnnotationOwner] != user {
 		log.Error(nil, "sandbox is not owned by user")
 		return nil, managererrors.NewError(managererrors.ErrorNotAllowed, "sandbox %s is not owned", opts.SandboxID)
 	}
@@ -310,9 +316,16 @@ func (m *SandboxManager) syncRoute(ctx context.Context, sbx infra.Sandbox, refre
 		}
 	}
 	start := time.Now()
-	route := sbx.GetRoute()
-	m.proxy.SetRoute(ctx, route)
-	err := m.proxy.SyncRouteWithPeers(route)
+	route, err := m.projectInfraSandbox(sbx)
+	if err != nil {
+		return err
+	}
+	if err := route.Validate(); err != nil {
+		return fmt.Errorf("invalid manager route projection: %w", err)
+	}
+	result := m.proxy.SetRoute(ctx, route)
+	m.logRouteMutation(ctx, "upsert", types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, result)
+	err = m.proxy.SyncRouteWithPeers(route)
 	duration := time.Since(start).Seconds()
 	if err != nil {
 		log.Error(err, "failed to sync route with peers")
@@ -362,9 +375,15 @@ func (m *SandboxManager) ResumeSandbox(ctx context.Context, sbx infra.Sandbox, o
 // deleteRouteAndSync removes the route locally and syncs the deletion with peers.
 func (m *SandboxManager) deleteRouteAndSync(ctx context.Context, sbx infra.Sandbox) {
 	log := klog.FromContext(ctx)
-	route := sbx.GetRoute()
+	key := types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}
+	result := m.proxy.DeleteAuthoritativeByObjectKey(key, sandboxid.Legacy(sbx.GetNamespace(), sbx.GetName()))
+	m.logRouteMutation(ctx, "delete", key, result)
+	route, err := m.projectInfraSandbox(sbx)
+	if err != nil {
+		log.Error(err, "failed to project deleted sandbox route")
+		return
+	}
 	route.State = v1alpha1.SandboxStateDead
-	m.proxy.DeleteRoute(route.ID)
 	if err := m.proxy.SyncRouteWithPeers(route); err != nil {
 		log.Error(err, "failed to sync route with peers")
 	}

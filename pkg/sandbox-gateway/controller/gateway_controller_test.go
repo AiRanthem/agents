@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,24 +19,26 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/jwtauth"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
 func TestAddJWTAuthManager(t *testing.T) {
@@ -95,784 +97,419 @@ func TestAddJWTAuthManager(t *testing.T) {
 	}
 }
 
-func TestSandboxReconciler_Reconcile_SandboxNotFound(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Pre-populate registry with an entry that should be removed
-	registry.GetRegistry().Update("default--deleted-sandbox", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
-
-	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "deleted-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Verify registry entry was deleted
-	_, found := registry.GetRegistry().Get("default--deleted-sandbox")
-	if found {
-		t.Error("Expected registry entry to be deleted")
-	}
-}
-
-func TestSandboxReconciler_Reconcile_SandboxBeingDeleted(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
+func TestSandboxReconcilerReconcile(t *testing.T) {
 	now := metav1.Now()
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "deleting-sandbox",
-			Namespace:         "default",
-			DeletionTimestamp: &now,
-			Finalizers:        []string{"test-finalizer"},
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.2",
-			},
-		},
-	}
-
-	// Pre-populate registry
-	registry.GetRegistry().Update("default--deleting-sandbox", proxy.Route{IP: "10.0.0.2", ResourceVersion: "1"})
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "deleting-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Verify registry entry was deleted
-	_, found := registry.GetRegistry().Get("default--deleting-sandbox")
-	if found {
-		t.Error("Expected registry entry to be deleted when sandbox is being deleted")
-	}
-}
-
-func TestSandboxReconciler_Reconcile_SandboxNoPodIP(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-ip-sandbox",
-			Namespace: "default",
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "",
-			},
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "no-ip-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Verify registry was updated with state="creating" (consistent with sandbox-manager behavior)
-	route, found := registry.GetRegistry().Get("default--no-ip-sandbox")
-	if !found {
-		t.Error("Expected registry entry to be created with creating state")
-	}
-	if route.IP != "" {
-		t.Errorf("Expected empty IP, got %s", route.IP)
-	}
-	if route.State != agentsv1alpha1.SandboxStateCreating {
-		t.Errorf("Expected state %s, got %s", agentsv1alpha1.SandboxStateCreating, route.State)
-	}
-}
-
-func TestSandboxReconciler_Reconcile_SandboxWithPodIP(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "running-sandbox",
-			Namespace: "default",
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.5",
-			},
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "running-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Verify registry was updated
-	route, found := registry.GetRegistry().Get("default--running-sandbox")
-	if !found {
-		t.Error("Expected registry entry to be created")
-	}
-	if route.IP != "10.0.0.5" {
-		t.Errorf("Expected IP 10.0.0.5, got %s", route.IP)
-	}
-
-	// Cleanup
-	registry.GetRegistry().Delete("default--running-sandbox")
-}
-
-func TestSandboxReconciler_Reconcile_UpdateExistingRegistryEntry(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Pre-populate registry with old IP
-	registry.GetRegistry().Update("default--update-sandbox", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "update-sandbox",
-			Namespace: "default",
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.10",
-			},
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "update-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	_, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-
-	// Verify registry was updated with new IP
-	route, found := registry.GetRegistry().Get("default--update-sandbox")
-	if !found {
-		t.Error("Expected registry entry to exist")
-	}
-	if route.IP != "10.0.0.10" {
-		t.Errorf("Expected IP 10.0.0.10, got %s", route.IP)
-	}
-
-	// Cleanup
-	registry.GetRegistry().Delete("default--update-sandbox")
-}
-
-func TestSandboxReconciler_Reconcile_DifferentNamespaces(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
 	tests := []struct {
-		name      string
-		namespace string
-		sboxName  string
-		podIP     string
+		name          string
+		object        *agentsv1alpha1.Sandbox
+		key           types.NamespacedName
+		policy        SandboxPolicy
+		setup         func(*registry.Registry)
+		configure     func(*SandboxReconciler)
+		expectID      string
+		expectPresent bool
+		expectState   string
+		expectAuth    bool
+		expectError   string
 	}{
 		{
-			name:      "sandbox in default namespace",
-			namespace: "default",
-			sboxName:  "sandbox-1",
-			podIP:     "10.0.1.1",
+			name:          "present legacy Sandbox projects a full route",
+			object:        testSandbox("ns", "legacy", "uid-a", "1", ""),
+			key:           types.NamespacedName{Namespace: "ns", Name: "legacy"},
+			expectID:      "ns--legacy",
+			expectPresent: true,
+			expectState:   agentsv1alpha1.SandboxStateRunning,
 		},
 		{
-			name:      "sandbox in custom namespace",
-			namespace: "production",
-			sboxName:  "sandbox-2",
-			podIP:     "10.0.2.2",
+			name: "persisted short label and traffic auth are authoritative",
+			object: func() *agentsv1alpha1.Sandbox {
+				sandbox := testSandbox("ns", "short", "uid-b", "2", "short-id")
+				sandbox.Annotations[identity.AnnotationEnableJwtAuth] = agentsv1alpha1.True
+				return sandbox
+			}(),
+			key:           types.NamespacedName{Namespace: "ns", Name: "short"},
+			expectID:      "short-id",
+			expectPresent: true,
+			expectState:   agentsv1alpha1.SandboxStateRunning,
+			expectAuth:    true,
 		},
 		{
-			name:      "sandbox in namespace with hyphens",
-			namespace: "my-namespace",
-			sboxName:  "sandbox-3",
-			podIP:     "10.0.3.3",
+			name: "missing Pod IP projects creating state",
+			object: func() *agentsv1alpha1.Sandbox {
+				sandbox := testSandbox("ns", "creating", "uid-creating", "2", "short-creating")
+				sandbox.Status.PodInfo.PodIP = ""
+				return sandbox
+			}(),
+			key:           types.NamespacedName{Namespace: "ns", Name: "creating"},
+			expectID:      "short-creating",
+			expectPresent: true,
+			expectState:   agentsv1alpha1.SandboxStateCreating,
+		},
+		{
+			name:   "projection failure is returned",
+			object: testSandbox("ns", "invalid", "uid-invalid", "2", ""),
+			key:    types.NamespacedName{Namespace: "ns", Name: "invalid"},
+			configure: func(reconciler *SandboxReconciler) {
+				reconciler.Projector = sandboxroute.NewProjector(func(metav1.Object) string { return "" })
+			},
+			expectID:    "unused",
+			expectError: "resolver returned an empty sandbox ID",
+		},
+		{
+			name:   "lifecycle teardown returns error for controller retry",
+			object: testSandbox("ns", "teardown", "uid-teardown", "3", "short-teardown"),
+			key:    types.NamespacedName{Namespace: "ns", Name: "teardown"},
+			configure: func(reconciler *SandboxReconciler) {
+				reconciler.Registry.SetRepairEnqueuer(nil)
+			},
+			expectID:    "short-teardown",
+			expectError: registry.ErrNotReady.Error(),
+		},
+		{
+			name: "NotFound authoritatively deletes full current route",
+			key:  types.NamespacedName{Namespace: "ns", Name: "gone"},
+			setup: func(registry *registry.Registry) {
+				registry.UpsertFull(testFullRoute("short-gone", "ns", "gone", "uid-c", "3"))
+			},
+			expectID: "short-gone",
+		},
+		{
+			name: "NotFound uses injected fallback only for ID-only compatibility",
+			key:  types.NamespacedName{Namespace: "ns", Name: "old"},
+			setup: func(registry *registry.Registry) {
+				registry.UpsertIDOnly(proxy.Route{ID: "ns--old", UID: "uid-d", ResourceVersion: "4"})
+			},
+			expectID: "ns--old",
+		},
+		{
+			name: "deleting Sandbox is authoritative absence",
+			object: func() *agentsv1alpha1.Sandbox {
+				sandbox := testSandbox("ns", "deleting", "uid-e", "5", "short-deleting")
+				sandbox.DeletionTimestamp = &now
+				sandbox.Finalizers = []string{"test"}
+				return sandbox
+			}(),
+			key: types.NamespacedName{Namespace: "ns", Name: "deleting"},
+			setup: func(registry *registry.Registry) {
+				registry.UpsertFull(testFullRoute("short-deleting", "ns", "deleting", "uid-e", "4"))
+			},
+			expectID: "short-deleting",
+		},
+		{
+			name:   "namespace exclusion is authoritative absence",
+			object: testSandbox("other", "excluded", "uid-f", "6", "short-excluded"),
+			key:    types.NamespacedName{Namespace: "other", Name: "excluded"},
+			policy: SandboxPolicy{
+				Namespace: "visible",
+				Selector:  labels.Everything(),
+				Include:   func(*agentsv1alpha1.Sandbox, string) bool { return true },
+			},
+			expectID: "short-excluded",
+		},
+		{
+			name:   "label exclusion is authoritative absence",
+			object: testSandbox("ns", "excluded", "uid-g", "7", "short-label-excluded"),
+			key:    types.NamespacedName{Namespace: "ns", Name: "excluded"},
+			policy: SandboxPolicy{
+				Selector: labels.SelectorFromSet(labels.Set{"included": "true"}),
+				Include:  func(*agentsv1alpha1.Sandbox, string) bool { return true },
+			},
+			expectID: "short-label-excluded",
+		},
+		{
+			name:   "state inclusion exclusion is authoritative absence",
+			object: testSandbox("ns", "excluded", "uid-h", "8", "short-state-excluded"),
+			key:    types.NamespacedName{Namespace: "ns", Name: "excluded"},
+			policy: SandboxPolicy{
+				Selector: labels.Everything(),
+				Include:  func(*agentsv1alpha1.Sandbox, string) bool { return false },
+			},
+			expectID: "short-state-excluded",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sandbox := &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      tt.sboxName,
-					Namespace: tt.namespace,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					PodInfo: agentsv1alpha1.PodInfo{
-						PodIP: tt.podIP,
-					},
-				},
+			objects := []client.Object{}
+			if tt.object != nil {
+				objects = append(objects, tt.object)
+			}
+			reconciler, routeRegistry := testReconciler(t, objects, tt.policy)
+			if tt.configure != nil {
+				tt.configure(reconciler)
+			}
+			if tt.setup != nil {
+				tt.setup(routeRegistry)
 			}
 
-			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-			reconciler := &SandboxReconciler{
-				Client: client,
-				Scheme: scheme,
+			result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: tt.key})
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
 			}
-
-			req := ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      tt.sboxName,
-					Namespace: tt.namespace,
-				},
+			require.NoError(t, err)
+			assert.False(t, result.Requeue)
+			route, present := routeRegistry.Get(tt.expectID)
+			assert.Equal(t, tt.expectPresent, present)
+			if tt.expectPresent {
+				assert.Equal(t, tt.key.Namespace, route.Namespace)
+				assert.Equal(t, tt.key.Name, route.Name)
+				assert.Equal(t, tt.expectState, route.State)
+				assert.Equal(t, tt.expectAuth, route.RequireTrafficAuth)
 			}
-
-			_, err := reconciler.Reconcile(context.Background(), req)
-			if err != nil {
-				t.Errorf("Expected no error, got %v", err)
-			}
-
-			expectedKey := tt.namespace + "--" + tt.sboxName
-			route, found := registry.GetRegistry().Get(expectedKey)
-			if !found {
-				t.Errorf("Expected registry entry for key %s", expectedKey)
-			}
-			if route.IP != tt.podIP {
-				t.Errorf("Expected IP %s, got %s", tt.podIP, route.IP)
-			}
-
-			// Cleanup
-			registry.GetRegistry().Delete(expectedKey)
 		})
 	}
 }
 
-func TestSandboxReconciler_Reconcile_ConcurrentUpdates(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Create multiple sandboxes
-	sandboxes := []*agentsv1alpha1.Sandbox{
+func TestSandboxReconcilerValidate(t *testing.T) {
+	valid, _ := testReconciler(t, nil, SandboxPolicy{})
+	tests := []struct {
+		name        string
+		configure   func(*SandboxReconciler)
+		expectError string
+	}{
+		{name: "valid dependencies"},
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "concurrent-1",
-				Namespace: "default",
-			},
-			Status: agentsv1alpha1.SandboxStatus{
-				PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
-			},
+			name:        "nil client rejected",
+			configure:   func(reconciler *SandboxReconciler) { reconciler.Client = nil },
+			expectError: "client must not be nil",
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "concurrent-2",
-				Namespace: "default",
-			},
-			Status: agentsv1alpha1.SandboxStatus{
-				PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.2"},
-			},
+			name:        "nil Registry rejected",
+			configure:   func(reconciler *SandboxReconciler) { reconciler.Registry = nil },
+			expectError: "Registry must not be nil",
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "concurrent-3",
-				Namespace: "default",
+			name:        "nil Projector rejected",
+			configure:   func(reconciler *SandboxReconciler) { reconciler.Projector = nil },
+			expectError: "Projector must not be nil",
+		},
+		{
+			name:        "nil legacy fallback rejected",
+			configure:   func(reconciler *SandboxReconciler) { reconciler.LegacyFallback = nil },
+			expectError: "legacy fallback must not be nil",
+		},
+		{
+			name: "uninitialized policy rejected",
+			configure: func(reconciler *SandboxReconciler) {
+				reconciler.Policy = SandboxPolicy{}
 			},
-			Status: agentsv1alpha1.SandboxStatus{
-				PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.3"},
-			},
+			expectError: "policy must be initialized",
 		},
 	}
-
-	objects := make([]client.Object, len(sandboxes))
-	for i, s := range sandboxes {
-		objects[i] = s
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	// Process all sandboxes concurrently
-	done := make(chan bool, len(sandboxes))
-	for _, s := range sandboxes {
-		go func(sbox *agentsv1alpha1.Sandbox) {
-			req := ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      sbox.Name,
-					Namespace: sbox.Namespace,
-				},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reconciler := *valid
+			if tt.configure != nil {
+				tt.configure(&reconciler)
 			}
-			_, err := reconciler.Reconcile(context.Background(), req)
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
+			err := reconciler.validate()
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
 			}
-			done <- true
-		}(s)
-	}
-
-	// Wait for all goroutines to complete
-	for i := 0; i < len(sandboxes); i++ {
-		<-done
-	}
-
-	// Verify all entries were added
-	for i, s := range sandboxes {
-		key := "default--" + s.Name
-		route, found := registry.GetRegistry().Get(key)
-		if !found {
-			t.Errorf("Expected registry entry for %s", key)
-		}
-		expectedIP := "10.0.0." + string(rune('1'+i))
-		if route.IP != expectedIP {
-			t.Errorf("Expected IP %s, got %s", expectedIP, route.IP)
-		}
-		// Cleanup
-		registry.GetRegistry().Delete(key)
+			require.NoError(t, err)
+		})
 	}
 }
 
-func TestSandboxReconciler_Reconcile_GetError(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
+func TestStartManagerDependencyFailureTearsDownReadiness(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     func(*registry.Registry) ManagerOptions
+		expectError string
+	}{
+		{
+			name: "missing Projector keeps gateway unavailable",
+			options: func(routeRegistry *registry.Registry) ManagerOptions {
+				return ManagerOptions{
+					Registry:       routeRegistry,
+					LegacyFallback: func(string, string) string { return "legacy" },
+				}
+			},
+			expectError: "route dependencies must not be nil",
+		},
+		{
+			name: "invalid selector keeps gateway unavailable",
+			options: func(routeRegistry *registry.Registry) ManagerOptions {
+				return ManagerOptions{
+					Registry:       routeRegistry,
+					Projector:      sandboxroute.NewProjector(testResolveSandboxID),
+					LegacyFallback: func(string, string) string { return "legacy" },
+					LabelSelector:  "bad in (",
+				}
+			},
+			expectError: "parse sandbox label selector",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+			require.NoError(t, err)
+			routeRegistry, err := registry.NewRegistry(store)
+			require.NoError(t, err)
+			routeRegistry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
+			require.True(t, routeRegistry.Ready())
 
-	// Create a sandbox
-	sandbox := &agentsv1alpha1.Sandbox{
+			err = StartManager(context.Background(), tt.options(routeRegistry))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+			assert.False(t, routeRegistry.Ready())
+		})
+	}
+}
+
+func TestSandboxReconcilerDirectObservationUsesSamePolicy(t *testing.T) {
+	tests := []struct {
+		name          string
+		object        *agentsv1alpha1.Sandbox
+		key           types.NamespacedName
+		policy        SandboxPolicy
+		expectPresent bool
+		expectError   string
+	}{
+		{
+			name:          "direct reader projects included object",
+			object:        testSandbox("ns", "included", "uid-a", "1", "short-a"),
+			key:           types.NamespacedName{Namespace: "ns", Name: "included"},
+			expectPresent: true,
+		},
+		{
+			name:   "direct reader treats excluded object as absent",
+			object: testSandbox("ns", "excluded", "uid-b", "2", "short-b"),
+			key:    types.NamespacedName{Namespace: "ns", Name: "excluded"},
+			policy: SandboxPolicy{
+				Selector: labels.Everything(),
+				Include:  func(*agentsv1alpha1.Sandbox, string) bool { return false },
+			},
+		},
+		{
+			name: "direct reader treats NotFound as absent",
+			key:  types.NamespacedName{Namespace: "ns", Name: "missing"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objects := []client.Object{}
+			if tt.object != nil {
+				objects = append(objects, tt.object)
+			}
+			reconciler, _ := testReconciler(t, objects, tt.policy)
+			observation, err := reconciler.observe(context.Background(), reconciler.Client, tt.key)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectPresent, observation.Present)
+		})
+	}
+}
+
+func TestNewSandboxPolicy(t *testing.T) {
+	tests := []struct {
+		name          string
+		selector      string
+		expectMatches bool
+		expectError   string
+	}{
+		{name: "empty selector matches all", expectMatches: true},
+		{name: "valid selector is applied", selector: "included=true", expectMatches: true},
+		{name: "nonmatching selector is applied", selector: "included=false"},
+		{name: "invalid selector rejected", selector: "bad in (", expectError: "parse sandbox label selector"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy, err := NewSandboxPolicy("", tt.selector, nil)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectMatches, policy.Selector.Matches(labels.Set{"included": "true"}))
+			assert.True(t, policy.Include(testSandbox("ns", "a", "uid", "1", ""), "state"))
+		})
+	}
+}
+
+func testReconciler(
+	t *testing.T,
+	objects []client.Object,
+	policy SandboxPolicy,
+) (*SandboxReconciler, *registry.Registry) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, agentsv1alpha1.AddToScheme(scheme))
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	store, err := sandboxroute.NewStore(sandboxroute.SurfaceGateway)
+	require.NoError(t, err)
+	routeRegistry, err := registry.NewRegistry(store)
+	require.NoError(t, err)
+	routeRegistry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
+	if policy.Selector == nil {
+		policy.Selector = labels.Everything()
+	}
+	if policy.Include == nil {
+		policy.Include = func(*agentsv1alpha1.Sandbox, string) bool { return true }
+	}
+	return &SandboxReconciler{
+		Client:         fakeClient,
+		Registry:       routeRegistry,
+		Projector:      sandboxroute.NewProjector(testResolveSandboxID),
+		LegacyFallback: func(namespace, name string) string { return fmt.Sprintf("%s--%s", namespace, name) },
+		Policy:         policy,
+	}, routeRegistry
+}
+
+func testResolveSandboxID(object metav1.Object) string {
+	if id := object.GetLabels()[agentsv1alpha1.LabelSandboxID]; id != "" {
+		return id
+	}
+	return fmt.Sprintf("%s--%s", object.GetNamespace(), object.GetName())
+}
+
+func testSandbox(namespace, name, uid, resourceVersion, id string) *agentsv1alpha1.Sandbox {
+	labels := map[string]string{}
+	if id != "" {
+		labels[agentsv1alpha1.LabelSandboxID] = id
+	}
+	return &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	// Test with empty request (should return not found error)
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "nonexistent",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error for not found, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue for not found")
-	}
-}
-
-func TestSandboxReconciler_Reconcile_EmptySandboxName(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	// Test with empty sandbox name - should result in not found
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-}
-
-func TestSandboxReconciler_Reconcile_SandboxWithIPv6(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ipv6-sandbox",
-			Namespace: "default",
+			Namespace:       namespace,
+			Name:            name,
+			UID:             types.UID(uid),
+			ResourceVersion: resourceVersion,
+			Labels:          labels,
+			Annotations: map[string]string{
+				agentsv1alpha1.AnnotationOwner:              "owner",
+				agentsv1alpha1.AnnotationRuntimeAccessToken: "token",
+			},
 		},
 		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "2001:db8::1",
-			},
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "ipv6-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	_, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-
-	// Verify registry was updated with IPv6 address
-	route, found := registry.GetRegistry().Get("default--ipv6-sandbox")
-	if !found {
-		t.Error("Expected registry entry to be created")
-	}
-	if route.IP != "2001:db8::1" {
-		t.Errorf("Expected IP 2001:db8::1, got %s", route.IP)
-	}
-
-	// Cleanup
-	registry.GetRegistry().Delete("default--ipv6-sandbox")
-}
-
-func TestSandboxReconciler_Reconcile_MultipleReconciles(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "multi-reconcile-sandbox",
-			Namespace: "default",
-		},
-		Status: agentsv1alpha1.SandboxStatus{
+			Phase: agentsv1alpha1.SandboxRunning,
 			PodInfo: agentsv1alpha1.PodInfo{
 				PodIP: "10.0.0.1",
 			},
+			Conditions: []metav1.Condition{{
+				Type:   string(agentsv1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+			}},
 		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "multi-reconcile-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	// Reconcile multiple times
-	for i := 0; i < 3; i++ {
-		result, err := reconciler.Reconcile(context.Background(), req)
-		if err != nil {
-			t.Errorf("Iteration %d: Expected no error, got %v", i, err)
-		}
-		if result.Requeue {
-			t.Errorf("Iteration %d: Expected no requeue", i)
-		}
-
-		// Verify registry still has correct IP
-		route, found := registry.GetRegistry().Get("default--multi-reconcile-sandbox")
-		if !found {
-			t.Errorf("Iteration %d: Expected registry entry to exist", i)
-		}
-		if route.IP != "10.0.0.1" {
-			t.Errorf("Iteration %d: Expected IP 10.0.0.1, got %s", i, route.IP)
-		}
-	}
-
-	// Cleanup
-	registry.GetRegistry().Delete("default--multi-reconcile-sandbox")
-}
-
-func TestSandboxReconciler_Reconcile_SandboxNameWithSpecialCharacters(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	tests := []struct {
-		name      string
-		sboxName  string
-		namespace string
-		podIP     string
-	}{
-		{
-			name:      "sandbox with hyphens",
-			sboxName:  "my-sandbox-name",
-			namespace: "default",
-			podIP:     "10.0.0.1",
-		},
-		{
-			name:      "sandbox with dots",
-			sboxName:  "my.sandbox.name",
-			namespace: "default",
-			podIP:     "10.0.0.2",
-		},
-		{
-			name:      "sandbox with alphanumeric",
-			sboxName:  "sandbox123-test",
-			namespace: "default",
-			podIP:     "10.0.0.3",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sandbox := &agentsv1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      tt.sboxName,
-					Namespace: tt.namespace,
-				},
-				Status: agentsv1alpha1.SandboxStatus{
-					PodInfo: agentsv1alpha1.PodInfo{
-						PodIP: tt.podIP,
-					},
-				},
-			}
-
-			client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-			reconciler := &SandboxReconciler{
-				Client: client,
-				Scheme: scheme,
-			}
-
-			req := ctrl.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      tt.sboxName,
-					Namespace: tt.namespace,
-				},
-			}
-
-			_, err := reconciler.Reconcile(context.Background(), req)
-			if err != nil {
-				t.Errorf("Expected no error, got %v", err)
-			}
-
-			expectedKey := tt.namespace + "--" + tt.sboxName
-			route, found := registry.GetRegistry().Get(expectedKey)
-			if !found {
-				t.Errorf("Expected registry entry for key %s", expectedKey)
-			}
-			if route.IP != tt.podIP {
-				t.Errorf("Expected IP %s, got %s", tt.podIP, route.IP)
-			}
-
-			// Cleanup
-			registry.GetRegistry().Delete(expectedKey)
-		})
 	}
 }
 
-func TestSandboxReconciler_Reconcile_DeletionTimestampWithZeroTime(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Create a sandbox with a zero deletion timestamp
-	// When DeletionTimestamp is set (even to zero time), the controller should remove from registry
-	zeroTime := &metav1.Time{Time: time.Time{}}
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "zero-deletion-sandbox",
-			Namespace:         "default",
-			DeletionTimestamp: zeroTime,
-			Finalizers:        []string{"test-finalizer"},
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			PodInfo: agentsv1alpha1.PodInfo{
-				PodIP: "10.0.0.77",
-			},
-		},
-	}
-
-	// Pre-populate registry
-	registry.GetRegistry().Update("default--zero-deletion-sandbox", proxy.Route{IP: "10.0.0.77", ResourceVersion: "1"})
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "zero-deletion-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Since DeletionTimestamp is not nil, entry should be deleted
-	// Note: The fake client may not properly handle DeletionTimestamp on initial creation,
-	// so we just verify the reconcile completes without error
-	// The actual behavior is tested in the "SandboxBeingDeleted" test
-}
-
-func TestSandboxReconciler_Reconcile_NilStatus(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Sandbox with nil status (should be handled gracefully)
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nil-status-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sandbox).Build()
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "nil-status-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-	if err != nil {
-		t.Errorf("Expected no error, got %v", err)
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue")
-	}
-
-	// Verify registry was updated with state="creating" (consistent with sandbox-manager behavior)
-	route, found := registry.GetRegistry().Get("default--nil-status-sandbox")
-	if !found {
-		t.Error("Expected registry entry to be created with creating state")
-	}
-	if route.IP != "" {
-		t.Errorf("Expected empty IP, got %s", route.IP)
-	}
-	if route.State != agentsv1alpha1.SandboxStateCreating {
-		t.Errorf("Expected state %s, got %s", agentsv1alpha1.SandboxStateCreating, route.State)
-	}
-}
-
-// Test error handling when Get returns an unexpected error
-func TestSandboxReconciler_Reconcile_UnexpectedGetError(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = agentsv1alpha1.AddToScheme(scheme)
-
-	// Create a client that will return an error
-	// We use an empty scheme to force errors
-	emptyScheme := runtime.NewScheme()
-	client := fake.NewClientBuilder().WithScheme(emptyScheme).Build()
-
-	reconciler := &SandboxReconciler{
-		Client: client,
-		Scheme: scheme,
-	}
-
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-sandbox",
-			Namespace: "default",
-		},
-	}
-
-	result, err := reconciler.Reconcile(context.Background(), req)
-
-	// Since the sandbox type is not registered in emptyScheme, Get should fail
-	// The error should be returned
-	if err == nil {
-		t.Error("Expected an error when scheme doesn't have the type")
-	}
-	if result.Requeue {
-		t.Error("Expected no requeue on error")
+func testFullRoute(id, namespace, name, uid, resourceVersion string) proxy.Route {
+	return proxy.Route{
+		ID:              id,
+		Namespace:       namespace,
+		Name:            name,
+		UID:             types.UID(uid),
+		ResourceVersion: resourceVersion,
 	}
 }

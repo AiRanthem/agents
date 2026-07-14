@@ -23,12 +23,14 @@ import (
 
 	"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/identity/oidc"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 )
 
@@ -41,6 +43,22 @@ type fakeJWTVerifier struct {
 func (v *fakeJWTVerifier) Verify(rawJWT string) (*oidc.TrafficAccessTokenClaims, error) {
 	v.rawJWT = rawJWT
 	return v.claims, v.err
+}
+
+func putTestRoute(t *testing.T, routeRegistry *registry.Registry, id string, route proxy.Route) {
+	t.Helper()
+	activateTestRegistry(routeRegistry)
+	route.ID = id
+	if route.UID == "" {
+		route.UID = types.UID("test-" + id)
+	}
+	result, err := routeRegistry.UpsertIDOnly(route)
+	require.NoError(t, err)
+	require.Equal(t, sandboxroute.EventResultApplied, result.Result)
+}
+
+func activateTestRegistry(routeRegistry *registry.Registry) {
+	routeRegistry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
 }
 
 // mockRequestHeaderMap implements api.RequestHeaderMap for testing
@@ -325,12 +343,12 @@ func (m *mockFilterCallbackHandler) EncoderFilterCallbacks() api.EncoderFilterCa
 func TestDecodeHeadersSandboxHeaderPriority(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--sandbox-header", proxy.Route{
+	putTestRoute(t, r, "default--sandbox-header", proxy.Route{
 		IP:              "10.0.0.1",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
 	})
-	r.Update("default--host-header", proxy.Route{
+	putTestRoute(t, r, "default--host-header", proxy.Route{
 		IP:              "10.0.0.2",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -365,7 +383,7 @@ func TestDecodeHeadersSandboxHeaderPriority(t *testing.T) {
 func TestDecodeHeadersFallbackToHostHeader(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--host-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--host-sandbox", proxy.Route{
 		IP:              "10.0.0.2",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -397,7 +415,7 @@ func TestDecodeHeadersFallbackToHostHeader(t *testing.T) {
 func TestDecodeHeadersNoHeaders(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
+	putTestRoute(t, r, "default--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -417,6 +435,7 @@ func TestDecodeHeadersNoHeaders(t *testing.T) {
 func TestDecodeHeadersSandboxNotFound(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
+	activateTestRegistry(r)
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -440,6 +459,7 @@ func TestDecodeHeadersSandboxNotFound(t *testing.T) {
 func TestDecodeHeadersSandboxNotFoundHostFallback(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
+	activateTestRegistry(r)
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -458,6 +478,46 @@ func TestDecodeHeadersSandboxNotFoundHostFallback(t *testing.T) {
 	assert.Equal(t, "sandbox_not_found", mockCallbacks.decoderCallbacks.replyDetails)
 }
 
+func TestDecodeHeadersRegistryLifecycleReadiness(t *testing.T) {
+	tests := []struct {
+		name     string
+		activate bool
+		teardown bool
+	}{
+		{name: "startup before repair handoff returns unavailable"},
+		{name: "teardown after repair handoff returns unavailable", activate: true, teardown: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routeRegistry := registry.GetRegistry()
+			routeRegistry.Clear()
+			defer routeRegistry.Clear()
+			if tt.activate {
+				putTestRoute(t, routeRegistry, "opaque-id", proxy.Route{
+					IP:              "10.0.0.1",
+					State:           agentsv1alpha1.SandboxStateRunning,
+					ResourceVersion: "1",
+				})
+			}
+			if tt.teardown {
+				routeRegistry.SetRepairEnqueuer(nil)
+			}
+
+			callbacks := newMockFilterCallbackHandler()
+			filter := &sandboxFilter{callbacks: callbacks, config: DefaultConfig(), adapter: defaultTestAdapter()}
+			header := newMockRequestHeaderMap()
+			header.Set(DefaultSandboxHeaderName, "opaque-id")
+
+			status := filter.DecodeHeaders(header, true)
+
+			assert.Equal(t, api.LocalReply, status)
+			assert.True(t, callbacks.decoderCallbacks.sendLocalReplyCalled)
+			assert.Equal(t, 503, callbacks.decoderCallbacks.replyStatusCode)
+			assert.Equal(t, "gateway_not_ready", callbacks.decoderCallbacks.replyDetails)
+		})
+	}
+}
+
 // TestDecodeHeadersSandboxNotRunning tests the case when sandbox exists but is not in running state
 func TestDecodeHeadersSandboxNotRunning(t *testing.T) {
 	tests := []struct {
@@ -473,7 +533,7 @@ func TestDecodeHeadersSandboxNotRunning(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := registry.GetRegistry()
 			defer r.Clear()
-			r.Update("default--test-sandbox", proxy.Route{
+			putTestRoute(t, r, "default--test-sandbox", proxy.Route{
 				IP:              "10.0.0.1",
 				State:           tt.state,
 				ResourceVersion: "1",
@@ -514,7 +574,7 @@ func TestDecodeHeadersSandboxNotRunningHostFallback(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := registry.GetRegistry()
 			defer r.Clear()
-			r.Update("default--test-sandbox", proxy.Route{
+			putTestRoute(t, r, "default--test-sandbox", proxy.Route{
 				IP:              "10.0.0.1",
 				State:           tt.state,
 				ResourceVersion: "1",
@@ -543,7 +603,7 @@ func TestDecodeHeadersSandboxNotRunningHostFallback(t *testing.T) {
 func TestDecodeHeadersSandboxRunning(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--running-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--running-sandbox", proxy.Route{
 		IP:              "10.0.0.5",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -653,7 +713,7 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 			r := registry.GetRegistry()
 			r.Clear()
 			t.Cleanup(r.Clear)
-			r.Update("default--runtime-mtls", proxy.Route{
+			putTestRoute(t, r, "default--runtime-mtls", proxy.Route{
 				IP:              "10.0.0.9",
 				State:           agentsv1alpha1.SandboxStateRunning,
 				ResourceVersion: "1",
@@ -690,7 +750,7 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 func TestDecodeHeadersSandboxRunningHostFallback(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--running-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--running-sandbox", proxy.Route{
 		IP:              "10.0.0.5",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -719,7 +779,7 @@ func TestDecodeHeadersSandboxRunningHostFallback(t *testing.T) {
 func TestDecodeHeadersWithCustomPort(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--port-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--port-sandbox", proxy.Route{
 		IP:              "10.0.0.6",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -750,7 +810,7 @@ func TestDecodeHeadersWithCustomPort(t *testing.T) {
 func TestDecodeHeadersWithIPv6(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--ipv6-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--ipv6-sandbox", proxy.Route{
 		IP:              "2001:db8::1",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -780,7 +840,7 @@ func TestDecodeHeadersWithIPv6(t *testing.T) {
 func TestDecodeHeadersWithIPv6HostFallback(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--ipv6-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--ipv6-sandbox", proxy.Route{
 		IP:              "2001:db8::1",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -809,7 +869,7 @@ func TestDecodeHeadersWithIPv6HostFallback(t *testing.T) {
 func TestDecodeHeadersEmptySandboxID(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
+	putTestRoute(t, r, "default--app1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -830,7 +890,7 @@ func TestDecodeHeadersEmptySandboxID(t *testing.T) {
 func TestDecodeHeadersInvalidHostFormat(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
+	putTestRoute(t, r, "default--app1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -850,7 +910,7 @@ func TestDecodeHeadersInvalidHostFormat(t *testing.T) {
 func TestDecodeHeadersRegistryInteraction(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
+	putTestRoute(t, r, "default--app1", proxy.Route{IP: "10.0.0.1", ResourceVersion: "1"})
 
 	route, ok := r.Get("default--app1")
 	if !ok || route.IP != "10.0.0.1" {
@@ -883,8 +943,8 @@ func TestDecodeHeadersMultipleRequests(t *testing.T) {
 	defer r.Clear()
 
 	// Setup multiple sandboxes
-	r.Update("ns1--sandbox1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-	r.Update("ns2--sandbox2", proxy.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
+	putTestRoute(t, r, "ns1--sandbox1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
+	putTestRoute(t, r, "ns2--sandbox2", proxy.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
 
 	cfg := DefaultConfig()
 
@@ -927,8 +987,8 @@ func TestDecodeHeadersMultipleRequestsHostFallback(t *testing.T) {
 	defer r.Clear()
 
 	// Setup multiple sandboxes
-	r.Update("ns1--sandbox1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-	r.Update("ns2--sandbox2", proxy.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
+	putTestRoute(t, r, "ns1--sandbox1", proxy.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
+	putTestRoute(t, r, "ns2--sandbox2", proxy.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
 
 	cfg := DefaultConfig()
 
@@ -966,7 +1026,7 @@ func TestDecodeHeadersMultipleRequestsHostFallback(t *testing.T) {
 func TestDecodeHeadersEndStreamFalse(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--test-sandbox", proxy.Route{
+	putTestRoute(t, r, "default--test-sandbox", proxy.Route{
 		IP:              "10.0.0.1",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -990,7 +1050,7 @@ func TestDecodeHeadersEndStreamFalse(t *testing.T) {
 func TestDecodeHeadersKruiseCustomProtocol(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("ns--mysandbox", proxy.Route{
+	putTestRoute(t, r, "ns--mysandbox", proxy.Route{
 		IP:              "10.0.0.10",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -1025,6 +1085,7 @@ func TestDecodeHeadersKruiseCustomProtocol(t *testing.T) {
 func TestDecodeHeadersKruiseCustomProtocolNotFound(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
+	activateTestRegistry(r)
 
 	cfg := DefaultConfig()
 	mockCallbacks := newMockFilterCallbackHandler()
@@ -1126,7 +1187,7 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := registry.GetRegistry()
 			defer r.Clear()
-			r.Update("default--auth-sandbox", proxy.Route{
+			putTestRoute(t, r, "default--auth-sandbox", proxy.Route{
 				IP:              "10.0.0.1",
 				State:           agentsv1alpha1.SandboxStateRunning,
 				ResourceVersion: "1",
@@ -1167,7 +1228,7 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 func TestDecodeHeadersAccessTokenAuthKruiseProtocol(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("ns--mysandbox", proxy.Route{
+	putTestRoute(t, r, "ns--mysandbox", proxy.Route{
 		IP:              "10.0.0.10",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -1210,7 +1271,7 @@ func TestDecodeHeadersAccessTokenAuthKruiseProtocol(t *testing.T) {
 func TestDecodeHeadersAuthDisabled(t *testing.T) {
 	r := registry.GetRegistry()
 	defer r.Clear()
-	r.Update("default--auth-disabled", proxy.Route{
+	putTestRoute(t, r, "default--auth-disabled", proxy.Route{
 		IP:              "10.0.0.5",
 		State:           agentsv1alpha1.SandboxStateRunning,
 		ResourceVersion: "1",
@@ -1349,7 +1410,7 @@ func TestDecodeHeadersJWTAuthentication(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			registry.GetRegistry().Clear()
 			t.Cleanup(registry.GetRegistry().Clear)
-			registry.GetRegistry().Update(sandboxID, proxy.Route{
+			putTestRoute(t, registry.GetRegistry(), sandboxID, proxy.Route{
 				ID: sandboxID, UID: types.UID(sandboxUID), IP: "10.0.0.1",
 				State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1", AccessToken: tt.routeToken,
 				RequireTrafficAuth: !tt.skipRouteAuth,
@@ -1410,7 +1471,7 @@ func TestDecodeHeadersRequiredJWTWithoutJWTMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			registry.GetRegistry().Clear()
 			t.Cleanup(registry.GetRegistry().Clear)
-			registry.GetRegistry().Update(sandboxID, proxy.Route{
+			putTestRoute(t, registry.GetRegistry(), sandboxID, proxy.Route{
 				ID: sandboxID, IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning,
 				ResourceVersion: "1", RequireTrafficAuth: true,
 			})

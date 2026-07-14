@@ -93,7 +93,18 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		zap.Any("extraHeaders", extraHeaders))
 
 	// Look up the pod IP from registry
-	route, ok := registry.GetRegistry().Get(sandboxID)
+	route, ok, ready := registry.GetRegistry().GetIfReady(sandboxID)
+	if !ready {
+		logger.Warn("Sandbox gateway route registry is not ready")
+		f.callbacks.DecoderFilterCallbacks().SendLocalReply(
+			503,
+			"sandbox gateway is not ready",
+			nil,
+			-1,
+			"gateway_not_ready",
+		)
+		return api.LocalReply
+	}
 	if !ok {
 		logger.Warn("Sandbox not found in registry", zap.String("sandboxID", sandboxID))
 		f.callbacks.DecoderFilterCallbacks().SendLocalReply(

@@ -37,6 +37,7 @@ import (
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -76,7 +77,8 @@ type Server struct {
 	// http
 	httpSrv *http.Server
 	// internal
-	routes  sync.Map
+	store   *sandboxroute.Store
+	enqueue func(sandboxroute.MutationResult)
 	adapter RequestAdapter
 	LBEntry string // entry of load balancer, usually a service
 	// peers - now managed by Peers
@@ -86,10 +88,30 @@ type Server struct {
 }
 
 func NewServer(opts config.SandboxManagerOptions) *Server {
+	store, err := sandboxroute.NewStore(sandboxroute.SurfaceManager)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create manager route store: %v", err))
+	}
+	return NewServerWithStore(opts, store)
+}
+
+// NewServerWithStore creates a proxy backed by the supplied manager-local Store.
+func NewServerWithStore(opts config.SandboxManagerOptions, store *sandboxroute.Store) *Server {
 	s := &Server{
 		extProcMaxConcurrentStreams: opts.ExtProcMaxConcurrency,
+		store:                       store,
 	}
 	return s
+}
+
+// SetRepairEnqueuer installs the non-blocking adapter for Store repair requests.
+func (s *Server) SetRepairEnqueuer(enqueue func(sandboxroute.MutationResult)) {
+	s.enqueue = enqueue
+}
+
+// Store returns the manager-local route Store.
+func (s *Server) Store() *sandboxroute.Store {
+	return s.store
 }
 
 func (s *Server) SetRequestAdapter(adapter RequestAdapter) {
@@ -162,12 +184,50 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to unmarshal body: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
+	shape, err := route.Shape()
+	if err != nil || route.Validate() != nil {
+		if err == nil {
+			err = route.Validate()
+		}
+		log.Error(err, "invalid route refresh payload")
+		http.Error(w, fmt.Sprintf("invalid route refresh payload: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var result sandboxroute.MutationResult
 	if route.State == v1alpha1.SandboxStateDead {
-		s.DeleteRoute(route.ID)
-		log.V(utils.DebugLogLevel + 1).Info("route deleted")
+		if shape == sandboxroute.ShapeFull {
+			result = s.store.DeleteFullConditionally(route)
+		} else {
+			result = s.store.DeleteIDOnlyConditionally(route)
+		}
 	} else {
-		s.SetRoute(ctx, route)
-		log.V(utils.DebugLogLevel+1).Info("route refreshed", "route", route)
+		if shape == sandboxroute.ShapeFull {
+			result = s.store.UpsertFull(route)
+		} else {
+			result = s.store.UpsertIDOnly(route)
+		}
+	}
+	s.enqueueMutation(result)
+	s.updateRouteCount()
+	log.V(utils.DebugLogLevel+1).Info("route refresh processed", "route", route, "result", result.Result, "reason", result.Reason)
+	if result.Result == sandboxroute.EventResultCollision {
+		http.Error(w, "route ID collision", http.StatusConflict)
+		return
+	}
+	if result.Result == sandboxroute.EventResultInvalid {
+		http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) enqueueMutation(result sandboxroute.MutationResult) {
+	if s.enqueue != nil {
+		s.enqueue(result)
+	}
+}
+
+func (s *Server) updateRouteCount() {
+	routeCount.Set(float64(len(s.store.List())))
 }

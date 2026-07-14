@@ -35,11 +35,12 @@ func TestResolve(t *testing.T) {
 		name     string
 		labels   map[string]string
 		expected string
+		format   string
 	}{
-		{name: "non-empty label is authoritative", labels: map[string]string{LabelKey: "operator-assigned-value"}, expected: "operator-assigned-value"},
-		{name: "absent label uses legacy ID", labels: map[string]string{"app": "sandbox"}, expected: "team-a--sandbox-a"},
-		{name: "empty label uses legacy ID", labels: map[string]string{LabelKey: ""}, expected: "team-a--sandbox-a"},
-		{name: "nil labels use legacy ID", labels: nil, expected: "team-a--sandbox-a"},
+		{name: "non-empty label is authoritative", labels: map[string]string{LabelKey: "operator-assigned-value"}, expected: "operator-assigned-value", format: FormatShort},
+		{name: "absent label uses legacy ID", labels: map[string]string{"app": "sandbox"}, expected: "team-a--sandbox-a", format: FormatLegacy},
+		{name: "empty label uses legacy ID", labels: map[string]string{LabelKey: ""}, expected: "team-a--sandbox-a", format: FormatLegacy},
+		{name: "nil labels use legacy ID", labels: nil, expected: "team-a--sandbox-a", format: FormatLegacy},
 	}
 
 	for _, tt := range tests {
@@ -49,7 +50,10 @@ func TestResolve(t *testing.T) {
 				Name:      "sandbox-a",
 				Labels:    tt.labels,
 			}}
-			assert.Equal(t, tt.expected, Resolve(sandbox))
+			id, format := ResolveWithFormat(sandbox)
+			assert.Equal(t, tt.expected, id)
+			assert.Equal(t, tt.format, format)
+			assert.Equal(t, id, Resolve(sandbox))
 		})
 	}
 }
