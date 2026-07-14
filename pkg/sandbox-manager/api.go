@@ -22,6 +22,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,8 +32,20 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
+	"github.com/openkruise/agents/pkg/sandbox-manager/sandboxid"
+	"github.com/openkruise/agents/pkg/sandboxidmetrics"
 	"github.com/openkruise/agents/pkg/utils/pagination"
 )
+
+// ResolveSandboxID returns the final public ID of a Sandbox for server-facing use.
+func (m *SandboxManager) ResolveSandboxID(sandbox metav1.Object) string {
+	format := "legacy"
+	if sandbox.GetLabels()[sandboxid.LabelKey] != "" {
+		format = "short"
+	}
+	sandboxidmetrics.RecordResolved(format, "e2b")
+	return sandboxid.Resolve(sandbox)
+}
 
 // ClaimSandboxOptions wraps infra-level claim options with an optional quota spec.
 // The manager builds the admission internally from Quota and the infra User field.

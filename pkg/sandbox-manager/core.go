@@ -71,6 +71,7 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 		instance: &SandboxManager{
 			proxy:              proxy.NewServer(opts),
 			memberlistBindPort: opts.MemberlistBindPort,
+			enableShortID:      opts.EnableShortSandboxID,
 			primary:            &primaryState{},
 		},
 		opts: opts,
@@ -182,6 +183,8 @@ type SandboxManager struct {
 
 	infra infra.Infrastructure
 	proxy *proxy.Server
+
+	enableShortID bool
 
 	primary *primaryState
 	elector *primaryElector

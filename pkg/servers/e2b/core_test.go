@@ -109,7 +109,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 			AdminKey:  InitKey,
 			Client:    fc,
 			APIReader: fc,
-		}, nil, config.QuotaOptions{})
+		}, nil, config.QuotaOptions{}, false)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -186,6 +186,29 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 		signal.Stop(controller.stop)
 		_ = controller.server.Close()
 		require.NoError(t, <-serverErr)
+	}
+}
+
+func TestNewControllerPropagatesShortSandboxIDOption(t *testing.T) {
+	tests := []struct {
+		name                 string
+		enableShortSandboxID bool
+	}{
+		{name: "disabled", enableShortSandboxID: false},
+		{name: "enabled", enableShortSandboxID: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := NewController(
+				"example.com", "sandbox-system", "component=sandbox-manager", "", "",
+				models.DefaultMaxTimeout, models.DefaultMinResumeTimeoutSeconds, 10, 0, 0,
+				TestServerPort, config.DefaultMemberlistBindPort, nil, nil, config.QuotaOptions{},
+				tt.enableShortSandboxID,
+			)
+
+			assert.Equal(t, tt.enableShortSandboxID, controller.sandboxManagerOptions().EnableShortSandboxID)
+		})
 	}
 }
 

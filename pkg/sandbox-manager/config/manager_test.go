@@ -33,6 +33,7 @@ func TestInitOptions(t *testing.T) {
 		expectExtProcConcurrency uint32
 		expectMaxCreateQPS       int
 		expectMemberlistBindPort int
+		expectEnableShortID      bool
 	}{
 		{
 			name:                     "all empty fields should use defaults",
@@ -185,12 +186,14 @@ func TestInitOptions(t *testing.T) {
 				SandboxNamespace:           "sandbox-ns",
 				SandboxLabelSelector:       "env=prod",
 				DisableRouteReconciliation: true,
+				EnableShortSandboxID:       true,
 			},
 			expectSystemNamespace:    utils.DefaultSandboxDeployNamespace,
 			expectMaxClaimWorkers:    consts.DefaultClaimWorkers,
 			expectExtProcConcurrency: consts.DefaultExtProcConcurrency,
 			expectMaxCreateQPS:       consts.DefaultCreateQPS,
 			expectMemberlistBindPort: DefaultMemberlistBindPort,
+			expectEnableShortID:      true,
 		},
 	}
 
@@ -203,6 +206,7 @@ func TestInitOptions(t *testing.T) {
 			assert.Equal(t, tt.expectExtProcConcurrency, result.ExtProcMaxConcurrency)
 			assert.Equal(t, tt.expectMaxCreateQPS, result.MaxCreateQPS)
 			assert.Equal(t, tt.expectMemberlistBindPort, result.MemberlistBindPort)
+			assert.Equal(t, tt.expectEnableShortID, result.EnableShortSandboxID)
 
 			// Verify non-configurable fields are preserved
 			if tt.input.PeerSelector != "" {
