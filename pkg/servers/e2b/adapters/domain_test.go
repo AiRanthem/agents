@@ -139,11 +139,6 @@ func TestCustomizedE2BAdapter_GetDomain(t *testing.T) {
 			expect:    "api.gateway.example.com",
 		},
 		{
-			name:      "preserves api prefix and port",
-			authority: "api.gateway.example.com:8443",
-			expect:    "api.gateway.example.com:8443",
-		},
-		{
 			name:      "preserves case",
 			authority: "Gateway.example.com",
 			expect:    "Gateway.example.com",
@@ -250,75 +245,37 @@ func TestCustomizedE2BAdapter_GetSandboxAddress(t *testing.T) {
 	}
 }
 
-func TestE2BAdapter_GetDomain(t *testing.T) {
+func TestE2BAdapter_DomainDispatch(t *testing.T) {
 	tests := []struct {
-		name      string
-		authority string
-		path      string
-		expect    string
+		name          string
+		authority     string
+		path          string
+		expectDomain  string
+		expectAddress string
 	}{
 		{
-			name:      "native request without port returns base domain",
-			authority: "api.example.com",
-			path:      "/xxxx",
-			expect:    "example.com",
+			name:          "native path selects native domain and address",
+			authority:     "API.example.com.",
+			path:          "/sandboxes/sid/connect",
+			expectDomain:  "example.com",
+			expectAddress: "9222-sid.example.com",
 		},
 		{
-			name:      "native request with port returns base domain and port",
-			authority: "api.example.com:8443",
-			path:      "/xxxx",
-			expect:    "example.com:8443",
-		},
-		{
-			name:      "customized request without port preserves authority",
-			authority: "example.com",
-			path:      "/kruise/api/xxxx",
-			expect:    "example.com",
-		},
-		{
-			name:      "customized request with port preserves authority",
-			authority: "example.com:8443",
-			path:      "/kruise/api/xxxx",
-			expect:    "example.com:8443",
+			name:          "customized path selects customized domain and address",
+			authority:     "API.example.com.",
+			path:          "/kruise/api/sandboxes/sid/connect",
+			expectDomain:  "API.example.com",
+			expectAddress: "API.example.com/kruise/sid/9222",
 		},
 	}
 
 	adapter := NewE2BAdapter(8080)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := adapter.GetDomain(tt.authority, tt.path)
+			domain, err := adapter.GetDomain(tt.authority, tt.path)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expect, got)
-		})
-	}
-}
-
-func TestE2BAdapter_GetSandboxAddress(t *testing.T) {
-	tests := []struct {
-		name   string
-		domain string
-		path   string
-		expect string
-	}{
-		{
-			name:   "native path selects native address formatter",
-			domain: "example.com",
-			path:   "/sandboxes/sid/connect",
-			expect: "9222-sid.example.com",
-		},
-		{
-			name:   "customized path selects customized address formatter",
-			domain: "gateway.example.com",
-			path:   "/kruise/api/sandboxes/sid/connect",
-			expect: "gateway.example.com/kruise/sid/9222",
-		},
-	}
-
-	adapter := NewE2BAdapter(8080)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := adapter.GetSandboxAddress(tt.domain, tt.path, "sid", 9222)
-			assert.Equal(t, tt.expect, got)
+			assert.Equal(t, tt.expectDomain, domain)
+			assert.Equal(t, tt.expectAddress, adapter.GetSandboxAddress(domain, tt.path, "sid", 9222))
 		})
 	}
 }

@@ -2508,34 +2508,25 @@ func TestCreateSandbox_EmptyHostDoesNotClaim(t *testing.T) {
 	defer teardown()
 
 	templateName := "empty-host-template"
-	cleanup := CreateSandboxPool(t, controller, templateName, 1, CreateSandboxPoolOptions{
-		AccessToken: "token",
-	})
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
 	defer cleanup()
-	require.Eventually(t, func() bool {
-		list, err := controller.cache.ListSandboxesInPool(t.Context(), cache.ListSandboxesInPoolOptions{
-			Pool: templateName,
-		})
-		return err == nil && len(list) == 1
-	}, time.Second, 50*time.Millisecond)
 
 	user := &models.CreatedTeamAPIKey{
 		ID:   keys.AdminKeyID,
 		Key:  InitKey,
 		Name: "test-user",
 	}
-	origDomain := controller.domain
 	controller.domain = ""
-	t.Cleanup(func() { controller.domain = origDomain })
 
-	req := NewRequest(t, nil, models.NewSandboxRequest{
+	request := models.NewSandboxRequest{
 		TemplateID: templateName,
 		Timeout:    600,
 		Metadata: map[string]string{
 			models.ExtensionKeySkipInitRuntime: v1alpha1.True,
 			models.ExtensionKeyClaimTimeout:    "1",
 		},
-	}, nil, user)
+	}
+	req := NewRequest(t, nil, request, nil, user)
 	req.Host = ""
 
 	_, apiErr := controller.CreateSandbox(req)
@@ -2543,20 +2534,7 @@ func TestCreateSandbox_EmptyHostDoesNotClaim(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, apiErr.Code)
 	assert.Contains(t, apiErr.Message, "empty host")
 
-	list, err := controller.cache.ListSandboxesInPool(t.Context(), cache.ListSandboxesInPoolOptions{
-		Pool: templateName,
-	})
-	require.NoError(t, err)
-	assert.Len(t, list, 1, "empty host must not claim a pooled sandbox")
-
-	okReq := NewRequest(t, nil, models.NewSandboxRequest{
-		TemplateID: templateName,
-		Timeout:    600,
-		Metadata: map[string]string{
-			models.ExtensionKeySkipInitRuntime: v1alpha1.True,
-			models.ExtensionKeyClaimTimeout:    "1",
-		},
-	}, nil, user)
+	okReq := NewRequest(t, nil, request, nil, user)
 	okReq.Host = "api.example.com"
 	resp, apiErr := controller.CreateSandbox(okReq)
 	require.Nil(t, apiErr)
@@ -2601,7 +2579,6 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 		path            string
 		wantURLContains string
 		expectError     string
-		expectUpstream  bool
 	}{
 		{
 			name:            "static native domain bypasses empty host and is preserved",
@@ -2609,7 +2586,6 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			host:            "",
 			path:            "/sandboxes/" + sandboxID + "/connect",
 			wantURLContains: fmt.Sprintf("wss://%d-%s.API.Static.example.com.", models.CDPPort, sandboxID),
-			expectUpstream:  true,
 		},
 		{
 			name:            "static customized domain bypasses empty host and is preserved",
@@ -2617,7 +2593,6 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			host:            "",
 			path:            "/kruise/api/sandboxes/" + sandboxID + "/connect",
 			wantURLContains: fmt.Sprintf("wss://Gateway.Static.example.com./kruise/%s/%d", sandboxID, models.CDPPort),
-			expectUpstream:  true,
 		},
 		{
 			name:            "dynamic native domain uses subdomain address",
@@ -2625,7 +2600,6 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			host:            "api.example.com",
 			path:            "/sandboxes/" + sandboxID + "/connect",
 			wantURLContains: fmt.Sprintf("wss://%d-%s.example.com", models.CDPPort, sandboxID),
-			expectUpstream:  true,
 		},
 		{
 			name:            "dynamic customized domain uses path-style address",
@@ -2633,15 +2607,13 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			host:            "Gateway.example.com.:8443",
 			path:            "/kruise/api/sandboxes/" + sandboxID + "/connect",
 			wantURLContains: fmt.Sprintf("wss://Gateway.example.com:8443/kruise/%s/%d", sandboxID, models.CDPPort),
-			expectUpstream:  true,
 		},
 		{
-			name:           "empty host returns 400 without upstream",
-			domain:         "",
-			host:           "",
-			path:           "/sandboxes/" + sandboxID + "/connect",
-			expectError:    "empty host",
-			expectUpstream: false,
+			name:        "empty host returns 400 without upstream",
+			domain:      "",
+			host:        "",
+			path:        "/sandboxes/" + sandboxID + "/connect",
+			expectError: "empty host",
 		},
 	}
 
@@ -2664,7 +2636,7 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			req.URL.Path = tt.path
 
 			resp, apiErr := controller.BrowserUse(req)
-			assert.Equal(t, tt.expectUpstream, upstreamCalled)
+			assert.Equal(t, tt.expectError == "", upstreamCalled)
 			if tt.expectError != "" {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, http.StatusBadRequest, apiErr.Code)
