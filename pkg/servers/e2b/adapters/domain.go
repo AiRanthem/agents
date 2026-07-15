@@ -33,6 +33,19 @@ func (a *E2BAdapter) GetSandboxAddress(domain, path, sandboxID string, port int3
 	return a.ChooseAdapter(path).GetSandboxAddress(domain, sandboxID, port)
 }
 
+// finishDomain strips one trailing dot from host, rejects empty hosts, and
+// rejoins host[:port].
+func finishDomain(host, port string) (string, error) {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return "", errEmptySandboxDomain
+	}
+	if port == "" {
+		return host, nil
+	}
+	return host + ":" + port, nil
+}
+
 // splitDomainHostPort splits a "host[:port]" authority without requiring a port.
 // It preserves bracketed IPv6 hosts and treats raw IPv6 as a host without an
 // explicit port.

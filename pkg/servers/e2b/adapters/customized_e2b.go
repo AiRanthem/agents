@@ -66,14 +66,7 @@ func (a *CustomizedE2BAdapter) IsSandboxRequest(_, path string, _ int) bool {
 // GetDomain resolves a customized E2B domain from the request authority.
 func (a *CustomizedE2BAdapter) GetDomain(authority string) (string, error) {
 	host, port := splitDomainHostPort(authority)
-	host = strings.TrimSuffix(host, ".")
-	if host == "" {
-		return "", errEmptySandboxDomain
-	}
-	if port == "" {
-		return host, nil
-	}
-	return host + ":" + port, nil
+	return finishDomain(host, port)
 }
 
 // GetSandboxAddress returns the customized path address for a sandbox port.

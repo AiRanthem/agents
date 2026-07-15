@@ -127,16 +127,8 @@ func (a *NativeE2BAdapter) IsSandboxRequest(authority, _ string, _ int) bool {
 // GetDomain resolves a native E2B domain from the request authority.
 func (a *NativeE2BAdapter) GetDomain(authority string) (string, error) {
 	host, port := splitDomainHostPort(authority)
-	host = strings.ToLower(host)
-	host = strings.TrimPrefix(host, "api.")
-	host = strings.TrimSuffix(host, ".")
-	if host == "" {
-		return "", errEmptySandboxDomain
-	}
-	if port == "" {
-		return host, nil
-	}
-	return host + ":" + port, nil
+	host = strings.TrimPrefix(strings.ToLower(host), "api.")
+	return finishDomain(host, port)
 }
 
 // GetSandboxAddress returns the native subdomain address for a sandbox port.
