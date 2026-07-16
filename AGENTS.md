@@ -174,3 +174,43 @@ Never add "or default" helpers to the shared package — doing so couples the pa
 - All comments must be in English
 - When creating an `AGENTS.md` for a new submodule, also create a sibling `CLAUDE.md` in the same directory whose sole content is `@./AGENTS.md`
 - Always commit with sign-off (e.g. `git commit -s`)
+
+## Cursor Cloud specific instructions
+
+This section documents non-obvious environment caveats for Cursor Cloud agents. Standard commands live in the
+`Makefile` and `CONTRIBUTING.md`; only the gotchas below are Cursor-Cloud specific.
+
+### Toolchain
+
+- A full official Go SDK (Go 1.25+) is installed at `/usr/local/go` and symlinked into `/usr/local/bin/go`. Do NOT
+  rely on the auto-downloaded `golang.org/toolchain` module: in this environment those toolchain modules are stripped
+  and are missing the `covdata` tool, which makes `make test` (`go test -coverprofile`) fail on packages without test
+  files. The full SDK at `/usr/local/go` provides `covdata` and fixes this.
+
+### Lint / Test / Build
+
+- Lint: `make lint` (auto-installs `golangci-lint` into `./bin`).
+- Unit tests: `make test`. It uses `envtest` (a real `kube-apiserver` + `etcd`, no kubelet), so no external cluster is
+  needed. Envtest binaries live under `./bin/k8s/...`; re-fetch them with `make setup-envtest` if missing.
+- Only run `pkg/...` tests via `go test`; never run the `test/` E2E suites here.
+- Build a component directly by package dir, e.g. `go build -o bin/agent-sandbox-controller ./cmd/agent-sandbox-controller/`.
+  Do NOT `go build cmd/agent-sandbox-controller/main.go` — sibling files (e.g. `ca_binding.go`) are required and a
+  single-file build fails with `undefined: executeCABindings`. The `sandbox-gateway` plugin needs
+  `CGO_ENABLED=1 -buildmode=c-shared` (see `make build-sandbox-gateway`).
+
+### Running the operator locally (no kind cluster available)
+
+- A full Kubernetes node (kind / minikube / k3d) CANNOT run in this VM: cgroup v2 controllers `memory`, `io`, and
+  `hugetlb` cannot be delegated to child cgroups (writing them to `cgroup.subtree_control` returns
+  `Operation not supported`), so the kind node's systemd fails to boot
+  (`Failed to create /init.scope control group: Structure needs cleaning`). Docker itself works, but do not spend time
+  trying to bring up kind.
+- To run and exercise the `agent-sandbox-controller` locally, point it at an `envtest` control plane instead:
+  boot `envtest` (installing `config/crd/bases`) to get a live `kube-apiserver` + `etcd` and a kubeconfig, then run the
+  binary against it with webhooks disabled and metrics off:
+  `KUBECONFIG=<envtest kubeconfig> ENABLE_WEBHOOKS=false ./bin/agent-sandbox-controller --metrics-bind-address=0 --health-probe-bind-address=:8081 --leader-elect=false`.
+  Applying a `SandboxSet` (e.g. `examples/code_interpreter/sandboxset.yaml`) then reconciles into child `Sandbox` and
+  `Pod` objects. Pods stay `Pending` (no scheduler/kubelet in envtest) — that is expected and still proves the
+  reconcile logic end-to-end.
+- `ENABLE_WEBHOOKS=false` skips the mutating/validating webhooks (which need TLS certs), so supply fully-specified CRs
+  since webhook defaulting will not run.
