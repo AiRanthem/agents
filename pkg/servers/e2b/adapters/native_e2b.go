@@ -121,7 +121,7 @@ func (a *NativeE2BAdapter) Map(req *ParsedRequest) (
 }
 
 func (a *NativeE2BAdapter) IsSandboxRequest(authority, _ string, _ int) bool {
-	return !strings.HasPrefix(authority, "api.")
+	return !strings.HasPrefix(strings.ToLower(authority), "api.")
 }
 
 // GetDomain resolves a native E2B domain from the request authority.

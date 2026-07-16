@@ -22,6 +22,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2578,6 +2579,10 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 		host            string
 		path            string
 		wantURLContains string
+		wantScheme      string
+		wantHost        string
+		wantPort        string
+		wantPath        string
 		expectError     string
 	}{
 		{
@@ -2607,6 +2612,16 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			host:            "Gateway.example.com.:8443",
 			path:            "/kruise/api/sandboxes/" + sandboxID + "/connect",
 			wantURLContains: fmt.Sprintf("wss://Gateway.example.com:8443/kruise/%s/%d", sandboxID, models.CDPPort),
+		},
+		{
+			name:            "dynamic customized ipv6 uses bracketed path-style address",
+			domain:          "",
+			host:            "2001:db8::1",
+			path:            "/kruise/api/sandboxes/" + sandboxID + "/connect",
+			wantURLContains: fmt.Sprintf("wss://[2001:db8::1]/kruise/%s/%d", sandboxID, models.CDPPort),
+			wantScheme:      "wss",
+			wantHost:        "2001:db8::1",
+			wantPath:        fmt.Sprintf("/kruise/%s/%d/devtools/browser/abc", sandboxID, models.CDPPort),
 		},
 		{
 			name:        "empty host returns 400 without upstream",
@@ -2646,6 +2661,14 @@ func TestBrowserUse_DomainResolution(t *testing.T) {
 			require.Nil(t, apiErr)
 			require.NotNil(t, resp.Body)
 			assert.Contains(t, resp.Body.WebSocketDebuggerURL, tt.wantURLContains)
+			if tt.wantScheme != "" {
+				parsedURL, err := url.Parse(resp.Body.WebSocketDebuggerURL)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantScheme, parsedURL.Scheme)
+				assert.Equal(t, tt.wantHost, parsedURL.Hostname())
+				assert.Equal(t, tt.wantPort, parsedURL.Port())
+				assert.Equal(t, tt.wantPath, parsedURL.Path)
+			}
 		})
 	}
 }

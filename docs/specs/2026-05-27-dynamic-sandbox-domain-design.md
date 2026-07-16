@@ -64,8 +64,10 @@ domain back to the adapter for shape-specific address formatting.
   trust / allowlist config and is left for a follow-up PR.
 - Do not persist `domain` anywhere on the Sandbox CR, annotations, labels,
   or runtime state.
-- Do not change the `proxy.RequestAdapter` interface or data-plane routing
-  behavior.
+- Do not change `proxy.RequestAdapter`, `E2BMapper`, CRDs, or Envoy
+  configuration while resolving dynamic domains. The only data-plane
+  classification fix is case-insensitive recognition of native `api.`
+  authorities.
 
 ## Resolution Rules
 
@@ -74,29 +76,32 @@ When a handler is about to return a `models.Sandbox`, the Controller and unified
 
 1. If the configured domain (set from `--e2b-domain`) is non-empty, return it
    as is.
-2. If the request authority is empty, return an error with
+2. Split the request authority into `host` and an optional `port` with the
+   shared adapter helper. Preserve bracketed IPv6 and treat raw IPv6 as a host
+   without a port. Do not add DNS grammar or port-range policy at this layer.
+3. If the request authority host is empty, return an error with
    `cannot resolve sandbox domain: empty host`.
-3. If the request path starts with `adapters.CustomPrefix` (`/kruise`), the
+4. If the request path starts with `adapters.CustomPrefix` (`/kruise`), the
    customized adapter is in use:
-   1. Split `host[:port]` with the shared authority helper.
-   2. Preserve host case and any leading `api.` segment because customized
+   1. Preserve host case and any leading `api.` segment because customized
       routing is path-based.
+   2. If the host is a raw IPv6 literal, return its canonical `netip` form in
+      brackets so it remains a valid URL authority. Already bracketed IPv6 is
+      preserved by the shared splitter.
    3. Strip one trailing dot from the host.
    4. If the resulting host is empty, return HTTP 400 with
       `cannot resolve sandbox domain: empty host`.
-   5. Rejoin `host` and `port` (omitting `:` when port is empty).
-4. Otherwise (native adapter shape):
-   1. Split `host[:port]` while preserving bracketed IPv6. Inputs without an
-      explicit port, including bracketed IPv6 such as `[::1]`, are valid.
-   2. Lowercase `host` (DNS labels are case-insensitive, RFC 4343). The port
+   5. Rejoin the host and port (omitting `:` when port is empty).
+5. Otherwise (native adapter shape):
+   1. Lowercase `host` (DNS labels are case-insensitive, RFC 4343). The port
       is preserved as written.
-   3. Strip a leading `api.` segment from the lowercased `host`. Only a
+   2. Strip a leading `api.` segment from the lowercased `host`. Only a
       literal `api.` segment is stripped, because the dot is part of the
       prefix; `apiserver.example.com` does not match.
-   4. Strip one trailing dot from the native host.
-   5. If the resulting host is empty, return HTTP 400 with
+   3. Strip one trailing dot from the native host.
+   4. If the resulting host is empty, return HTTP 400 with
       `cannot resolve sandbox domain: empty host`.
-   6. Rejoin `host` and `port` (omitting `:` when port is empty).
+   5. Rejoin the host and port (omitting `:` when port is empty).
 
 Without case normalization, a client request to `API.example.com` would
 yield response `API.example.com`. The constructed sandbox subdomain
@@ -113,11 +118,14 @@ yield response `API.example.com`. The constructed sandbox subdomain
 | `API.example.com:8443` | `example.com:8443` |
 | `api.example.com.` | `example.com` |
 | `api.example.com.:8443` | `example.com:8443` |
+| `127.0.0.1` | `127.0.0.1` |
+| `2001:db8::1` | `2001:db8::1` |
 | `[::1]` | `[::1]` |
 | `[::1]:8443` | `[::1]:8443` |
 | `example.com` | `example.com` |
 | `localhost:7788` | `localhost:7788` |
 | `apiserver.example.com` | `apiserver.example.com` |
+| `api.bad_host.example.com:https` | `bad_host.example.com:https` |
 | `api.` | HTTP 400 |
 | `api.:8443` | HTTP 400 |
 | `""` | HTTP 400 |
@@ -132,6 +140,10 @@ yield response `API.example.com`. The constructed sandbox subdomain
 | `Gateway.example.com` | `/kruise/api/sandboxes` | `Gateway.example.com` |
 | `gateway.example.com.` | `/kruise/api/sandboxes` | `gateway.example.com` |
 | `gateway.example.com.:8443` | `/kruise/api/sandboxes` | `gateway.example.com:8443` |
+| `192.0.2.1:8443` | `/kruise/api/sandboxes` | `192.0.2.1:8443` |
+| `2001:db8::1` | `/kruise/api/sandboxes` | `[2001:db8::1]` |
+| `[2001:db8::1]:8443` | `/kruise/api/sandboxes` | `[2001:db8::1]:8443` |
+| `bad_host.example.com:https` | `/kruise/api/sandboxes` | `bad_host.example.com:https` |
 | `:8443` | `/kruise/api/sandboxes` | HTTP 400 |
 | `""` | `/kruise/api/sandboxes` | HTTP 400 |
 
@@ -206,8 +218,11 @@ package-level native/customized address helpers are removed.
   `NativeE2BAdapter` and `CustomizedE2BAdapter`.
 - Keep `proxy.RequestAdapter` unchanged. Sandbox-gateway does not call the new
   `E2BMapper` methods.
-- Move optional-port and IPv6-aware authority splitting from the Controller to
-  `NativeE2BAdapter`, the only protocol shape that uses it.
+- Keep optional-port and IPv6-aware authority splitting in the adapter package.
+  Customized brackets raw IPv6 locally; Native otherwise preserves the shared
+  permissive split behavior.
+- Make native `IsSandboxRequest` detect the raw `api.` authority prefix
+  case-insensitively.
 
 ### Handler Call Sites
 
@@ -219,7 +234,7 @@ preserves the API's error precedence.
 
 | File | Handler / Helper | Change |
 |---|---|---|
-| `create.go` | `CreateSandbox` | Parse and validate the request body, then resolve domain; bail with 400 before `ClaimSandbox` / `CloneSandbox` runs. Pass `domain` to `createSandboxWithClaim` / `createSandboxWithClone`. |
+| `create.go` | `CreateSandbox` | Validate request structure and the supported resource override, then resolve Host before template/checkpoint lookup and claim/clone mode validation. Bail with 400 before `ClaimSandbox` / `CloneSandbox` runs. This intentionally does not promise preservation of every combined-error priority. |
 | `create.go` | `createSandboxWithClaim` | Accept new `domain string` parameter; forward to `convertToE2BSandbox`. |
 | `create.go` | `createSandboxWithClone` | Accept new `domain string` parameter; forward to `convertToE2BSandbox`. |
 | `services.go` | `DescribeSandbox` | Get the sandbox first so missing sandbox remains 404, then resolve domain and pass it to `convertToE2BSandbox`. |
@@ -280,14 +295,27 @@ process.
 
 ### `pkg/proxy`
 
-No changes. `proxy.RequestAdapter` remains unchanged; sandbox-gateway continues
-using only `Map` and `IsSandboxRequest` on the concrete unified adapter.
+No production file or Envoy configuration changes. `proxy.RequestAdapter`
+remains unchanged; sandbox-gateway continues using only `Map` and
+`IsSandboxRequest`. A real-adapter ext_proc test verifies that
+`API.example.com/sandboxes` writes the load-balancer entry instead of calling
+`Map` and returning an immediate 500.
+
+### Certificate Tooling
+
+`hack/generate-certificates.sh` keeps explicit `--ca-key` / `--ca-cert` reuse
+and the existing CA validity checks. Leaf signing uses
+`openssl ca -rand_serial`; the OpenSSL database, configured serial path, and
+`new_certs_dir` are created under a fresh temporary directory for each run and
+removed by the exit trap. The script never initializes a shared serial to
+`01`, and OpenSSL's random-serial certificate copy is not written to the output
+directory.
 
 ## Error Handling
 
-- Empty or unresolvable `r.Host` (no fallback static domain): HTTP 400 with
-  `cannot resolve sandbox domain: empty host`. The 400 is returned before
-  any state-mutating operation runs.
+- An empty `r.Host` (no fallback static domain) returns HTTP 400 before any
+  state-mutating operation runs. Other authority validation remains at the HTTP
+  server or deployment boundary.
 - `X-Forwarded-Host` is not consulted. Reverse proxies that need to
   propagate the inbound host must rewrite the upstream `Host` header.
 
@@ -323,7 +351,7 @@ mapping.
 |---|---|---|
 | `sandbox_test.go` | `resolveSandboxDomain` | configured domain bypasses an empty Host and is returned as-is; dynamic native/customized resolution; dynamic empty Host → 400 |
 | `services_test.go` | `CreateSandbox` | empty host → 400 **and** pooled sandbox is not claimed; subsequent create with a valid host succeeds and `Domain` matches the resolved value |
-| `services_test.go` | `BrowserUse` | configured native/customized domains bypass an empty Host and remain unchanged; dynamic native/customized URL shapes; dynamic empty Host → 400 **and** no upstream request was sent to the sandbox |
+| `services_test.go` | `BrowserUse` | configured native/customized domains remain byte-for-byte unchanged; customized raw IPv6 forms a parseable bracketed `wss://` URL; empty host → 400 **and** no upstream request was sent |
 
 Each test uses `httptest.NewRequest` with an explicit `req.Host` and an
 `r.URL.Path` consistent with the shape under test. The "no state mutation
@@ -344,5 +372,6 @@ on 400" assertions are the central regression guard for P2.
   returned URL matches the actually reachable address. Captured in the
   changelog under behavioral fixes.
 - `sandbox-gateway` continues using only `Map` and `IsSandboxRequest`; its
-  configuration and request-routing behavior are unchanged.
+  configuration and public interface are unchanged. Uppercase native `API.`
+  classification is corrected to match lowercase `api.` behavior.
 - No CRD, annotation, label, or runtime state is added or read.

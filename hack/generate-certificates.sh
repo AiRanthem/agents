@@ -182,6 +182,11 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
+# Keep OpenSSL's per-signing database and issued-certificate copies isolated
+# from the requested output directory. Each invocation gets a fresh database.
+OPENSSL_WORK_DIR="$(mktemp -d)"
+mkdir -p "$OPENSSL_WORK_DIR/newcerts"
+
 # CN can only contain one domain.
 # Modern clients validate Subject Alternative Name instead.
 PRIMARY_DOMAIN="${DOMAINS[0]}"
@@ -207,15 +212,10 @@ cleanup() {
         "$OUTPUT_DIR/server-clean.crt" \
         "$OUTPUT_DIR/cert.conf" \
         "$OUTPUT_DIR/ca.conf" \
-        "$OUTPUT_DIR/signing.conf" \
-        "$OUTPUT_DIR/index.txt" \
-        "$OUTPUT_DIR/index.txt.attr" \
-        "$OUTPUT_DIR/index.txt.old" \
-        "$OUTPUT_DIR/serial" \
-        "$OUTPUT_DIR/serial.old" \
         "$OUTPUT_DIR/ca.srl" \
         "$OUTPUT_DIR/.rnd" \
         "$OUTPUT_DIR/01.pem"
+    rm -rf "$OPENSSL_WORK_DIR"
 }
 
 trap cleanup EXIT
@@ -333,12 +333,12 @@ echo "Signing server certificate with CA..."
 default_ca = CA_default
 
 [CA_default]
-dir = $OUTPUT_DIR
+dir = $OPENSSL_WORK_DIR
 database = \$dir/index.txt
 serial = \$dir/serial
 private_key = $CA_KEY
 certificate = $CA_CERT
-new_certs_dir = \$dir
+new_certs_dir = \$dir/newcerts
 default_days = $DAYS
 default_md = sha256
 policy = policy_anything
@@ -364,16 +364,16 @@ subjectAltName = @alt_names
 EOF
 
     write_alt_names
-} > "$OUTPUT_DIR/signing.conf"
+} > "$OPENSSL_WORK_DIR/signing.conf"
 
 # Initialize OpenSSL CA database
-: > "$OUTPUT_DIR/index.txt"
-echo "01" > "$OUTPUT_DIR/serial"
+: > "$OPENSSL_WORK_DIR/index.txt"
 
 openssl ca \
-    -config "$OUTPUT_DIR/signing.conf" \
+    -config "$OPENSSL_WORK_DIR/signing.conf" \
     -policy policy_anything \
     -extensions server \
+    -rand_serial \
     -in "$OUTPUT_DIR/server.csr" \
     -out "$OUTPUT_DIR/server.crt" \
     -batch

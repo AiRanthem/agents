@@ -23,13 +23,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNativeE2BAdapter_GetDomain(t *testing.T) {
-	tests := []struct {
-		name        string
-		authority   string
-		expect      string
-		expectError string
-	}{
+type getDomainTestCase struct {
+	name        string
+	authority   string
+	expect      string
+	expectError string
+}
+
+type getSandboxAddressTestCase struct {
+	name      string
+	domain    string
+	sandboxID string
+	port      int32
+	expect    string
+}
+
+func TestE2BAdapters_GetDomain(t *testing.T) {
+	nativeTests := []getDomainTestCase{
 		{
 			name:      "strips api prefix and preserves port",
 			authority: "api.example.com:8443",
@@ -66,6 +76,11 @@ func TestNativeE2BAdapter_GetDomain(t *testing.T) {
 			expect:    "example.com:8443",
 		},
 		{
+			name:      "preserves raw ipv6",
+			authority: "2001:db8::1",
+			expect:    "2001:db8::1",
+		},
+		{
 			name:      "preserves bracketed ipv6 without port",
 			authority: "[::1]",
 			expect:    "[::1]",
@@ -99,30 +114,19 @@ func TestNativeE2BAdapter_GetDomain(t *testing.T) {
 			authority:   "api.:8443",
 			expectError: "cannot resolve sandbox domain: empty host",
 		},
+		{
+			name:      "preserves ipv4",
+			authority: "127.0.0.1:8443",
+			expect:    "127.0.0.1:8443",
+		},
+		{
+			name:      "preserves permissive host and port",
+			authority: "api.bad_host.example.com:https",
+			expect:    "bad_host.example.com:https",
+		},
 	}
 
-	adapter := &NativeE2BAdapter{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := adapter.GetDomain(tt.authority)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.expect, got)
-		})
-	}
-}
-
-func TestCustomizedE2BAdapter_GetDomain(t *testing.T) {
-	tests := []struct {
-		name        string
-		authority   string
-		expect      string
-		expectError string
-	}{
+	customizedTests := []getDomainTestCase{
 		{
 			name:      "preserves host",
 			authority: "gateway.example.com",
@@ -154,6 +158,26 @@ func TestCustomizedE2BAdapter_GetDomain(t *testing.T) {
 			expect:    "Gateway.example.com:8443",
 		},
 		{
+			name:      "preserves ipv4 with port",
+			authority: "192.0.2.1:8443",
+			expect:    "192.0.2.1:8443",
+		},
+		{
+			name:      "brackets raw ipv6",
+			authority: "2001:db8::1",
+			expect:    "[2001:db8::1]",
+		},
+		{
+			name:      "preserves bracketed ipv6",
+			authority: "[2001:db8::1]",
+			expect:    "[2001:db8::1]",
+		},
+		{
+			name:      "accepts bracketed ipv6 with port",
+			authority: "[2001:db8::1]:8443",
+			expect:    "[2001:db8::1]:8443",
+		},
+		{
 			name:        "empty host is rejected",
 			expectError: "cannot resolve sandbox domain: empty host",
 		},
@@ -162,31 +186,50 @@ func TestCustomizedE2BAdapter_GetDomain(t *testing.T) {
 			authority:   ":8443",
 			expectError: "cannot resolve sandbox domain: empty host",
 		},
+		{
+			name:      "preserves permissive host and port",
+			authority: "bad_host.example.com:https",
+			expect:    "bad_host.example.com:https",
+		},
 	}
 
-	adapter := &CustomizedE2BAdapter{}
+	tests := []struct {
+		name      string
+		getDomain func(string) (string, error)
+		cases     []getDomainTestCase
+	}{
+		{
+			name:      "native",
+			getDomain: (&NativeE2BAdapter{}).GetDomain,
+			cases:     nativeTests,
+		},
+		{
+			name:      "customized",
+			getDomain: (&CustomizedE2BAdapter{}).GetDomain,
+			cases:     customizedTests,
+		},
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := adapter.GetDomain(tt.authority)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				return
+			for _, tc := range tt.cases {
+				t.Run(tc.name, func(t *testing.T) {
+					got, err := tt.getDomain(tc.authority)
+					if tc.expectError != "" {
+						require.Error(t, err)
+						assert.Contains(t, err.Error(), tc.expectError)
+						return
+					}
+					require.NoError(t, err)
+					assert.Equal(t, tc.expect, got)
+				})
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.expect, got)
 		})
 	}
 }
 
-func TestNativeE2BAdapter_GetSandboxAddress(t *testing.T) {
-	tests := []struct {
-		name      string
-		domain    string
-		sandboxID string
-		port      int32
-		expect    string
-	}{
+func TestE2BAdapters_GetSandboxAddress(t *testing.T) {
+	nativeTests := []getSandboxAddressTestCase{
 		{
 			name:      "formats resolved domain as subdomain address",
 			domain:    "example.com",
@@ -203,23 +246,7 @@ func TestNativeE2BAdapter_GetSandboxAddress(t *testing.T) {
 		},
 	}
 
-	adapter := &NativeE2BAdapter{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := adapter.GetSandboxAddress(tt.domain, tt.sandboxID, tt.port)
-			assert.Equal(t, tt.expect, got)
-		})
-	}
-}
-
-func TestCustomizedE2BAdapter_GetSandboxAddress(t *testing.T) {
-	tests := []struct {
-		name      string
-		domain    string
-		sandboxID string
-		port      int32
-		expect    string
-	}{
+	customizedTests := []getSandboxAddressTestCase{
 		{
 			name:      "formats resolved domain as path address",
 			domain:    "gateway.example.com",
@@ -236,11 +263,31 @@ func TestCustomizedE2BAdapter_GetSandboxAddress(t *testing.T) {
 		},
 	}
 
-	adapter := &CustomizedE2BAdapter{}
+	tests := []struct {
+		name              string
+		getSandboxAddress func(string, string, int32) string
+		cases             []getSandboxAddressTestCase
+	}{
+		{
+			name:              "native",
+			getSandboxAddress: (&NativeE2BAdapter{}).GetSandboxAddress,
+			cases:             nativeTests,
+		},
+		{
+			name:              "customized",
+			getSandboxAddress: (&CustomizedE2BAdapter{}).GetSandboxAddress,
+			cases:             customizedTests,
+		},
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := adapter.GetSandboxAddress(tt.domain, tt.sandboxID, tt.port)
-			assert.Equal(t, tt.expect, got)
+			for _, tc := range tt.cases {
+				t.Run(tc.name, func(t *testing.T) {
+					got := tt.getSandboxAddress(tc.domain, tc.sandboxID, tc.port)
+					assert.Equal(t, tc.expect, got)
+				})
+			}
 		})
 	}
 }

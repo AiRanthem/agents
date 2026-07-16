@@ -18,6 +18,7 @@ package adapters
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -66,6 +67,9 @@ func (a *CustomizedE2BAdapter) IsSandboxRequest(_, path string, _ int) bool {
 // GetDomain resolves a customized E2B domain from the request authority.
 func (a *CustomizedE2BAdapter) GetDomain(authority string) (string, error) {
 	host, port := splitDomainHostPort(authority)
+	if addr, err := netip.ParseAddr(host); err == nil && addr.Is6() {
+		host = "[" + addr.String() + "]"
+	}
 	return finishDomain(host, port)
 }
 
