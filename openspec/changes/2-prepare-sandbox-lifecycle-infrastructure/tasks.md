@@ -1,0 +1,36 @@
+## 1. Prerequisite and Source Inventory
+
+- [ ] 1.1 Confirm `1-define-sandbox-lifecycle-state-model` is implemented and its exhaustive lifecycle and Controller failure-stage suites pass before enabling any route consumer.
+- [ ] 1.2 Confirm the approved short-ID foundation is present: neutral `pkg/sandboxroute` Projector/Store/Repairer, full ObjectKey Routes, UID/RV-fenced authority-specific mutations, conditional peer delete, collision quarantine, manager-owned feeder/repair wiring, Gateway adapter wiring, opaque claimed-ID resolver, and removal of `infra.Sandbox.GetSandboxID`/`GetRoute`.
+- [ ] 1.3 If the implementation base still contains production `GetRouteFromSandbox`, independent `sync.Map` route algorithms, sandboxcr-owned `reconcileSandbox`/periodic `reconcileRoutes`, or unconditional peer deletes, stop and first integrate the short-ID change; do not implement a temporary lifecycle branch against those legacy seams.
+- [ ] 1.4 Update `docs/proposals/20260715-sandbox-lifecycle-state-model.md` with the explicit partial order, short-ID seam ownership table, opaque-miss limitation, and separate manager-path/routing dependency graphs.
+
+## 2. Opaque Lookup and Normalized Infra Contract
+
+- [ ] 2.1 Preserve the short-ID cache lookup's zero/one/multiple result contract and introduce or reuse a bounded, test-injectable label-propagation confirmation window; return clean repeated zero results through normal window completion as typed claimed-Sandbox absence, treat an active opaque Route observation as a non-authoritative lag signal that prevents clean absence, and preserve ambiguity as a distinct fail-closed error without parsing the ID.
+- [ ] 2.2 Keep APIReader refresh only for a cache hit whose ObjectKey is known and whose resourceVersion expectation or full-route observation proves staleness; do not issue `APIReader.Get` for a pure miss, split an ID on `--`, or add a full Sandbox List fallback.
+- [ ] 2.3 Preserve cache, ambiguity, APIReader, timeout, cancellation, and transport failures through sandbox-manager and map them to non-404 server errors; keep only clean indexed absence and cache-hit APIReader NotFound/unclaimed results as the existing generic 404 until Part 3 adds reason taxonomy.
+- [ ] 2.4 Add a named normalized lifecycle observation plus CR-backed owner, recycle-eligibility, and reserved-failure visibility accessors to `infra.Sandbox`; expose only aliases of the `pkg/utils/lifecycle` state type/constants rather than a duplicate vocabulary, and implement CR derivation in sandboxcr while temporarily retaining tuple `GetState`, raw `Phase`, and split recycle methods for Part 3.
+- [ ] 2.5 Change Sandbox-manager authorization and manager `ProjectionInput.Owner` assembly to use the infra owner accessor instead of route owner or `AnnotationOwner`; keep `GetSandboxID` and `GetRoute` absent and remove any route-owner helper left by the integration base.
+- [ ] 2.6 Add focused table-driven tests for one cache match, clean zero after propagation retry, pure miss with active Route lag signal, ambiguity, cache-hit stale refresh, APIReader NotFound/unclaimed, missing route, route-ahead staleness, terminal CR, backend failure, and context expiry using `expectError string`; assert that pure miss never invokes APIReader Get/List or ID parsing and that Route presence never returns or authorizes a Sandbox.
+- [ ] 2.7 Add table-driven authorization/boundary tests for missing or stale routes, owner match/mismatch, and proof that manager/E2B lifecycle and ownership code does not inspect Sandbox phase, conditions, claim/cleanup metadata, ownership annotation constants, or Controller reason strings.
+
+## 3. Lifecycle Integration with Short-ID Routing
+
+- [ ] 3.1 Add a route-policy disposition helper outside the pure lifecycle and `pkg/sandboxroute` packages for retained, forwarding, and deletion states.
+- [ ] 3.2 Change the manager-owned cache feeder to obtain normalized lifecycle state from the sandboxcr-backed infra boundary, build the existing neutral `sandboxroute.ProjectionInput`, preserve state when Pod IP is empty, and use `UpsertFull` only for retained observations.
+- [ ] 3.3 Change the Gateway CR adapter to derive canonical state with an explicit observation time, preserve it in `ProjectionInput.State`, retain transitional observations, and delete terminal/recycling observations; leave the data-plane running-only filter unchanged.
+- [ ] 3.4 Reuse each component's exact namespace/selector/deletion/lifecycle inclusion predicate in its targeted direct-reader repair callback so repair treats NotFound, deletion, visibility exclusion, and terminal lifecycle as authoritative absence.
+- [ ] 3.5 Route NotFound, `DeletionTimestamp`, visibility exclusion, and `recycling`/`terminating`/`succeeded`/`failed` through `DeleteAuthoritativeByObjectKey` with only the short-ID-injected legacy fallback; never delete by client ID or add an unconditional Store mutation.
+- [ ] 3.6 Remove lifecycle dependence on sandboxcr-owned informer/periodic route reconciliation; use the manager composition feeder, informer initial synchronization/ListWatch recovery, and short-ID targeted ObjectKey Repairer only. Do not add a periodic or request-triggered full Sandbox List.
+- [ ] 3.7 Generalize the explicit-delete copy-to-`dead` sender behavior for an accepted local terminal/recycling removal, preserving full namespace/name/ID/UID/RV fields and the precise source observation; retained states are never translated and an already-absent terminal CR is not periodically rebroadcast.
+- [ ] 3.8 Keep Gateway peer state policy running-only but verify it applies full and ID-only upserts/deletes through the short-ID conditional Store APIs; do not redesign the shared Store, RV comparator, fences, collision state, or Repairer in this lifecycle change.
+- [ ] 3.9 Add table-driven adapter tests for the healthy-running forwarding golden path, every retained-but-rejected state, every deletion state, empty IP, recycling recovery across a newer fenced observation, sender-copy translation, retained-state non-translation, precise source preservation, full conditional peer deletion, ID-only compatibility deletion, and identical event/repair predicates.
+
+## 4. Scope and Verification
+
+- [ ] 4.1 Verify by source inventory that production code does not call `GetRouteFromSandbox`, `sandboxcr.Infra` registers no route feeder or Repairer, no periodic full route reconciliation/List was added, and every manager/Gateway route mutation uses the short-ID authority-specific Store API.
+- [ ] 4.2 Verify `pkg/sandboxroute` remains lifecycle/CRD-agnostic, infra does not import it or return Routes, Sandbox IDs remain opaque, and Controller/lifecycle packages do not import manager, infra, web, E2B, or route packages.
+- [ ] 4.3 Run focused Go tests only for changed packages under `pkg/`, including sandboxcr, sandbox-manager, E2B middleware, proxy, sandbox-gateway controller/server, and the existing short-ID sandboxroute regression package; do not run `test/` E2E.
+- [ ] 4.4 Run final builds only for affected manager and Gateway commands after focused tests pass.
+- [ ] 4.5 Re-run strict OpenSpec validation and confirm canonical derivation is activated only through short-ID `ProjectionInput.State`; final general/public-state adoption remains deferred to Part 3.
