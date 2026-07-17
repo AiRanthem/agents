@@ -1,15 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Public Sandbox state remains running or paused
-E2B Sandbox responses SHALL expose only public `running` or `paused`. Internal `running` SHALL project to `running`; `pausing`, `paused`, and `resuming` SHALL project to `paused`; `claimable`, `unready`, `terminating`, and `completed` SHALL be unrepresentable. Projection SHALL consume `SandboxStateObservation` and MUST NOT inspect CR phase or conditions.
+E2B Sandbox responses SHALL expose only public `running` or `paused`. Internal `running` SHALL project to `running`; `pausing`, `paused`, and `resuming` SHALL project to `paused`; `claimable`, `unready`, `terminating`, and `completed` SHALL be unrepresentable. Only Manager SHALL consume provider `SandboxStateObservation`; E2B SHALL consume a protocol-independent lifecycle outcome through the Manager interface and MUST NOT import provider/infra or inspect CR phase and conditions.
 
 #### Scenario: Running projects to running
-- **WHEN** a response represents an internal `running` Sandbox
+- **WHEN** Manager returns the protocol-independent outcome corresponding to internal `running`
 - **THEN** its public state is `running`
 
 #### Scenario: Paused family projects to paused
-- **WHEN** a response represents internal `pausing`, `paused`, or `resuming`
+- **WHEN** Manager returns an outcome corresponding to internal `pausing`, `paused`, or `resuming`
 - **THEN** its public state is `paused`
+
+#### Scenario: API does not bypass Manager
+- **WHEN** E2B performs lookup, projection, or a lifecycle operation
+- **THEN** it calls the Manager interface and does not call provider GetState or Manager infra
 
 #### Scenario: List omits unrepresentable state
 - **WHEN** List Sandboxes encounters `claimable`, `unready`, `terminating`, or `completed`
@@ -20,15 +24,15 @@ E2B Sandbox responses SHALL expose only public `running` or `paused`. Internal `
 - **THEN** it includes internal `pausing`, `paused`, and `resuming`
 
 #### Scenario: Successful body is refreshed running
-- **WHEN** Create, Clone, Resume, or Connect returns a successful Sandbox body
+- **WHEN** Create, Clone, or Connect returns a successful Sandbox body
 - **THEN** a refreshed observation is `running` and the public state is `running`
 
 #### Scenario: Legacy paused fallback becomes unavailable
 - **WHEN** a claimed Upgrading, Recycling, empty-phase, or unsupported-phase Sandbox would previously have been returned as public `paused`
-- **THEN** List omits it and direct representation returns the applicable reasoned unavailable response instead of HTTP 200
+- **THEN** List omits it and direct representation returns the applicable HTTP 404 reasoned unavailable response instead of HTTP 200
 
-### Requirement: Lifecycle lookup does not pre-filter state
-SandboxManager and E2B claimed-Sandbox lookup SHALL establish existence and ownership without an expected-state parameter, state whitelist, or reserved-failed label short-circuit. Lifecycle projection and operation policy SHALL run only after lookup and authorization. Confirmed absence SHALL remain distinct from backend, timeout, cancellation, and authorization failures.
+### Requirement: Manager lifecycle lookup does not pre-filter state
+The Manager lookup used by E2B SHALL establish existence and ownership without an expected-state parameter, state whitelist, or reserved-failed label short-circuit. Manager lifecycle policy and the API projection SHALL run only after lookup and authorization. Confirmed absence SHALL remain distinct from backend, timeout, cancellation, and authorization failures.
 
 #### Scenario: Found unready Sandbox reaches policy
 - **WHEN** an owned Sandbox exists and its observation is `unready`
@@ -36,7 +40,8 @@ SandboxManager and E2B claimed-Sandbox lookup SHALL establish existence and owne
 
 #### Scenario: Reserved failed Sandbox reaches policy
 - **WHEN** an owned Sandbox exists with the reserved-failed label
-- **THEN** shared lookup returns it so GetState derives `terminating` and the requested operation applies its own policy
+- **THEN** shared lookup returns it so GetState derives `completed` unless a higher removal fact
+  applies, and the requested operation applies its own policy
 
 #### Scenario: Backend failure is not absence
 - **WHEN** the cache or API lookup fails without confirmed NotFound
@@ -47,34 +52,35 @@ SandboxManager and E2B claimed-Sandbox lookup SHALL establish existence and owne
 - **THEN** the existing authorization response is preserved without exposing lifecycle or resource details
 
 ### Requirement: Lifecycle unavailability has four stable reasons
-`web.ApiError` SHALL add `Reason string` serialized as `reason,omitempty`. Lifecycle-related unavailable responses SHALL use only `SandboxNotFound`, `SandboxTemporarilyUnavailable`, `SandboxCompleted`, or `SandboxTerminating`; existing error fields and unrelated errors SHALL remain compatible.
+`web.ApiError` SHALL add `Reason string` serialized as `reason,omitempty`. Direct Sandbox representation of confirmed absence or an unrepresentable lifecycle observation SHALL return HTTP 404 and SHALL use only `SandboxNotFound`, `SandboxTemporarilyUnavailable`, `SandboxCompleted`, or `SandboxTerminating`. Operation-specific conflicts and rejections retain their separately specified status. Existing error fields and unrelated errors SHALL remain compatible.
 
 #### Scenario: Confirmed absence
 - **WHEN** claimed-Sandbox lookup confirms no Sandbox exists
-- **THEN** the response reason is `SandboxNotFound`
+- **THEN** the response is HTTP 404 with reason `SandboxNotFound`
 
 #### Scenario: Live but unavailable
 - **WHEN** an operation cannot represent `claimable` or `unready`
-- **THEN** the response reason is `SandboxTemporarilyUnavailable`
+- **THEN** direct representation is HTTP 404 with reason `SandboxTemporarilyUnavailable`
 
 #### Scenario: Completed Sandbox
 - **WHEN** an operation cannot represent `completed`
-- **THEN** the response reason is `SandboxCompleted` regardless of successful or failed raw completion
+- **THEN** direct representation is HTTP 404 with reason `SandboxCompleted` regardless of successful or failed raw completion
 
 #### Scenario: Removal in progress
 - **WHEN** an operation cannot represent `terminating`
-- **THEN** the response reason is `SandboxTerminating` regardless of deletion or recycling mechanism
+- **THEN** direct representation is HTTP 404 with reason `SandboxTerminating` regardless of deletion or recycling mechanism
 
 #### Scenario: Reserved failed Sandbox
 - **WHEN** an owned Sandbox is retained with the reserved-failed label
-- **THEN** it is observed as `terminating` and the response reason is `SandboxTerminating`, not `SandboxNotFound`
+- **THEN** it is observed as `completed` before removal starts and direct representation is HTTP 404
+  with reason `SandboxCompleted`, not `SandboxNotFound`
 
 #### Scenario: Unrelated error
 - **WHEN** an error is not a Sandbox lifecycle unavailable response
 - **THEN** reason may be omitted and existing code, headers, message, and request-id behavior remains unchanged
 
 ### Requirement: Pause and Resume are directionally idempotent
-Pause SHALL accept `running`, `pausing`, and `paused`. Resume SHALL accept `paused`, `resuming`, and `running`. A same-direction request during progress SHALL join the existing wait without replacing first-writer parameters; an opposite-direction request during progress SHALL return HTTP 409.
+Pause SHALL accept `running`, `pausing`, and `paused`. Resume SHALL accept `paused`, `resuming`, and `running`. A same-direction request during progress SHALL join the existing wait without replacing first-writer parameters; an opposite-direction request during progress SHALL return HTTP 409. Resume SHALL preserve its existing empty HTTP 204 success response and SHALL complete that response only after a refreshed observation is `running`.
 
 #### Scenario: Repeated Pause joins progress
 - **WHEN** Pause is requested for `pausing`
@@ -90,7 +96,11 @@ Pause SHALL accept `running`, `pausing`, and `paused`. Resume SHALL accept `paus
 
 #### Scenario: Resume is already complete
 - **WHEN** Resume is requested for `running`
-- **THEN** it succeeds without starting another resume
+- **THEN** it returns the existing empty HTTP 204 success without starting another resume
+
+#### Scenario: Resume progress completes
+- **WHEN** Resume starts or joins progress
+- **THEN** it returns the existing empty HTTP 204 success only after refreshed `running`
 
 #### Scenario: Opposite transition conflicts
 - **WHEN** Pause sees `resuming` or Resume sees `pausing`

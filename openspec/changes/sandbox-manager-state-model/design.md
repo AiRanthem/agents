@@ -1,208 +1,256 @@
 ## Context
 
-`pkg/utils.GetSandboxState` currently derives `creating`, `available`, `running`, `paused`, or `dead` for every component. That apparent consistency hides several different policies:
+`pkg/utils.GetSandboxState` currently derives `creating`, `available`, `running`, `paused`, or
+`dead` for every component. That apparent consistency hides several different policies:
 
-- SandboxSet needs to know whether a pool member is still creating or is available for claim.
-- cache needs pool indexing, active-count, and operation-wait predicates.
-- sandbox-manager needs an orchestration view that distinguishes pause/resume progress, temporary unavailability, removal, and completion.
-- proxy and Gateway need a forwarding action, not a lifecycle vocabulary.
+- SandboxSet needs to know whether a pool member is creating or available for claim.
+- cache needs pool indexing, active counting, and operation-wait predicates.
+- sandbox-manager needs pause/resume progress, temporary unavailability, removal, and completion.
+- proxy and Gateway need a forwarding action, not lifecycle vocabulary.
 - E2B exposes only `running` and `paused` and needs stable errors for other observations.
 
-The shared helper therefore both under-describes sandbox-manager state and over-couples components that should not share a state model. In particular, `dead` currently combines deletion, normal completion, failed completion, termination, and a claimed Running Sandbox whose Ready condition is false.
+The shared helper under-describes Manager state and over-couples unrelated components. Its `dead`
+result combines deletion, normal completion, failed completion, termination, and a claimed Running
+Sandbox whose Ready condition is false.
 
-This change makes the internal model a sandbox-manager component contract. It is derived from the Sandbox CR but is not persisted and is not a Controller API. Other components keep only the purpose-specific predicates they require.
+The completed `sandbox-provider` prerequisite gives these components a neutral dependency boundary.
+`pkg/sandboxprovider` owns cross-provider contracts, `pkg/sandboxprovider/sandboxcr` owns Kubernetes
+CR observation, and `pkg/sandbox-manager/infra/sandboxcr` remains the Manager-specific adapter.
+Controller uses provider pool predicates but does not consume the Manager state. Manager and
+Gateway can now obtain routes from the same CR provider implementation.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Cover every state distinction required by sandbox-manager without attempting to represent every Controller phase or condition outcome.
-- Return one deterministic state and a non-empty diagnostic reason for every CR observation.
-- Keep CR interpretation below the `infra.Sandbox` boundary.
-- Preserve existing SandboxSet, pool-index, active-count, claim-selection, quota, and waiter behavior unless this proposal explicitly changes it.
-- Remove lifecycle vocabulary from Route and make forwarding/removal policy explicit at the producer.
+- Cover every state distinction required by Manager operations without mirroring every Controller
+  phase or condition outcome.
+- Return one deterministic state and non-empty diagnostic reason for every CR observation.
+- Keep raw CR interpretation behind the sandboxprovider Sandbox methods.
+- Make Manager and Gateway call one canonical GetRoute implementation that is derived from GetState.
+- Preserve existing SandboxSet, pool-index, active-count, claim-selection, quota, and waiter behavior
+  unless this change explicitly says otherwise.
+- Remove lifecycle vocabulary from core Route and make forwarding/removal behavior explicit.
 - Keep internal state out of public E2B response bodies.
-- Support mixed-version manager and Gateway rollout while Route changes from `state` to `action`.
+- Keep mixed-version Manager and Gateway rollout fail-closed while Route changes from state to action.
 
 **Non-Goals:**
 
 - Adding a lifecycle field to the Sandbox CRD.
-- Making Controller, SandboxSet, cache, proxy, or Gateway consume the sandbox-manager state type.
-- Adding new Controller phases or in-place update reasons, or changing mutation/retry behavior.
-- Distinguishing successful and failed completion in the internal state or public unavailable reason.
-- Distinguishing deletion from recycling in the internal state or public unavailable reason.
-- Tightening SandboxSet availability with Pod IP, lock, claimed-label, or new health requirements.
-- Changing quota liveness, route identity, peer membership, route freshness comparison, or reconciliation topology.
+- Making Controller, SandboxSet, cache, or proxy consume the manager-oriented eight-state type.
+- Adding Controller phases or in-place update reasons, or changing mutation/retry behavior other
+  than the recycle-rejection fallback required to honor an accepted Delete.
+- Distinguishing successful and failed completion in internal state or public unavailable reason.
+- Distinguishing deletion from recycling in internal state or public unavailable reason.
+- Tightening pool availability with Pod IP, lock, claimed label, or new health requirements.
+- Changing quota liveness, route identity, peer membership, resource-version parsing, route
+  ownership, or reconciliation topology. The prerequisite tombstone/authoritative-observation
+  baseline and this change's equal-version action rank are the approved freshness additions.
+- Reintroducing a Gateway-local or Manager-local raw CR routing policy.
 
 ## Decisions
 
-### 1. One sandbox-manager-owned vocabulary
+### 1. One manager-oriented vocabulary behind the provider contract
 
-`pkg/sandbox-manager/infra` defines:
+`pkg/sandboxprovider` defines `SandboxState`, exactly eight state values, and
+`SandboxStateObservation`. Its Sandbox capability returns the observation through `GetState`.
 
-```go
-type SandboxState string
+The CR implementation in `pkg/sandboxprovider/sandboxcr` delegates `GetState` to an unexported pure
+derivation that accepts the observation time explicitly. The method supplies the current time;
+package tests use an explicit time. No exported CR-to-state function exists.
 
-const (
-	SandboxStateClaimable   SandboxState = "claimable"
-	SandboxStateRunning     SandboxState = "running"
-	SandboxStatePausing     SandboxState = "pausing"
-	SandboxStatePaused      SandboxState = "paused"
-	SandboxStateResuming    SandboxState = "resuming"
-	SandboxStateUnready     SandboxState = "unready"
-	SandboxStateTerminating SandboxState = "terminating"
-	SandboxStateCompleted   SandboxState = "completed"
-)
+Only Manager consumes the observation through its neutral infra port. Manager exposes
+protocol-independent lifecycle outcomes through its Manager interface. E2B calls that interface and
+owns public projection, HTTP status, and error-reason mapping without importing provider or infra.
+Gateway does not branch on state; it obtains the result indirectly through the same provider's
+GetRoute. Controller, SandboxSet, cache, and proxy cannot import or compare the eight state constants.
 
-type SandboxStateObservation struct {
-	State  SandboxState
-	Reason string
-}
-```
+`Reason` is always non-empty and supports protected diagnostics. It is not a stable public enum and
+must not be returned as public Sandbox state or Route data.
 
-`infra.Sandbox.GetState()` returns `SandboxStateObservation`. The only production implementation, `sandboxcr.Sandbox`, delegates to an unexported pure function:
-
-```go
-func getSandboxState(sbx *v1alpha1.Sandbox, now time.Time) infra.SandboxStateObservation
-```
-
-The method supplies the current time; tests call the pure function with an explicit time. No exported CR-to-state function is added. Sandbox-manager and its E2B server path consume the observation through `infra.Sandbox`; Controller, SandboxSet, cache, proxy, and Gateway cannot import or compare these constants.
-
-`Reason` is always non-empty and is intended for logs and protected diagnostics. It is not a stable public enum and must not be returned as the public Sandbox `state`.
-
-### 2. First-match derivation covers manager needs
+### 2. First-match derivation covers Manager needs
 
 The first matching rule wins:
 
 | Priority | State | Decisive facts |
 |---:|---|---|
-| 1 | `terminating` | deletion timestamp; shutdown time is before the observation time; reserved-failed label; accepted cleanup (`cleanup=true` and `cleanup-enabled=true`); or phase `Recycling`/`Terminating` |
-| 2 | `completed` | phase `Succeeded` or `Failed` |
-| 3 | `resuming` | phase `Resuming`; completed Paused condition with `spec.paused=false`; or exact post-resume initialization gate |
-| 4 | `pausing` | `Running` with `spec.paused=true`; or phase `Paused` before the Paused condition is true |
-| 5 | `paused` | phase `Paused`, `spec.paused=true`, and Paused condition true |
-| 6 | `unready` | phase `Upgrading`, or a currently supported active/unsafe in-place update observation |
-| 7 | `claimable` | `sandboxset.IsSandboxAvailable(sbx, now)` |
-| 8 | `running` | phase `Running`, not paused, Ready true, Pod IP non-empty, and no higher rule matched |
-| 9 | `unready` | every other live observation, including Pending, Ready false/absent, empty Pod IP, empty phase, and unsupported future phase |
+| 1 | `terminating` | deletion timestamp; observation time is after shutdown time; or phase Recycling/Terminating |
+| 2 | `completed` | reserved-failed label without a higher removal fact; or phase Succeeded/Failed |
+| 3 | `resuming` | phase Resuming; phase Paused with completed Paused condition and `spec.paused=false`; or exact post-resume initialization gate |
+| 4 | `pausing` | phase Running with `spec.paused=true`; or phase Paused before the Paused condition is true |
+| 5 | `paused` | phase Paused, `spec.paused=true`, and Paused condition true |
+| 6 | `unready` | cleanup request metadata before removal starts; phase Upgrading; or an existing unsafe in-place update observation |
+| 7 | `claimable` | the provider pool-available predicate is true |
+| 8 | `running` | phase Running, not paused, Ready true, Pod IP non-empty, and no higher rule matched |
+| 9 | `unready` | every other live observation, including Pending, Ready false/absent, empty Pod IP, empty phase, and an unsupported future phase |
 
-Deletion/removal overrides completion because an object being removed is still in progress, not terminal from sandbox-manager's perspective. Only `completed` is terminal. `terminating` is a transition whose end is object absence.
+Removal overrides completion because an object being removed is still in progress. Only
+`completed` is terminal. `terminating` is a transition whose end is object absence.
 
-The shutdown comparison preserves current behavior: the deadline is considered reached only when the observation time is after `spec.shutdownTime`.
+The shutdown comparison preserves current behavior: the deadline is reached only when observation
+time is strictly after `spec.shutdownTime`. A reserved-failed Sandbox without a higher-priority
+removal fact is `completed`: it is excluded from future claims and cannot become active, including
+when the caller selected forever retention. A finite retained failure becomes `terminating` once
+its shutdown deadline expires.
 
-Reserved-failed is `terminating` even when the raw phase or Ready condition would otherwise map elsewhere. It represents a failed claim artifact waiting for its retention/deletion policy, not a serviceable or completed user Sandbox.
+Cleanup annotations alone record a request, not Controller acceptance. They derive `unready` until
+the Sandbox enters Recycling or receives a deletion timestamp. This avoids deleting the route for
+a request the Controller has not yet acted on.
 
-### 3. Pause, resume, and update details are deliberately narrow
+### 3. Pause, resume, and update details are narrow
 
-Pause and resume remain explicit because manager operations need to join or reject an in-flight transition:
+Pause and resume are explicit because Manager operations need to join or reject in-flight work:
 
-- phase `Resuming` is always `resuming`;
-- phase `Paused` with Paused condition true and `spec.paused=false` is `resuming`;
-- phase `Running` with `SandboxResumed=True` is `resuming` only when `RuntimeInitialized` exists and is not true;
-- phase `Running` with `spec.paused=true` is `pausing`;
-- phase `Paused` before Paused condition true is `pausing`;
-- phase `Paused` with `spec.paused=true` and Paused condition true is `paused`.
+- phase Resuming is always `resuming`;
+- phase Paused with Paused true and `spec.paused=false` is `resuming`;
+- phase Running with Resumed true is `resuming` only when RuntimeInitialized exists and is not true;
+- phase Running with `spec.paused=true` is `pausing`;
+- phase Paused before Paused true is `pausing`;
+- phase Paused with `spec.paused=true` and Paused true is `paused`.
 
-An absent `RuntimeInitialized` condition does not imply resume progress, preventing legacy healthy objects from remaining `resuming` indefinitely.
+An absent RuntimeInitialized condition does not imply resume progress, preventing legacy healthy
+objects from remaining `resuming` indefinitely.
 
-The post-resume initialization rule intentionally precedes `Running + spec.paused=true` and does not require `spec.paused=false`. Resume is not complete until runtime initialization and Ready convergence finish, so a Pause request in that window is an opposite-direction conflict and returns HTTP 409. This matches the current infra contract, where Resume waits for Ready and Pause rejects Running-but-not-ready. Once initialization finishes, a later pause observation derives `pausing` normally.
+The post-resume initialization rule precedes Running plus `spec.paused=true` and does not require
+`spec.paused=false`. Resume is incomplete until runtime initialization converges, so Pause in that
+window is an opposite-direction conflict. After initialization completes, a later pause observation
+derives `pausing` normally.
 
-The former `upgrading` distinction is folded into `unready`. Phase `Upgrading` and the existing `InplaceUpdate` reasons `InplaceUpdating` or `Failed` are non-serving. `Succeeded` falls through to Ready and Pod-IP evaluation. This change does not add stage-specific update reasons or attempt to exhaustively encode Controller operation outcomes; Ready remains the final service signal after these known unsafe markers.
+Phase Upgrading and existing InplaceUpdate reasons InplaceUpdating or Failed are `unready`.
+InplaceUpdate Succeeded falls through to Ready and Pod-IP evaluation. No new update reason is added;
+Ready remains the final service signal after known unsafe markers.
 
-### 4. SandboxSet owns creating and available
+### 4. Pool predicates remain separate and provider-owned
 
-`pkg/controller/sandboxset` exports pure helpers with an explicit observation time:
+`pkg/sandboxprovider/sandboxcr` owns pure explicit-time pool creating and available predicates. They
+preserve the former five-state helper's pool behavior:
 
-```go
-func IsSandboxCreating(sbx *v1alpha1.Sandbox, now time.Time) bool
-func IsSandboxAvailable(sbx *v1alpha1.Sandbox, now time.Time) bool
-```
-
-They reproduce the existing five-state helper's creating/available behavior:
-
-- deletion, expired shutdown, `Succeeded`, `Failed`, and `Terminating` are neither creating nor available;
+- deletion, expired shutdown, Succeeded, Failed, and Terminating are neither creating nor available;
 - Pending is creating;
-- a SandboxSet-controlled, non-terminal object is available when Ready is true and creating otherwise;
-- the available predicate does not require Pod IP, lock availability, or a new claimed-label rule.
+- a SandboxSet-controlled non-terminal object is available when Ready is true and creating otherwise;
+- available does not require Pod IP, lock availability, a claimed-label check, or revision match.
 
-SandboxSet grouping and event handling use these helpers plus local used/dead grouping. The pool cache index uses the same helpers. sandboxcr imports the SandboxSet package only from its infra implementation: claim selection uses both helpers, while manager `claimable` derivation uses only `IsSandboxAvailable` after higher-priority manager rules.
+SandboxSet grouping/event handling and cache pool indexing use these predicates. Claim candidate
+selection uses the same predicates plus its independent freshness, Pod-IP, lock, speculation, and
+revision checks. Manager GetState uses only the available predicate after all higher-priority rules
+to derive `claimable`.
 
-Claim selection retains its independent resource-version, candidate precheck, Pod-IP, lock, speculation duration, and revision-preference checks. Naming a manager state `claimable` does not replace those atomic claim safeguards.
+The provider package never imports Controller. Controller remains self-contained and never calls
+the manager-oriented GetState.
 
-### 5. Other non-manager consumers retain local policy
+### 5. Other non-Manager consumers keep purpose-specific policy
 
-`pkg/utils.GetSandboxState` is removed rather than redirected to the new model. The five `api/v1alpha1.SandboxState*` strings are removed after all uses migrate. Generic low-level helpers such as Ready-condition lookup and SandboxSet controller ownership may remain shared; `pkg/utils/lifecycle` does not own or alias the sandbox-manager vocabulary, and its package guidance explicitly prohibits doing so.
+`pkg/utils.GetSandboxState` is removed rather than redirected to the new model. The five
+`api/v1alpha1.SandboxState*` strings are removed after compatibility adapters no longer use them.
+Generic fact helpers may remain shared, but no generic lifecycle package may own or alias the
+Manager state.
 
-Behavior-preserving migrations are local:
+Behavior-preserving migrations remain local:
 
-- `CountActiveSandboxes` keeps the current reserved-failed and legacy-dead exclusion policy; it does not become claimed-only in this change.
-- pool indexing retains the current creating-or-available behavior.
-- SandboxSet grouping, status, rolling update, and event enqueue behavior remain unchanged.
-- waiters use their required CR facts and operation-specific fast failures without importing manager state.
-- `IsLiveForQuota` remains an independent policy.
+- active Sandbox counting keeps its reserved-failed and legacy-dead exclusion policy;
+- pool indexing retains creating-or-available behavior;
+- SandboxSet grouping, status, rolling update, and enqueue behavior remain unchanged;
+- waiters keep their required CR facts and operation-specific fast failures;
+- quota liveness remains an independent policy;
+- claim selection keeps atomic safeguards beyond the `claimable` observation.
 
-### 6. Recycle eligibility is an infra capability
+### 6. Recycle eligibility is a provider capability
 
-The `infra.Sandbox` interface replaces `IsRecycleEnabled()` and `Phase()` with:
+The provider Sandbox capability exposes `IsRecyclable` instead of giving Manager raw `Phase` and
+`IsRecycleEnabled`. The CR implementation returns true when cleanup is enabled, phase is Running,
+and known Controller preconditions permit recycling, including the absence of persistent-volume
+claims.
 
-```go
-IsRecyclable() bool
-```
+Manager preserves the trigger-recycle operation and metrics when IsRecyclable is true, and uses its
+existing direct-delete path when it is false or triggering fails. A successful trigger creates a
+cleanup request, which GetState reports as `unready` until Controller starts removal. Controller
+uses the same known preconditions; if a request becomes ineligible before reconcile or another
+precondition rejects it, Controller falls back to direct deletion rather than leaving a successful
+Delete request serving indefinitely. Once phase is Recycling or deletion starts, GetState returns
+`terminating`.
 
-`sandboxcr.Sandbox.IsRecyclable()` preserves the current combined predicate: cleanup is enabled and the raw phase is `Running`. Sandbox-manager still performs the existing trigger-recycle, metric, and fallback-to-delete flow, but it no longer reads Controller phase or combines raw facts itself.
+### 7. GetRoute is the only state-to-action mapping
 
-After cleanup is accepted, state observation reports `terminating` regardless of whether the Controller implements removal through recycling or direct deletion.
+The neutral core Route replaces lifecycle `State` with typed `Action` values Allow, Deny, and
+Delete. Route identity, IP, owner, resource version, and access token remain unchanged.
 
-### 7. Route carries action, not lifecycle
+`pkg/sandboxprovider/sandboxcr` owns the only state-to-action mapping:
 
-The core Route replaces `State string` with:
-
-```go
-type RouteAction string
-
-const (
-	RouteActionAllow  RouteAction = "allow"
-	RouteActionDeny   RouteAction = "deny"
-	RouteActionDelete RouteAction = "delete"
-)
-```
-
-Route metadata projection no longer derives lifecycle or action. Each producer explicitly assigns Action before local mutation or peer synchronization:
-
-| Manager observation | Action |
+| Provider observation | Action |
 |---|---|
-| `running` | `Allow` |
-| `claimable`, `pausing`, `paused`, `resuming`, `unready` | `Deny` |
-| `terminating`, `completed` | `Delete` |
+| `running` | Allow |
+| `claimable`, `pausing`, `paused`, `resuming`, `unready` | Deny |
+| `terminating`, `completed` | Delete |
 
-Gateway cannot consume manager state. Its local CR policy selects:
+The read-only CR view's GetRoute calls GetState exactly once and uses that observation to populate
+the action together with route metadata. No metadata-only caller assignment and no second mapping
+in Manager, proxy, or Gateway is allowed.
 
-- `Delete` for deletion timestamp, expired shutdown, reserved-failed, accepted cleanup, or phase `Recycling`, `Terminating`, `Succeeded`, or `Failed`;
-- `Allow` for a non-SandboxSet-controlled phase `Running` object that is not paused, has Ready true and a non-empty Pod IP, and has no active unsafe update marker;
-- `Deny` for every other live observation.
+Manager route reconciliation calls GetRoute on its provider-backed Sandbox. Gateway wraps informer
+objects in the same read-only CR view and calls GetRoute. Gateway must not inspect phase, Ready,
+Pod IP serviceability, paused flags, RuntimeInitialized, InplaceUpdate, cleanup, or completion facts
+to select an action.
 
-`Allow` and `Deny` are retained route records; data planes forward only `Allow`. `Delete` invokes deletion and is never stored as an active Route. Missing or unknown Action is invalid after compatibility decoding and must not mutate a route or enable forwarding.
+For the same CR snapshot and explicit observation time, Manager and Gateway obtain identical route
+metadata and Action. Independent wall clocks may cross a configured shutdown deadline at different
+instants; both execute the same strict-after comparison, while the equal-version safety ordering and
+deletion tombstone below resolve the temporary observation difference fail-closed.
 
-### 8. Mixed-version Route wire compatibility is isolated
+Allow and Deny are retained active records. Data planes forward only Allow. Delete removes the
+active route and retains only a non-forwarding decision tombstone containing route identity, UID,
+resource version, and action rank. Missing or unknown Action is invalid after compatibility decoding
+and cannot mutate a route or enable forwarding.
 
-Core Route logic never reads lifecycle `state`. A wire adapter temporarily emits both `action` and a legacy top-level `state` field:
+For one Sandbox UID, resource version remains the primary freshness key. When resource versions are
+equal, safety action order is Delete greater than Deny greater than Allow. A stronger equal-version
+decision replaces a weaker one; a weaker decision is rejected. A Delete tombstone rejects Allow or
+Deny with the same or older resource version. A strictly newer resource version for the same UID,
+or a new UID for a reused route ID, may replace the tombstone.
+
+This ordering is required because shutdown expiry is derived from observation time without changing
+the CR resource version. A fast clock may produce Delete while a slow clock still produces Allow
+for the same snapshot. The tombstone makes the fast fail-closed decision monotonic and prevents a
+late equal-version Allow from recreating the route. Tombstones are not returned by active-route List
+or data-plane lookup and therefore do not violate the rule that Delete is not an active route.
+
+### 8. Mixed-version Route compatibility is isolated and fail-closed
+
+Core Route never contains lifecycle state. A wire adapter temporarily emits both action and a
+legacy top-level state field:
 
 | Action | Legacy field sent |
 |---|---|
-| `Allow` | `running` |
-| `Deny` | `paused` |
-| `Delete` | `dead` |
+| Allow | `running` |
+| Deny | `paused` |
+| Delete | `dead` |
 
-New receivers treat a present valid Action as authoritative. When Action is absent:
+A valid received Action is authoritative. When Action is absent:
 
-- sandbox-manager/proxy maps legacy `dead` to Delete, `running` to Allow, and every other value to Deny;
-- Gateway maps legacy `running` to Allow and every other value to Delete, preserving its current refresh behavior.
+- Manager/proxy maps legacy `dead` to Delete, `running` to Allow, and every other value to Deny;
+- Gateway maps legacy `running` to Allow and every other value to Delete, preserving its current
+  peer-refresh behavior.
 
-Compatibility decoding happens before validation and store mutation. The legacy field is not copied into the core Route and is not consulted by data-plane filters. Existing resource-version comparison, registry/store ownership, peer selection, and reconciliation behavior are unchanged.
+An old Gateway may delete a new Deny route instead of retaining it. These record-level differences
+are allowed during mixed-version rollout because neither fallback converts a non-running legacy
+value into Allow. Compatibility decoding occurs before freshness and action ordering, so legacy
+Delete also creates a tombstone.
+
+Arbitrary versions older than the `sandbox-provider` prerequisite are not supported peers for this
+rollout because they can delete without retaining decision freshness or can emit legacy `running`
+for observations the new model denies. Every Manager, proxy, and Gateway producer and receiver must
+first run the prerequisite tombstone and conservative legacy-running baseline. The supported mixed
+window is then baseline provider behavior versus this state-model behavior. New components validate
+the normalized action before mutation.
+
+The legacy field is not copied into core Route, stored as lifecycle state, or used by data-plane
+filters. Resource-version comparison, registry ownership, peer selection, reconciliation topology,
+and access-token redaction remain unchanged.
 
 ### 9. E2B remains a two-state public projection
 
-Only the sandbox-manager/E2B path consumes `SandboxStateObservation`. Public projection is:
+Only Manager consumes SandboxStateObservation. It converts the provider observation into a
+protocol-independent Manager lifecycle outcome. E2B consumes that outcome through the Manager
+interface and owns the following public projection:
 
 | Internal state | Public result |
 |---|---|
@@ -213,55 +261,95 @@ Only the sandbox-manager/E2B path consumes `SandboxStateObservation`. Public pro
 | `completed` | unrepresentable, `SandboxCompleted` |
 | confirmed absence | `SandboxNotFound` |
 
-`web.ApiError` gains `Reason string` serialized as `reason,omitempty`. These four strings are the only stable lifecycle-unavailable reasons. Internal state and diagnostic reason may appear in protected logs/messages after ownership succeeds but never in the public Sandbox state field.
+`web.ApiError` gains an optional `reason`. The four listed reason strings are the only stable
+lifecycle-unavailable reasons. Internal state and diagnostic reason may appear in protected logs
+after ownership succeeds but never in public Sandbox state.
 
-The public enum is stable, but observation behavior is not fully backward compatible. The current shared helper treats claimed Upgrading, Recycling, empty-phase, and unsupported-phase Sandboxes as `paused`, so Describe/List may expose them with HTTP 200. The new policy maps Upgrading/empty/unsupported observations to `unready` and Recycling to `terminating`; direct representation becomes the applicable reasoned HTTP 404 and List omits them. Migration tests must lock this intentional 200-to-404 change for SDK polling behavior.
+The API layer does not call provider GetState, import sandboxprovider, or bypass Manager for lookup
+or operation policy. Manager does not assign HTTP codes or construct E2B response models.
 
-Lifecycle filtering is removed from `SandboxManager.GetSandbox` and `getSandboxOfUser`; this includes the current reserved-failed label short-circuit in the shared E2B lookup. Lookup first establishes existence and ownership, then GetState and the requested E2B operation handle the observation. Describe therefore maps reserved-failed to `SandboxTerminating`, while Delete reaches and accepts the real removal path instead of treating the lookup error itself as deletion success. Confirmed absence remains distinct from backend, timeout, cancellation, and authorization failures.
+The public enum remains stable, but observation behavior is not fully backward compatible. The old
+helper can expose claimed Upgrading, Recycling, empty-phase, and unsupported-phase objects as HTTP
+200 `paused`. The new policy returns HTTP 404 SandboxTemporarilyUnavailable for
+Upgrading/empty/unsupported observations and HTTP 404 SandboxTerminating for Recycling; List omits
+all four.
 
-Operation policy remains:
+Shared lookup first establishes existence and ownership without state whitelist or reserved-failed
+short-circuit. GetState and each operation then apply policy. Confirmed absence remains distinct from
+backend, timeout, cancellation, and authorization failures.
+
+Operation policy is:
 
 - Pause accepts `running`, `pausing`, and `paused`; Resume accepts `paused`, `resuming`, and `running`.
-- Same-direction requests join existing waits; opposite pause/resume progress returns HTTP 409.
-- Connect returns `running` directly, starts or joins Resume for `paused`/`resuming`, and rejects `pausing` with HTTP 400.
+- Same-direction progress joins; opposite pause/resume progress returns HTTP 409.
+- Connect returns `running`, starts or joins Resume for `paused`/`resuming`, and rejects `pausing`
+  with HTTP 400.
 - Snapshot and timeout mutation require `running`.
-- Create, Clone, Resume, and Connect return a Sandbox body only after a refreshed `running` observation.
-- Delete accepts every state of an owned Sandbox and confirmed/concurrent absence, preserving authorization and non-NotFound backend failures.
+- Create, Clone, and Connect return a Sandbox body only after refreshed `running`. Resume verifies
+  refreshed `running` before its existing empty success response.
+- Delete accepts every state of an owned Sandbox plus confirmed/concurrent absence, while preserving
+  authorization and non-NotFound backend failures.
 
 ### 10. Alternatives considered
 
-- **Shared canonical lifecycle under `pkg/utils/lifecycle`: rejected.** It would continue coupling controller/cache policy to manager needs and encourage new consumers to treat one vocabulary as universal.
-- **Eleven states mirroring Controller progress: rejected.** Separate creating/available, upgrading, recycling, succeeded, and failed states express Controller or pool detail that upper manager policy intentionally merges.
-- **Three independently deployable changes: rejected.** The reduced design would require an unused model, temporary tuple/struct adapters, and partial route migration. One atomic change is smaller and prevents mixed state semantics inside a binary.
-- **Tuple `GetState() (state, reason)`: rejected.** A named observation makes the boundary extensible and prevents callers from silently discarding the association between normalized state and its diagnostic.
-- **Keep raw `Phase()` for recycle: rejected.** `IsRecyclable()` preserves behavior while keeping Controller phase interpretation inside sandboxcr.
-- **Keep lifecycle state in Route: rejected.** Proxy and Gateway need an explicit forwarding/removal decision, not knowledge of manager lifecycle semantics.
-- **Treat every non-running Route as Delete: rejected.** Deny preserves a live but unavailable record and distinguishes temporary unavailability from authoritative removal.
-- **Hard Route wire cutover: rejected.** Dual-field encoding allows rolling upgrades while keeping the legacy field outside core logic.
-- **Tighten SandboxSet available to require Pod IP or lock: rejected.** That would change pool/controller behavior; atomic claim checks remain the correct place for those safeguards.
-- **Add stage-specific Controller update reasons: rejected.** The manager model needs only serviceable versus unready, and existing phase/Ready/update facts are sufficient for this change.
+- **Shared repository-wide lifecycle:** rejected because Controller pool and waiter policies answer
+  different questions from Manager operations.
+- **Gateway-local CR routing policy:** rejected because duplicated facts cannot guarantee exact new
+  Manager/Gateway behavior and had already missed resume/update safety gates during review.
+- **Manager-local state package:** rejected because Gateway would need either a forbidden Manager
+  dependency or a second mapping; sandboxprovider is the neutral contract selected by the
+  prerequisite change.
+- **Eleven states mirroring Controller progress:** rejected because Controller detail would become
+  upper Manager policy without adding useful decisions.
+- **Keep raw phase for recycle:** rejected because IsRecyclable expresses Controller eligibility
+  without exposing Controller phase or volume facts to Manager.
+- **Keep lifecycle state in Route:** rejected because routing needs forwarding/removal action.
+- **Treat every non-running Route as Delete:** rejected because Deny preserves a live unavailable
+  record for recovery.
+- **Hard wire cutover:** rejected because dual-field encoding is required for rolling upgrades.
+- **Tighten pool available:** rejected because claim safeguards remain the correct atomic boundary.
 
 ## Risks / Trade-offs
 
-- **[Risk] `claimable` sounds stronger than the legacy available predicate.** -> Document that atomic claim still performs Pod-IP, expectation, lock, and candidate checks; do not tighten the shared pool helper implicitly.
-- **[Risk] A new Controller phase is accidentally served.** -> Unknown and empty phases fall through to `unready`; Gateway's Allow predicate requires exact `Running` plus service facts.
-- **[Risk] A half-migrated binary compares manager states outside the manager path.** -> Implement the interface switch, consumer migration, Route action, and legacy-helper removal in one change; add source/import inventory checks.
-- **[Risk] Route deletion is persisted as an active entry.** -> Reject Delete in upsert paths and test that it only invokes deletion.
-- **[Risk] Mixed-version peers disagree about non-running routes.** -> Keep component-specific legacy decode semantics and send both fields during rollout.
-- **[Risk] Public clients receive new internal strings.** -> Centralize projection and assert response bodies contain only `running`/`paused`.
-- **[Trade-off] Completion cause is lost in state.** -> Preserve phase and diagnostic reason inside sandboxcr logs; upper policy intentionally uses one `completed` outcome.
-- **[Trade-off] Recycling is indistinguishable from deletion.** -> Preserve recycle metrics and fallback behavior as operation details while state and public errors use `terminating`.
+- **A new Controller phase is served accidentally.** Unknown and empty phases fall through to
+  `unready`, and GetRoute maps them to Deny.
+- **Manager or Gateway bypasses GetRoute.** Source inventory and parity tests prohibit any second raw
+  CR action policy.
+- **Shutdown clocks differ.** The shared explicit-time rule is deterministic, and same-version
+  Delete-over-Deny-over-Allow ordering plus deletion tombstones prevents a slow observer from
+  reviving a route after a fast observer crosses the deadline.
+- **Delete is persisted.** Upsert paths reject Delete and tests require removal-only behavior.
+- **Mixed-version peers retain different non-forwarding records.** Every fallback remains
+  fail-closed; action precedence and resource-version tests cover recovery.
+- **A recycle request is rejected after Delete succeeds.** IsRecyclable screens known rejection
+  facts, request-only observations deny traffic, and Controller falls back to direct deletion when
+  it cannot start recycling.
+- **Public clients receive internal strings.** Projection is centralized and response tests permit
+  only running/paused plus stable error reasons.
+- **Claimable sounds stronger than pool available.** Documentation and tests retain independent
+  Pod-IP, freshness, lock, speculation, and revision safeguards.
 
 ## Migration Plan
 
-1. Add the infra vocabulary, observation type, private explicit-time derivation, SandboxSet helpers, and focused tests without adding a shared canonical package.
-2. Migrate SandboxSet, cache, claim selection, waiters, and recycle capability while preserving their current local behavior.
-3. Add RouteAction, producer policies, compatibility wire adapters, storage/data-plane handling, and route tests.
-4. Atomically switch `infra.Sandbox.GetState`, sandbox-manager, and E2B projection/operations; add stable error reasons.
-5. Remove the legacy helper/constants and raw phase/recycle methods, run generated-artifact checks required by the API package edit, then complete focused tests, static checks, and final component builds.
+1. Complete and verify the `sandbox-provider` prerequisite, including deletion decision tombstones
+   and conservative legacy-running projection, and deploy that producer/receiver baseline to every
+   Manager, proxy, and Gateway peer.
+2. Add the eight-state contract to sandboxprovider, implement explicit-time CR derivation behind
+   GetState, and add focused precedence tests.
+3. Migrate pool, cache, claim, waiter, quota, and recycle consumers away from the legacy shared
+   helper without changing their purpose-specific behavior.
+4. Add Route Action and compatibility wire types, change provider GetRoute to the canonical
+   state-to-action mapping, and migrate Manager, Gateway, proxy, registry, and data-plane consumers.
+5. Atomically switch Manager to SandboxStateObservation, expose protocol-independent outcomes to
+   E2B, and add API-layer stable unavailable reasons.
+6. Remove legacy state helpers/constants and raw phase/recycle access, then complete focused tests,
+   generated-artifact checks, static checks, component builds, and strict OpenSpec validation.
 
-No stored CRD migration is required. Stable running and paused observations remain compatible, while the documented legacy paused fallbacks change to unavailable responses and require rollout regression coverage. Route compatibility supports rolling component replacement; the legacy wire field can be removed in a separate compatibility cleanup after the supported mixed-version window ends.
+No stored CRD migration is required. Stable running and paused observations remain compatible;
+documented legacy paused fallbacks change to reasoned unavailable responses. The legacy wire state
+is removed only by a later compatibility cleanup.
 
 ## Open Questions
 
-None. The vocabulary, precedence, component boundaries, Route action, compatibility mapping, public projection, and behavior-preservation constraints are fixed.
+None. Provider ownership, consumers, state precedence, canonical GetRoute mapping, mixed-version
+safety, public projection, and rollout order are fixed.
