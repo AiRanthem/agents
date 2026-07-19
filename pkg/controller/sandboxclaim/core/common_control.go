@@ -41,6 +41,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/utils"
+	annotationutils "github.com/openkruise/agents/pkg/utils/annotations"
 	"github.com/openkruise/agents/pkg/utils/csiutils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	"github.com/openkruise/agents/pkg/utils/timeout"
@@ -314,6 +315,12 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 				labels[k] = v
 			}
 			sbx.SetPodLabels(labels)
+
+			// propagate user annotations to podtemplate. Keys with internal
+			// reserved prefixes (annotationutils.BlackListPrefix) are filtered
+			// out so propagated annotations cannot interfere with the sandbox
+			// controller itself.
+			infra.MergePodAnnotations(sbx, annotationutils.FilterBlackListed(claim.Spec.Annotations))
 
 			// apply shutdownTime
 			if claim.Spec.ShutdownTime != nil {
