@@ -20,10 +20,12 @@ import "github.com/prometheus/client_golang/prometheus"
 
 const (
 	// RouteSurface* label values for sandbox_route_* metrics (aligned with sandboxroute.Surface).
+
 	RouteSurfaceManager = "manager"
 	RouteSurfaceGateway = "gateway"
 
 	// RouteRecordShape* label values retained on sandbox_route_records.
+
 	RouteRecordShapeIDOnly    = "id_only"
 	RouteRecordShapeCollision = "collision"
 )
@@ -48,37 +50,36 @@ var (
 )
 
 // RecordSandboxRouteLegacyFallback records one successful legacy delete fallback.
-func RecordSandboxRouteLegacyFallback(surface string) {
-	if !supportedSandboxRouteSurface(surface) {
-		return
-	}
-	sandboxRouteLegacyFallbackTotal.WithLabelValues(surface).Inc()
+func RecordSandboxRouteLegacyFallback(gateway bool) {
+	sandboxRouteLegacyFallbackTotal.WithLabelValues(sandboxRouteSurface(gateway)).Inc()
 }
 
 // RecordSandboxRouteInvalid records one invalid route mutation.
-func RecordSandboxRouteInvalid(surface string) {
-	if !supportedSandboxRouteSurface(surface) {
-		return
-	}
-	sandboxRouteInvalidTotal.WithLabelValues(surface).Inc()
+func RecordSandboxRouteInvalid(gateway bool) {
+	sandboxRouteInvalidTotal.WithLabelValues(sandboxRouteSurface(gateway)).Inc()
 }
 
-// SetSandboxRouteRecords sets the current number of records for one retained shape.
-func SetSandboxRouteRecords(surface, shape string, count int) {
-	if supportedSandboxRouteSurface(surface) &&
-		allowedLabel(shape, RouteRecordShapeIDOnly, RouteRecordShapeCollision) &&
-		count >= 0 {
-		sandboxRouteRecords.WithLabelValues(surface, shape).Set(float64(count))
+// SetSandboxRouteRecords sets the current numbers of retained route records.
+func SetSandboxRouteRecords(gateway bool, idOnly, collision int) {
+	surface := sandboxRouteSurface(gateway)
+	if idOnly >= 0 {
+		sandboxRouteRecords.WithLabelValues(surface, RouteRecordShapeIDOnly).Set(float64(idOnly))
+	}
+	if collision >= 0 {
+		sandboxRouteRecords.WithLabelValues(surface, RouteRecordShapeCollision).Set(float64(collision))
 	}
 }
 
 // SetSandboxRouteRepairQueueDepth sets the current targeted repair queue depth.
-func SetSandboxRouteRepairQueueDepth(surface string, count int) {
-	if supportedSandboxRouteSurface(surface) && count >= 0 {
-		sandboxRouteRepairQueueDepth.WithLabelValues(surface).Set(float64(count))
+func SetSandboxRouteRepairQueueDepth(gateway bool, count int) {
+	if count >= 0 {
+		sandboxRouteRepairQueueDepth.WithLabelValues(sandboxRouteSurface(gateway)).Set(float64(count))
 	}
 }
 
-func supportedSandboxRouteSurface(surface string) bool {
-	return allowedLabel(surface, RouteSurfaceManager, RouteSurfaceGateway)
+func sandboxRouteSurface(gateway bool) string {
+	if gateway {
+		return RouteSurfaceGateway
+	}
+	return RouteSurfaceManager
 }

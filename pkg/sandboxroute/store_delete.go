@@ -47,7 +47,7 @@ func (s *Store) DeleteAuthoritativeByObjectKey(
 	case 0:
 		return s.finishLocked(EventResultIgnored, ReasonAbsent, nil)
 	case 1:
-		metrics.RecordSandboxRouteLegacyFallback(string(s.surface))
+		metrics.RecordSandboxRouteLegacyFallback(s.surface == SurfaceGateway)
 		return s.deleteCompatibilityForObjectLocked(
 			key,
 			participants[0],

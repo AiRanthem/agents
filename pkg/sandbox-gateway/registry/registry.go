@@ -54,9 +54,7 @@ func mustNewRegistry() *Registry {
 func newGatewayStore() (*sandboxroute.Store, error) {
 	return sandboxroute.NewStoreWithOptions(
 		sandboxroute.SurfaceGateway,
-		sandboxroute.StoreOptions{CollisionRecorder: func() {
-			metrics.RecordSandboxIDCollision(metrics.CollisionSurfaceGatewayRoute)
-		}},
+		sandboxroute.StoreOptions{CollisionRecorder: metrics.RecordSandboxIDCollisionGatewayRoute},
 	)
 }
 

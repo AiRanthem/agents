@@ -23,10 +23,12 @@ const (
 	SandboxIDAssignmentResultFailure = "failure"
 
 	// LegacyResolutionSurface* label values for sandbox_id_legacy_resolution_total.
+
 	LegacyResolutionSurfaceE2B     = "e2b"
 	LegacyResolutionSurfaceGateway = "gateway"
 
 	// CollisionSurface* label values for sandbox_id_collision_total.
+
 	CollisionSurfaceCache        = "cache"
 	CollisionSurfaceManagerRoute = "manager_route"
 	CollisionSurfaceGatewayRoute = "gateway_route"
@@ -47,26 +49,36 @@ var (
 	}, []string{"surface"})
 )
 
-// RecordSandboxIDLegacyResolution records one legacy Sandbox ID resolution.
-func RecordSandboxIDLegacyResolution(surface string) {
-	if !allowedLabel(surface, LegacyResolutionSurfaceE2B, LegacyResolutionSurfaceGateway) {
-		return
-	}
-	sandboxIDLegacyResolutionTotal.WithLabelValues(surface).Inc()
+// RecordSandboxIDLegacyResolutionE2B records one E2B legacy Sandbox ID resolution.
+func RecordSandboxIDLegacyResolutionE2B() {
+	sandboxIDLegacyResolutionTotal.WithLabelValues(LegacyResolutionSurfaceE2B).Inc()
+}
+
+// RecordSandboxIDLegacyResolutionGateway records one gateway legacy Sandbox ID resolution.
+func RecordSandboxIDLegacyResolutionGateway() {
+	sandboxIDLegacyResolutionTotal.WithLabelValues(LegacyResolutionSurfaceGateway).Inc()
 }
 
 // RecordSandboxIDAssignment records one short Sandbox ID assignment result.
-func RecordSandboxIDAssignment(result string) {
-	if !allowedLabel(result, SandboxIDAssignmentResultSuccess, SandboxIDAssignmentResultFailure) {
-		return
+func RecordSandboxIDAssignment(success bool) {
+	result := SandboxIDAssignmentResultFailure
+	if success {
+		result = SandboxIDAssignmentResultSuccess
 	}
 	sandboxIDAssignmentTotal.WithLabelValues(result).Inc()
 }
 
-// RecordSandboxIDCollision records one ambiguous Sandbox ID collision.
-func RecordSandboxIDCollision(surface string) {
-	if !allowedLabel(surface, CollisionSurfaceCache, CollisionSurfaceManagerRoute, CollisionSurfaceGatewayRoute) {
-		return
-	}
-	sandboxIDCollisionTotal.WithLabelValues(surface).Inc()
+// RecordSandboxIDCollisionCache records one Sandbox ID collision detected by the cache.
+func RecordSandboxIDCollisionCache() {
+	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceCache).Inc()
+}
+
+// RecordSandboxIDCollisionManagerRoute records one Sandbox ID collision detected by the manager route store.
+func RecordSandboxIDCollisionManagerRoute() {
+	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceManagerRoute).Inc()
+}
+
+// RecordSandboxIDCollisionGatewayRoute records one Sandbox ID collision detected by the gateway route store.
+func RecordSandboxIDCollisionGatewayRoute() {
+	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceGatewayRoute).Inc()
 }

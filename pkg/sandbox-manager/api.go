@@ -43,7 +43,7 @@ import (
 func (m *SandboxManager) ResolveSandboxID(sandbox metav1.Object) string {
 	id, format := sandboxid.ResolveWithFormat(sandbox)
 	if format == sandboxid.FormatLegacy {
-		metrics.RecordSandboxIDLegacyResolution(metrics.LegacyResolutionSurfaceE2B)
+		metrics.RecordSandboxIDLegacyResolutionE2B()
 	}
 	return id
 }

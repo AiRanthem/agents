@@ -196,8 +196,7 @@ func (s *Store) recomputeActiveViewLocked() {
 
 func (s *Store) setRecordMetricsLocked() {
 	stats := s.statsLocked()
-	metrics.SetSandboxRouteRecords(string(s.surface), metrics.RouteRecordShapeIDOnly, stats.IDOnly)
-	metrics.SetSandboxRouteRecords(string(s.surface), metrics.RouteRecordShapeCollision, stats.Collision)
+	metrics.SetSandboxRouteRecords(s.surface == SurfaceGateway, stats.IDOnly, stats.Collision)
 }
 
 func (s *Store) statsLocked() StoreStats {

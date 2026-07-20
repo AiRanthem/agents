@@ -313,7 +313,7 @@ func (c *Cache) GetClaimedSandbox(ctx context.Context, opts GetClaimedSandboxOpt
 			return nil, fmt.Errorf("%w: sandbox %s not found in cache", ErrSandboxNotFound, opts.SandboxID)
 		}
 		if len(list.Items) > 1 {
-			metrics.RecordSandboxIDCollision(metrics.CollisionSurfaceCache)
+			metrics.RecordSandboxIDCollisionCache()
 			objectKeys := make([]ctrlclient.ObjectKey, 0, len(list.Items))
 			for index := range list.Items {
 				objectKeys = append(objectKeys, ctrlclient.ObjectKeyFromObject(&list.Items[index]))

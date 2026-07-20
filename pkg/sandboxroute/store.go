@@ -226,7 +226,7 @@ func (s *Store) finishLocked(
 	requests []RepairRequest,
 ) MutationResult {
 	if result == EventResultInvalid {
-		metrics.RecordSandboxRouteInvalid(string(s.surface))
+		metrics.RecordSandboxRouteInvalid(s.surface == SurfaceGateway)
 	}
 	if result == EventResultCollision && s.recordCollision != nil {
 		s.recordCollision()

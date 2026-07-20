@@ -4,4 +4,4 @@
 - Register metric groups explicitly from component entrypoints; never register them from package `init()`.
 - Use domain-prefixed recorder APIs and keep business logic out of this package.
 - This package only hosts short-Sandbox-ID and sandbox-route metric groups; do not add unrelated controller/quota series here.
-- Surface and shape label values must use the exported constants in this package; do not scatter magic strings at call sites.
+- Keep label selection inside recorder APIs; callers must pass semantic values, not Prometheus label strings.

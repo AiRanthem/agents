@@ -58,7 +58,7 @@ func NewRouteProjector(resolve FormattedResolver) *sandboxroute.Projector {
 	return sandboxroute.NewProjector(func(object metav1.Object) string {
 		id, format := resolve(object)
 		if format == legacySandboxIDFormat {
-			metrics.RecordSandboxIDLegacyResolution(metrics.LegacyResolutionSurfaceGateway)
+			metrics.RecordSandboxIDLegacyResolutionGateway()
 		}
 		return id
 	})

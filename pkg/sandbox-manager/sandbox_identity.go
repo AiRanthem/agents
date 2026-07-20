@@ -156,7 +156,7 @@ func recordSandboxIDAssignment(ctx context.Context, state *sandboxIDAssignmentSt
 	}
 	if operationErr == nil {
 		if state.assigned {
-			agentmetrics.RecordSandboxIDAssignment(agentmetrics.SandboxIDAssignmentResultSuccess)
+			agentmetrics.RecordSandboxIDAssignment(true)
 			klog.FromContext(ctx).V(utils.DebugLogLevel).Info("assigned short Sandbox ID", "namespace", state.namespace, "name", state.name)
 		}
 		return
@@ -165,7 +165,7 @@ func recordSandboxIDAssignment(ctx context.Context, state *sandboxIDAssignmentSt
 	if reason == "" {
 		return
 	}
-	agentmetrics.RecordSandboxIDAssignment(agentmetrics.SandboxIDAssignmentResultFailure)
+	agentmetrics.RecordSandboxIDAssignment(false)
 	klog.FromContext(ctx).Error(operationErr, "failed to assign short Sandbox ID", "reason", reason, "namespace", state.namespace, "name", state.name)
 }
 

@@ -91,9 +91,7 @@ type Server struct {
 func NewServer(opts config.SandboxManagerOptions) *Server {
 	store, err := sandboxroute.NewStoreWithOptions(
 		sandboxroute.SurfaceManager,
-		sandboxroute.StoreOptions{CollisionRecorder: func() {
-			metrics.RecordSandboxIDCollision(metrics.CollisionSurfaceManagerRoute)
-		}},
+		sandboxroute.StoreOptions{CollisionRecorder: metrics.RecordSandboxIDCollisionManagerRoute},
 	)
 	if err != nil {
 		panic(fmt.Sprintf("failed to create manager route store: %v", err))

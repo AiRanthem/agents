@@ -72,55 +72,27 @@ func TestMetricGroupsExposeOnlyBoundedSeries(t *testing.T) {
 	}
 }
 
-func TestRecordersRejectUnsupportedLabels(t *testing.T) {
-	tests := []struct {
-		name       string
-		register   func(prometheus.Registerer)
-		record     func()
-		metricName string
-	}{
-		{name: "legacy resolution surface", register: RegisterSandboxID, record: func() { RecordSandboxIDLegacyResolution("other") }, metricName: "sandbox_id_legacy_resolution_total"},
-		{name: "assignment result", register: RegisterSandboxID, record: func() { RecordSandboxIDAssignment("other") }, metricName: "sandbox_id_assignment_total"},
-		{name: "collision surface", register: RegisterSandboxID, record: func() { RecordSandboxIDCollision("other") }, metricName: "sandbox_id_collision_total"},
-		{name: "legacy fallback surface", register: RegisterSandboxRoute, record: func() { RecordSandboxRouteLegacyFallback("other") }, metricName: "sandbox_route_legacy_fallback_total"},
-		{name: "invalid route surface", register: RegisterSandboxRoute, record: func() { RecordSandboxRouteInvalid("other") }, metricName: "sandbox_route_invalid_total"},
-		{name: "route record shape", register: RegisterSandboxRoute, record: func() { SetSandboxRouteRecords(RouteSurfaceManager, "full", 1) }, metricName: "sandbox_route_records"},
-		{name: "repair queue surface", register: RegisterSandboxRoute, record: func() { SetSandboxRouteRepairQueueDepth("other", 1) }, metricName: "sandbox_route_repair_queue_depth"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registry := prometheus.NewRegistry()
-			tt.register(registry)
-			before := metricSeriesCount(t, registry, tt.metricName)
-			tt.record()
-			assert.Equal(t, before, metricSeriesCount(t, registry, tt.metricName))
-		})
-	}
-}
-
 type metricExpectation struct {
 	metricType dto.MetricType
 	labelSets  []map[string]string
 }
 
 func recordAllSandboxIDMetrics() {
-	RecordSandboxIDLegacyResolution(LegacyResolutionSurfaceE2B)
-	RecordSandboxIDLegacyResolution(LegacyResolutionSurfaceGateway)
-	RecordSandboxIDAssignment(SandboxIDAssignmentResultSuccess)
-	RecordSandboxIDAssignment(SandboxIDAssignmentResultFailure)
-	RecordSandboxIDCollision(CollisionSurfaceCache)
-	RecordSandboxIDCollision(CollisionSurfaceManagerRoute)
-	RecordSandboxIDCollision(CollisionSurfaceGatewayRoute)
+	RecordSandboxIDLegacyResolutionE2B()
+	RecordSandboxIDLegacyResolutionGateway()
+	RecordSandboxIDAssignment(true)
+	RecordSandboxIDAssignment(false)
+	RecordSandboxIDCollisionCache()
+	RecordSandboxIDCollisionManagerRoute()
+	RecordSandboxIDCollisionGatewayRoute()
 }
 
 func recordAllSandboxRouteMetrics() {
-	for _, surface := range []string{RouteSurfaceManager, RouteSurfaceGateway} {
-		RecordSandboxRouteLegacyFallback(surface)
-		RecordSandboxRouteInvalid(surface)
-		SetSandboxRouteRecords(surface, RouteRecordShapeIDOnly, 1)
-		SetSandboxRouteRecords(surface, RouteRecordShapeCollision, 1)
-		SetSandboxRouteRepairQueueDepth(surface, 1)
+	for _, gateway := range []bool{false, true} {
+		RecordSandboxRouteLegacyFallback(gateway)
+		RecordSandboxRouteInvalid(gateway)
+		SetSandboxRouteRecords(gateway, 1, 1)
+		SetSandboxRouteRepairQueueDepth(gateway, 1)
 	}
 }
 
@@ -147,16 +119,4 @@ func metricLabelSets(metrics []*dto.Metric) []map[string]string {
 		result = append(result, labels)
 	}
 	return result
-}
-
-func metricSeriesCount(t *testing.T, registry *prometheus.Registry, name string) int {
-	t.Helper()
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() == name {
-			return len(family.Metric)
-		}
-	}
-	return 0
 }
