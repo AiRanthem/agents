@@ -541,7 +541,7 @@ func TestParseAndRemoveQuantity(t *testing.T) {
 func TestParseExtensions_InvalidLabelErrorPropagates(t *testing.T) {
 	req := &NewSandboxRequest{
 		Metadata: map[string]string{
-			v1alpha1.E2BLabelPrefix + "bad/key/": "value",
+			E2BLabelPrefix + "bad/key/": "value",
 		},
 	}
 
@@ -986,21 +986,21 @@ func TestParseExtensionLabels(t *testing.T) {
 		{
 			name: "reserved sandbox ID label",
 			metadata: map[string]string{
-				v1alpha1.E2BLabelPrefix + v1alpha1.LabelSandboxID: "spoofed-id",
+				E2BLabelPrefix + v1alpha1.LabelSandboxID: "spoofed-id",
 			},
 			expectError: "is reserved",
 		},
 		{
 			name: "protected response resource label",
 			metadata: map[string]string{
-				v1alpha1.E2BLabelPrefix + MetadataKeySandboxResource: "team-a/sandbox-a",
+				E2BLabelPrefix + MetadataKeySandboxResource: "team-a/sandbox-a",
 			},
 			expectError: "is reserved",
 		},
 		{
 			name: "unrelated internal label remains accepted",
 			metadata: map[string]string{
-				v1alpha1.E2BLabelPrefix + v1alpha1.InternalPrefix + "custom": "value",
+				E2BLabelPrefix + v1alpha1.InternalPrefix + "custom": "value",
 			},
 			expectedLabels: map[string]string{v1alpha1.InternalPrefix + "custom": "value"},
 		},

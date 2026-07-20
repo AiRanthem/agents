@@ -146,7 +146,7 @@ func (r *NewSandboxRequest) parseCommonExtensions() error {
 
 func (r *NewSandboxRequest) parseExtensionLabels() error {
 	for k, v := range r.Metadata {
-		key := strings.TrimPrefix(k, v1alpha1.E2BLabelPrefix)
+		key := strings.TrimPrefix(k, E2BLabelPrefix)
 		if key == k {
 			// not a label
 			continue

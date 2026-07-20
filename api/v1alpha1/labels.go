@@ -44,8 +44,6 @@ const (
 	// CheckpointLabelType is the checkpoint type label key
 	CheckpointLabelType = InternalPrefix + "checkpoint-type"
 
-	E2BLabelPrefix = "label:"
-
 	True  = "true"
 	False = "false"
 )

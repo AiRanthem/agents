@@ -370,10 +370,10 @@ func TestCreateSandbox(t *testing.T) {
 				TemplateID: templateName,
 				Timeout:    600,
 				Metadata: map[string]string{
-					v1alpha1.E2BLabelPrefix + "app":         "my-app",
-					v1alpha1.E2BLabelPrefix + "environment": "test",
-					v1alpha1.E2BLabelPrefix + "team":        "backend",
-					"regular-metadata-key":                  "should-remain-in-metadata",
+					models.E2BLabelPrefix + "app":         "my-app",
+					models.E2BLabelPrefix + "environment": "test",
+					models.E2BLabelPrefix + "team":        "backend",
+					"regular-metadata-key":                "should-remain-in-metadata",
 				},
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox) {
@@ -404,7 +404,7 @@ func TestCreateSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
-					v1alpha1.E2BLabelPrefix + "invalid@label": "value",
+					models.E2BLabelPrefix + "invalid@label": "value",
 				},
 			},
 			expectError: &web.ApiError{
@@ -419,7 +419,7 @@ func TestCreateSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: templateName,
 				Metadata: map[string]string{
-					v1alpha1.E2BLabelPrefix + "valid-label": "invalid value with spaces!",
+					models.E2BLabelPrefix + "valid-label": "invalid value with spaces!",
 				},
 			},
 			expectError: &web.ApiError{
@@ -435,9 +435,9 @@ func TestCreateSandbox(t *testing.T) {
 				TemplateID: templateName,
 				Timeout:    600,
 				Metadata: map[string]string{
-					v1alpha1.E2BLabelPrefix + "label-key": "label-value",
-					"metadata-key":                        "metadata-value",
-					"another-metadata":                    "another-value",
+					models.E2BLabelPrefix + "label-key": "label-value",
+					"metadata-key":                      "metadata-value",
+					"another-metadata":                  "another-value",
 				},
 			},
 			postCheck: func(t *testing.T, resp *models.Sandbox) {
@@ -519,7 +519,7 @@ func TestCreateSandbox(t *testing.T) {
 					if !ValidateMetadataKey(k) {
 						continue
 					}
-					if strings.HasPrefix(k, v1alpha1.E2BLabelPrefix) {
+					if strings.HasPrefix(k, models.E2BLabelPrefix) {
 						continue
 					}
 					assert.Equal(t, v, sbx.Metadata[k], fmt.Sprintf("metadata key: %s", k))
