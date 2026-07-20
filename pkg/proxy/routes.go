@@ -35,10 +35,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 )
 
-// Route is re-exported from pkg/sandboxroute for backward compatibility.
-type Route = sandboxroute.Route
-
-func (s *Server) SetRoute(ctx context.Context, route Route) sandboxroute.MutationResult {
+func (s *Server) SetRoute(ctx context.Context, route sandboxroute.Route) sandboxroute.MutationResult {
 	log := klog.FromContext(ctx)
 	log.Info("try to set route", "new", route)
 	shape, err := validateRouteShape(route)
@@ -58,7 +55,7 @@ func (s *Server) SetRoute(ctx context.Context, route Route) sandboxroute.Mutatio
 	return result
 }
 
-func (s *Server) SyncRouteWithPeers(route Route) error {
+func (s *Server) SyncRouteWithPeers(route sandboxroute.Route) error {
 	body, err := json.Marshal(route)
 	if err != nil {
 		return err
@@ -111,18 +108,11 @@ func (s *Server) SyncRouteWithPeers(route Route) error {
 	return errors.New(strings.Join(errStrings, ";"))
 }
 
-func (s *Server) LoadRoute(id string) (Route, bool) {
+func (s *Server) LoadRoute(id string) (sandboxroute.Route, bool) {
 	return s.store.Get(id)
 }
 
-// RouteResourceVersion exposes the version of an opaque route key without
-// leaking route projection into infra.
-func (s *Server) RouteResourceVersion(id string) (string, bool) {
-	route, ok := s.store.Get(id)
-	return route.ResourceVersion, ok
-}
-
-func (s *Server) ListRoutes() []Route {
+func (s *Server) ListRoutes() []sandboxroute.Route {
 	return s.store.List()
 }
 
@@ -153,7 +143,7 @@ func (s *Server) DeleteRoute(id string) {
 	s.updateRouteCount()
 }
 
-func validateRouteShape(route Route) (sandboxroute.Shape, error) {
+func validateRouteShape(route sandboxroute.Route) (sandboxroute.Shape, error) {
 	if err := route.Validate(); err != nil {
 		return "", err
 	}

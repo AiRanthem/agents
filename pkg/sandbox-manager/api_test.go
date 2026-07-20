@@ -1441,7 +1441,7 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 					},
 				}
 				CreateSandboxWithStatus(t, client, sandbox)
-				manager.proxy.SetRoute(t.Context(), proxy.Route{
+				manager.proxy.SetRoute(t.Context(), sandboxroute.Route{
 					ID:              tt.sandboxID,
 					IP:              "10.0.0.1",
 					Namespace:       sandbox.GetNamespace(),

@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
@@ -283,8 +282,8 @@ func TestRegistryHandoffPreservesAppliedRepairRequests(t *testing.T) {
 	}
 }
 
-func fullRoute(id, namespace, name, uid, resourceVersion string) proxy.Route {
-	return proxy.Route{
+func fullRoute(id, namespace, name, uid, resourceVersion string) sandboxroute.Route {
+	return sandboxroute.Route{
 		ID:              id,
 		Namespace:       namespace,
 		Name:            name,
@@ -293,6 +292,6 @@ func fullRoute(id, namespace, name, uid, resourceVersion string) proxy.Route {
 	}
 }
 
-func idOnlyRoute(id, uid, resourceVersion string) proxy.Route {
-	return proxy.Route{ID: id, UID: types.UID(uid), ResourceVersion: resourceVersion}
+func idOnlyRoute(id, uid, resourceVersion string) sandboxroute.Route {
+	return sandboxroute.Route{ID: id, UID: types.UID(uid), ResourceVersion: resourceVersion}
 }

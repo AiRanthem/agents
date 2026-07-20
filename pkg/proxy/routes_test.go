@@ -78,8 +78,8 @@ func newTestServer(pm peers.Peers) *Server {
 	return server
 }
 
-func testProxyRoute(id, ip, resourceVersion string) Route {
-	return Route{
+func testProxyRoute(id, ip, resourceVersion string) sandboxroute.Route {
+	return sandboxroute.Route{
 		ID:              id,
 		IP:              ip,
 		UID:             types.UID("uid-" + id),
@@ -157,16 +157,16 @@ func TestSetRouteValidationAndShapeDispatch(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		route        Route
+		route        sandboxroute.Route
 		expectResult sandboxroute.EventResult
 		expectStored bool
 	}{
 		{name: "ID-only route", route: validIDOnly, expectResult: sandboxroute.EventResultApplied, expectStored: true},
 		{name: "full route", route: validFull, expectResult: sandboxroute.EventResultApplied, expectStored: true},
-		{name: "missing ID", route: Route{UID: "uid", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
-		{name: "missing UID", route: Route{ID: "id", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
-		{name: "missing resource version", route: Route{ID: "id", UID: "uid"}, expectResult: sandboxroute.EventResultInvalid},
-		{name: "partial ObjectKey", route: Route{ID: "id", Namespace: "ns", UID: "uid", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
+		{name: "missing ID", route: sandboxroute.Route{UID: "uid", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
+		{name: "missing UID", route: sandboxroute.Route{ID: "id", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
+		{name: "missing resource version", route: sandboxroute.Route{ID: "id", UID: "uid"}, expectResult: sandboxroute.EventResultInvalid},
+		{name: "partial ObjectKey", route: sandboxroute.Route{ID: "id", Namespace: "ns", UID: "uid", ResourceVersion: "1"}, expectResult: sandboxroute.EventResultInvalid},
 	}
 
 	for _, tt := range tests {
@@ -191,9 +191,9 @@ func TestSetRouteValidationAndShapeDispatch(t *testing.T) {
 func TestSetRouteInvalidMetric(t *testing.T) {
 	tests := []struct {
 		name  string
-		route Route
+		route sandboxroute.Route
 	}{
-		{name: "decoded invalid route", route: Route{}},
+		{name: "decoded invalid route", route: sandboxroute.Route{}},
 	}
 
 	for _, tt := range tests {
@@ -291,7 +291,7 @@ func TestDeleteRoute(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		route    *Route
+		route    *sandboxroute.Route
 		deleteID string
 	}{
 		{name: "ID-only route", route: &idOnly, deleteID: idOnly.ID},
@@ -348,7 +348,7 @@ func TestListPeers_WithPeers(t *testing.T) {
 
 type recordingPeer struct {
 	server   *httptest.Server
-	received []Route
+	received []sandboxroute.Route
 	mu       sync.Mutex
 }
 
@@ -356,7 +356,7 @@ func newRecordingPeer() *recordingPeer {
 	rp := &recordingPeer{}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
-		var route Route
+		var route sandboxroute.Route
 		if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -374,10 +374,10 @@ func (rp *recordingPeer) close() {
 	rp.server.Close()
 }
 
-func (rp *recordingPeer) getReceived() []Route {
+func (rp *recordingPeer) getReceived() []sandboxroute.Route {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
-	result := make([]Route, len(rp.received))
+	result := make([]sandboxroute.Route, len(rp.received))
 	copy(result, rp.received)
 	return result
 }
@@ -501,14 +501,14 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	// Set up HTTP handlers for /refresh on both servers
 	mux1 := http.NewServeMux()
 	mux1.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
-		var route Route
+		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
 		server1.SetRoute(r.Context(), route)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux2 := http.NewServeMux()
 	mux2.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
-		var route Route
+		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
 		server2.SetRoute(r.Context(), route)
 		w.WriteHeader(http.StatusNoContent)

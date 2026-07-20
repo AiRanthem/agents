@@ -161,7 +161,7 @@ func TestHandleRefresh(t *testing.T) {
 		name           string
 		method         string
 		body           string
-		route          *proxy.Route
+		route          *sandboxroute.Route
 		setup          func(*registry.Registry)
 		expectStatus   int
 		expectID       string
@@ -177,7 +177,7 @@ func TestHandleRefresh(t *testing.T) {
 		{
 			name:   "full running route preserves traffic auth",
 			method: http.MethodPost,
-			route: func() *proxy.Route {
+			route: func() *sandboxroute.Route {
 				route := route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning)
 				route.RequireTrafficAuth = true
 				return route
@@ -423,8 +423,8 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 	return routeRegistry
 }
 
-func route(id, namespace, name, uid, resourceVersion, state string) *proxy.Route {
-	return &proxy.Route{
+func route(id, namespace, name, uid, resourceVersion, state string) *sandboxroute.Route {
+	return &sandboxroute.Route{
 		ID:              id,
 		Namespace:       namespace,
 		Name:            name,

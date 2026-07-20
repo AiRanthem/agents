@@ -23,7 +23,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/openkruise/agents/pkg/metrics"
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
@@ -96,30 +95,30 @@ func (r *Registry) Ready() bool {
 }
 
 // Get returns the unique active route for an opaque Sandbox ID.
-func (r *Registry) Get(id string) (proxy.Route, bool) {
+func (r *Registry) Get(id string) (sandboxroute.Route, bool) {
 	return r.Store().Get(id)
 }
 
 // GetIfReady atomically checks lifecycle readiness and reads one active route.
-func (r *Registry) GetIfReady(id string) (proxy.Route, bool, bool) {
+func (r *Registry) GetIfReady(id string) (sandboxroute.Route, bool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.enqueue == nil {
-		return proxy.Route{}, false, false
+		return sandboxroute.Route{}, false, false
 	}
 	route, found := r.store.Get(id)
 	return route, found, true
 }
 
 // UpsertFull applies an ObjectKey-backed route update.
-func (r *Registry) UpsertFull(route proxy.Route) (sandboxroute.MutationResult, error) {
+func (r *Registry) UpsertFull(route sandboxroute.Route) (sandboxroute.MutationResult, error) {
 	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
 		return store.UpsertFull(route)
 	})
 }
 
 // UpsertIDOnly applies an old-peer compatibility update.
-func (r *Registry) UpsertIDOnly(route proxy.Route) (sandboxroute.MutationResult, error) {
+func (r *Registry) UpsertIDOnly(route sandboxroute.Route) (sandboxroute.MutationResult, error) {
 	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
 		return store.UpsertIDOnly(route)
 	})
@@ -136,23 +135,23 @@ func (r *Registry) DeleteAuthoritativeByObjectKey(
 }
 
 // DeleteFullConditionally applies a full peer deletion.
-func (r *Registry) DeleteFullConditionally(route proxy.Route) (sandboxroute.MutationResult, error) {
+func (r *Registry) DeleteFullConditionally(route sandboxroute.Route) (sandboxroute.MutationResult, error) {
 	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
 		return store.DeleteFullConditionally(route)
 	})
 }
 
 // DeleteIDOnlyConditionally applies an ID-only peer deletion.
-func (r *Registry) DeleteIDOnlyConditionally(route proxy.Route) (sandboxroute.MutationResult, error) {
+func (r *Registry) DeleteIDOnlyConditionally(route sandboxroute.Route) (sandboxroute.MutationResult, error) {
 	return r.mutate(func(store *sandboxroute.Store) sandboxroute.MutationResult {
 		return store.DeleteIDOnlyConditionally(route)
 	})
 }
 
 // List returns a snapshot of all active routes keyed by opaque Sandbox ID.
-func (r *Registry) List() map[string]proxy.Route {
+func (r *Registry) List() map[string]sandboxroute.Route {
 	routes := r.Store().List()
-	result := make(map[string]proxy.Route, len(routes))
+	result := make(map[string]sandboxroute.Route, len(routes))
 	for _, route := range routes {
 		result[route.ID] = route
 	}

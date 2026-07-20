@@ -163,7 +163,7 @@ func TestServer_handleRefresh(t *testing.T) {
 		},
 		{
 			name: "partial ObjectKey is rejected",
-			body: mustMarshal(Route{
+			body: mustMarshal(sandboxroute.Route{
 				ID:              "partial",
 				Namespace:       "ns",
 				UID:             "uid-partial",
@@ -173,7 +173,7 @@ func TestServer_handleRefresh(t *testing.T) {
 		},
 		{
 			name: "missing required metadata is rejected",
-			body: mustMarshal(Route{
+			body: mustMarshal(sandboxroute.Route{
 				ID:              "missing-uid",
 				ResourceVersion: "1",
 			}),
@@ -187,7 +187,7 @@ func TestServer_handleRefresh(t *testing.T) {
 		},
 		{
 			name: "running state should set route with traffic auth",
-			body: mustMarshal(func() Route {
+			body: mustMarshal(func() sandboxroute.Route {
 				route := testIDOnlyRoute("sandbox-2", v1alpha1.SandboxStateRunning, "1")
 				route.IP = "10.0.0.2"
 				route.RequireTrafficAuth = true
@@ -199,7 +199,7 @@ func TestServer_handleRefresh(t *testing.T) {
 		},
 		{
 			name: "available state should set route",
-			body: mustMarshal(func() Route {
+			body: mustMarshal(func() sandboxroute.Route {
 				route := testIDOnlyRoute("sandbox-3", v1alpha1.SandboxStateAvailable, "1")
 				route.IP = "10.0.0.3"
 				return route
@@ -263,8 +263,8 @@ func mustMarshal(v interface{}) string {
 	return string(data)
 }
 
-func testIDOnlyRoute(id, state, resourceVersion string) Route {
-	return Route{
+func testIDOnlyRoute(id, state, resourceVersion string) sandboxroute.Route {
+	return sandboxroute.Route{
 		ID:              id,
 		UID:             types.UID("uid-" + id),
 		State:           state,

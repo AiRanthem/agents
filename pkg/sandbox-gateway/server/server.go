@@ -218,7 +218,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := klog.FromContext(ctx)
 
-	var route proxy.Route
+	var route sandboxroute.Route
 	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 		log.Error(err, "Failed to decode refresh request")
 		http.Error(w, fmt.Sprintf("Failed to decode request: %v", err), http.StatusBadRequest)

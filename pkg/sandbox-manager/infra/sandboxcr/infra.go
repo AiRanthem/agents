@@ -392,7 +392,8 @@ func (i *Infra) lookupSandbox(ctx context.Context, opts infra.GetSandboxOptions)
 		if err == nil {
 			lookup.sandbox = got
 			if i.RouteVersions != nil {
-				lookup.routeResourceVersion, lookup.hasRoute = i.RouteVersions.RouteResourceVersion(opts.SandboxID)
+				route, ok := i.RouteVersions.LoadRoute(opts.SandboxID)
+				lookup.routeResourceVersion, lookup.hasRoute = route.ResourceVersion, ok
 			}
 			return true, nil
 		}

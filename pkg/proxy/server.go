@@ -176,7 +176,7 @@ func (s *Server) Stop(ctx context.Context) {
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := klog.FromContext(ctx)
-	var route Route
+	var route sandboxroute.Route
 	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 		log.Error(err, "failed to unmarshal refresh request body")
 		http.Error(w, fmt.Sprintf("failed to unmarshal body: %s", err.Error()), http.StatusBadRequest)

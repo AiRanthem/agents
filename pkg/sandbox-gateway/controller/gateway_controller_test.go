@@ -35,7 +35,6 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/identity"
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/jwtauth"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandboxroute"
@@ -177,7 +176,7 @@ func TestSandboxReconcilerReconcile(t *testing.T) {
 			name: "NotFound uses injected fallback only for ID-only compatibility",
 			key:  types.NamespacedName{Namespace: "ns", Name: "old"},
 			setup: func(registry *registry.Registry) {
-				registry.UpsertIDOnly(proxy.Route{ID: "ns--old", UID: "uid-d", ResourceVersion: "4"})
+				registry.UpsertIDOnly(sandboxroute.Route{ID: "ns--old", UID: "uid-d", ResourceVersion: "4"})
 			},
 			expectID: "ns--old",
 		},
@@ -504,8 +503,8 @@ func testSandbox(namespace, name, uid, resourceVersion, id string) *agentsv1alph
 	}
 }
 
-func testFullRoute(id, namespace, name, uid, resourceVersion string) proxy.Route {
-	return proxy.Route{
+func testFullRoute(id, namespace, name, uid, resourceVersion string) sandboxroute.Route {
+	return sandboxroute.Route{
 		ID:              id,
 		Namespace:       namespace,
 		Name:            name,

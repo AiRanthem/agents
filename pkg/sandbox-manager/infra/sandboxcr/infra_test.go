@@ -42,6 +42,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/runtime"
 	utestutils "github.com/openkruise/agents/pkg/utils/testutils"
@@ -1230,9 +1231,12 @@ func (r *stubAPIReader) List(_ context.Context, _ client.ObjectList, _ ...client
 
 type stubRouteVersionReader map[string]string
 
-func (r stubRouteVersionReader) RouteResourceVersion(sandboxID string) (string, bool) {
+func (r stubRouteVersionReader) LoadRoute(sandboxID string) (sandboxroute.Route, bool) {
 	resourceVersion, ok := r[sandboxID]
-	return resourceVersion, ok
+	if !ok {
+		return sandboxroute.Route{}, false
+	}
+	return sandboxroute.Route{ResourceVersion: resourceVersion}, true
 }
 
 func setRouteResourceVersion(infraInstance *Infra, sandboxID, resourceVersion string) {

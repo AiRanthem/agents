@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/openkruise/agents/pkg/cache"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
@@ -223,10 +224,10 @@ type Builder interface {
 	Build() Infrastructure
 }
 
-// RouteVersionReader exposes only the opaque route version needed to detect an
-// informer cache hit that lags a previously observed routing event.
+// RouteVersionReader exposes local route state needed to detect an informer
+// cache hit that lags a previously observed routing event.
 type RouteVersionReader interface {
-	RouteResourceVersion(sandboxID string) (string, bool)
+	LoadRoute(sandboxID string) (sandboxroute.Route, bool)
 }
 
 type Infrastructure interface {
