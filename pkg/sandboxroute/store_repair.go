@@ -30,7 +30,7 @@ func (s *Store) ApplyAuthoritativeRepair(
 ) MutationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.finishLocked(s.applyAuthoritativeRepairLocked(request, observation))
+	return s.applyAuthoritativeRepairLocked(request, observation)
 }
 
 func (s *Store) applyAuthoritativeRepairLocked(
@@ -87,8 +87,7 @@ func (s *Store) Maintenance() []RepairRequest {
 		s.deletionByObject[key] = fence
 		requests = append(requests, RepairRequest{ObjectKey: key, Generation: fence.generation})
 	}
-	requests = deduplicateRepairRequests(requests)
-	s.setRecordMetricsLocked()
+	sortRepairRequests(requests)
 	return requests
 }
 
@@ -96,14 +95,7 @@ func (s *Store) applyAuthoritativePresenceLocked(
 	key types.NamespacedName,
 	route Route,
 ) MutationResult {
-	s.installRouteLocked(key, route, false)
-	s.recomputeActiveViewLocked()
-	if s.idCollidedLocked(route.ID) {
-		return MutationResult{
-			Result: EventResultCollision,
-			Reason: ReasonIDCollision,
-		}
-	}
+	s.installRouteLocked(key, route)
 	return MutationResult{
 		Result: EventResultApplied,
 		Reason: ReasonAuthoritativePresent,
@@ -122,8 +114,8 @@ func (s *Store) applyAuthoritativeAbsenceLocked(key types.NamespacedName) Mutati
 		); err != nil {
 			return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 		}
+		s.deactivateRouteLocked(key, current.route.ID)
 		delete(s.recordByObject, key)
-		s.recomputeActiveViewLocked()
 		return MutationResult{
 			Result: EventResultApplied,
 			Reason: ReasonAuthoritativeAbsent,
@@ -158,17 +150,6 @@ func (s *Store) affectedGenerationLocked(key types.NamespacedName) (uint64, bool
 	return 0, false
 }
 
-func (s *Store) repairRequestsForIDLocked(id string) []RepairRequest {
-	requests := make([]RepairRequest, 0)
-	for key, record := range s.recordByObject {
-		if record.route.ID == id {
-			requests = append(requests, RepairRequest{ObjectKey: key, Generation: record.generation})
-		}
-	}
-	sortRepairRequests(requests)
-	return requests
-}
-
 func sortRepairRequests(requests []RepairRequest) {
 	sort.Slice(requests, func(i, j int) bool {
 		if requests[i].ObjectKey.Namespace == requests[j].ObjectKey.Namespace {
@@ -176,20 +157,4 @@ func sortRepairRequests(requests []RepairRequest) {
 		}
 		return requests[i].ObjectKey.Namespace < requests[j].ObjectKey.Namespace
 	})
-}
-
-func deduplicateRepairRequests(requests []RepairRequest) []RepairRequest {
-	newestByKey := make(map[types.NamespacedName]RepairRequest, len(requests))
-	for _, request := range requests {
-		current, exists := newestByKey[request.ObjectKey]
-		if !exists || current.Generation < request.Generation {
-			newestByKey[request.ObjectKey] = request
-		}
-	}
-	deduplicated := make([]RepairRequest, 0, len(newestByKey))
-	for _, request := range newestByKey {
-		deduplicated = append(deduplicated, request)
-	}
-	sortRepairRequests(deduplicated)
-	return deduplicated
 }

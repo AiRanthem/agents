@@ -775,45 +775,6 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 	}
 }
 
-func TestSandboxManager_GetSandboxCollision(t *testing.T) {
-	tests := []struct {
-		name        string
-		sandboxID   string
-		objectNames []string
-		expectError string
-		expectCode  errors.ErrorCode
-	}{
-		{
-			name:        "duplicate resolved ID fails closed",
-			sandboxID:   "duplicate-id",
-			objectNames: []string{"collision-a", "collision-b"},
-			expectError: "sandbox lookup is ambiguous",
-			expectCode:  errors.ErrorInternal,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			manager, client := setupTestManager(t)
-			for _, name := range tt.objectNames {
-				sandbox := getSandboxForApiTest(name)
-				sandbox.Labels[agentsv1alpha1.LabelSandboxID] = tt.sandboxID
-				require.NoError(t, client.Create(t.Context(), sandbox))
-			}
-
-			got, err := manager.GetSandbox(t.Context(), testUser, nil, infra.GetSandboxOptions{SandboxID: tt.sandboxID})
-			require.Error(t, err)
-			assert.Nil(t, got)
-			assert.Contains(t, err.Error(), tt.expectError)
-			assert.Equal(t, tt.expectCode, errors.GetErrCode(err))
-			assert.ErrorIs(t, err, infracache.ErrSandboxIDCollision)
-			for _, name := range tt.objectNames {
-				assert.NotContains(t, err.Error(), name)
-			}
-		})
-	}
-}
-
 func TestSandboxManager_GetSandboxExpectedStates(t *testing.T) {
 	manager, client := setupTestManager(t)
 

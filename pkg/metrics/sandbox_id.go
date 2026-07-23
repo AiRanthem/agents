@@ -26,12 +26,6 @@ const (
 
 	LegacyResolutionSurfaceE2B     = "e2b"
 	LegacyResolutionSurfaceGateway = "gateway"
-
-	// CollisionSurface* label values for sandbox_id_collision_total.
-
-	CollisionSurfaceCache        = "cache"
-	CollisionSurfaceManagerRoute = "manager_route"
-	CollisionSurfaceGatewayRoute = "gateway_route"
 )
 
 var (
@@ -43,10 +37,6 @@ var (
 		Name: "sandbox_id_assignment_total",
 		Help: "Total short Sandbox ID assignments by result.",
 	}, []string{"result"})
-	sandboxIDCollisionTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "sandbox_id_collision_total",
-		Help: "Total Sandbox ID collisions by detection surface.",
-	}, []string{"surface"})
 )
 
 // RecordSandboxIDLegacyResolutionE2B records one E2B legacy Sandbox ID resolution.
@@ -66,19 +56,4 @@ func RecordSandboxIDAssignment(success bool) {
 		result = SandboxIDAssignmentResultSuccess
 	}
 	sandboxIDAssignmentTotal.WithLabelValues(result).Inc()
-}
-
-// RecordSandboxIDCollisionCache records one Sandbox ID collision detected by the cache.
-func RecordSandboxIDCollisionCache() {
-	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceCache).Inc()
-}
-
-// RecordSandboxIDCollisionManagerRoute records one Sandbox ID collision detected by the manager route store.
-func RecordSandboxIDCollisionManagerRoute() {
-	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceManagerRoute).Inc()
-}
-
-// RecordSandboxIDCollisionGatewayRoute records one Sandbox ID collision detected by the gateway route store.
-func RecordSandboxIDCollisionGatewayRoute() {
-	sandboxIDCollisionTotal.WithLabelValues(CollisionSurfaceGatewayRoute).Inc()
 }

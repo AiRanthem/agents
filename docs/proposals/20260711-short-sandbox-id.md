@@ -27,7 +27,7 @@ status: provisional
   - [Cache Lookup](#cache-lookup)
   - [Shared Routing Model](#shared-routing-model)
     - [Store Model](#store-model)
-    - [Collision Handling](#collision-handling)
+    - [Active ID Index](#active-id-index)
     - [Delete Semantics](#delete-semantics)
     - [Asynchronous Targeted Repair](#asynchronous-targeted-repair)
   - [E2B Diagnostics](#e2b-diagnostics)
@@ -64,7 +64,7 @@ Kubernetes Sandbox UID. The selected short ID is persisted in the Sandbox label
 The migration is deliberately one-way and per-Sandbox. The feature flag controls only whether a
 new short ID is assigned; all components always honor an existing label. Manager and gateway share
 one routing implementation that atomically replaces legacy routes with short routes, supports old
-peer payloads during binary rollout, and fails closed on ambiguous IDs.
+peer payloads during binary rollout, and resolves active IDs through ObjectKey-backed records.
 
 ## Motivation
 
@@ -101,7 +101,7 @@ messages rather than encoding it back into the ID.
 - Allow manager and gateway binaries to roll out in either order while assignment is disabled.
 - Make a short ID directly searchable with `kubectl`.
 - Restore namespace/name diagnostics without disclosing another tenant's Sandbox location.
-- Fail closed when multiple Sandbox objects claim the same ID.
+- Treat system-generated Sandbox IDs as globally unique within the supported protocol.
 
 ### Non-Goals
 
@@ -111,8 +111,9 @@ messages rather than encoding it back into the ID.
 - Making a short ID reversible to namespace/name.
 - Removing the existing `--` namespace restriction while legacy IDs remain supported.
 - Validating or repairing a non-empty persisted label while reading it.
-- Preventing a cluster administrator with direct Sandbox write permission from manually setting the
-  label. Such writes are trusted operational actions, with duplicate-ID detection as a safety net.
+- Supporting direct writes to the reserved label by cluster administrators or other non-core
+  writers. Such writes and any resulting duplicate IDs are outside the supported protocol and have
+  undefined behavior.
 
 ## Proposal
 
@@ -281,7 +282,7 @@ flowchart LR
 | `pkg/utils` | Existing reversible `<namespace>--<name>` legacy wire codec |
 | sandbox-manager core | Feature flag, modifier protection, Checkpoint orchestration, manager route projection |
 | `pkg/cache` | Neutral indexed lookup with an injected resolver |
-| `pkg/sandboxroute` | Neutral Route type and stateless projection, Store, version fencing, collision handling, targeted Repairer |
+| `pkg/sandboxroute` | Neutral Route type and stateless projection, ObjectKey-backed Store, active ID index, version fencing, targeted Repairer |
 | infra | Generic mutation/persistence plus neutral Sandbox event and direct-observation capabilities |
 | E2B server | Request validation and response/error presentation |
 
@@ -304,9 +305,9 @@ resolution and token compatibility to shared `sandboxroute.FromSandbox`, while i
 a present, included, non-deleting Sandbox, the adapter snapshots state once and the shared function
 constructs the full Route before it is offered to the Store without deriving a registry key from
 the reconcile request. For NotFound or `DeletionTimestamp`, it authoritatively deletes by
-ObjectKey. When the Store reports an ambiguity, the gateway adapter enqueues the
-affected ObjectKey for asynchronous direct-reader repair and completes the current reconcile
-without waiting for an API call.
+ObjectKey. When an equal-RV event meets a deletion fence, the gateway adapter enqueues the affected
+ObjectKey for asynchronous direct-reader repair and completes the current reconcile without
+waiting for an API call.
 
 ### Cache Lookup
 
@@ -319,9 +320,10 @@ When a label update is observed, the informer index moves the Sandbox from its l
 short key without retaining an alias. Client IDs remain opaque: cache or API fallbacks never split
 an ID on `--` to recover namespace/name.
 
-Lookup requests enough indexed results to distinguish zero, one, and multiple matches. Multiple
-matches produce an ambiguity error instead of selecting the first object. This protects against
-duplicate labels introduced through direct administrative writes.
+Lookup requests at most one indexed result. The supported protocol guarantees uniqueness because
+short IDs encode the complete cluster-unique UID, legacy IDs encode the ObjectKey in a disjoint
+format, and only core assignment may write the reserved label. Direct administrative label writes,
+copied labels, forged peer Routes, and cross-cluster delivery have undefined behavior.
 
 ### Shared Routing Model
 
@@ -348,15 +350,20 @@ The shared `Route.String()` continues redacting `AccessToken` as `***` in logs.
 
 Every accepted Route producer, including peer refresh, is trusted to project ObjectMeta from the
 same Kubernetes cluster. UID is therefore trusted as cluster-lifetime unique. The Store retains UID
-fencing between different incarnations at one ObjectKey but does not maintain cross-ObjectKey UID
-collision state; cross-cluster, misrouted, forged, or corrupted UID/ObjectKey pairs are outside the
+fencing between different incarnations at one ObjectKey but does not maintain cross-ObjectKey
+duplicate-UID state; cross-cluster, misrouted, forged, or corrupted UID/ObjectKey pairs are outside the
 supported protocol.
+Kubernetes may reuse namespace/name after deletion; a recreated Sandbox has a new UID, so
+same-ObjectKey incarnation fencing remains required.
 
 #### Store Model
 
-The Store maintains one record per ObjectKey plus deletion fences and derived active-ID and
-collision views under one lock. Every Store mutation carries namespace/name, ID, UID, and RV.
-Legacy peer payloads therefore use the same ordering, deletion, collision, and repair paths as
+The Store maintains one full record per ObjectKey, deletion fences, and an active
+SandboxID-to-ObjectKey index under one lock. Complete Routes exist only in the ObjectKey table.
+`Get` and `List` resolve ID to ObjectKey and then read the authoritative record under the same read
+lock. Record install, ID transition, deletion, and repair update the index incrementally
+under the write lock, without materializing a second Route copy or rescanning all records. Every
+Store mutation carries namespace/name, ID, UID, and RV. Legacy peer payloads therefore use the same ordering, deletion, and repair paths as
 current payloads after boundary normalization; the Store has no compatibility-only record shape or
 peer-specific upsert path.
 
@@ -370,7 +377,7 @@ Request`. Valid RVs are compared with Kubernetes' resource-version comparator.
 | Same UID and same ID | Accept equal or newer comparable RV |
 | Same UID but different ID | Require a strictly newer numeric RV |
 | Different UID at the same ObjectKey | Require a strictly newer numeric RV |
-| Different UID with equal RV | Quarantine and enqueue the ObjectKey for targeted repair |
+| Different UID with equal RV | Ignore as an identity mismatch; supported producers cannot emit this combination |
 
 An accepted legacy-to-short transition removes the old ID and installs the new ID in one Store
 transaction. A single Store lookup or snapshot therefore sees old or new, never both. Independent
@@ -382,12 +389,12 @@ Deletion fences are not routes and never appear in ID lookup. After the bounded 
 the Store queues one targeted observation and prunes the fence only after a generation-matched
 authoritative absence; a present observation repairs the Route instead.
 
-#### Collision Handling
+#### Active ID Index
 
-If two full ObjectKeys claim the same Sandbox ID, the Store does not use last-write-wins. The ID is
-marked collided and removed from successful route lookup until a later update, delete, or targeted
-repair leaves exactly one claimant. Each known claimant ObjectKey is enqueued for repair. A
-peer payload rejected at admission cannot quarantine an existing record.
+The active index contains the current ObjectKey for each supported ID. A legacy-to-short update
+atomically removes the legacy index entry, updates the ObjectKey record, and installs the short
+entry. An impossible equal-RV/different-UID event is ignored and cannot deactivate the current
+route.
 
 Peer endpoint behavior is:
 
@@ -395,7 +402,6 @@ Peer endpoint behavior is:
 |---|---|
 | Malformed or partial Route | `400 Bad Request` |
 | Well-formed stale or identity-mismatched event | `204 No Content` no-op |
-| Store collision | `409 Conflict` |
 
 #### Delete Semantics
 
@@ -411,11 +417,11 @@ This prevents a delayed delete for UID A from deleting a recreated UID B at the 
 
 #### Asynchronous Targeted Repair
 
-Normal event adapters never block on direct API reads. When a Store mutation encounters a known
-ambiguity, such as a different UID with an equal RV, it quarantines the affected ID
-and returns the ObjectKey that requires authoritative verification. The adapter enqueues that key
-into a deduplicated, rate-limited repair queue and immediately completes normal event processing.
-Cross-ObjectKey collisions enqueue each known claimant.
+Normal event adapters never block on direct API reads. When an event has the same RV as an existing
+deletion fence, the Store keeps the route absent and returns the ObjectKey that requires
+authoritative verification. The adapter enqueues that key into a deduplicated, rate-limited repair
+queue and immediately completes normal event processing. Deletion fences are also queued for
+delayed confirmation when no equal-RV event arrives.
 
 The shared Repairer reads only queued ObjectKeys outside the Store lock. Gateway uses its direct API
 reader; Manager obtains a backend-neutral observation from Infra, whose `sandboxcr` implementation
@@ -423,14 +429,13 @@ performs the direct Get. A present, included, non-deleting Sandbox is projected 
 NotFound, deleting, or excluded objects produce an authoritative ObjectKey deletion. The Store
 applies the observation only when the affected record or fence has not advanced beyond the mutation
 generation captured for the repair. Stale results are ignored, while transient read errors are
-retried with rate-limited backoff. A duplicate ID confirmed on multiple live ObjectKeys remains
-quarantined but is not retried until a later event changes one of its claimants.
+retried with rate-limited backoff.
 
 There is no periodic direct API-server List. Normal route population and missed-event recovery rely
 on informer initial synchronization, List/Watch reconnects, and existing reconcile retries. The
-targeted queue bounds direct API traffic by the number of ambiguous ObjectKeys rather than the total
-number of Sandboxes, and its fixed concurrency and QPS limits prevent an anomaly burst from blocking
-event delivery or overloading the API server.
+targeted queue bounds direct API traffic by the number of pending deletion-fence confirmations
+rather than the total number of Sandboxes, and its fixed concurrency and QPS limits prevent an
+event burst from blocking event delivery or overloading the API server.
 
 ### E2B Diagnostics
 
@@ -503,7 +508,6 @@ The first rollout also assumes no Sandbox already carries a short-ID label.
 Before enabling assignment, operators must verify:
 
 - all live manager and gateway replicas understand label resolution;
-- each Store reports zero unresolved collisions;
 - targeted repair queues are drained and cache lookup health is normal.
 
 Short assignment can then be enabled on sandbox-manager. Mixed enabled/disabled manager replicas are
@@ -532,9 +536,9 @@ removed separately after operators confirm no supported old sender remains.
 | Final assignment adds API traffic and a new failure point | Disabled by default; one direct Get per enabled operation, one Update only on first assignment; retain operation-stage timing and error logs |
 | Client receives short ID before every informer sees the label | Return only after persistence; keep existing eventual-consistency retries; do not create a second alias |
 | Late supported peer events delete or revive a newer route | UID/RV fencing, deletion fences, and targeted authoritative repair |
-| Ambiguities accumulate faster than they can be verified | Deduplicate by ObjectKey, bound repair concurrency/QPS, retry with backoff, quarantine until verified, and expose queue health |
-| An event is missed without producing an ambiguity | Rely on informer initial synchronization, List/Watch reconnects, and existing reconcile retries; do not add an unbounded full-list repair path |
-| Cluster administrator writes duplicate labels | Cache ambiguity error and route collision quarantine fail closed; structured logs identify resources |
+| Deletion-fence confirmations accumulate faster than they can be verified | Deduplicate by ObjectKey, bound repair concurrency/QPS, retry with backoff, and expose queue health |
+| An event is missed without producing a deletion fence | Rely on informer initial synchronization, List/Watch reconnects, and existing reconcile retries; do not add an unbounded full-list repair path |
+| Cluster administrator writes or copies the reserved label | Outside the supported protocol and explicitly undefined; only core assignment may write the label |
 | Opaque ID makes incidents harder to diagnose | Add protected E2B namespace/name metadata and authorized error context |
 | Sandbox CR is reused by another claim over time | Treat ID as CR identity only; never infer tenant/session ownership from ID |
 | Route type moves to a shared package | Preserve the custom `String()` implementation so access tokens remain redacted |
@@ -542,16 +546,13 @@ removed separately after operators confirm no supported old sender remains.
 ## Observability
 
 Metrics use only bounded labels; namespace, name, UID, and Sandbox ID are excluded from metric
-dimensions. The implementation reports legacy resolution, short assignment success/failure, cache
-and route collisions, successful legacy-peer normalization, invalid route mutations, current
-collision records, and targeted-repair queue depth. Normal route events,
-assignment error reasons, repair outcomes/retries, reserved-label validation failures, and
-PostModifier details remain in structured logs or existing claim/clone operation-stage timings.
-The Store simplification removes `sandbox_route_records` and
-`sandbox_route_legacy_fallback_total`; their remaining operational signals are exposed as the
-unlabeled `sandbox_route_collision_records` gauge and `sandbox_route_legacy_peer_total` counter.
+dimensions. The implementation reports legacy resolution and short assignment success/failure.
+Shared Store mutations, peer compatibility, and repair queue state do not emit dedicated short-ID route Prometheus
+series. Assignment error reasons, route and repair outcomes/retries, reserved-label validation
+failures, and PostModifier details remain in structured logs or existing claim/clone
+operation-stage timings. The Store simplification removes its dedicated Store/peer/repair metrics.
 
-Structured logs include namespace/name for internal assignment, collision, and route-repair
+Structured logs include namespace/name for internal assignment and route-repair
 diagnostics. Successful assignment is debug-level to avoid per-Sandbox info-log volume. E2B-visible
 errors include resource context only after authorization.
 
@@ -566,10 +567,10 @@ concurrency harnesses.
 | Encoding and resolution | Legacy fallback, existing-label trust, deterministic 26-character encoding, invalid UID, idempotent assignment |
 | Mutation boundaries | E2B/SandboxClaim rejection, modifier add/change/delete protection, feature-disabled protection |
 | Recycle | User metadata tracking excludes the key; crafted cleanup metadata cannot delete it |
-| Cache | Resolver injection, legacy-to-short index move, duplicate match fails closed |
-| Route Store | Atomic ID switch, full/ID-only conversion, same/different UID RV fencing, collision quarantine and recovery |
+| Cache | Resolver injection, legacy-to-short index move, unique opaque lookup |
+| Route Store | Atomic ID switch, ID-to-ObjectKey-to-record lookup, same/different UID RV fencing, and deletion fences |
 | Deletes and compatibility | Old UID/RV deletes, ID-only delete restrictions, old/new Route JSON compatibility, HTTP result mapping |
-| Targeted repair | Non-blocking enqueue, ObjectKey deduplication, direct Get outcomes, backoff, collision claimants, and per-record generation guards |
+| Targeted repair | Non-blocking enqueue, ObjectKey deduplication, direct Get outcomes, backoff, and per-record generation guards |
 | Layer boundaries | No ID/Route policy in infra; Manager route code consumes only the required neutral source and never CRDs, concrete Cache, or Kubernetes readers |
 | E2B and Checkpoint | Protected metadata, authorized error context, no disclosure, historical Checkpoint IDs, opaque pagination |
 
@@ -588,9 +589,9 @@ verification. Final verification builds sandbox-manager and sandbox-gateway bina
 | Permanent legacy and short aliases | Violates one-ID semantics and complicates cleanup, authorization reasoning, and eventual legacy removal |
 | Validate labels on every read | Different readers could disagree about already-persisted state; recovery behavior becomes ambiguous |
 | Use a different label key | The chosen label and existing Checkpoint annotation both represent Sandbox ID and are safely separated by metadata kind |
-| Keep separate manager/gateway route implementations | Duplicates the hardest version-skew, fencing, collision, and repair logic |
-| Periodically List all Sandboxes through the direct reader | Cost scales with all Sandboxes and every manager/gateway replica even when no route is ambiguous |
-| Use an informer-backed scan as authoritative | Cached absence or identity may be stale; normal informer state remains the event source but cannot authorize an ambiguous replacement |
+| Keep separate manager/gateway route implementations | Duplicates the hardest version-skew, fencing, deletion, and repair logic |
+| Periodically List all Sandboxes through the direct reader | Cost scales with all Sandboxes and every manager/gateway replica even when no deletion fence needs confirmation |
+| Use an informer-backed scan as authoritative | Cached absence may be stale; normal informer state remains the event source but cannot authorize deletion-fence confirmation |
 | Keep `infra.Sandbox.GetRoute()` with injected policy | Leaves route and ID ownership hidden behind infra rather than making manager composition explicit |
 
 ## Implementation History

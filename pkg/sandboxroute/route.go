@@ -76,32 +76,32 @@ func (r Route) Validate() error {
 }
 
 // AdmitPeerRoute normalizes and validates a Route received from a peer.
-func AdmitPeerRoute(route Route) (Route, bool, error) {
-	route, legacy, err := normalizePeerRoute(route)
+func AdmitPeerRoute(route Route) (Route, error) {
+	route, err := normalizePeerRoute(route)
 	if err != nil {
-		return Route{}, false, err
+		return Route{}, err
 	}
 	if err := route.Validate(); err != nil {
-		return Route{}, false, err
+		return Route{}, err
 	}
-	return route, legacy, nil
+	return route, nil
 }
 
 // normalizePeerRoute upgrades a legacy ID-only peer payload to a full Route.
 // Routes produced by current peers pass through unchanged.
-func normalizePeerRoute(route Route) (Route, bool, error) {
+func normalizePeerRoute(route Route) (Route, error) {
 	switch {
 	case route.Namespace != "" && route.Name != "":
-		return route, false, nil
+		return route, nil
 	case route.Namespace != "" || route.Name != "":
-		return Route{}, false, fmt.Errorf("route namespace and name must both be set or both be empty")
+		return Route{}, fmt.Errorf("route namespace and name must both be set or both be empty")
 	}
 
 	key, err := utils.ParseLegacySandboxID(route.ID)
 	if err != nil {
-		return Route{}, false, err
+		return Route{}, err
 	}
 	route.Namespace = key.Namespace
 	route.Name = key.Name
-	return route, true, nil
+	return route, nil
 }

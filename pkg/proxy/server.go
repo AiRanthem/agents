@@ -34,7 +34,6 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
@@ -89,9 +88,7 @@ type Server struct {
 }
 
 func NewServer(opts config.SandboxManagerOptions) *Server {
-	store := sandboxroute.NewStore(
-		sandboxroute.StoreOptions{CollisionRecorder: metrics.RecordSandboxIDCollisionManagerRoute},
-	)
+	store := sandboxroute.NewStore(sandboxroute.StoreOptions{})
 	return &Server{
 		extProcMaxConcurrentStreams: opts.ExtProcMaxConcurrency,
 		store:                       store,
@@ -178,15 +175,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to unmarshal body: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
-	route, legacy, err := sandboxroute.AdmitPeerRoute(route)
+	route, err := sandboxroute.AdmitPeerRoute(route)
 	if err != nil {
 		log.Error(err, "invalid route refresh payload")
-		s.store.RecordInvalid()
 		http.Error(w, fmt.Sprintf("invalid route refresh payload: %v", err), http.StatusBadRequest)
 		return
-	}
-	if legacy {
-		metrics.RecordSandboxRouteLegacyPeer()
 	}
 
 	var result sandboxroute.MutationResult
@@ -198,10 +191,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	s.enqueueMutation(result)
 	s.updateRouteCount()
 	log.V(utils.DebugLogLevel+1).Info("route refresh processed", "route", route, "result", result.Result, "reason", result.Reason)
-	if result.Result == sandboxroute.EventResultCollision {
-		http.Error(w, "route ID collision", http.StatusConflict)
-		return
-	}
 	if result.Result == sandboxroute.EventResultInvalid {
 		http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
 		return

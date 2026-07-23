@@ -1,17 +1,17 @@
 ## ADDED Requirements
 
 <!--
-Traceability to the unchanged design artifact:
+Traceability to the design artifact:
 - Authoritative Sandbox ID resolution: Sections 4 and 6; Acceptance Criteria 2-3.
 - Complete UID short-ID encoding: Section 5; Acceptance Criterion 1.
 - Flag-controlled final assignment: Sections 6, 8, and 9; Acceptance Criteria 1-2.
 - One-way CR identity transition: Sections 4.3 and 9.4; Acceptance Criteria 5-6 and 16.
 - Reserved metadata protection: Sections 4.1, 9.4, and 13.1; Acceptance Criterion 4.
 - Final assignment failure semantics: Sections 8.1-8.3 and 17; Acceptance Criterion 1.
-- Opaque and unambiguous cache lookup: Section 10; Acceptance Criteria 5 and 7.
+- Opaque unique cache lookup: Section 10; Acceptance Criteria 5 and 7.
 - Shared atomic route projection: Sections 11.1-11.4; Acceptance Criteria 5, 7-8.
 - Version-fenced peer compatibility and deletion: Sections 11.3-11.7 and 17; Acceptance Criteria 8-9 and 11.
-- Collision quarantine and targeted repair: Sections 10, 11.3, and 11.8; Acceptance Criteria 7 and 10.
+- Deletion-fence targeted repair: Sections 11.3 and 11.8; Acceptance Criterion 10.
 - Authorized E2B resource diagnostics: Section 13; Acceptance Criterion 14.
 - Point-in-time Checkpoint and opaque pagination identity: Section 12; Acceptance Criterion 13.
 - Staged activation and rollback boundary: Section 14; Acceptance Criterion 15.
@@ -99,19 +99,19 @@ The system MUST fail the overall claim or clone and use its existing cleanup pat
 - **WHEN** the final callback reports `changed=false`
 - **THEN** the returned Sandbox is refreshed from the direct read and no Update is issued
 
-### Requirement: Opaque and unambiguous cache lookup
-The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat client-provided IDs as opaque, and fail closed when more than one Sandbox matches an ID.
+### Requirement: Opaque unique cache lookup
+The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat client-provided IDs as opaque, and request at most one result under the supported global-ID uniqueness contract.
 
 #### Scenario: Label update reaches the cache
 - **WHEN** an informer observes a Sandbox transition from unlabeled to a non-empty short-ID label
 - **THEN** the cache moves the entry from the legacy key to the short key without retaining both aliases
 
-#### Scenario: Duplicate ID is indexed
-- **WHEN** claimed-Sandbox lookup finds multiple objects for the same opaque ID
-- **THEN** it returns an ambiguity error without selecting the first object or parsing the ID for fallback lookup
+#### Scenario: Claimed Sandbox is looked up
+- **WHEN** a client supplies an opaque Sandbox ID
+- **THEN** cache lookup requests at most one indexed result and does not parse the ID for fallback lookup
 
 ### Requirement: Shared atomic route projection
-Manager and gateway SHALL use the same ObjectKey-, UID-, resourceVersion-, and SandboxID-aware routing semantics while maintaining separate physical stores, and an accepted ID transition SHALL replace the old route with the new route atomically. Every accepted Route producer, including peer refresh, SHALL be a trusted projection of ObjectMeta from the same Kubernetes cluster. The Store SHALL rely on cluster-lifetime UID uniqueness, retain UID fencing between incarnations at one ObjectKey, and SHALL NOT maintain cross-ObjectKey UID collision state.
+Manager and gateway SHALL use the same ObjectKey-, UID-, resourceVersion-, and SandboxID-aware routing semantics while maintaining separate physical stores, and an accepted ID transition SHALL replace the old route with the new route atomically. Every accepted Route producer, including peer refresh, SHALL be a trusted projection of ObjectMeta from the same Kubernetes cluster. Every supported non-empty label SHALL be generated from that Sandbox's complete UID; direct reserved-label writes, copied labels, forged Routes, and cross-cluster delivery are undefined behavior. The Store SHALL rely on cluster-lifetime UID uniqueness, retain UID fencing between incarnations at one ObjectKey, store each complete Route only in its ObjectKey record, and maintain only an active SandboxID-to-ObjectKey index.
 
 #### Scenario: Legacy route transitions to short
 - **WHEN** a full Route with a strictly newer resourceVersion changes the same UID from its legacy ID to its persisted short ID
@@ -125,6 +125,19 @@ Manager and gateway SHALL use the same ObjectKey-, UID-, resourceVersion-, and S
 - **WHEN** accepted Routes are projected from Sandbox objects in the same Kubernetes cluster
 - **THEN** the Store uses UID to distinguish incarnations at one ObjectKey without scanning other ObjectKeys for duplicate UIDs
 
+#### Scenario: Active route is looked up
+- **WHEN** a caller gets or lists an active Sandbox ID
+- **THEN** the Store resolves SandboxID to ObjectKey and reads the authoritative Route record under the same read lock
+
+#### Scenario: ObjectKey is reused
+- **WHEN** a Sandbox is deleted and a new Sandbox is created with the same namespace and name
+- **THEN** its new UID identifies a new incarnation and stale events from the previous UID cannot replace or delete it
+
+#### Scenario: Equal resourceVersion carries another UID
+- **WHEN** a Route for the current ObjectKey and resourceVersion carries a different UID
+- **THEN** the Store ignores it as an identity mismatch and leaves the current route active because
+  supported Kubernetes projections cannot produce that combination
+
 ### Requirement: Version-fenced peer compatibility and deletion
 The routing system MUST normalize only reversibly encoded legacy ID-only payloads at peer ingress,
 MUST admit only full Routes into the Store, and MUST prevent stale or mismatched updates and deletes
@@ -132,7 +145,7 @@ from replacing or removing current ownership.
 
 #### Scenario: Old peer sends an ID-only record
 - **WHEN** a Route has namespace and name absent and its non-empty ID is a reversible `<namespace>--<name>` legacy value
-- **THEN** peer ingress splits the first separator, fills the ObjectKey, validates the full Route, records legacy-peer normalization, and dispatches only that full Route to the Store
+- **THEN** peer ingress splits the first separator, fills the ObjectKey, validates the full Route, and dispatches only that full Route to the Store
 
 #### Scenario: Peer sends a partial or malformed record
 - **WHEN** exactly one ObjectKey field is present, an ID-only value is opaque/short, ID, UID, or resourceVersion is missing, or resourceVersion is not a well-formed positive integer
@@ -146,15 +159,12 @@ from replacing or removing current ownership.
 - **WHEN** an update or delete for an old UID or old resourceVersion arrives after a newer incarnation owns the ObjectKey
 - **THEN** fencing prevents that event from deleting the current route or reviving a legacy alias
 
-### Requirement: Collision quarantine and targeted repair
-The system MUST make duplicate full Sandbox IDs unroutable instead of using last-write-wins and SHALL repair known ambiguous ObjectKeys asynchronously through bounded direct Gets guarded by the affected record generation.
+### Requirement: Deletion-fence targeted repair
+The system SHALL verify equal-resourceVersion and delayed deletion fences asynchronously through
+bounded direct Gets guarded by the affected record or fence generation.
 
-#### Scenario: Different ObjectKeys claim the same ID
-- **WHEN** two full records claim one Sandbox ID
-- **THEN** the ID is quarantined, successful lookup fails closed, each claimant is queued for repair, and the peer endpoint returns `409 Conflict`
-
-#### Scenario: Ambiguous event requires authoritative repair
-- **WHEN** equal resourceVersions leave a known ObjectKey identity ambiguous
+#### Scenario: Equal-resourceVersion event meets a deletion fence
+- **WHEN** an incoming Route has the same resourceVersion as the ObjectKey deletion fence
 - **THEN** the event adapter enqueues a deduplicated repair request and completes without blocking on an API read
 
 #### Scenario: Repair result becomes stale
@@ -205,7 +215,7 @@ Checkpoint creation SHALL persist the non-empty final Sandbox ID supplied by man
 
 ### Requirement: Staged activation and rollback boundary
 Operators MUST roll out label-aware manager and gateway binaries with assignment disabled and MUST
-drain old replicas/retries and satisfy cache, collision, and repair health gates before enabling
+drain old replicas/retries and satisfy cache and repair health gates before enabling
 new short-ID assignment. The system SHALL treat completion of this protocol as a trusted
 correctness precondition: after activation no old binary or its delayed/retry peer traffic is
 supported, and rollback to such a binary is prohibited.
@@ -215,7 +225,7 @@ supported, and rollback to such a binary is prohibited.
 - **THEN** manager and gateway may roll out in either order while new receivers normalize reversible legacy ID-only messages at peer ingress
 
 #### Scenario: Activation readiness is incomplete
-- **WHEN** any old replica or retry traffic remains, an unresolved collision remains, or a repair queue is not drained
+- **WHEN** any old replica or retry traffic remains or a repair queue is not drained
 - **THEN** operators do not enable short-ID assignment
 
 #### Scenario: Assignment has occurred and the flag is disabled
@@ -223,14 +233,14 @@ supported, and rollback to such a binary is prohibited.
 - **THEN** new assignments stop but existing labels remain authoritative and rolling back to label-unaware binaries remains unsafe
 
 ### Requirement: Bounded identity observability
-The implementation SHALL report legacy resolution, assignment success/failure, collision, invalid
-route mutations, successful legacy-peer normalization, and targeted-repair queue health with
-bounded metric labels that exclude namespace, name, UID, and Sandbox ID.
+The implementation SHALL report legacy resolution and assignment success/failure with bounded
+metric labels that exclude namespace, name, UID, and Sandbox ID. Shared short-ID Route Store
+processing, peer compatibility, and targeted repair SHALL NOT add dedicated Prometheus series.
 
 #### Scenario: Identity event is measured
-- **WHEN** legacy resolution, assignment, collision, invalid routing, legacy-peer normalization, or targeted repair backlog produces an observable result
-- **THEN** aggregate metrics use fixed dimensions and omit resource identity from metric labels while normal event and retry details remain in structured logs
+- **WHEN** legacy resolution or assignment produces an observable result
+- **THEN** aggregate metrics use fixed dimensions and omit resource identity from metric labels while route and retry details remain in structured logs
 
 #### Scenario: Internal diagnostic is logged
-- **WHEN** assignment, collision, or repair requires resource-specific diagnosis
+- **WHEN** assignment or repair requires resource-specific diagnosis
 - **THEN** structured logs may include namespace and name while successful assignment remains debug-level

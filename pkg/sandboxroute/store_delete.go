@@ -25,57 +25,68 @@ import (
 func (s *Store) DeleteAuthoritativeByObjectKey(key types.NamespacedName) MutationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.finishLocked(s.deleteAuthoritativeByObjectKeyLocked(key))
-}
 
-func (s *Store) deleteAuthoritativeByObjectKeyLocked(key types.NamespacedName) MutationResult {
 	if key.Namespace == "" || key.Name == "" {
-		return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidObjectKey}
+		return MutationResult{
+			Result: EventResultInvalid,
+			Reason: ReasonInvalidObjectKey,
+		}
 	}
 
-	if current, exists := s.recordByObject[key]; exists {
-		return s.deleteRecordLocked(key, current, current.route.ResourceVersion)
+	current, exists := s.recordByObject[key]
+	if !exists {
+		return MutationResult{
+			Result: EventResultIgnored,
+			Reason: ReasonAbsent,
+		}
 	}
-	return MutationResult{Result: EventResultIgnored, Reason: ReasonAbsent}
+	return s.deleteRecordLocked(key, current, current.route.ResourceVersion)
 }
 
 // DeleteConditionally removes a route when identity and resource-version fences match.
 func (s *Store) DeleteConditionally(route Route) MutationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.finishLocked(s.deleteConditionallyLocked(route))
-}
 
-func (s *Store) deleteConditionallyLocked(route Route) MutationResult {
 	if err := route.Validate(); err != nil {
-		return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
+		return MutationResult{
+			Result: EventResultInvalid,
+			Reason: ReasonInvalidRoute,
+		}
 	}
-	return s.deleteRouteConditionallyLocked(route)
-}
 
-func (s *Store) deleteRouteConditionallyLocked(route Route) MutationResult {
 	key := types.NamespacedName{Namespace: route.Namespace, Name: route.Name}
-	if current, exists := s.recordByObject[key]; exists {
-		if current.route.ID != route.ID || current.route.UID != route.UID {
-			return MutationResult{Result: EventResultIgnored, Reason: ReasonIdentityMismatch}
+	current, exists := s.recordByObject[key]
+	if !exists {
+		return MutationResult{
+			Result: EventResultIgnored,
+			Reason: ReasonAbsent,
 		}
-		comparison, err := resourceversion.CompareResourceVersion(
-			route.ResourceVersion,
-			current.route.ResourceVersion,
-		)
-		if err != nil {
-			return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
+	}
+	if current.route.ID != route.ID || current.route.UID != route.UID {
+		return MutationResult{
+			Result: EventResultIgnored,
+			Reason: ReasonIdentityMismatch,
 		}
-		if comparison < 0 {
-			return MutationResult{Result: EventResultIgnored, Reason: ReasonStaleResourceVersion}
-		}
-		return s.deleteRecordLocked(key, current, route.ResourceVersion)
 	}
 
-	if s.idHasOwnerLocked(route.ID) {
-		return MutationResult{Result: EventResultIgnored, Reason: ReasonIdentityMismatch}
+	comparison, err := resourceversion.CompareResourceVersion(
+		route.ResourceVersion,
+		current.route.ResourceVersion,
+	)
+	if err != nil {
+		return MutationResult{
+			Result: EventResultInvalid,
+			Reason: ReasonInvalidRoute,
+		}
 	}
-	return MutationResult{Result: EventResultIgnored, Reason: ReasonAbsent}
+	if comparison < 0 {
+		return MutationResult{
+			Result: EventResultIgnored,
+			Reason: ReasonStaleResourceVersion,
+		}
+	}
+	return s.deleteRecordLocked(key, current, route.ResourceVersion)
 }
 
 func (s *Store) deleteRecordLocked(
@@ -87,8 +98,8 @@ func (s *Store) deleteRecordLocked(
 	if err := s.installDeletionFenceLocked(key, fenceResourceVersion, generation, false); err != nil {
 		return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 	}
+	s.deactivateRouteLocked(key, current.route.ID)
 	delete(s.recordByObject, key)
-	s.recomputeActiveViewLocked()
 	return MutationResult{Result: EventResultApplied}
 }
 

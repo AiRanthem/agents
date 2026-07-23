@@ -28,7 +28,6 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -111,7 +110,7 @@ type RepairerOptions struct {
 	Queue               workqueue.TypedRateLimitingInterface[types.NamespacedName]
 }
 
-// Repairer deduplicates ambiguous ObjectKeys and applies scoped direct observations.
+// Repairer deduplicates deletion-fence verification and applies scoped direct observations.
 type Repairer struct {
 	store               *Store
 	observe             ObserveFunc
@@ -155,7 +154,6 @@ func NewRepairer(store *Store, observe ObserveFunc, options RepairerOptions) (*R
 		requestLimiter:      rate.NewLimiter(rate.Limit(qps), burst),
 		pending:             make(map[types.NamespacedName]uint64),
 	}
-	metrics.SetSandboxRouteRepairQueueDepth(0)
 	return repairer, nil
 }
 
@@ -183,7 +181,6 @@ func (r *Repairer) EnqueueRequest(request RepairRequest) {
 		return
 	}
 	r.pending[request.ObjectKey] = request.Generation
-	metrics.SetSandboxRouteRepairQueueDepth(len(r.pending))
 	r.mu.Unlock()
 
 	r.queue.Add(request.ObjectKey)
@@ -218,7 +215,6 @@ func (r *Repairer) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			r.queue.ShutDown()
 			workers.Wait()
-			r.syncPendingDepth()
 			return nil
 		case <-ticker.C:
 			r.EnqueueRequests(r.store.Maintenance())
@@ -300,7 +296,6 @@ func (r *Repairer) complete(key types.NamespacedName, generation uint64) {
 		delete(r.pending, key)
 	}
 	newerPending := exists && current > generation
-	metrics.SetSandboxRouteRepairQueueDepth(len(r.pending))
 	r.mu.Unlock()
 
 	r.queue.Forget(key)
@@ -308,13 +303,6 @@ func (r *Repairer) complete(key types.NamespacedName, generation uint64) {
 		r.queue.Add(key)
 	}
 }
-
-func (r *Repairer) syncPendingDepth() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	metrics.SetSandboxRouteRepairQueueDepth(len(r.pending))
-}
-
 func (r *Repairer) retry(key types.NamespacedName, generation uint64) {
 	r.mu.Lock()
 	current, exists := r.pending[key]

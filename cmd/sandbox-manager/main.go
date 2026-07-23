@@ -69,7 +69,6 @@ func validateE2BTimeoutFlags(minResumeTimeout, maxTimeout int) error {
 
 func main() {
 	metrics.RegisterSandboxID(controllermetrics.Registry)
-	metrics.RegisterSandboxRoute(controllermetrics.Registry)
 
 	// Define variables for pprof configuration
 	var enablePprof bool

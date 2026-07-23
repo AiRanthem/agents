@@ -189,55 +189,6 @@ func TestCache_GetClaimedSandboxMovesInjectedIndexOnLabelUpdate(t *testing.T) {
 	}
 }
 
-func TestCache_GetClaimedSandboxRejectsAmbiguousID(t *testing.T) {
-	duplicateID := "opaque--duplicate-id"
-	objects := []ctrlclient.Object{
-		claimedSandboxForIDTest("team-a", "first", duplicateID),
-		claimedSandboxForIDTest("team-b", "second", duplicateID),
-	}
-	tests := []struct {
-		name          string
-		namespace     string
-		expectName    string
-		expectError   string
-		expectErrorIs error
-	}{
-		{
-			name:          "duplicate visible IDs fail closed",
-			expectError:   cache.ErrSandboxIDCollision.Error(),
-			expectErrorIs: cache.ErrSandboxIDCollision,
-		},
-		{
-			name:       "namespace scope selects its single match",
-			namespace:  "team-a",
-			expectName: "first",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c, _, err := cachetest.NewTestCacheWithOptions(t, cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
-			}, objects...)
-			require.NoError(t, err)
-
-			got, err := c.GetClaimedSandbox(t.Context(), cache.GetClaimedSandboxOptions{
-				Namespace: tt.namespace,
-				SandboxID: duplicateID,
-			})
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				assert.ErrorIs(t, err, tt.expectErrorIs)
-				assert.Nil(t, got)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.expectName, got.Name)
-		})
-	}
-}
-
 func TestClaimedSandboxIndexUsesOneResolvedKey(t *testing.T) {
 	tests := []struct {
 		name     string

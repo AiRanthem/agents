@@ -43,7 +43,6 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/controllers"
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 )
 
@@ -306,20 +305,11 @@ func (c *Cache) Stop(ctx context.Context) {
 func (c *Cache) GetClaimedSandbox(ctx context.Context, opts GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) {
 	resultVal, err, _ := c.indexGetGroup.Do("claimed-sandbox:"+opts.Namespace+":"+opts.SandboxID, func() (any, error) {
 		list := &agentsv1alpha1.SandboxList{}
-		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(2)); err != nil {
+		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(1)); err != nil {
 			return nil, err
 		}
 		if len(list.Items) == 0 {
 			return nil, fmt.Errorf("%w: sandbox %s not found in cache", ErrSandboxNotFound, opts.SandboxID)
-		}
-		if len(list.Items) > 1 {
-			metrics.RecordSandboxIDCollisionCache()
-			objectKeys := make([]ctrlclient.ObjectKey, 0, len(list.Items))
-			for index := range list.Items {
-				objectKeys = append(objectKeys, ctrlclient.ObjectKeyFromObject(&list.Items[index]))
-			}
-			klog.FromContext(ctx).Error(ErrSandboxIDCollision, "multiple claimed Sandboxes share a Sandbox ID", "reason", "duplicate_sandbox_id", "objectKeys", objectKeys, "matches", len(list.Items))
-			return nil, ErrSandboxIDCollision
 		}
 		return &list.Items[0], nil
 	})

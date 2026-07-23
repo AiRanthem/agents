@@ -95,11 +95,10 @@ func TestRouteValidation(t *testing.T) {
 
 func TestAdmitPeerRoute(t *testing.T) {
 	tests := []struct {
-		name         string
-		route        Route
-		expectRoute  Route
-		expectLegacy bool
-		expectError  string
+		name        string
+		route       Route
+		expectRoute Route
+		expectError string
 	}{
 		{
 			name: "full route unchanged", route: fullRoute("opaque", "ns", "name", "uid", "1"),
@@ -107,8 +106,7 @@ func TestAdmitPeerRoute(t *testing.T) {
 		},
 		{
 			name: "legacy ID-only route normalized", route: idOnlyRoute("ns--name--suffix", "uid", "1"),
-			expectRoute:  fullRoute("ns--name--suffix", "ns", "name--suffix", "uid", "1"),
-			expectLegacy: true,
+			expectRoute: fullRoute("ns--name--suffix", "ns", "name--suffix", "uid", "1"),
 		},
 		{name: "opaque ID-only route rejected", route: idOnlyRoute("opaque", "uid", "1"), expectError: "invalid legacy sandbox ID"},
 		{name: "partial namespace rejected", route: Route{ID: "ns--name", Namespace: "ns"}, expectError: "both be set or both be empty"},
@@ -116,7 +114,7 @@ func TestAdmitPeerRoute(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			route, legacy, err := AdmitPeerRoute(tt.route)
+			route, err := AdmitPeerRoute(tt.route)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
@@ -124,7 +122,6 @@ func TestAdmitPeerRoute(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectRoute, route)
-			assert.Equal(t, tt.expectLegacy, legacy)
 		})
 	}
 }

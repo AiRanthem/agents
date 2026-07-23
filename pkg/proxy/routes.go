@@ -40,7 +40,10 @@ func (s *Server) SetRoute(ctx context.Context, route sandboxroute.Route) sandbox
 	log.Info("try to set route", "new", route)
 	if err := route.Validate(); err != nil {
 		log.Error(err, "rejected invalid route mutation")
-		return s.store.RecordInvalid()
+		return sandboxroute.MutationResult{
+			Result: sandboxroute.EventResultInvalid,
+			Reason: sandboxroute.ReasonInvalidRoute,
+		}
 	}
 	result := s.store.Upsert(route)
 	s.enqueueMutation(result)

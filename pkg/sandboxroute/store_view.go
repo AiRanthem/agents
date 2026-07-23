@@ -19,24 +19,35 @@ package sandboxroute
 import (
 	"sort"
 
-	"github.com/openkruise/agents/pkg/metrics"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Get returns the unique active route for id.
 func (s *Store) Get(id string) (Route, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	route, exists := s.activeByID[id]
-	return route, exists
+	key, exists := s.activeKeyByID[id]
+	if !exists {
+		return Route{}, false
+	}
+	record, exists := s.recordByObject[key]
+	if !exists || record.route.ID != id {
+		return Route{}, false
+	}
+	return record.route, true
 }
 
 // List returns active routes sorted by ID.
 func (s *Store) List() []Route {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	routes := make([]Route, 0, len(s.activeByID))
-	for _, route := range s.activeByID {
-		routes = append(routes, route)
+	routes := make([]Route, 0, len(s.activeKeyByID))
+	for id, key := range s.activeKeyByID {
+		record, exists := s.recordByObject[key]
+		if !exists || record.route.ID != id {
+			continue
+		}
+		routes = append(routes, record.route)
 	}
 	sort.Slice(routes, func(i, j int) bool {
 		return routes[i].ID < routes[j].ID
@@ -44,41 +55,8 @@ func (s *Store) List() []Route {
 	return routes
 }
 
-func (s *Store) idHasOwnerLocked(id string) bool {
-	for _, record := range s.recordByObject {
-		if record.route.ID == id {
-			return true
-		}
+func (s *Store) deactivateRouteLocked(key types.NamespacedName, id string) {
+	if activeKey, exists := s.activeKeyByID[id]; exists && activeKey == key {
+		delete(s.activeKeyByID, id)
 	}
-	return false
-}
-
-func (s *Store) idCollidedLocked(id string) bool {
-	_, collided := s.collisionsByID[id]
-	return collided
-}
-
-func (s *Store) recomputeActiveViewLocked() {
-	claims := make(map[string][]Route)
-	forcedCollisions := make(map[string]struct{})
-	for _, record := range s.recordByObject {
-		claims[record.route.ID] = append(claims[record.route.ID], record.route)
-		if record.quarantined {
-			forcedCollisions[record.route.ID] = struct{}{}
-		}
-	}
-	s.activeByID = make(map[string]Route, len(claims))
-	s.collisionsByID = make(map[string]struct{})
-	for id, routes := range claims {
-		_, forced := forcedCollisions[id]
-		if len(routes) == 1 && !forced {
-			s.activeByID[id] = routes[0]
-			continue
-		}
-		s.collisionsByID[id] = struct{}{}
-	}
-}
-
-func (s *Store) setRecordMetricsLocked() {
-	metrics.SetSandboxRouteCollisionRecords(len(s.collisionsByID))
 }

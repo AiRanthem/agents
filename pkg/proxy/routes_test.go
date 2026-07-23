@@ -27,12 +27,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandboxroute"
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -190,63 +187,6 @@ func TestSetRouteValidation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSetRouteInvalidMetric(t *testing.T) {
-	tests := []struct {
-		name  string
-		route sandboxroute.Route
-	}{
-		{name: "decoded invalid route", route: sandboxroute.Route{}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := newTestServer(nil)
-			labels := routeInvalidLabels()
-			before := proxyCounterValue(t, "sandbox_route_invalid_total", labels)
-
-			result := s.SetRoute(t.Context(), tt.route)
-
-			assert.Equal(t, sandboxroute.EventResultInvalid, result.Result)
-			assert.Equal(t, before+1, proxyCounterValue(t, "sandbox_route_invalid_total", labels))
-		})
-	}
-}
-
-func proxyCounterValue(t *testing.T, name string, expectedLabels map[string]string) float64 {
-	t.Helper()
-	registry := prometheus.NewRegistry()
-	metrics.RegisterSandboxRoute(registry)
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.Metric {
-			if proxyMetricLabelsMatch(metric, expectedLabels) {
-				return metric.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
-func proxyMetricLabelsMatch(metric *dto.Metric, expected map[string]string) bool {
-	if len(metric.Label) != len(expected) {
-		return false
-	}
-	for _, label := range metric.Label {
-		if expected[label.GetName()] != label.GetValue() {
-			return false
-		}
-	}
-	return true
-}
-
-func routeInvalidLabels() map[string]string {
-	return map[string]string{}
 }
 
 // ---- LoadRoute tests ----

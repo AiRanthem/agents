@@ -30,7 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
@@ -227,15 +226,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.V(utils.DebugLogLevel).Info("Received route refresh", "route", route)
-	route, legacy, err := sandboxroute.AdmitPeerRoute(route)
+	route, err := sandboxroute.AdmitPeerRoute(route)
 	if err != nil {
 		log.Error(err, "Rejected malformed route refresh")
-		s.routeRegistry().Store().RecordInvalid()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	if legacy {
-		metrics.RecordSandboxRouteLegacyPeer()
 	}
 
 	var result sandboxroute.MutationResult
@@ -265,9 +260,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	switch result.Result {
 	case sandboxroute.EventResultInvalid:
 		http.Error(w, string(result.Reason), http.StatusBadRequest)
-		return
-	case sandboxroute.EventResultCollision:
-		http.Error(w, string(result.Reason), http.StatusConflict)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

@@ -24,14 +24,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
@@ -304,15 +301,16 @@ func TestHandleRefresh(t *testing.T) {
 			expectIP:      "10.0.0.1",
 		},
 		{
-			name:   "cross ObjectKey collision returns conflict and enqueues claimants",
+			name:   "equal-RV deletion fence returns success and enqueues ObjectKey",
 			method: http.MethodPost,
 			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("duplicate", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
+				registry.Upsert(*route("old", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
+				registry.DeleteAuthoritativeByObjectKey(types.NamespacedName{Namespace: "ns", Name: "a"})
 			},
-			route:          route("duplicate", "ns", "b", "uid-b", "2", v1alpha1.SandboxStateRunning),
-			expectStatus:   http.StatusConflict,
-			expectID:       "duplicate",
-			expectEnqueued: 2,
+			route:          route("old", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning),
+			expectStatus:   http.StatusNoContent,
+			expectID:       "old",
+			expectEnqueued: 1,
 		},
 	}
 
@@ -354,79 +352,6 @@ func TestHandleRefresh(t *testing.T) {
 			assert.Len(t, enqueued, tt.expectEnqueued)
 		})
 	}
-}
-
-func TestHandleRefreshInvalidRouteMetric(t *testing.T) {
-	tests := []struct {
-		name        string
-		body        string
-		expectDelta float64
-	}{
-		{name: "JSON decode error is not a route event", body: "not-json"},
-		{name: "decoded invalid route is recorded", body: "{}", expectDelta: 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			routeRegistry := newTestRegistry(t)
-			labels := map[string]string{}
-			before := serverCounterValue(t, "sandbox_route_invalid_total", labels)
-			body := []byte(tt.body)
-
-			request := httptest.NewRequest(http.MethodPost, proxy.RefreshAPI, bytes.NewReader(body))
-			response := httptest.NewRecorder()
-			(&Server{registry: routeRegistry}).handleRefresh(response, request)
-
-			assert.Equal(t, http.StatusBadRequest, response.Code)
-			assert.Equal(t, before+tt.expectDelta, serverCounterValue(t, "sandbox_route_invalid_total", labels))
-		})
-	}
-}
-
-func TestHandleRefreshLegacyPeerMetric(t *testing.T) {
-	routeRegistry := newTestRegistry(t)
-	routeRegistry.SetRepairEnqueuer(func(sandboxroute.MutationResult) {})
-	before := serverCounterValue(t, "sandbox_route_legacy_peer_total", map[string]string{})
-	body, err := json.Marshal(route("ns--legacy", "", "", "uid-legacy", "1", v1alpha1.SandboxStateRunning))
-	require.NoError(t, err)
-
-	request := httptest.NewRequest(http.MethodPost, proxy.RefreshAPI, bytes.NewReader(body))
-	response := httptest.NewRecorder()
-	(&Server{registry: routeRegistry}).handleRefresh(response, request)
-
-	assert.Equal(t, http.StatusNoContent, response.Code)
-	assert.Equal(t, before+1, serverCounterValue(t, "sandbox_route_legacy_peer_total", map[string]string{}))
-}
-
-func serverCounterValue(t *testing.T, name string, expectedLabels map[string]string) float64 {
-	t.Helper()
-	registry := prometheus.NewRegistry()
-	metrics.RegisterSandboxRoute(registry)
-	families, err := registry.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.Metric {
-			if serverMetricLabelsMatch(metric, expectedLabels) {
-				return metric.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
-func serverMetricLabelsMatch(metric *dto.Metric, expected map[string]string) bool {
-	if len(metric.Label) != len(expected) {
-		return false
-	}
-	for _, label := range metric.Label {
-		if expected[label.GetName()] != label.GetValue() {
-			return false
-		}
-	}
-	return true
 }
 
 func TestServerStopWithoutStart(t *testing.T) {

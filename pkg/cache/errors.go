@@ -19,6 +19,5 @@ package cache
 import "errors"
 
 var (
-	ErrSandboxNotFound    = errors.New("sandbox not found in cache")
-	ErrSandboxIDCollision = errors.New("sandbox ID collision in cache")
+	ErrSandboxNotFound = errors.New("sandbox not found in cache")
 )

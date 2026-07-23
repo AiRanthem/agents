@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
@@ -192,20 +191,22 @@ func TestRepairerProcessOutcomes(t *testing.T) {
 					return AuthoritativeObservation{Present: true, Route: authoritative}, nil
 				}
 			},
+			expectIDs: []string{"old"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newTestStore(t, nil, time.Second)
-			store.Upsert(fullRoute("old", "ns", "one", "uid-a", "1"))
-			ambiguous := store.Upsert(fullRoute("new", "ns", "one", "uid-b", "1"))
-			require.Len(t, ambiguous.RepairRequests, 1)
-			request := ambiguous.RepairRequests[0]
+			request := requireDeletionFenceRepairRequest(
+				t,
+				store,
+				fullRoute("old", "ns", "one", "uid-a", "1"),
+			)
 			if tt.mutateBeforeRead != nil {
 				tt.mutateBeforeRead(store, request)
 			}
-			repairer := newTestRepairer(t, store, tt.observer(fullRoute("new", "ns", "one", "uid-b", "1")))
+			repairer := newTestRepairer(t, store, tt.observer(fullRoute("new", "ns", "one", "uid-b", "2")))
 			defer repairer.queue.ShutDown()
 			repairer.EnqueueRequest(request)
 			assert.True(t, repairer.processNext(context.Background()))
@@ -217,81 +218,31 @@ func TestRepairerProcessOutcomes(t *testing.T) {
 }
 
 func TestRepairerRetainsNewestGenerationDuringRead(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "newer generation enqueued during read is processed next"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newTestStore(t, nil, time.Second)
-			store.Upsert(fullRoute("old", "ns", "one", "uid-a", "1"))
-			first := store.Upsert(fullRoute("new", "ns", "one", "uid-b", "1"))
-			require.Len(t, first.RepairRequests, 1)
+	store := newTestStore(t, nil, time.Second)
+	route := fullRoute("old", "ns", "one", "uid-a", "1")
+	first := requireDeletionFenceRepairRequest(t, store, route)
 
-			calls := 0
-			var repairer *Repairer
-			repairer = newTestRepairer(t, store, func(context.Context, types.NamespacedName) (AuthoritativeObservation, error) {
-				calls++
-				if calls == 1 {
-					newer := store.Upsert(fullRoute("new", "ns", "one", "uid-b", "1"))
-					require.Len(t, newer.RepairRequests, 1)
-					repairer.Enqueue(newer)
-				}
-				return AuthoritativeObservation{Present: true, Route: fullRoute("new", "ns", "one", "uid-b", "1")}, nil
-			})
-			defer repairer.queue.ShutDown()
-			repairer.Enqueue(first)
-			require.True(t, repairer.processNext(context.Background()))
-			require.True(t, repairer.processNext(context.Background()))
-			assert.Equal(t, 2, calls)
-			assert.Equal(t, 0, repairer.Pending())
-			assert.Equal(t, []string{"new"}, routeIDs(store.List()))
-		})
-	}
+	calls := 0
+	var repairer *Repairer
+	repairer = newTestRepairer(t, store, func(context.Context, types.NamespacedName) (AuthoritativeObservation, error) {
+		calls++
+		if calls == 1 {
+			newer := store.Upsert(route)
+			require.Len(t, newer.RepairRequests, 1)
+			repairer.Enqueue(newer)
+		}
+		return AuthoritativeObservation{Present: true, Route: route}, nil
+	})
+	defer repairer.queue.ShutDown()
+	repairer.EnqueueRequest(first)
+	require.True(t, repairer.processNext(context.Background()))
+	require.True(t, repairer.processNext(context.Background()))
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, 0, repairer.Pending())
+	assert.Equal(t, []string{"old"}, routeIDs(store.List()))
 }
 
-func TestRepairerForgetsConfirmedLiveDuplicate(t *testing.T) {
-	tests := []struct {
-		name string
-	}{
-		{name: "confirmed live duplicate remains quarantined without requeue"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			store := newTestStore(t, nil, time.Second)
-			first := fullRoute("same", "ns", "one", "uid-a", "1")
-			second := fullRoute("same", "ns", "two", "uid-b", "1")
-			store.Upsert(first)
-			collision := store.Upsert(second)
-			require.Len(t, collision.RepairRequests, 2)
-
-			repairer := newTestRepairer(t, store, func(_ context.Context, key types.NamespacedName) (AuthoritativeObservation, error) {
-				if key.Name == "one" {
-					return AuthoritativeObservation{Present: true, Route: first}, nil
-				}
-				return AuthoritativeObservation{Present: true, Route: second}, nil
-			})
-			defer repairer.queue.ShutDown()
-			repairer.Enqueue(collision)
-			for range collision.RepairRequests {
-				require.True(t, repairer.processNext(context.Background()))
-			}
-			assert.Equal(t, 0, repairer.Pending())
-			assert.Equal(t, 0, repairer.queue.Len())
-			store.mu.RLock()
-			assert.Len(t, store.recordByObject, 2)
-			assert.Len(t, store.collisionsByID, 1)
-			store.mu.RUnlock()
-		})
-	}
-}
-
-func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
-	registry := newRouteMetricRegistry()
-	depth := func() float64 {
-		return routeGaugeValue(t, registry, "sandbox_route_repair_queue_depth")
-	}
+func TestRepairPendingTracksDeduplicatedRequests(t *testing.T) {
 	tests := []struct {
 		name string
 		run  func(*testing.T)
@@ -311,7 +262,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 					{ObjectKey: second, Generation: 1},
 				})
 				assert.Equal(t, 2, repairer.Pending())
-				assert.Equal(t, float64(2), depth())
 			},
 		},
 		{
@@ -346,7 +296,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 				<-firstDone
 
 				assert.Equal(t, 2, repairer.Pending())
-				assert.Equal(t, float64(2), routeGaugeValue(t, registry, "sandbox_route_repair_queue_depth"))
 			},
 		},
 		{
@@ -383,7 +332,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 				close(start)
 				workers.Wait()
 				assert.Equal(t, count, repairer.Pending())
-				assert.Equal(t, float64(count), depth())
 
 				for _, key := range keys {
 					key := key
@@ -395,7 +343,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 				}
 				workers.Wait()
 				assert.Equal(t, 0, repairer.Pending())
-				assert.Equal(t, float64(0), depth())
 			},
 		},
 		{
@@ -415,10 +362,9 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 				<-entered
 				assert.Equal(t, 0, repairer.queue.Len())
 				assert.Equal(t, 1, repairer.Pending())
-				assert.Equal(t, float64(1), depth())
 				close(release)
 				assert.True(t, <-done)
-				assert.Equal(t, float64(0), depth())
+				assert.Equal(t, 0, repairer.Pending())
 			},
 		},
 		{
@@ -439,7 +385,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 				require.True(t, repairer.processNext(context.Background()))
 				assert.Equal(t, 0, repairer.queue.Len())
 				assert.Equal(t, 1, repairer.Pending())
-				assert.Equal(t, float64(1), depth())
 			},
 		},
 	}
@@ -448,23 +393,6 @@ func TestRepairQueueDepthTracksDeduplicatedPending(t *testing.T) {
 			tt.run(t)
 		})
 	}
-}
-
-func routeGaugeValue(t *testing.T, gatherer prometheus.Gatherer, name string) float64 {
-	t.Helper()
-	families, err := gatherer.Gather()
-	require.NoError(t, err)
-	for _, family := range families {
-		if family.GetName() != name {
-			continue
-		}
-		for _, metric := range family.Metric {
-			if len(metric.Label) == 0 {
-				return metric.GetGauge().GetValue()
-			}
-		}
-	}
-	return 0
 }
 
 func TestRepairerStartRunsMaintenanceAndStops(t *testing.T) {
@@ -521,6 +449,17 @@ func TestValidateObservation(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectError)
 		})
 	}
+}
+
+func requireDeletionFenceRepairRequest(t *testing.T, store *Store, route Route) RepairRequest {
+	t.Helper()
+	require.Equal(t, EventResultApplied, store.Upsert(route).Result)
+	key := types.NamespacedName{Namespace: route.Namespace, Name: route.Name}
+	require.Equal(t, EventResultApplied, store.DeleteAuthoritativeByObjectKey(key).Result)
+	result := store.Upsert(route)
+	require.Equal(t, EventResultRepairRequired, result.Result)
+	require.Len(t, result.RepairRequests, 1)
+	return result.RepairRequests[0]
 }
 
 func newTestRepairer(t *testing.T, store *Store, observe ObserveFunc) *Repairer {

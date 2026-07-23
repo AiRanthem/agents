@@ -25,7 +25,7 @@ import (
 func (s *Store) Upsert(route Route) MutationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.finishLocked(s.upsertLocked(route))
+	return s.upsertLocked(route)
 }
 
 func (s *Store) upsertLocked(route Route) MutationResult {
@@ -45,21 +45,24 @@ func (s *Store) upsertLocked(route Route) MutationResult {
 		if err != nil {
 			return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 		}
-		sameUID := current.route.UID == route.UID
-		sameID := current.route.ID == route.ID
-		// Equal versions are idempotent only when UID and ID match.
-		// Changing either requires a newer version.
-		switch {
-		// Ignore older events and equal-version attempts to remap the same UID to another ID.
-		case comparison < 0, comparison == 0 && sameUID && !sameID:
+		if comparison < 0 {
 			return MutationResult{Result: EventResultIgnored, Reason: ReasonStaleResourceVersion}
-		// Equal versions with different UIDs are ambiguous, so quarantine and verify the object directly.
-		case comparison == 0 && !sameUID:
-			current.generation = s.nextGenerationLocked()
-			current.quarantined = true
-			s.recordByObject[key] = current
-			s.recomputeActiveViewLocked()
-			return ambiguousResourceVersionResult(key, current.generation)
+		}
+		if comparison == 0 {
+			sameUID := current.route.UID == route.UID
+			sameID := current.route.ID == route.ID
+			// Equal versions are idempotent only for an exact same-incarnation replay.
+			// Remapping ID at the same version is stale; a different UID violates the
+			// trusted ObjectKey-to-UID correspondence and is ignored.
+			// Same UID+ID with a changed payload falls through and installs.
+			switch {
+			case sameUID && sameID && route == current.route:
+				return MutationResult{Result: EventResultApplied}
+			case sameUID && !sameID:
+				return MutationResult{Result: EventResultIgnored, Reason: ReasonStaleResourceVersion}
+			case !sameUID:
+				return MutationResult{Result: EventResultIgnored, Reason: ReasonIdentityMismatch}
+			}
 		}
 	}
 
@@ -70,37 +73,25 @@ func (s *Store) upsertLocked(route Route) MutationResult {
 		if err != nil {
 			return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 		}
-		switch {
-		// An event older than the deletion is stale and must not resurrect the object.
-		case comparison < 0:
+		if comparison < 0 {
+			// Older than the deletion must not resurrect the object.
 			return MutationResult{Result: EventResultIgnored, Reason: ReasonStaleResourceVersion}
-		// An event at the deletion version has ambiguous ordering and requires a direct read.
-		case comparison == 0:
+		}
+		if comparison == 0 {
+			// Same version as the deletion is ambiguous; confirm with a direct read.
 			deletion.generation = s.nextGenerationLocked()
 			deletion.confirmationQueued = true
 			s.deletionByObject[key] = deletion
-			return ambiguousResourceVersionResult(key, deletion.generation)
+			return deletionFenceRepairResult(key, deletion.generation)
 		}
 	}
 
-	preserveQuarantine := hasCurrent && current.route.UID == route.UID &&
-		current.route.ID == route.ID && current.quarantined
-
-	// Install the source record, rebuild the derived view, and classify the result.
-	s.installRouteLocked(key, route, preserveQuarantine)
-	s.recomputeActiveViewLocked()
-	// Report any derived collision for the target ID.
-	if s.idCollidedLocked(route.ID) {
-		return MutationResult{
-			Result:         EventResultCollision,
-			Reason:         ReasonIDCollision,
-			RepairRequests: s.repairRequestsForIDLocked(route.ID),
-		}
-	}
+	// Install the source record and its active ID index entry.
+	s.installRouteLocked(key, route)
 	return MutationResult{Result: EventResultApplied}
 }
 
-func ambiguousResourceVersionResult(key types.NamespacedName, generation uint64) MutationResult {
+func deletionFenceRepairResult(key types.NamespacedName, generation uint64) MutationResult {
 	return MutationResult{
 		Result:         EventResultRepairRequired,
 		Reason:         ReasonAmbiguousResourceVersion,
@@ -111,13 +102,16 @@ func ambiguousResourceVersionResult(key types.NamespacedName, generation uint64)
 func (s *Store) installRouteLocked(
 	key types.NamespacedName,
 	route Route,
-	preserveQuarantine bool,
 ) {
 	generation := s.nextGenerationLocked()
+	// Remove the stale ID index only when this ObjectKey moves to a different ID.
+	if current, exists := s.recordByObject[key]; exists && current.route.ID != route.ID {
+		s.deactivateRouteLocked(key, current.route.ID)
+	}
 	delete(s.deletionByObject, key)
 	s.recordByObject[key] = routeRecord{
-		route:       route,
-		generation:  generation,
-		quarantined: preserveQuarantine,
+		route:      route,
+		generation: generation,
 	}
+	s.activeKeyByID[route.ID] = key
 }

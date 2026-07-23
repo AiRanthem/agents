@@ -27,7 +27,6 @@ import (
 
 func TestMetricGroupsExposeOnlyBoundedSeries(t *testing.T) {
 	recordAllSandboxIDMetrics()
-	recordAllSandboxRouteMetrics()
 
 	tests := []struct {
 		name             string
@@ -40,17 +39,6 @@ func TestMetricGroupsExposeOnlyBoundedSeries(t *testing.T) {
 			expectedFamilies: map[string]metricExpectation{
 				"sandbox_id_legacy_resolution_total": {metricType: dto.MetricType_COUNTER, labelSets: []map[string]string{{"surface": LegacyResolutionSurfaceE2B}, {"surface": LegacyResolutionSurfaceGateway}}},
 				"sandbox_id_assignment_total":        {metricType: dto.MetricType_COUNTER, labelSets: []map[string]string{{"result": SandboxIDAssignmentResultSuccess}, {"result": SandboxIDAssignmentResultFailure}}},
-				"sandbox_id_collision_total":         {metricType: dto.MetricType_COUNTER, labelSets: []map[string]string{{"surface": CollisionSurfaceCache}, {"surface": CollisionSurfaceManagerRoute}, {"surface": CollisionSurfaceGatewayRoute}}},
-			},
-		},
-		{
-			name:     "Sandbox route group",
-			register: RegisterSandboxRoute,
-			expectedFamilies: map[string]metricExpectation{
-				"sandbox_route_legacy_peer_total":  {metricType: dto.MetricType_COUNTER, labelSets: []map[string]string{{}}},
-				"sandbox_route_invalid_total":      {metricType: dto.MetricType_COUNTER, labelSets: []map[string]string{{}}},
-				"sandbox_route_collision_records":  {metricType: dto.MetricType_GAUGE, labelSets: []map[string]string{{}}},
-				"sandbox_route_repair_queue_depth": {metricType: dto.MetricType_GAUGE, labelSets: []map[string]string{{}}},
 			},
 		},
 	}
@@ -82,16 +70,6 @@ func recordAllSandboxIDMetrics() {
 	RecordSandboxIDLegacyResolutionGateway()
 	RecordSandboxIDAssignment(true)
 	RecordSandboxIDAssignment(false)
-	RecordSandboxIDCollisionCache()
-	RecordSandboxIDCollisionManagerRoute()
-	RecordSandboxIDCollisionGatewayRoute()
-}
-
-func recordAllSandboxRouteMetrics() {
-	RecordSandboxRouteLegacyPeer()
-	RecordSandboxRouteInvalid()
-	SetSandboxRouteCollisionRecords(1)
-	SetSandboxRouteRepairQueueDepth(1)
 }
 
 func metricLabelSets(metrics []*dto.Metric) []map[string]string {

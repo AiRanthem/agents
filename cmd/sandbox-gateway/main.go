@@ -42,7 +42,6 @@ import (
 func init() {
 	jwtAuthManager := jwtauth.NewManager()
 	metrics.RegisterSandboxID(controllermetrics.Registry)
-	metrics.RegisterSandboxRoute(controllermetrics.Registry)
 
 	envoyhttp.RegisterHttpFilterFactoryAndConfigParser(
 		"sandbox-gateway",

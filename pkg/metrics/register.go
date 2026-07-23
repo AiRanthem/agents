@@ -23,16 +23,5 @@ func RegisterSandboxID(registerer prometheus.Registerer) {
 	registerer.MustRegister(
 		sandboxIDLegacyResolutionTotal,
 		sandboxIDAssignmentTotal,
-		sandboxIDCollisionTotal,
-	)
-}
-
-// RegisterSandboxRoute registers the Sandbox route metric group.
-func RegisterSandboxRoute(registerer prometheus.Registerer) {
-	registerer.MustRegister(
-		sandboxRouteLegacyPeerTotal,
-		sandboxRouteInvalidTotal,
-		sandboxRouteCollisionRecords,
-		sandboxRouteRepairQueueDepth,
 	)
 }

@@ -28,13 +28,13 @@ import (
 )
 
 type upsertTransitionCase struct {
-	name           string
-	arrange        func(*Store)
-	incoming       Route
-	expectResult   EventResult
-	expectReason   Reason
-	expectIDs      []string
-	expectRequests int
+	name         string
+	arrange      func(*Store)
+	incoming     Route
+	expectResult EventResult
+	expectReason Reason
+	expectIDs    []string
+	expectIP     string
 }
 
 func TestStoreUpsertTransitions(t *testing.T) {
@@ -48,8 +48,10 @@ func TestStoreUpsertTransitions(t *testing.T) {
 			arrange: func(store *Store) {
 				store.Upsert(fullRoute("id", "ns", "one", "uid-a", "1"))
 			},
-			incoming:     fullRoute("id", "ns", "one", "uid-a", "1"),
-			expectResult: EventResultApplied, expectIDs: []string{"id"},
+			incoming: Route{
+				ID: "id", Namespace: "ns", Name: "one", UID: "uid-a", ResourceVersion: "1", IP: "updated",
+			},
+			expectResult: EventResultApplied, expectIDs: []string{"id"}, expectIP: "updated",
 		},
 		{
 			name: "legacy to short migration",
@@ -94,22 +96,13 @@ func TestStoreUpsertTransitions(t *testing.T) {
 			expectResult: EventResultApplied, expectIDs: []string{"new"},
 		},
 		{
-			name: "equal RV new incarnation requires repair",
+			name: "equal RV different UID ignored",
 			arrange: func(store *Store) {
 				store.Upsert(fullRoute("old", "ns", "one", "uid-a", "1"))
 			},
 			incoming:     fullRoute("new", "ns", "one", "uid-b", "1"),
-			expectResult: EventResultRepairRequired, expectReason: ReasonAmbiguousResourceVersion,
-			expectRequests: 1,
-		},
-		{
-			name: "ID collision",
-			arrange: func(store *Store) {
-				store.Upsert(fullRoute("same", "ns", "one", "uid-a", "1"))
-			},
-			incoming:     fullRoute("same", "ns", "two", "uid-b", "1"),
-			expectResult: EventResultCollision, expectReason: ReasonIDCollision,
-			expectRequests: 2,
+			expectResult: EventResultIgnored, expectReason: ReasonIdentityMismatch,
+			expectIDs: []string{"old"},
 		},
 		{
 			name:         "ID-only route rejected",
@@ -127,10 +120,32 @@ func TestStoreUpsertTransitions(t *testing.T) {
 			result := store.Upsert(tt.incoming)
 			assert.Equal(t, tt.expectResult, result.Result)
 			assert.Equal(t, tt.expectReason, result.Reason)
-			assert.Len(t, result.RepairRequests, tt.expectRequests)
+			assert.Empty(t, result.RepairRequests)
 			assert.Equal(t, tt.expectIDs, routeIDs(store.List()))
+			if tt.expectIP != "" {
+				assert.Equal(t, tt.expectIP, mustGetRoute(t, store, tt.incoming.ID).IP)
+			}
 		})
 	}
+}
+
+func TestStoreActiveKeyIndexReferencesAuthoritativeRecord(t *testing.T) {
+	store := newTestStore(t, nil, time.Second)
+	key := types.NamespacedName{Namespace: "ns", Name: "one"}
+	legacy := fullRoute("ns--one", key.Namespace, key.Name, "uid-a", "1")
+
+	require.Equal(t, EventResultApplied, store.Upsert(legacy).Result)
+	store.mu.RLock()
+	assert.Equal(t, key, store.activeKeyByID[legacy.ID])
+	assert.Equal(t, legacy, store.recordByObject[key].route)
+	store.mu.RUnlock()
+	assert.Equal(t, legacy, mustGetRoute(t, store, legacy.ID))
+
+	short := fullRoute("short", key.Namespace, key.Name, "uid-a", "2")
+	require.Equal(t, EventResultApplied, store.Upsert(short).Result)
+	_, legacyPresent := store.Get(legacy.ID)
+	assert.False(t, legacyPresent)
+	assert.Equal(t, short, mustGetRoute(t, store, short.ID))
 }
 
 func TestStoreDeleteModes(t *testing.T) {
@@ -225,19 +240,22 @@ func TestStoreRepairGenerationAndDeletionFence(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "one"}
 
 	store.Upsert(fullRoute("old", "ns", "one", "uid-a", "1"))
-	ambiguous := store.Upsert(fullRoute("new", "ns", "one", "uid-b", "1"))
+	deleted := store.DeleteAuthoritativeByObjectKey(key)
+	require.Equal(t, EventResultApplied, deleted.Result)
+	ambiguous := store.Upsert(fullRoute("old", "ns", "one", "uid-a", "1"))
 	require.Len(t, ambiguous.RepairRequests, 1)
+	_, oldActive := store.Get("old")
+	assert.False(t, oldActive)
 
 	store.Upsert(fullRoute("other", "ns", "other", "uid-c", "10"))
 	result := store.ApplyAuthoritativeRepair(ambiguous.RepairRequests[0], AuthoritativeObservation{
 		Present: true,
-		Route:   fullRoute("new", "ns", "one", "uid-b", "1"),
+		Route:   fullRoute("new", "ns", "one", "uid-b", "2"),
 	})
 	assert.Equal(t, EventResultApplied, result.Result)
 	assert.Equal(t, []string{"new", "other"}, routeIDs(store.List()))
-	store.Upsert(fullRoute("new", "ns", "one", "uid-b", "2"))
 
-	deleted := store.DeleteAuthoritativeByObjectKey(key)
+	deleted = store.DeleteAuthoritativeByObjectKey(key)
 	assert.Equal(t, EventResultApplied, deleted.Result)
 	assert.Empty(t, store.Maintenance())
 
@@ -252,26 +270,6 @@ func TestStoreRepairGenerationAndDeletionFence(t *testing.T) {
 	repaired := store.ApplyAuthoritativeRepair(requests[0], AuthoritativeObservation{})
 	assert.Equal(t, EventResultApplied, repaired.Result)
 	assert.Empty(t, store.deletionByObject)
-}
-
-func TestStoreCollisionRepair(t *testing.T) {
-	store := newTestStore(t, nil, time.Second)
-	first := fullRoute("same", "ns", "one", "uid-a", "1")
-	second := fullRoute("same", "ns", "two", "uid-b", "1")
-	store.Upsert(first)
-	collision := store.Upsert(second)
-	require.Equal(t, EventResultCollision, collision.Result)
-	require.Len(t, collision.RepairRequests, 2)
-	assert.Empty(t, store.List())
-
-	for _, request := range collision.RepairRequests {
-		if request.ObjectKey.Name != "two" {
-			continue
-		}
-		result := store.ApplyAuthoritativeRepair(request, AuthoritativeObservation{})
-		assert.Equal(t, EventResultApplied, result.Result)
-	}
-	assert.Equal(t, []string{"same"}, routeIDs(store.List()))
 }
 
 func TestApplyAuthoritativeRepairValidation(t *testing.T) {
@@ -330,15 +328,6 @@ func TestStoreConcurrentReadWrite(t *testing.T) {
 	assert.Len(t, store.List(), workers)
 }
 
-func TestStoreCollisionRecorder(t *testing.T) {
-	calls := 0
-	store := NewStore(StoreOptions{CollisionRecorder: func() { calls++ }})
-	store.Upsert(fullRoute("same", "ns", "one", "uid-a", "1"))
-	result := store.Upsert(fullRoute("same", "ns", "two", "uid-b", "1"))
-	assert.Equal(t, EventResultCollision, result.Result)
-	assert.Equal(t, 1, calls)
-}
-
 func newTestStore(t *testing.T, now func() time.Time, deletionFenceDelay time.Duration) *Store {
 	t.Helper()
 	return NewStore(StoreOptions{Now: now, DeletionFenceDelay: deletionFenceDelay})
@@ -355,9 +344,16 @@ func routeIDs(routes []Route) []string {
 	return ids
 }
 
+func mustGetRoute(t *testing.T, store *Store, id string) Route {
+	t.Helper()
+	route, exists := store.Get(id)
+	require.True(t, exists)
+	return route
+}
+
 func storeIsEmpty(store *Store) bool {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	return len(store.recordByObject) == 0 && len(store.deletionByObject) == 0 &&
-		len(store.activeByID) == 0 && len(store.collisionsByID) == 0
+		len(store.activeKeyByID) == 0
 }

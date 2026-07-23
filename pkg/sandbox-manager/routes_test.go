@@ -274,44 +274,26 @@ func TestSandboxManagerObserveRoute(t *testing.T) {
 }
 
 func TestSandboxManagerBuilderForwardsRouteRepairRequests(t *testing.T) {
-	tests := []struct {
-		name          string
-		routes        []sandboxroute.Route
-		expectResults []sandboxroute.EventResult
-		expectPending int
-	}{
-		{
-			name: "ID collision enqueues both authoritative object keys",
-			routes: []sandboxroute.Route{
-				{ID: "shared-id", Namespace: "team-a", Name: "sandbox-a", UID: "uid-a", ResourceVersion: "10"},
-				{ID: "shared-id", Namespace: "team-a", Name: "sandbox-b", UID: "uid-b", ResourceVersion: "11"},
-			},
-			expectResults: []sandboxroute.EventResult{sandboxroute.EventResultApplied, sandboxroute.EventResultCollision},
-			expectPending: 2,
-		},
+	opts := config.InitOptions(config.SandboxManagerOptions{})
+	managerCache, apiReader, err := cachetest.NewTestCacheWithOptions(t, infracache.Options{SandboxIDResolver: sandboxid.Resolve})
+	require.NoError(t, err)
+
+	manager, err := NewSandboxManagerBuilder(opts).
+		WithCustomInfra(func() (infra.Builder, error) {
+			return sandboxcr.NewInfraBuilder(opts).
+				WithCache(managerCache).
+				WithAPIReader(apiReader), nil
+		}).
+		Build()
+	require.NoError(t, err)
+	require.NotNil(t, manager.routeRepairer)
+
+	route := sandboxroute.Route{
+		ID: "old-id", Namespace: "team-a", Name: "sandbox-a", UID: "uid-a", ResourceVersion: "10",
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			opts := config.InitOptions(config.SandboxManagerOptions{})
-			managerCache, apiReader, err := cachetest.NewTestCacheWithOptions(t, infracache.Options{SandboxIDResolver: sandboxid.Resolve})
-			require.NoError(t, err)
-
-			manager, err := NewSandboxManagerBuilder(opts).
-				WithCustomInfra(func() (infra.Builder, error) {
-					return sandboxcr.NewInfraBuilder(opts).
-						WithCache(managerCache).
-						WithAPIReader(apiReader), nil
-				}).
-				Build()
-			require.NoError(t, err)
-			require.NotNil(t, manager.routeRepairer)
-
-			for i, route := range tt.routes {
-				result := manager.proxy.SetRoute(t.Context(), route)
-				assert.Equal(t, tt.expectResults[i], result.Result)
-			}
-			assert.Equal(t, tt.expectPending, manager.routeRepairer.Pending())
-		})
-	}
+	assert.Equal(t, sandboxroute.EventResultApplied, manager.proxy.SetRoute(t.Context(), route).Result)
+	key := types.NamespacedName{Namespace: route.Namespace, Name: route.Name}
+	assert.Equal(t, sandboxroute.EventResultApplied, manager.proxy.DeleteAuthoritativeByObjectKey(key).Result)
+	assert.Equal(t, sandboxroute.EventResultRepairRequired, manager.proxy.SetRoute(t.Context(), route).Result)
+	assert.Equal(t, 1, manager.routeRepairer.Pending())
 }

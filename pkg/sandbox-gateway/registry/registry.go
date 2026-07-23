@@ -22,7 +22,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/openkruise/agents/pkg/metrics"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
@@ -47,9 +46,7 @@ func mustNewRegistry() *Registry {
 }
 
 func newGatewayStore() *sandboxroute.Store {
-	return sandboxroute.NewStore(
-		sandboxroute.StoreOptions{CollisionRecorder: metrics.RecordSandboxIDCollisionGatewayRoute},
-	)
+	return sandboxroute.NewStore(sandboxroute.StoreOptions{})
 }
 
 // NewRegistry creates a gateway Registry around the supplied shared Store.

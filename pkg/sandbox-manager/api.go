@@ -220,9 +220,6 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	sbx, err := m.infra.GetSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "failed to get sandbox from cache")
-		if errors.Is(err, cache.ErrSandboxIDCollision) {
-			return nil, managererrors.WrapError(managererrors.ErrorInternal, err, "sandbox lookup is ambiguous")
-		}
 		return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found", opts.SandboxID)
 	}
 

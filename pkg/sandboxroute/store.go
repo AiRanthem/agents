@@ -21,8 +21,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
-
-	"github.com/openkruise/agents/pkg/metrics"
 )
 
 // DeletionFenceConfirmationDelay is the delay before an authoritative deletion is confirmed.
@@ -35,7 +33,6 @@ const (
 	EventResultApplied        EventResult = "applied"
 	EventResultIgnored        EventResult = "ignored"
 	EventResultInvalid        EventResult = "invalid"
-	EventResultCollision      EventResult = "collision"
 	EventResultRepairRequired EventResult = "repair_required"
 )
 
@@ -56,7 +53,6 @@ const (
 	ReasonNone                     Reason = ""
 	ReasonInvalidRoute             Reason = "invalid_route"
 	ReasonStaleResourceVersion     Reason = "stale_resource_version"
-	ReasonIDCollision              Reason = "id_collision"
 	ReasonAbsent                   Reason = "absent"
 	ReasonIdentityMismatch         Reason = "identity_mismatch"
 	ReasonInvalidObjectKey         Reason = "invalid_object_key"
@@ -90,14 +86,11 @@ type AuthoritativeObservation struct {
 type StoreOptions struct {
 	Now                func() time.Time
 	DeletionFenceDelay time.Duration
-	// CollisionRecorder must be non-blocking and must not call back into Store.
-	CollisionRecorder func()
 }
 
 type routeRecord struct {
-	route       Route
-	generation  uint64
-	quarantined bool
+	route      Route
+	generation uint64
 }
 
 type deletionFence struct {
@@ -108,19 +101,16 @@ type deletionFence struct {
 	confirmed          bool
 }
 
-// Store owns source records, transition fences, and a derived active/collision view.
+// Store owns source records, transition fences, and an active ID-to-ObjectKey index.
 type Store struct {
 	mu                 sync.RWMutex
 	now                func() time.Time
 	deletionFenceDelay time.Duration
-	recordCollision    func()
 
 	generation       uint64
 	recordByObject   map[types.NamespacedName]routeRecord
 	deletionByObject map[types.NamespacedName]deletionFence
-
-	activeByID     map[string]Route
-	collisionsByID map[string]struct{}
+	activeKeyByID    map[string]types.NamespacedName
 }
 
 // NewStore creates an empty Store with optional runtime dependencies.
@@ -136,35 +126,9 @@ func NewStore(options StoreOptions) *Store {
 	store := &Store{
 		now:                now,
 		deletionFenceDelay: deletionFenceDelay,
-		recordCollision:    options.CollisionRecorder,
 		recordByObject:     make(map[types.NamespacedName]routeRecord),
 		deletionByObject:   make(map[types.NamespacedName]deletionFence),
-		activeByID:         make(map[string]Route),
-		collisionsByID:     make(map[string]struct{}),
+		activeKeyByID:      make(map[string]types.NamespacedName),
 	}
-	store.setRecordMetricsLocked()
 	return store
-}
-
-// RecordInvalid records a decoded route that was rejected before Store dispatch.
-func (s *Store) RecordInvalid() MutationResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.finishLocked(MutationResult{
-		Result: EventResultInvalid,
-		Reason: ReasonInvalidRoute,
-	})
-}
-
-// finishLocked records a route mutation event and returns the result. Must be called with s.mu.Lock held.
-func (s *Store) finishLocked(result MutationResult) MutationResult {
-	if result.Result == EventResultInvalid {
-		metrics.RecordSandboxRouteInvalid()
-	}
-	if result.Result == EventResultCollision && s.recordCollision != nil {
-		s.recordCollision()
-	}
-	s.setRecordMetricsLocked()
-	result.RepairRequests = append([]RepairRequest(nil), result.RepairRequests...)
-	return result
 }

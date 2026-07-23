@@ -93,15 +93,16 @@ func TestRegistryMutationAdapters(t *testing.T) {
 			expectCallbacks: 2,
 		},
 		{
-			name: "cross ObjectKey collision is quarantined and enqueued",
+			name: "equal-RV deletion fence is enqueued",
 			mutate: func(registry *Registry) (sandboxroute.MutationResult, error) {
-				_, _ = registry.Upsert(fullRoute("duplicate", "ns", "a", "uid-a", "1"))
-				return registry.Upsert(fullRoute("duplicate", "ns", "b", "uid-b", "2"))
+				_, _ = registry.Upsert(fullRoute("old", "ns", "a", "uid-a", "1"))
+				_, _ = registry.DeleteAuthoritativeByObjectKey(types.NamespacedName{Namespace: "ns", Name: "a"})
+				return registry.Upsert(fullRoute("old", "ns", "a", "uid-a", "1"))
 			},
-			expectResult:    sandboxroute.EventResultCollision,
-			expectID:        "duplicate",
-			expectRepairs:   2,
-			expectCallbacks: 2,
+			expectResult:    sandboxroute.EventResultRepairRequired,
+			expectID:        "old",
+			expectRepairs:   1,
+			expectCallbacks: 3,
 		},
 	}
 
