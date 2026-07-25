@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,169 @@ func TestConvertToE2BSandboxPodIPMetadata(t *testing.T) {
 			if exists {
 				assert.Equal(t, tt.expectValue, value)
 			}
+		})
+	}
+}
+
+func TestConvertToE2BSandboxStateMapping(t *testing.T) {
+	// All cases use a claimed sandbox (no OwnerReferences) so that
+	// GetSandboxState uses the claimed-branch logic.
+	tests := []struct {
+		name      string
+		sandbox   *agentsv1alpha1.Sandbox
+		wantState string
+	}{
+		{
+			name: "running but not ready is surfaced as running",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionFalse},
+					},
+				},
+			},
+			wantState: agentsv1alpha1.SandboxStateRunning,
+		},
+		{
+			name: "running and ready is running",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue},
+					},
+				},
+			},
+			wantState: agentsv1alpha1.SandboxStateRunning,
+		},
+		{
+			name: "terminating stays dead",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxTerminating,
+				},
+			},
+			wantState: agentsv1alpha1.SandboxStateDead,
+		},
+		{
+			name: "paused is paused",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{
+					Paused: true,
+				},
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+				},
+			},
+			wantState: agentsv1alpha1.SandboxStatePaused,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := &sandboxcr.Sandbox{Sandbox: tt.sandbox}
+			got := (&Controller{}).convertToE2BSandbox(sbx, "", "")
+			assert.Equal(t, tt.wantState, got.State)
+		})
+	}
+}
+
+func TestIsSandboxViewable(t *testing.T) {
+	// All cases use a claimed sandbox (no OwnerReferences) so that
+	// GetSandboxState uses the claimed-branch logic.
+	pastTime := metav1.NewTime(time.Now().Add(-time.Hour))
+	tests := []struct {
+		name        string
+		sandbox     *agentsv1alpha1.Sandbox
+		wantVisible bool
+	}{
+		// non-viewable: terminal dead reasons
+		{
+			name: "Terminating phase is not viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxTerminating},
+			},
+			wantVisible: false,
+		},
+		{
+			name: "Failed phase is not viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxFailed},
+			},
+			wantVisible: false,
+		},
+		{
+			name: "Succeeded phase is not viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxSucceeded},
+			},
+			wantVisible: false,
+		},
+		{
+			name: "DeletionTimestamp set is not viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{DeletionTimestamp: &pastTime},
+			},
+			wantVisible: false,
+		},
+		// non-viewable: SandboxStateCreating
+		{
+			name: "Pending phase creating is not viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{Phase: agentsv1alpha1.SandboxPending},
+			},
+			wantVisible: false,
+		},
+		// viewable: other dead reasons
+		{
+			name: "ShutdownTimeReached dead reason is viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{ShutdownTime: &pastTime},
+			},
+			wantVisible: true,
+		},
+		{
+			name: "Running phase not ready is viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionFalse},
+					},
+				},
+			},
+			wantVisible: true,
+		},
+		// viewable: normal live states
+		{
+			name: "Running and ready is viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+					Conditions: []metav1.Condition{
+						{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue},
+					},
+				},
+			},
+			wantVisible: true,
+		},
+		{
+			name: "Paused is viewable",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{Paused: true},
+				Status: agentsv1alpha1.SandboxStatus{
+					Phase: agentsv1alpha1.SandboxRunning,
+				},
+			},
+			wantVisible: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := &sandboxcr.Sandbox{Sandbox: tt.sandbox}
+			assert.Equal(t, tt.wantVisible, isSandboxViewable(sbx))
 		})
 	}
 }

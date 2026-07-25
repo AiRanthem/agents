@@ -76,6 +76,22 @@ func (sc *Controller) getSandboxOfUser(ctx context.Context, sandboxID string, ex
 	return sbx, nil
 }
 
+func isSandboxViewable(sbx infra.Sandbox) bool {
+	state, reason := sbx.GetState()
+	if state == agentsv1alpha1.SandboxStateCreating {
+		return false
+	}
+	if state != agentsv1alpha1.SandboxStateDead {
+		return true
+	}
+	switch reason {
+	case "ResourceSucceeded", "ResourceFailed", "ResourceTerminating", "ResourceDeleted":
+		return false
+	default:
+		return true
+	}
+}
+
 func (sc *Controller) getNamespaceOfUser(user *models.CreatedTeamAPIKey) string {
 	team := keys.TeamForKey(user)
 	// Keys in the admin team can access resources in cluster scope
@@ -98,7 +114,17 @@ func (sc *Controller) convertToE2BSandbox(sbx infra.Sandbox, accessToken, domain
 		TrafficAccessToken:           sbx.GetTrafficAccessToken(),
 		TrafficAccessTokenExpiration: sbx.GetTrafficAccessTokenExpiration(),
 	}
-	sandbox.State, _ = sbx.GetState()
+	// A sandbox in the Running phase that is claimed but not yet ready is
+	// reported as "dead" by GetSandboxState because the Ready condition is
+	// unsatisfied. The underlying phase is Running, so surface it as
+	// "running" to E2B API clients — this avoids returning the unparsable
+	// "dead" state to E2B SDK clients while reflecting that the sandbox is
+	// still live.
+	state, reason := sbx.GetState()
+	if state == agentsv1alpha1.SandboxStateDead && reason == "RunningResourceClaimedButNotReady" {
+		state = agentsv1alpha1.SandboxStateRunning
+	}
+	sandbox.State = state
 	annotations := sbx.GetAnnotations()
 	labels := sbx.GetLabels()
 

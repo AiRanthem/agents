@@ -38,14 +38,19 @@ func (sc *Controller) DescribeSandbox(r *http.Request) (web.ApiResponse[*models.
 	log := klog.FromContext(r.Context())
 	log.Info("describe sandbox", "id", id)
 
-	// Use liveSandboxStates so that dead sandboxes return 404 (NotFound).
-	// The E2B SDK's SandboxState enum does not include "dead", so returning it
-	// would cause a ValueError on the client side. A dead sandbox is effectively
-	// unusable, so treating it as not-found from the API perspective is correct.
-	sbx, err := sc.getSandboxOfUser(r.Context(), id, liveSandboxStates)
+	// Use claimedSandboxStates so that transient dead states can be inspected
+	// before deciding whether the sandbox is still viewable from the E2B API.
+	sbx, err := sc.getSandboxOfUser(r.Context(), id, claimedSandboxStates)
 	if err != nil {
 		log.Error(err, "failed to get sandbox", "id", id)
 		return web.ApiResponse[*models.Sandbox]{}, err
+	}
+	if !isSandboxViewable(sbx) {
+		log.Info("sandbox is not viewable, treating as not found", "id", id)
+		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf("Cannot get sandbox %s: sandbox not found", id),
+		}
 	}
 
 	domain, apiErr := sc.resolveSandboxDomain(r)
@@ -86,6 +91,12 @@ func (sc *Controller) DeleteSandbox(r *http.Request) (web.ApiResponse[struct{}],
 	sbx, apiError := sc.getSandboxOfUser(r.Context(), id, claimedSandboxStates)
 	if apiError != nil {
 		log.Error(apiError, "failed to get sandbox, just return success", "id", id)
+		return web.ApiResponse[struct{}]{
+			Code: http.StatusNoContent,
+		}, nil
+	}
+	if !isSandboxViewable(sbx) {
+		log.Info("sandbox is not viewable, just return success", "id", id)
 		return web.ApiResponse[struct{}]{
 			Code: http.StatusNoContent,
 		}, nil

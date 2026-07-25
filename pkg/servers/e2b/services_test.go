@@ -2238,6 +2238,38 @@ func TestDeleteSandboxDeadClaimedSandbox(t *testing.T) {
 	require.True(t, apierrors.IsNotFound(getErr), "expected sandbox to be deleted, got error: %v", getErr)
 }
 
+func TestDeleteSandboxTerminalDeadClaimedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "terminal-dead-delete", "test-template", user.ID.String(), nil)
+	sandboxID := fmt.Sprintf("%s--%s", sandbox.Namespace, sandbox.Name)
+	UpdateSandboxWhen(t, fc, sandboxID, Immediately, DoSetSandboxStatus(v1alpha1.SandboxTerminating, "", metav1.ConditionFalse))
+
+	deleteCalls := 0
+	origDeleteSandbox := sandboxcr.DefaultDeleteSandbox
+	sandboxcr.DefaultDeleteSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, client ctrlclient.Client) error {
+		deleteCalls++
+		return origDeleteSandbox(ctx, sbx, client)
+	}
+	t.Cleanup(func() { sandboxcr.DefaultDeleteSandbox = origDeleteSandbox })
+
+	deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+		"sandboxID": sandboxID,
+	}, user))
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, http.StatusNoContent, deleteResp.Code)
+	assert.Equal(t, 0, deleteCalls)
+	assert.NoError(t, fc.Get(t.Context(), ctrlclient.ObjectKey{Namespace: sandbox.Namespace, Name: sandbox.Name}, &v1alpha1.Sandbox{}))
+}
+
 func TestDescribeSandboxDeadClaimedSandbox(t *testing.T) {
 	controller, fc, teardown := Setup(t)
 	defer teardown()
@@ -2256,9 +2288,36 @@ func TestDescribeSandboxDeadClaimedSandbox(t *testing.T) {
 		"sandboxID": sandboxID,
 	}, user))
 
-	// A dead sandbox should be treated as not found from the E2B API perspective,
-	// because the E2B SDK cannot parse the "dead" state. Returning 404 allows
-	// clients to detect sandbox removal via SandboxNotFoundException.
+	// The sandbox is in the Running phase with Ready=False, which
+	// GetSandboxState reports as ("dead", "RunningResourceClaimedButNotReady").
+	// DescribeSandbox uses claimedSandboxStates so the sandbox is found, and
+	// convertToE2BSandbox surfaces the state as "running" because the
+	// underlying phase is Running and the sandbox is still live.
+	assert.Nil(t, apiErr)
+	require.NotNil(t, describeResp.Body)
+	assert.Equal(t, v1alpha1.SandboxStateRunning, describeResp.Body.State)
+}
+
+func TestDescribeSandboxTerminalDeadClaimedSandbox(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "terminal-dead-describe", "test-template", user.ID.String(), nil)
+	sandboxID := fmt.Sprintf("%s--%s", sandbox.Namespace, sandbox.Name)
+	UpdateSandboxWhen(t, fc, sandboxID, Immediately, DoSetSandboxStatus(v1alpha1.SandboxTerminating, "", metav1.ConditionFalse))
+
+	describeResp, apiErr := controller.DescribeSandbox(NewRequest(t, nil, nil, map[string]string{
+		"sandboxID": sandboxID,
+	}, user))
+
+	// Terminal dead states (for example, Terminating) are not viewable and
+	// should be treated as missing from the E2B API perspective.
 	assert.Nil(t, describeResp.Body)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
