@@ -62,6 +62,11 @@ func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSan
 	if opts.User == "" {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("user is required")
 	}
+	// Owner is also synced to a pod label (AnnotationOwner key). Annotation
+	// values are unrestricted but label values are not, so reject early.
+	if errs := content.IsLabelValue(opts.User); len(errs) > 0 {
+		return infra.ClaimSandboxOptions{}, fmt.Errorf("invalid owner %q for pod label %s: %s", opts.User, v1alpha1.AnnotationOwner, strings.Join(errs, "; "))
+	}
 	if opts.Template == "" {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("template is required")
 	}
@@ -753,11 +758,10 @@ func performLockSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockTy
 	log := klog.FromContext(ctx)
 	c := cache.GetClient()
 	utils.LockSandbox(sbx.Sandbox, opts.LockString, opts.User)
-	// sync user annotation to pod label. Annotation values are unrestricted but
-	// label values are not, so reject an owner that cannot be a valid label.
-	if errs := content.IsLabelValue(opts.User); len(errs) > 0 {
-		return fmt.Errorf("invalid owner %q for pod label %s: %s", opts.User, v1alpha1.AnnotationOwner, strings.Join(errs, "; "))
-	}
+	// Sync owner onto the pod template as a label so selectors/policies can
+	// match it. Reuse AnnotationOwner as the label key so the value stays
+	// aligned with the sandbox owner annotation written by LockSandbox.
+	// opts.User was validated as a label value in ValidateAndInitClaimOptions.
 	podLabels := sbx.GetPodLabels()
 	if podLabels == nil {
 		podLabels = make(map[string]string, 1)

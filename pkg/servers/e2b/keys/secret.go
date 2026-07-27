@@ -358,6 +358,8 @@ func (k *secretKeyStorage) retryPatchSecretKey(
 		if err := k.patchSecretKey(ctx, secret, id, apiKey); err != nil {
 			return err
 		}
+		// On delete, prepare returns nil; a nil patchedKey with a nil error
+		// means the deletion patch succeeded (or was already a no-op).
 		patchedKey = apiKey
 		return nil
 	})
@@ -367,6 +369,8 @@ func (k *secretKeyStorage) retryPatchSecretKey(
 	return patchedKey, nil
 }
 
+// patchSecretKey upserts or deletes one Secret.Data entry. A nil apiKey means
+// delete the key at id; a non-nil apiKey means create or update that entry.
 func (k *secretKeyStorage) patchSecretKey(ctx context.Context, secret *corev1.Secret, id string, apiKey *models.CreatedTeamAPIKey) error {
 	base := secret.DeepCopy()
 
