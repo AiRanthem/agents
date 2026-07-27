@@ -59,8 +59,38 @@ func GenerateShort(uid types.UID) (string, error) {
 	return strings.ToLower(shortEncoding.EncodeToString(parsed[:])), nil
 }
 
-// AssignShort assigns a short ID only when the authoritative label value is empty.
-func AssignShort(sandbox metav1.Object) (bool, error) {
+// ValidatePrefix checks that prefix uses only [a-z0-9-] and, when non-empty,
+// starts with [a-z0-9]. Callers own broader prefix and ID correctness policy.
+func ValidatePrefix(prefix string) error {
+	if prefix != "" && !isLowerAlphanumeric(prefix[0]) {
+		return fmt.Errorf(
+			"short sandbox ID prefix %q is invalid: it must start with a lowercase letter or digit",
+			prefix,
+		)
+	}
+	for i := 1; i < len(prefix); i++ {
+		char := prefix[i]
+		if isLowerAlphanumeric(char) || char == '-' {
+			continue
+		}
+		return fmt.Errorf(
+			"short sandbox ID prefix %q is invalid: character %q at position %d is not "+
+				"a lowercase letter, digit, or hyphen",
+			prefix,
+			char,
+			i,
+		)
+	}
+	return nil
+}
+
+func isLowerAlphanumeric(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
+}
+
+// AssignShort assigns a prefixed short ID only when the authoritative label value is empty.
+// The caller must validate prefix before calling.
+func AssignShort(sandbox metav1.Object, prefix string) (bool, error) {
 	labels := sandbox.GetLabels()
 	if labels[LabelKey] != "" {
 		return false, nil
@@ -73,7 +103,7 @@ func AssignShort(sandbox metav1.Object) (bool, error) {
 	if labels == nil {
 		labels = make(map[string]string, 1)
 	}
-	labels[LabelKey] = sandboxID
+	labels[LabelKey] = prefix + sandboxID
 	sandbox.SetLabels(labels)
 	return true, nil
 }

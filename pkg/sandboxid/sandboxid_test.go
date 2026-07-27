@@ -104,18 +104,48 @@ func TestGenerateShort(t *testing.T) {
 	}
 }
 
+func TestValidatePrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		prefix      string
+		expectError string
+	}{
+		{name: "empty prefix"},
+		{name: "lowercase prefix", prefix: "prod-"},
+		{name: "numeric prefix", prefix: "42-"},
+		{name: "long prefix is accepted", prefix: strings.Repeat("a", 128)},
+		{name: "uppercase is rejected", prefix: "Prod-", expectError: "invalid"},
+		{name: "underscore is rejected", prefix: "prod_", expectError: "invalid"},
+		{name: "leading hyphen is rejected", prefix: "-prod", expectError: "invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePrefix(tt.prefix)
+			if tt.expectError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
+		})
+	}
+}
+
 func TestAssignShort(t *testing.T) {
 	tests := []struct {
 		name          string
 		uid           types.UID
 		labels        map[string]string
+		prefix        string
 		expectChanged bool
 		expectedID    string
 		expectError   string
 	}{
 		{name: "missing label is assigned", uid: types.UID("00000000-0000-0000-0000-000000000000"), expectChanged: true, expectedID: strings.Repeat("a", 26)},
-		{name: "empty label is assigned and other labels are preserved", uid: types.UID("00000000-0000-0000-0000-000000000001"), labels: map[string]string{LabelKey: "", "app": "sandbox"}, expectChanged: true, expectedID: strings.Repeat("a", 25) + "e"},
-		{name: "non-empty label is preserved without UID validation", uid: types.UID("not-a-uuid"), labels: map[string]string{LabelKey: "operator-assigned-value"}, expectedID: "operator-assigned-value"},
+		{name: "prefix is prepended and other labels are preserved", uid: types.UID("00000000-0000-0000-0000-000000000001"), labels: map[string]string{LabelKey: "", "app": "sandbox"}, prefix: "prod-", expectChanged: true, expectedID: "prod-" + strings.Repeat("a", 25) + "e"},
+		{name: "non-empty label is preserved without UID or prefix validation", uid: types.UID("not-a-uuid"), labels: map[string]string{LabelKey: "operator-assigned-value"}, prefix: "INVALID_", expectedID: "operator-assigned-value"},
+		{name: "assignment trusts caller prefix", uid: types.UID("00000000-0000-0000-0000-000000000001"), labels: map[string]string{"app": "sandbox"}, prefix: "INVALID_", expectChanged: true, expectedID: "INVALID_" + strings.Repeat("a", 25) + "e"},
 		{name: "invalid UID leaves labels unchanged", uid: types.UID("not-a-uuid"), labels: map[string]string{"app": "sandbox"}, expectError: "invalid sandbox UID"},
 	}
 
@@ -129,7 +159,7 @@ func TestAssignShort(t *testing.T) {
 				Labels:    maps.Clone(tt.labels),
 			}}
 
-			changed, err := AssignShort(sandbox)
+			changed, err := AssignShort(sandbox, tt.prefix)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
@@ -145,7 +175,7 @@ func TestAssignShort(t *testing.T) {
 				assert.Equal(t, initialLabels["app"], sandbox.Labels["app"])
 			}
 
-			changed, err = AssignShort(sandbox)
+			changed, err = AssignShort(sandbox, tt.prefix)
 			require.NoError(t, err)
 			assert.False(t, changed)
 		})

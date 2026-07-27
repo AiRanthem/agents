@@ -94,6 +94,7 @@ type sandboxIDAssignmentState struct {
 func composePostModifier(
 	modifier func(metav1.Object) (bool, error),
 	enableAssignment bool,
+	prefix string,
 ) (func(metav1.Object) (bool, error), *sandboxIDAssignmentState) {
 	state := &sandboxIDAssignmentState{enabled: enableAssignment}
 	if modifier == nil && !enableAssignment {
@@ -122,7 +123,7 @@ func composePostModifier(
 			return changed, nil
 		}
 		state.assignmentRan = true
-		assigned, err := sandboxid.AssignShort(sandbox)
+		assigned, err := sandboxid.AssignShort(sandbox, prefix)
 		if err != nil {
 			state.invalidUID = true
 			return false, err
@@ -133,7 +134,7 @@ func composePostModifier(
 }
 
 func (m *SandboxManager) prepareClaimSandboxIdentity(opts infra.ClaimSandboxOptions) (infra.ClaimSandboxOptions, *sandboxIDAssignmentState) {
-	postModifier, state := composePostModifier(opts.PostModifier, m.enableShortID)
+	postModifier, state := composePostModifier(opts.PostModifier, m.enableShortID, m.shortIDPrefix)
 	state.namespace = opts.Namespace
 	opts.Modifier = trackSandboxIDAssignmentObject(state, guardPreModifier(opts.Modifier))
 	opts.PostModifier = postModifier
@@ -141,7 +142,7 @@ func (m *SandboxManager) prepareClaimSandboxIdentity(opts infra.ClaimSandboxOpti
 }
 
 func (m *SandboxManager) prepareCloneSandboxIdentity(opts infra.CloneSandboxOptions) (infra.CloneSandboxOptions, *sandboxIDAssignmentState) {
-	postModifier, state := composePostModifier(opts.PostModifier, m.enableShortID)
+	postModifier, state := composePostModifier(opts.PostModifier, m.enableShortID, m.shortIDPrefix)
 	state.namespace = opts.Namespace
 	state.name = opts.Name
 	opts.Modifier = trackSandboxIDAssignmentObject(state, guardPreModifier(opts.Modifier))
