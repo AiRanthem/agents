@@ -16,13 +16,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -32,43 +36,123 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/jwtauth"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
-	proxyutils "github.com/openkruise/agents/pkg/utils/proxyutils"
+	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/utils"
 )
 
-// SandboxReconciler reconciles Sandbox objects and updates the local registry
-type SandboxReconciler struct {
-	client.Client
-	Scheme *runtime.Scheme
+// ManagerOptions supplies gateway composition dependencies.
+type ManagerOptions struct {
+	Registry       *registry.Registry
+	Namespace      string
+	LabelSelector  string
+	JWTAuthManager *jwtauth.Manager
 }
 
-func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-	key := req.Namespace + "--" + req.Name
+type routeEventHandler struct {
+	registry *registry.Registry
+}
 
-	var sandbox agentsv1alpha1.Sandbox
-	if err := r.Get(ctx, req.NamespacedName, &sandbox); err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("sandbox deleted, removing from registry", "key", key)
-			registry.GetRegistry().Delete(key)
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
+func (h *routeEventHandler) onObject(ctx context.Context, obj any) {
+	sandbox, ok := obj.(*agentsv1alpha1.Sandbox)
+	if !ok {
+		log.FromContext(ctx).Error(
+			nil,
+			"discarding unexpected gateway route informer object",
+			"type", fmt.Sprintf("%T", obj),
+		)
+		return
 	}
 
+	key := types.NamespacedName{Namespace: sandbox.Namespace, Name: sandbox.Name}
+	deletion := sandboxroute.Route{
+		Namespace:       key.Namespace,
+		Name:            key.Name,
+		ResourceVersion: sandbox.ResourceVersion,
+	}
 	if sandbox.DeletionTimestamp != nil {
-		logger.Info("sandbox being deleted, removing from registry", "key", key)
-		registry.GetRegistry().Delete(key)
-		return ctrl.Result{}, nil
+		h.logMutation(ctx, "delete", key, h.registry.Delete(deletion))
+		return
 	}
-
-	route := proxyutils.DefaultGetRouteFunc(&sandbox)
-	logger.Info("updating registry", "key", key, "podIP", route.IP, "state", route.State, "resourceVersion", route.ResourceVersion)
-	registry.GetRegistry().Update(key, route)
-	return ctrl.Result{}, nil
+	route, err := sandboxroute.ProjectRoute(newGatewayProjectionSource(sandbox))
+	if err != nil {
+		log.FromContext(ctx).Error(err, "failed to project gateway route", "namespace", key.Namespace, "name", key.Name)
+		return
+	}
+	h.logMutation(ctx, "upsert", key, h.registry.Upsert(route))
 }
 
-func StartManager(ctx context.Context, jwtAuthManager *jwtauth.Manager) error {
+func (h *routeEventHandler) onDelete(ctx context.Context, obj any) {
+	var deletion sandboxroute.Route
+	switch value := obj.(type) {
+	case *agentsv1alpha1.Sandbox:
+		// Normal deletes retain the Kubernetes resource version.
+		deletion = sandboxroute.Route{
+			Namespace:       value.Namespace,
+			Name:            value.Name,
+			ResourceVersion: value.ResourceVersion,
+		}
+	case toolscache.DeletedFinalStateUnknown:
+		// Empty resource version is reserved for an untrusted tombstone.
+		namespace, name, err := toolscache.SplitMetaNamespaceKey(value.Key)
+		if err != nil || namespace == "" || name == "" {
+			log.FromContext(ctx).Error(err, "discarding invalid gateway route tombstone", "key", value.Key)
+			return
+		}
+		deletion.Namespace = namespace
+		deletion.Name = name
+	default:
+		log.FromContext(ctx).Error(
+			nil,
+			"discarding unexpected gateway route delete object",
+			"type", fmt.Sprintf("%T", obj),
+		)
+		return
+	}
+	key, _ := deletion.ObjectKey()
+	h.logMutation(ctx, "delete", key, h.registry.Delete(deletion))
+}
+
+func (h *routeEventHandler) logMutation(
+	ctx context.Context,
+	operation string,
+	key types.NamespacedName,
+	result sandboxroute.MutationResult,
+) {
+	logger := log.FromContext(ctx)
+	if result.Result == sandboxroute.EventResultInvalid {
+		logger.Error(
+			errors.New(string(result.Reason)),
+			"gateway route mutation rejected",
+			"operation", operation,
+			"namespace", key.Namespace,
+			"name", key.Name,
+		)
+		return
+	}
+	logger.V(utils.DebugLogLevel).Info(
+		"gateway route mutation completed",
+		"operation", operation,
+		"namespace", key.Namespace,
+		"name", key.Name,
+		"result", result.Result,
+		"reason", result.Reason,
+	)
+}
+
+// StartManager starts the gateway Sandbox informer route feed.
+func StartManager(ctx context.Context, options ManagerOptions) error {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	if options.Registry == nil {
+		return errors.New("gateway manager route dependencies must not be nil")
+	}
+	options.Registry.SetReady(false)
+	defer options.Registry.SetReady(false)
+
+	cacheOptions, err := buildGatewayCacheOptions(options.Namespace, options.LabelSelector)
+	if err != nil {
+		return err
+	}
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -76,6 +160,7 @@ func StartManager(ctx context.Context, jwtAuthManager *jwtauth.Manager) error {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
+		Cache:  cacheOptions,
 		// Disable metrics and health probe servers to avoid port conflicts with Envoy.
 		HealthProbeBindAddress: "0",
 		Metrics: metricsserver.Options{
@@ -86,19 +171,69 @@ func StartManager(ctx context.Context, jwtAuthManager *jwtauth.Manager) error {
 		return fmt.Errorf("unable to create manager: %w", err)
 	}
 
-	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&agentsv1alpha1.Sandbox{}).
-		Complete(&SandboxReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
-		}); err != nil {
-		return fmt.Errorf("unable to create controller: %w", err)
+	informer, err := mgr.GetCache().GetInformer(ctx, &agentsv1alpha1.Sandbox{})
+	if err != nil {
+		return fmt.Errorf("get gateway Sandbox informer: %w", err)
 	}
-	if err := addJWTAuthManager(mgr.GetAPIReader(), mgr.Add, jwtAuthManager); err != nil {
+	handler := &routeEventHandler{registry: options.Registry}
+	registration, err := informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			handler.onObject(ctx, obj)
+		},
+		UpdateFunc: func(_, newObj any) {
+			handler.onObject(ctx, newObj)
+		},
+		DeleteFunc: func(obj any) {
+			handler.onDelete(ctx, obj)
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("register gateway Sandbox informer handler: %w", err)
+	}
+	defer func() {
+		if removeErr := informer.RemoveEventHandler(registration); removeErr != nil {
+			log.FromContext(ctx).Error(removeErr, "failed to remove gateway Sandbox informer handler")
+		}
+	}()
+
+	if err := addJWTAuthManager(mgr.GetAPIReader(), mgr.Add, options.JWTAuthManager); err != nil {
 		return err
 	}
 
+	if err := mgr.Add(manager.RunnableFunc(func(runCtx context.Context) error {
+		if !toolscache.WaitForCacheSync(runCtx.Done(), registration.HasSynced) {
+			return nil
+		}
+		options.Registry.SetReady(true)
+		defer options.Registry.SetReady(false)
+		<-runCtx.Done()
+		return nil
+	})); err != nil {
+		return fmt.Errorf("register gateway route readiness: %w", err)
+	}
+
 	return mgr.Start(ctx)
+}
+
+func buildGatewayCacheOptions(namespace, labelSelector string) (ctrlcache.Options, error) {
+	sandboxConfig := ctrlcache.ByObject{}
+	if namespace != "" {
+		sandboxConfig.Namespaces = map[string]ctrlcache.Config{
+			namespace: {},
+		}
+	}
+	if labelSelector != "" {
+		selector, err := labels.Parse(labelSelector)
+		if err != nil {
+			return ctrlcache.Options{}, fmt.Errorf("parse sandbox label selector: %w", err)
+		}
+		sandboxConfig.Label = selector
+	}
+	return ctrlcache.Options{
+		ByObject: map[client.Object]ctrlcache.ByObject{
+			&agentsv1alpha1.Sandbox{}: sandboxConfig,
+		},
+	}, nil
 }
 
 func addJWTAuthManager(reader client.Reader, add func(manager.Runnable) error, jwtAuthManager *jwtauth.Manager) error {

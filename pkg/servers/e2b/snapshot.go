@@ -48,10 +48,10 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	}
 	if state, reason := sbx.GetState(); state != v1alpha1.SandboxStateRunning {
 		log.Info("cannot create snapshot: sandbox is not running", "state", state, "reason", reason)
-		return web.ApiResponse[*models.Snapshot]{}, &web.ApiError{
+		return web.ApiResponse[*models.Snapshot]{}, withSandboxResource(&web.ApiError{
 			Code:    http.StatusBadRequest,
-			Message: fmt.Sprintf("Sandbox %s is not running", sandboxID),
-		}
+			Message: fmt.Sprintf("Sandbox %s is not running", sc.manager.ResolveSandboxID(sbx)),
+		}, sbx)
 	}
 	ctx, span := tracing.StartManagerSpan(ctx, tracing.SpanManagerCreateSnapshot)
 	// Register EndSpan via defer with a stable operation-error variable so the
@@ -68,7 +68,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	if request.Extensions.TTL != nil {
 		span.SetAttributes(attribute.String(tracing.AttrSnapshotTTL, *request.Extensions.TTL))
 	}
-	checkpointID, err := sbx.CreateCheckpoint(ctx, infra.CreateCheckpointOptions{
+	checkpointID, err := sc.manager.CreateCheckpoint(ctx, sbx, infra.CreateCheckpointOptions{
 		KeepRunning:        request.Extensions.KeepRunning,
 		TTL:                request.Extensions.TTL,
 		PersistentContents: request.Extensions.PersistentContents,
@@ -77,9 +77,9 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	if err != nil {
 		log.Error(err, "failed to create checkpoint")
 		snapshotTotal.WithLabelValues(sbx.GetNamespace(), "failure").Inc()
-		return web.ApiResponse[*models.Snapshot]{}, &web.ApiError{
+		return web.ApiResponse[*models.Snapshot]{}, withSandboxResource(&web.ApiError{
 			Message: err.Error(),
-		}
+		}, sbx)
 	}
 	snapshotDuration.WithLabelValues(sbx.GetNamespace()).Observe(time.Since(start).Seconds())
 	snapshotTotal.WithLabelValues(sbx.GetNamespace(), "success").Inc()

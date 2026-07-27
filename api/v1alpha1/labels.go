@@ -53,6 +53,8 @@ const (
 
 	// CheckpointLabelType is the checkpoint type label key
 	CheckpointLabelType = InternalPrefix + "checkpoint-type"
+	// CheckpointLabelID is the checkpoint ID label key
+	CheckpointLabelID = InternalPrefix + "checkpoint-id"
 
 	True  = "true"
 	False = "false"

@@ -34,6 +34,7 @@ import (
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -78,7 +79,11 @@ type Server struct {
 }
 
 // NewServer creates a new peer server
-func NewServer(client client.Client, port int, readinessChecks ...ReadinessCheck) *Server {
+func NewServer(
+	client client.Client,
+	port int,
+	readinessChecks ...ReadinessCheck,
+) *Server {
 	server := &Server{
 		port:               normalizePort(port, proxy.SystemPort),
 		client:             client,
@@ -207,7 +212,7 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := klog.FromContext(ctx)
 
-	var route proxy.Route
+	var route sandboxroute.Route
 	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 		log.Error(err, "Failed to decode refresh request")
 		http.Error(w, fmt.Sprintf("Failed to decode request: %v", err), http.StatusBadRequest)
@@ -215,19 +220,30 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.V(utils.DebugLogLevel).Info("Received route refresh", "route", route)
-
-	// Handle based on state
+	var result sandboxroute.MutationResult
 	if route.State == v1alpha1.SandboxStateRunning {
-		// Update the route
-		if registry.GetRegistry().Update(route.ID, route) {
-			log.Info("Route updated via refresh", "id", route.ID, "ip", route.IP)
-		} else {
-			log.V(utils.DebugLogLevel).Info("Route update skipped due to older resourceVersion", "id", route.ID)
-		}
+		result = registry.GetRegistry().Upsert(route)
 	} else {
-		// Delete the route if the sandbox is dead
-		registry.GetRegistry().Delete(route.ID)
+		if route.ResourceVersion == "" {
+			http.Error(w, string(sandboxroute.ReasonInvalidRoute), http.StatusBadRequest)
+			return
+		}
+		result = registry.GetRegistry().Delete(route)
 	}
 
+	log.V(utils.DebugLogLevel).Info(
+		"Applied peer route refresh",
+		"id", route.ID,
+		"namespace", route.Namespace,
+		"name", route.Name,
+		"result", result.Result,
+		"reason", result.Reason,
+	)
+	switch result.Result {
+	case sandboxroute.EventResultInvalid:
+		log.Error(errors.New(string(result.Reason)), "Rejected invalid route refresh")
+		http.Error(w, string(result.Reason), http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

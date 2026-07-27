@@ -72,7 +72,7 @@ func Add(mgr manager.Manager, runtimeTLSBundle *runtimeclient.TLSBundle) error {
 	}
 
 	// Initialize cache
-	cache, err := infracache.NewCache(mgr)
+	cache, err := infracache.NewCacheWithOptions(mgr, infracache.Options{})
 	if err != nil {
 		return fmt.Errorf("failed to create cache: %w", err)
 	}
