@@ -253,9 +253,10 @@ sequenceDiagram
     Manager-->>API: final resolved ID
 ```
 
-The first read and every update-conflict retry use the direct API reader rather than the informer
-cache. The final modifier is deterministic, idempotent, and limited to `metav1.Object` metadata so
-it cannot perform external lifecycle side effects during a retry.
+The first read uses the informer-backed client. A first-attempt direct API reader Get is forbidden;
+APIReader is used only after an update conflict when the informer cache is known to be stale. The
+final modifier is deterministic, idempotent, and limited to `metav1.Object` metadata so it cannot
+perform external lifecycle side effects during a retry.
 
 The existing broader pre-lock `Modifier` changes to return an error so the reserved-label guard can
 stop before the claim/create write. Guard failures are terminal for that operation and are not
@@ -265,8 +266,9 @@ Clone follows the same finalization flow and derives the ID from the clone's own
 inherits a sandbox-ID label from its source or template.
 
 When no final modifier is configured, infra performs no extra read or update. With assignment
-enabled, the path adds one direct Get; the first assignment adds one Update. A Sandbox that already
-has a label skips the Update unless another final metadata modifier changed the object.
+enabled, the path adds one informer Get in the steady state (zero direct Gets); the first
+assignment adds one Update. A Sandbox that already has a label skips the Update unless another
+final metadata modifier changed the object. Conflict retries add one APIReader Get per attempt.
 
 Failure in this final stage fails the claim/clone and uses the existing cleanup path. This is an
 accepted trade-off: the Sandbox may already be ready, but the create response is not emitted until
@@ -567,7 +569,7 @@ normalization may be removed separately after operators confirm no supported old
 
 | Risk | Mitigation |
 |---|---|
-| Final assignment adds API traffic and a new failure point | Disabled by default; one direct Get per enabled operation, one Update only on first assignment; retain operation-stage timing and error logs |
+| Final assignment adds API traffic and a new failure point | Disabled by default; one informer Get per enabled operation (APIReader only on conflict), one Update only on first assignment; retain operation-stage timing and error logs |
 | Client receives short ID before every informer sees the label | Return only after persistence; keep existing eventual-consistency retries; do not create a second alias |
 | Late peer events delete or revive a newer route | ObjectKey/RV ordering plus permanent deletion fences |
 | Permanent fences consume memory | Informer filtering avoids allocations for out-of-scope objects; every ObjectKey accepted from informer, lifecycle, or peer feeders contributes to growth, with 100,000 keys costing tens of MiB |

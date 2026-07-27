@@ -11,8 +11,8 @@
 
 - [x] 2.1 Change claim and clone pre-lock `Modifier` callbacks to return errors and update existing callers to preserve their current mutations while returning `nil` (design §8).
 - [x] 2.2 Add the optional metadata-only `PostModifier func(metav1.Object) (bool, error)` to claim and clone options without introducing sandbox-ID policy into infra (design §8).
-- [x] 2.3 Execute PostModifier after existing post-processing by direct `APIReader` Get, deep copy, conditional Update, and wrapper refresh; skip all extra work when the callback is nil (design §8.1).
-- [x] 2.4 Re-read through `APIReader` and re-run the idempotent callback on each conflict retry, honoring context cancellation and preserving NotFound as an operation failure (design §§8.1-8.2, 17).
+- [x] 2.3 Execute PostModifier after existing post-processing by reusing sandboxcr `retryUpdate` (informer Get, deep copy, conditional Update, RV-monotonic wrapper refresh); skip all extra work when the callback is nil (design §8.1).
+- [x] 2.4 On update conflict, re-read through `APIReader` and re-run the idempotent callback; first-attempt direct `APIReader` Get is forbidden; informer NotFound fails the operation with no APIReader fallback; context cancellation stops the attempt and is never reported as success (design §§8.1-8.2, 17).
 - [x] 2.5 Preserve manager error codes and original callback/update causes through the public claim and clone boundaries (design §§8.2, 17).
 - [x] 2.6 Extend the existing infra claim/clone tables for nil, unchanged, changed, conflict, callback error, cancellation, refresh, and ordering cases (design §18.5).
 

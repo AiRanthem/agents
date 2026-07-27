@@ -16,8 +16,6 @@ limitations under the License.
 
 package sandboxroute
 
-import "k8s.io/apimachinery/pkg/types"
-
 // Get returns the unique active route for id.
 func (s *Store) Get(id string) (Route, bool) {
 	s.mu.RLock()
@@ -38,10 +36,4 @@ func (s *Store) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.activeKeyByID)
-}
-
-func (s *Store) deactivateRouteLocked(key types.NamespacedName, id string) {
-	if activeKey, exists := s.activeKeyByID[id]; exists && activeKey == key {
-		delete(s.activeKeyByID, id)
-	}
 }

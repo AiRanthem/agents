@@ -172,8 +172,8 @@ func sandboxIDAssignmentErrorReason(state *sandboxIDAssignmentState, duration ti
 		return ""
 	}
 	// Failures before the final stage (readiness, runtime, token, or CSI) are
-	// operation failures, not Sandbox ID assignment failures. applyPostModifier
-	// records a non-zero duration even when its first direct Get fails.
+	// operation failures, not Sandbox ID assignment failures. The PostModifier
+	// stage records a non-zero duration even when its first informer Get fails.
 	if duration <= 0 {
 		return ""
 	}

@@ -63,3 +63,9 @@ func NewStore() *Store {
 		activeKeyByID:    make(map[string]types.NamespacedName),
 	}
 }
+
+func (s *Store) deactivateRouteLocked(key types.NamespacedName, id string) {
+	if activeKey, exists := s.activeKeyByID[id]; exists && activeKey == key {
+		delete(s.activeKeyByID, id)
+	}
+}
