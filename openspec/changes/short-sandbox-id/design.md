@@ -277,17 +277,21 @@ Pre-lock modifiers are mutation-only callbacks and must not invoke external life
 
 The post modifier runs after all existing claim/clone post-process steps have succeeded, including readiness/runtime/CSI work, and immediately before the successful result is returned.
 
-Infra performs the following sequence:
+Infra reuses the existing sandboxcr `retryUpdate` helper:
 
-1. Read the current Sandbox directly through `APIReader`, bypassing the informer cache.
+1. Read the current Sandbox through the informer-backed client.
 2. Deep-copy it.
 3. Invoke `PostModifier` on the copy.
-4. If `changed` is false, refresh the wrapper with the fresh object and skip Update.
-5. If `changed` is true, persist the modified object with conflict retry.
-6. Refresh the infra wrapper with the object returned by the successful Update.
+4. If `changed` is false, skip Update and refresh the wrapper from the object returned by that Get only when its ResourceVersion is not older than the wrapper's current view. The informer view may lag behind writes made earlier in the same operation; the monotonic guard ensures the wrapper never rolls back to a stale object.
+5. If `changed` is true, persist the modified object. On update conflict, re-read through `APIReader` (cache known stale), deep-copy again, and re-run the callback.
+6. On a successful Update, refresh the infra wrapper with the written object.
 7. Return the wrapper to core.
 
-The first attempt and every conflict retry use `APIReader`, not the informer-backed client. The callback is re-run on a fresh copy during a conflict retry. It must therefore be deterministic and idempotent for the latest object and must not perform external side effects. Short assignment satisfies this rule: it assigns from UID only when the label is empty and otherwise returns `changed=false`.
+The first read uses the informer client. A first-attempt direct `APIReader` Get is forbidden; `APIReader` is used only after conflict when the informer cache is known to be stale, matching other `retryUpdate` callers. The callback is re-run on a fresh copy during a conflict retry. It must therefore be deterministic and idempotent for the latest object and must not perform external side effects. Short assignment satisfies this rule: it assigns from UID only when the label is empty and otherwise returns `changed=false`.
+
+Each retry attempt checks context cancellation before reading. `retry.OnError` rewrites interrupted errors (context cancellation included) to the last conflict, which is nil when no conflict happened; `retryUpdate` restores the last attempt error so cancellation is never reported as success.
+
+If the first informer Get returns NotFound, `retryUpdate` fails the operation with no `APIReader` fallback (unlike `InplaceRefresh`). This is accepted because PostModifier runs only after WaitReady and earlier post-process stages that already observed the object in cache; residual race risk is low and is not closed by an unconditional direct read.
 
 If `PostModifier` is nil, no additional read or update is performed.
 
@@ -297,7 +301,7 @@ An error from the callback, refresh, conflict retry, context cancellation, or up
 
 The Sandbox may already have completed readiness work before this failure. This is an accepted consequence of placing final identity mutation after existing post-processes.
 
-An enabled assignment path performs one additional direct API-server Get. The first short assignment also performs an Update; a Sandbox that already has a non-empty label skips the Update when no preceding caller post modifier changed other state. Conflicts may require repeated direct Get/Update attempts. This added API traffic and the new final-stage failure point are accepted operational costs; diagnosis relies on structured assignment logs and existing claim/clone stage timings.
+An enabled assignment path performs one additional informer Get in the steady state (zero direct API-server Gets). The first short assignment also performs an Update; a Sandbox that already has a non-empty label skips the Update when no preceding caller post modifier changed other state. Only conflict retries add APIReader Gets (one per retry attempt) and may repeat Update. This added traffic and the new final-stage failure point are accepted operational costs; diagnosis relies on structured assignment logs and existing claim/clone stage timings.
 
 ### 8.3 Allowed transition window
 
@@ -317,7 +321,7 @@ The Create/Clone E2B success response is emitted only after infra refreshes the 
 ### 9.2 Claim with assignment enabled
 
 1. Existing claim behavior completes.
-2. The final post modifier examines the fresh Sandbox.
+2. The final post modifier examines the Sandbox from `retryUpdate`'s informer-first read.
 3. An existing non-empty label is preserved.
 4. Otherwise, a short ID is generated from the Sandbox UID and written as the label.
 5. Infra persists and refreshes the wrapper.
@@ -860,8 +864,8 @@ Extend existing `TryClaimSandbox` and `CloneSandbox` table tests to cover:
 
 - nil callback causes no extra update;
 - callback runs after current post-processes;
-- first mutation read uses `APIReader`, not the informer client, and uses a fresh deep copy;
-- `changed=false` refreshes the wrapper and skips Update;
+- first mutation read uses the informer client; `APIReader` is used only after update conflict;
+- `changed=false` refreshes the wrapper only from a Get result whose ResourceVersion is not older, and skips Update;
 - `changed=true` persists exactly once without a conflict;
 - update conflict re-reads through `APIReader` and retries;
 - callback remains idempotent across retry;

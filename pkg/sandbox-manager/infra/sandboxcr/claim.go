@@ -414,7 +414,10 @@ func runClaimPostProcesses(ctx context.Context, sbx *Sandbox, lockType infra.Loc
 
 	if opts.PostModifier != nil {
 		start := time.Now()
-		err := sbx.applyPostModifier(ctx, opts.PostModifier)
+		postCtx := logs.Extend(ctx, "stage", "post modifier")
+		_, err := sbx.retryUpdate(postCtx, func(cr *v1alpha1.Sandbox) (bool, error) {
+			return opts.PostModifier(cr)
+		})
 		metrics.PostModifier = time.Since(start)
 		metrics.Total += metrics.PostModifier
 		if err != nil {

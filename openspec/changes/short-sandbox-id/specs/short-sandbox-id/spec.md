@@ -120,7 +120,7 @@ The system MUST fail the overall claim or clone and use its existing cleanup pat
 
 #### Scenario: Final callback makes no change
 - **WHEN** the final callback reports `changed=false`
-- **THEN** the returned Sandbox is refreshed from the direct read and no Update is issued
+- **THEN** the returned Sandbox is refreshed from that attempt's informer Get only when it is not older than the current wrapper view, and no Update is issued
 
 ### Requirement: Opaque unique cache lookup
 The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat client-provided IDs as opaque, and request at most one result under the supported global-ID uniqueness contract.

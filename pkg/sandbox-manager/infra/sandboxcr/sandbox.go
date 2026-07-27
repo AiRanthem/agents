@@ -18,15 +18,12 @@ package sandboxcr
 
 import (
 	"context"
-	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -130,9 +127,13 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool,
 	objectKey := client.ObjectKeyFromObject(s.Sandbox)
 	updated := false
 	first := true
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	var attemptErr error
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() (err error) {
+		defer func() { attemptErr = err }()
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		latest := &agentsv1alpha1.Sandbox{}
-		var err error
 		if first {
 			err = s.Cache.GetClient().Get(ctx, objectKey, latest)
 		} else {
@@ -149,7 +150,11 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool,
 			return err
 		}
 		if !shouldUpdate {
-			s.Sandbox = latest
+			// The informer view may lag behind writes made earlier in the same
+			// operation; never roll the wrapper back to an older object.
+			if expectations.IsResourceVersionNewer(s.Sandbox.ResourceVersion, latest.ResourceVersion) {
+				s.Sandbox = latest
+			}
 			updated = false
 			return nil
 		}
@@ -164,6 +169,12 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool,
 		updated = true
 		return nil
 	})
+	if err == nil && attemptErr != nil {
+		// retry.OnError rewrites wait.Interrupted errors (context cancellation
+		// included) to the last conflict, which is nil when no conflict
+		// happened; restore the real cause instead of reporting success.
+		err = attemptErr
+	}
 	if err != nil {
 		log.Error(err, "failed to update sandbox after retries")
 		return false, err
@@ -174,71 +185,6 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool,
 		log.Info("sandbox update skipped")
 	}
 	return updated, nil
-}
-
-// applyPostModifier runs a metadata-only mutation against a fresh API-server
-// object. Every conflict retry re-reads through APIReader before re-running the
-// callback so the callback always observes the latest persisted metadata.
-func (s *Sandbox) applyPostModifier(ctx context.Context, modifier func(metav1.Object) (bool, error)) error {
-	if modifier == nil {
-		return nil
-	}
-	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
-	objectKey := client.ObjectKeyFromObject(s.Sandbox)
-	var lastConflict error
-	err := wait.ExponentialBackoffWithContext(ctx, retry.DefaultRetry, func(ctx context.Context) (bool, error) {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-
-		latest := &agentsv1alpha1.Sandbox{}
-		getErr := s.Cache.GetAPIReader().Get(ctx, objectKey, latest)
-		if getErr != nil {
-			return false, getErr
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-
-		copied := latest.DeepCopy()
-		changed, err := modifier(copied)
-		if err != nil {
-			return false, err
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		if !changed {
-			s.Sandbox = latest
-			return true, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-
-		updateErr := s.Cache.GetClient().Update(ctx, copied)
-		if updateErr != nil {
-			if apierrors.IsConflict(updateErr) {
-				lastConflict = updateErr
-				return false, nil
-			}
-			return false, updateErr
-		}
-		s.Sandbox = copied
-		expectations.ResourceVersionExpectationExpect(copied)
-		return true, nil
-	})
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if lastConflict != nil && stderrors.Is(err, wait.ErrWaitTimeout) {
-			return lastConflict
-		}
-		log.Error(err, "failed to apply post modifier")
-		return err
-	}
-	return nil
 }
 
 func (s *Sandbox) refreshFromAPIReader(ctx context.Context) error {
