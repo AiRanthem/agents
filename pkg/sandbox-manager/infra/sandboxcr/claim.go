@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -60,6 +61,11 @@ var errSandboxCreateNotAttempted = errors.New("sandbox create not attempted")
 func ValidateAndInitClaimOptions(opts infra.ClaimSandboxOptions) (infra.ClaimSandboxOptions, error) {
 	if opts.User == "" {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("user is required")
+	}
+	// Owner is also synced to a pod label (AnnotationOwner key). Annotation
+	// values are unrestricted but label values are not, so reject early.
+	if errs := content.IsLabelValue(opts.User); len(errs) > 0 {
+		return infra.ClaimSandboxOptions{}, fmt.Errorf("invalid owner %q for pod label %s: %s", opts.User, v1alpha1.AnnotationOwner, strings.Join(errs, "; "))
 	}
 	if opts.Template == "" {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("template is required")
@@ -752,6 +758,16 @@ func performLockSandbox(ctx context.Context, sbx *Sandbox, lockType infra.LockTy
 	log := klog.FromContext(ctx)
 	c := cache.GetClient()
 	utils.LockSandbox(sbx.Sandbox, opts.LockString, opts.User)
+	// Sync owner onto the pod template as a label so selectors/policies can
+	// match it. Reuse AnnotationOwner as the label key so the value stays
+	// aligned with the sandbox owner annotation written by LockSandbox.
+	// opts.User was validated as a label value in ValidateAndInitClaimOptions.
+	podLabels := sbx.GetPodLabels()
+	if podLabels == nil {
+		podLabels = make(map[string]string, 1)
+	}
+	podLabels[v1alpha1.AnnotationOwner] = opts.User
+	sbx.SetPodLabels(podLabels)
 	var updated *v1alpha1.Sandbox
 	var err error
 	if lockType == infra.LockTypeCreate {
