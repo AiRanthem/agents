@@ -141,7 +141,7 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts ClaimSandboxOpti
 	log := klog.FromContext(ctx)
 	infraOpts := opts.Infra
 	infraOpts.Admission = m.quotaAdmission(infraOpts.User, opts.Quota)
-	infraOpts, assignmentState := m.prepareClaimSandboxIdentity(infraOpts)
+	infraOpts = m.prepareClaimSandboxIdentity(infraOpts)
 
 	if !m.infra.HasTemplate(ctx, infra.HasTemplateOptions{Namespace: infraOpts.Namespace, Name: infraOpts.Template}) {
 		// Template lookup failed before any sandbox was picked, so lock_type is unknown.
@@ -155,7 +155,6 @@ func (m *SandboxManager) ClaimSandbox(ctx context.Context, opts ClaimSandboxOpti
 		attribute.Int(tracing.AttrClaimRetries, claimMetrics.Retries),
 		attribute.Float64(tracing.AttrClaimDuration, claimMetrics.Total.Seconds()),
 	)
-	recordSandboxIDAssignment(ctx, assignmentState, claimMetrics.PostModifier, err)
 	if err != nil {
 		log.Error(err, "failed to claim sandbox", "metrics", claimMetrics.String())
 		// claimMetrics may carry the actual lock_type even on failure; fall back to
@@ -195,10 +194,9 @@ func (m *SandboxManager) CloneSandbox(ctx context.Context, opts CloneSandboxOpti
 	log := klog.FromContext(ctx)
 	infraOpts := opts.Infra
 	infraOpts.Admission = m.quotaAdmission(infraOpts.User, opts.Quota)
-	infraOpts, assignmentState := m.prepareCloneSandboxIdentity(infraOpts)
+	infraOpts = m.prepareCloneSandboxIdentity(infraOpts)
 
 	sandbox, cloneMetrics, err := m.infra.CloneSandbox(ctx, infraOpts)
-	recordSandboxIDAssignment(ctx, assignmentState, cloneMetrics.PostModifier, err)
 	if err != nil {
 		log.Error(err, "failed to clone sandbox", "metrics", cloneMetrics)
 		sandboxCloneTotal.WithLabelValues(infraOpts.Namespace, "failure").Inc()

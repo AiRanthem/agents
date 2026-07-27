@@ -301,7 +301,7 @@ An error from the callback, refresh, conflict retry, context cancellation, or up
 
 The Sandbox may already have completed readiness work before this failure. This is an accepted consequence of placing final identity mutation after existing post-processes.
 
-An enabled assignment path performs one additional informer Get in the steady state (zero direct API-server Gets). The first short assignment also performs an Update; a Sandbox that already has a non-empty label skips the Update when no preceding caller post modifier changed other state. Only conflict retries add APIReader Gets (one per retry attempt) and may repeat Update. This added traffic and the new final-stage failure point are accepted operational costs; diagnosis relies on structured assignment logs and existing claim/clone stage timings.
+An enabled assignment path performs one additional informer Get in the steady state (zero direct API-server Gets). The first short assignment also performs an Update; a Sandbox that already has a non-empty label skips the Update when no preceding caller post modifier changed other state. Only conflict retries add APIReader Gets (one per retry attempt) and may repeat Update. This added traffic and the new final-stage failure point are accepted operational costs; diagnosis relies on existing PostModifier and claim/clone error logs and stage timings.
 
 ### 8.3 Allowed transition window
 
@@ -711,13 +711,13 @@ If compatibility is eventually removed, that is a separate code change after ope
 Short-ID identity events do not add dedicated Prometheus series. Legacy resolution and assignment
 success/failure are not counted in aggregate metrics.
 
-Structured logs for assignment/update failures include namespace and name with fixed reason enums.
-Successful assignment is debug-level to avoid noisy per-Sandbox info logs.
+Assignment does not add dedicated result logs. Failures remain visible through the existing
+PostModifier retry/update log and the enclosing claim/clone error logs.
 
 Claim/clone metrics continue to expose total duration. Post-modifier and shared short-ID route
 Store/peer Prometheus series are removed; conflict and failure details stay in structured logs.
-Assignment failure reasons, route mutation outcomes, and stale results remain fixed fields in
-structured logs instead of Prometheus labels.
+Route mutation outcomes and stale results remain fixed fields in structured logs instead of
+Prometheus labels.
 
 Shared Store processing and peer compatibility do not emit dedicated short-ID route Prometheus
 series. Metrics do not trigger validation of non-empty labels.
