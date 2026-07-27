@@ -243,21 +243,24 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 			expectError: "not found",
 		},
 		{
-			name: "admin key exists",
+			name: "admin key exists under id",
 			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
 				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "admin-key", Name: "admin"}
 				b, err := json.Marshal(admin)
 				require.NoError(t, err)
 				return newSecretStorageForTest(t, map[string][]byte{
-					"admin-key":         b,
 					AdminKeyID.String(): b,
 				})
 			},
-			assertion: func(t *testing.T, storage *secretKeyStorage, _ client.Client) {
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
 				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
 				require.True(t, found)
 				require.Equal(t, "admin-key", loaded.Key)
 				require.Equal(t, models.AdminTeam(), loaded.Team)
+				secret := getSecretForTest(t, c)
+				assert.Len(t, secret.Data, 1)
+				_, hasLegacy := secret.Data["admin-key"]
+				assert.False(t, hasLegacy)
 			},
 		},
 		{
@@ -272,6 +275,25 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 				var admin models.CreatedTeamAPIKey
 				require.NoError(t, json.Unmarshal(bytes, &admin))
 				require.Equal(t, models.AdminTeam(), admin.Team)
+			},
+		},
+		{
+			name: "legacy admin-key map entry gets id-keyed entry",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "admin-key", Name: "admin"}
+				b, err := json.Marshal(admin)
+				require.NoError(t, err)
+				return newSecretStorageForTest(t, map[string][]byte{
+					"admin-key": b,
+				})
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				secret := getSecretForTest(t, c)
+				_, ok := secret.Data[AdminKeyID.String()]
+				assert.True(t, ok)
+				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
+				require.True(t, found)
+				require.Equal(t, "admin-key", loaded.Key)
 			},
 		},
 		{

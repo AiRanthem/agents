@@ -161,9 +161,11 @@ func (k *secretKeyStorage) Init(ctx context.Context) error {
 		return err
 	}
 
-	// create admin key if needed
+	// create admin key if needed. Presence is keyed by AdminKeyID because that is
+	// the Secret.Data map key used by patch/refresh; checking k.AdminKey (the raw
+	// key string) would miss an already-persisted admin entry and re-patch on every Init.
 	// all replicas does the same operation, no matter who eventually wins the race.
-	if _, ok := secret.Data[k.AdminKey]; !ok {
+	if _, ok := secret.Data[AdminKeyID.String()]; !ok {
 		adminKey := &models.CreatedTeamAPIKey{
 			CreatedAt: time.Now(),
 			ID:        AdminKeyID,
