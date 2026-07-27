@@ -12,12 +12,13 @@ status: provisional
 
 ## Table of Contents
 
-- [Summary](#summary)
-- [Motivation](#motivation)
-  - [Current Problem](#current-problem)
-  - [Goals](#goals)
-  - [Non-Goals](#non-goals)
-- [Proposal](#proposal)
+- [Why](#why)
+  - [Summary](#summary)
+  - [Motivation](#motivation)
+    - [Current Problem](#current-problem)
+    - [Goals](#goals)
+    - [Non-Goals](#non-goals)
+- [What Changes](#what-changes)
   - [User Stories](#user-stories)
   - [User-Visible ID Behavior](#user-visible-id-behavior)
   - [Short-ID Encoding](#short-id-encoding)
@@ -33,6 +34,8 @@ status: provisional
   - [E2B Diagnostics](#e2b-diagnostics)
   - [Checkpoint and Pagination Semantics](#checkpoint-and-pagination-semantics)
   - [Configuration](#configuration)
+- [Capabilities](#capabilities)
+- [Impact](#impact)
 - [Compatibility and Upgrade Strategy](#compatibility-and-upgrade-strategy)
   - [Initial Rollout](#initial-rollout)
   - [Activation](#activation)
@@ -43,7 +46,9 @@ status: provisional
 - [Alternatives](#alternatives)
 - [Implementation History](#implementation-history)
 
-## Summary
+## Why
+
+### Summary
 
 OpenKruise Agents currently identifies a Sandbox with a readable value derived from its Kubernetes
 location:
@@ -66,9 +71,9 @@ new short ID is assigned; all components always honor an existing label. Manager
 one routing implementation that atomically replaces legacy routes with short routes, supports old
 peer payloads during binary rollout, and resolves active IDs through ObjectKey-backed records.
 
-## Motivation
+### Motivation
 
-### Current Problem
+#### Current Problem
 
 The legacy ID has useful operational properties: it is readable, deterministic, and reversible.
 Its length, however, grows with two independently variable Kubernetes names. The first label in an
@@ -91,7 +96,7 @@ A short opaque ID also removes the namespace and name that operators currently s
 The proposal restores that context explicitly in E2B success metadata and authorized error
 messages rather than encoding it back into the ID.
 
-### Goals
+#### Goals
 
 - Provide a stable UID-derived short suffix; configured prefixes use DNS-compatible characters,
   while operators own the resulting total length.
@@ -104,7 +109,7 @@ messages rather than encoding it back into the ID.
 - Restore namespace/name diagnostics without disclosing another tenant's Sandbox location.
 - Treat system-generated Sandbox IDs as globally unique within the supported protocol.
 
-### Non-Goals
+#### Non-Goals
 
 - Serving permanent legacy and short aliases for the same Sandbox.
 - Migrating every existing Sandbox in a background controller.
@@ -116,7 +121,7 @@ messages rather than encoding it back into the ID.
   writers. Such writes and any resulting duplicate IDs are outside the supported protocol and have
   undefined behavior.
 
-## Proposal
+## What Changes
 
 ### User Stories
 
@@ -492,6 +497,26 @@ claim/clone finalization. Disabling it later stops new assignments but does not 
 existing label. The prefix is prepended only to newly assigned IDs, includes no implicit separator,
 has no manager-enforced length limit, and must be identical across sandbox-manager replicas.
 
+## Capabilities
+
+### New Capabilities
+
+- `short-sandbox-id`: This proposal introduces an optional operator-configured prefix plus a 26-character Sandbox ID suffix derived from the complete 128-bit Kubernetes Sandbox UID.
+
+### Modified Capabilities
+
+None.
+
+## Impact
+
+The current format is also embedded in multiple internal paths:
+
+- claimed-Sandbox cache indexing and lookup;
+- manager proxy and sandbox-gateway route keys;
+- peer route synchronization;
+- Checkpoint source association;
+- E2B responses, logs, and pagination keys.
+
 ## Compatibility and Upgrade Strategy
 
 ### Initial Rollout
@@ -544,7 +569,7 @@ normalization may be removed separately after operators confirm no supported old
 |---|---|
 | Final assignment adds API traffic and a new failure point | Disabled by default; one direct Get per enabled operation, one Update only on first assignment; retain operation-stage timing and error logs |
 | Client receives short ID before every informer sees the label | Return only after persistence; keep existing eventual-consistency retries; do not create a second alias |
-| Late supported peer events delete or revive a newer route | ObjectKey/RV ordering plus permanent deletion fences |
+| Late peer events delete or revive a newer route | ObjectKey/RV ordering plus permanent deletion fences |
 | Permanent fences consume memory | Informer filtering avoids allocations for out-of-scope objects; every ObjectKey accepted from informer, lifecycle, or peer feeders contributes to growth, with 100,000 keys costing tens of MiB |
 | `DeletedFinalStateUnknown` lacks a trustworthy final RV | Use deletionTimestamp updates and normal DELETE events; apply an empty-RV best-effort delete and accept the remaining narrow risk without APIReader repair |
 | Cluster administrator writes or copies the reserved label | Outside the supported protocol and explicitly undefined; only core assignment may write the label |
@@ -554,12 +579,11 @@ normalization may be removed separately after operators confirm no supported old
 
 ## Observability
 
-Metrics use only bounded labels; namespace, name, UID, and Sandbox ID are excluded from metric
-dimensions. The implementation reports legacy resolution and short assignment success/failure.
-Shared Store mutations and peer compatibility do not emit dedicated short-ID route Prometheus
-series. Assignment error reasons, route outcomes, reserved-label validation failures, and
-PostModifier details remain in structured logs or existing claim/clone operation-stage timings. The
-Store simplification removes its dedicated Store/peer metrics.
+Short-ID identity events do not add dedicated Prometheus series for legacy resolution or assignment
+success/failure. Shared Store mutations and peer compatibility do not emit dedicated short-ID route
+Prometheus series. Assignment error reasons, route outcomes, reserved-label validation failures,
+and PostModifier details remain in structured logs or existing claim/clone operation-stage timings.
+The Store simplification removes its dedicated Store/peer metrics.
 
 Structured logs include namespace/name for internal assignment and route-mutation diagnostics.
 Successful assignment is debug-level to avoid per-Sandbox info-log volume. E2B-visible
