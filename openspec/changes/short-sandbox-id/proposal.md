@@ -583,13 +583,12 @@ normalization may be removed separately after operators confirm no supported old
 
 Short-ID identity events do not add dedicated Prometheus series for legacy resolution or assignment
 success/failure. Shared Store mutations and peer compatibility do not emit dedicated short-ID route
-Prometheus series. Assignment error reasons, route outcomes, reserved-label validation failures,
-and PostModifier details remain in structured logs or existing claim/clone operation-stage timings.
-The Store simplification removes its dedicated Store/peer metrics.
+Prometheus series. Assignment failures and reserved-label validation failures remain visible through
+existing PostModifier and claim/clone error logs and operation-stage timings. Route outcomes remain
+in structured logs. The Store simplification removes its dedicated Store/peer metrics.
 
-Structured logs include namespace/name for internal assignment and route-mutation diagnostics.
-Successful assignment is debug-level to avoid per-Sandbox info-log volume. E2B-visible
-errors include resource context only after authorization.
+Structured logs include namespace/name for route-mutation diagnostics. Assignment does not add
+dedicated result logs. E2B-visible errors include resource context only after authorization.
 
 ## Test Plan
 

@@ -123,11 +123,11 @@
 
 ## 11. Observability
 
-- [x] 11.1 Remove dedicated Sandbox ID Prometheus metrics for legacy resolution and assignment; keep identity diagnosis in structured logs only (design §15).
+- [x] 11.1 Remove dedicated Sandbox ID Prometheus metrics for legacy resolution and assignment; keep assignment failures visible through existing PostModifier and claim/clone error logs (design §15).
 - [x] 11.2 Keep shared Store mutation and peer compatibility out of dedicated short-ID route metrics
   while retaining route outcomes in structured logs (design §15).
-- [x] 11.3 Add structured assignment and fencing logs with fixed reason enums; keep successful
-  assignment at debug level and preserve access-token redaction (design §15).
+- [x] 11.3 Keep fencing logs with fixed reason enums, avoid dedicated assignment result logs, and
+  preserve access-token redaction (design §15).
 
 ## 12. Verification and Boundary Audit
 

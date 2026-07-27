@@ -311,8 +311,9 @@ supported, and rollback to such a binary is prohibited.
 ### Requirement: Bounded identity observability
 The implementation SHALL NOT add dedicated Prometheus series for legacy resolution or assignment
 success/failure. Shared short-ID Route Store processing and peer compatibility SHALL NOT add
-dedicated Prometheus series. Assignment and route diagnosis SHALL use structured logs with fixed
-reason enums where applicable.
+dedicated Prometheus series. Assignment failures SHALL remain observable through existing
+PostModifier and claim/clone error logs. Route diagnosis SHALL use structured logs with fixed reason
+enums where applicable.
 
 #### Scenario: Identity event has no dedicated metric
 - **WHEN** legacy resolution or assignment produces an observable result
@@ -320,5 +321,5 @@ reason enums where applicable.
   route and retry details in structured logs
 
 #### Scenario: Internal diagnostic is logged
-- **WHEN** assignment or route mutation requires resource-specific diagnosis
-- **THEN** structured logs may include namespace and name while successful assignment remains debug-level
+- **WHEN** assignment fails or route mutation requires resource-specific diagnosis
+- **THEN** assignment uses existing PostModifier and claim/clone error logs, while route diagnostics may include namespace and name

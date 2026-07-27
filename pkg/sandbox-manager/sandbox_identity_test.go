@@ -17,10 +17,8 @@ limitations under the License.
 package sandbox_manager
 
 import (
-	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +31,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
-func TestGuardPreModifier(t *testing.T) {
+func TestDecoratePreModifier(t *testing.T) {
 	tests := []struct {
 		name           string
 		labels         map[string]string
@@ -82,7 +80,7 @@ func TestGuardPreModifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			modifier := guardPreModifier(tt.modifier)
+			modifier := decoratePreModifier(tt.modifier)
 			if tt.modifier == nil {
 				assert.Nil(t, modifier)
 				return
@@ -100,67 +98,7 @@ func TestGuardPreModifier(t *testing.T) {
 	}
 }
 
-func TestTrackSandboxIDAssignmentObject(t *testing.T) {
-	tests := []struct {
-		name          string
-		enabled       bool
-		caller        bool
-		callerError   string
-		expectNil     bool
-		expectCalls   int
-		expectTracked bool
-	}{
-		{name: "disabled nil modifier stays nil", expectNil: true},
-		{name: "disabled caller remains untracked", caller: true, expectCalls: 1},
-		{name: "enabled nil modifier tracks selected object", enabled: true, expectTracked: true},
-		{name: "enabled caller error preserves tracking", enabled: true, caller: true, callerError: "caller failed", expectCalls: 1, expectTracked: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			state := &sandboxIDAssignmentState{enabled: tt.enabled}
-			calls := 0
-			var modifier func(infra.Sandbox) error
-			if tt.caller {
-				modifier = func(infra.Sandbox) error {
-					calls++
-					if tt.callerError != "" {
-						return errors.New(tt.callerError)
-					}
-					return nil
-				}
-			}
-
-			tracked := trackSandboxIDAssignmentObject(state, modifier)
-			if tt.expectNil {
-				assert.Nil(t, tracked)
-				return
-			}
-			require.NotNil(t, tracked)
-			sandbox := sandboxcr.AsSandbox(&agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-				Namespace: "team-a",
-				Name:      "sandbox-a",
-			}}, nil)
-			err := tracked(sandbox)
-			if tt.callerError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.callerError)
-			} else {
-				require.NoError(t, err)
-			}
-			assert.Equal(t, tt.expectCalls, calls)
-			if tt.expectTracked {
-				assert.Equal(t, "team-a", state.namespace)
-				assert.Equal(t, "sandbox-a", state.name)
-			} else {
-				assert.Empty(t, state.namespace)
-				assert.Empty(t, state.name)
-			}
-		})
-	}
-}
-
-func TestComposePostModifier(t *testing.T) {
+func TestDecoratePostModifier(t *testing.T) {
 	callerErr := errors.New("caller failed")
 	tests := []struct {
 		name             string
@@ -174,7 +112,6 @@ func TestComposePostModifier(t *testing.T) {
 		expectID         string
 		expectError      string
 		expectReserved   bool
-		expectAssigned   bool
 		expectAnnotation string
 	}{
 		{name: "disabled without caller stays nil", expectNil: true},
@@ -228,7 +165,6 @@ func TestComposePostModifier(t *testing.T) {
 			},
 			expectChanged:    true,
 			expectID:         "aaaaaaaaaaaaaaaaaaaaaaaaae",
-			expectAssigned:   true,
 			expectAnnotation: "caller-first",
 		},
 		{
@@ -238,7 +174,6 @@ func TestComposePostModifier(t *testing.T) {
 			uid:              types.UID("00000000-0000-0000-0000-000000000001"),
 			expectChanged:    true,
 			expectID:         "prod-aaaaaaaaaaaaaaaaaaaaaaaaae",
-			expectAssigned:   true,
 		},
 		{
 			name:             "enabled assignment preserves existing ID",
@@ -267,7 +202,7 @@ func TestComposePostModifier(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			object := &metav1.ObjectMeta{UID: tt.uid, Labels: tt.labels}
-			modifier, state := composePostModifier(tt.modifier, tt.enableAssignment, tt.prefix)
+			modifier := decoratePostModifier(tt.modifier, tt.enableAssignment, tt.prefix)
 			if tt.expectNil {
 				assert.Nil(t, modifier)
 				return
@@ -286,36 +221,7 @@ func TestComposePostModifier(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectChanged, changed)
 			assert.Equal(t, tt.expectID, object.GetLabels()[sandboxid.LabelKey])
-			assert.Equal(t, tt.expectAssigned, state.assigned)
 			assert.Equal(t, tt.expectAnnotation, object.GetAnnotations()["order"])
-		})
-	}
-}
-
-func TestSandboxIDAssignmentErrorReason(t *testing.T) {
-	operationErr := errors.New("assignment operation failed")
-	tests := []struct {
-		name     string
-		state    *sandboxIDAssignmentState
-		duration time.Duration
-		err      error
-		expect   string
-	}{
-		{name: "nil state", duration: time.Nanosecond, err: operationErr},
-		{name: "assignment disabled", state: &sandboxIDAssignmentState{}, duration: time.Nanosecond, err: operationErr},
-		{name: "successful operation", state: &sandboxIDAssignmentState{enabled: true}, duration: time.Nanosecond},
-		{name: "failure before final stage", state: &sandboxIDAssignmentState{enabled: true}, err: operationErr},
-		{name: "caller callback failure", state: &sandboxIDAssignmentState{enabled: true, callerFailed: true}, duration: time.Nanosecond, err: operationErr},
-		{name: "direct read failure", state: &sandboxIDAssignmentState{enabled: true}, duration: time.Nanosecond, err: operationErr, expect: "read_failed"},
-		{name: "invalid UID", state: &sandboxIDAssignmentState{enabled: true, assignmentRan: true, invalidUID: true}, duration: time.Nanosecond, err: operationErr, expect: "invalid_uid"},
-		{name: "context canceled", state: &sandboxIDAssignmentState{enabled: true}, duration: time.Nanosecond, err: context.Canceled, expect: "context_done"},
-		{name: "context deadline", state: &sandboxIDAssignmentState{enabled: true}, duration: time.Nanosecond, err: context.DeadlineExceeded, expect: "context_done"},
-		{name: "update failure", state: &sandboxIDAssignmentState{enabled: true, assignmentRan: true}, duration: time.Nanosecond, err: operationErr, expect: "update_failed"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expect, sandboxIDAssignmentErrorReason(tt.state, tt.duration, tt.err))
 		})
 	}
 }
