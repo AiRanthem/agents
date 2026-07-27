@@ -211,7 +211,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 	infraInstance := sandboxcr.NewInfraBuilder(opts).
 		WithCache(cache).
 		WithAPIReader(fc).
-		WithProxy(proxyServer).
+		WithRouteVersionReader(proxyServer).
 		Build()
 	require.NoError(t, infraInstance.Run(t.Context()))
 
@@ -222,7 +222,7 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(cache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer), nil
+				WithRouteVersionReader(proxyServer), nil
 		}).
 		Build()
 	require.NoError(t, err)
@@ -259,6 +259,28 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 		signal.Stop(controller.stop)
 		_ = controller.server.Close()
 		require.NoError(t, <-serverErr)
+	}
+}
+
+func TestNewControllerPropagatesShortSandboxIDOption(t *testing.T) {
+	tests := []struct {
+		name                 string
+		enableShortSandboxID bool
+	}{
+		{name: "disabled", enableShortSandboxID: false},
+		{name: "enabled", enableShortSandboxID: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			controller := NewController(ControllerOptions{
+				Manager: config.SandboxManagerOptions{
+					EnableShortSandboxID: tt.enableShortSandboxID,
+				},
+			})
+
+			assert.Equal(t, tt.enableShortSandboxID, controller.mgrOpts.EnableShortSandboxID)
+		})
 	}
 }
 
@@ -340,7 +362,7 @@ func TestControllerShutdownStopsManagerAfterHTTPShutdown(t *testing.T) {
 			builder := sandboxcr.NewInfraBuilder(opts).
 				WithCache(fakeCache).
 				WithAPIReader(fc).
-				WithProxy(proxyServer)
+				WithRouteVersionReader(proxyServer)
 			return stopProbeInfraBuilder{
 				base: builder,
 				stop: func() {

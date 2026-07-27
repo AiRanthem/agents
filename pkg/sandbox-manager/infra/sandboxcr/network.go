@@ -27,6 +27,7 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/utils/network"
 )
 
@@ -122,7 +123,7 @@ func (s *Sandbox) CreateNetworkPolicy(ctx context.Context, netConfig infra.Sandb
 	}
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s))
 	k8sClient := s.Cache.GetClient()
-	sandboxID := s.GetSandboxID()
+	sandboxID := sandboxid.Resolve(s.Sandbox)
 	namespace := s.GetNamespace()
 
 	allowCIDRs, allowDomains := network.SplitAllowOut(netConfig.AllowOut)
@@ -143,7 +144,7 @@ func (s *Sandbox) CreateNetworkPolicy(ctx context.Context, netConfig infra.Sandb
 func (s *Sandbox) UpdateNetworkPolicy(ctx context.Context, netConfig infra.SandboxNetworkConfig) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s))
 	k8sClient := s.Cache.GetClient()
-	sandboxID := s.GetSandboxID()
+	sandboxID := sandboxid.Resolve(s.Sandbox)
 	namespace := s.GetNamespace()
 
 	allowCIDRs, allowDomains := network.SplitAllowOut(netConfig.AllowOut)
@@ -210,7 +211,7 @@ func (s *Sandbox) UpdateNetworkPolicy(ctx context.Context, netConfig infra.Sandb
 func (s *Sandbox) SelectNetworkPolicy(ctx context.Context) (*infra.SandboxNetworkConfig, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s))
 	k8sClient := s.Cache.GetClient()
-	sandboxID := s.GetSandboxID()
+	sandboxID := sandboxid.Resolve(s.Sandbox)
 	namespace := s.GetNamespace()
 
 	config := &infra.SandboxNetworkConfig{}
