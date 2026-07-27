@@ -52,6 +52,7 @@ type SandboxManagerOptions struct {
 	ExtProcMaxConcurrency uint32
 	MemberlistBindPort    int
 	EnableShortSandboxID  bool
+	ShortSandboxIDPrefix  string
 	RestConfig            *rest.Config
 	Quota                 QuotaOptions
 }

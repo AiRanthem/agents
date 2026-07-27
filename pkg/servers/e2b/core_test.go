@@ -266,9 +266,10 @@ func TestNewControllerPropagatesShortSandboxIDOption(t *testing.T) {
 	tests := []struct {
 		name                 string
 		enableShortSandboxID bool
+		shortSandboxIDPrefix string
 	}{
 		{name: "disabled", enableShortSandboxID: false},
-		{name: "enabled", enableShortSandboxID: true},
+		{name: "enabled with prefix", enableShortSandboxID: true, shortSandboxIDPrefix: "prod-"},
 	}
 
 	for _, tt := range tests {
@@ -276,10 +277,12 @@ func TestNewControllerPropagatesShortSandboxIDOption(t *testing.T) {
 			controller := NewController(ControllerOptions{
 				Manager: config.SandboxManagerOptions{
 					EnableShortSandboxID: tt.enableShortSandboxID,
+					ShortSandboxIDPrefix: tt.shortSandboxIDPrefix,
 				},
 			})
 
 			assert.Equal(t, tt.enableShortSandboxID, controller.mgrOpts.EnableShortSandboxID)
+			assert.Equal(t, tt.shortSandboxIDPrefix, controller.mgrOpts.ShortSandboxIDPrefix)
 		})
 	}
 }

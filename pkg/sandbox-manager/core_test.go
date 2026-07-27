@@ -100,6 +100,7 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 		expectExtProcConcurrency uint32
 		expectMaxCreateQPS       int
 		expectMemberlistBindPort int
+		expectShortIDPrefix      string
 	}{
 		{
 			name:                     "default options should be initialized",
@@ -118,12 +119,14 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 				ExtProcMaxConcurrency: 200,
 				MaxCreateQPS:          50,
 				MemberlistBindPort:    8000,
+				ShortSandboxIDPrefix:  "prod-",
 			},
 			expectSystemNamespace:    "custom-namespace",
 			expectMaxClaimWorkers:    20,
 			expectExtProcConcurrency: 200,
 			expectMaxCreateQPS:       50,
 			expectMemberlistBindPort: 8000,
+			expectShortIDPrefix:      "prod-",
 		},
 	}
 
@@ -139,6 +142,28 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 			assert.Equal(t, tt.expectExtProcConcurrency, builder.opts.ExtProcMaxConcurrency)
 			assert.Equal(t, tt.expectMaxCreateQPS, builder.opts.MaxCreateQPS)
 			assert.Equal(t, tt.expectMemberlistBindPort, builder.opts.MemberlistBindPort)
+			assert.Equal(t, tt.expectShortIDPrefix, builder.instance.shortIDPrefix)
+		})
+	}
+}
+
+func TestSandboxManagerBuilderValidatesShortIDPrefixBeforeInfra(t *testing.T) {
+	tests := []struct {
+		name        string
+		prefix      string
+		expectError string
+	}{
+		{name: "invalid characters are rejected", prefix: "INVALID_", expectError: "short sandbox id prefix"},
+		{name: "long prefix passes validation", prefix: strings.Repeat("a", 128), expectError: "infra builder is not configured"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewSandboxManagerBuilder(config.SandboxManagerOptions{
+				ShortSandboxIDPrefix: tt.prefix,
+			}).Build()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectError)
 		})
 	}
 }

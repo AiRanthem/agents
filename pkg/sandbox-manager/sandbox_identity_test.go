@@ -165,6 +165,7 @@ func TestComposePostModifier(t *testing.T) {
 	tests := []struct {
 		name             string
 		enableAssignment bool
+		prefix           string
 		uid              types.UID
 		labels           map[string]string
 		modifier         func(metav1.Object) (bool, error)
@@ -231,11 +232,12 @@ func TestComposePostModifier(t *testing.T) {
 			expectAnnotation: "caller-first",
 		},
 		{
-			name:             "enabled assignment uses final UID",
+			name:             "enabled assignment prepends configured prefix",
 			enableAssignment: true,
+			prefix:           "prod-",
 			uid:              types.UID("00000000-0000-0000-0000-000000000001"),
 			expectChanged:    true,
-			expectID:         "aaaaaaaaaaaaaaaaaaaaaaaaae",
+			expectID:         "prod-aaaaaaaaaaaaaaaaaaaaaaaaae",
 			expectAssigned:   true,
 		},
 		{
@@ -265,7 +267,7 @@ func TestComposePostModifier(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			object := &metav1.ObjectMeta{UID: tt.uid, Labels: tt.labels}
-			modifier, state := composePostModifier(tt.modifier, tt.enableAssignment)
+			modifier, state := composePostModifier(tt.modifier, tt.enableAssignment, tt.prefix)
 			if tt.expectNil {
 				assert.Nil(t, modifier)
 				return

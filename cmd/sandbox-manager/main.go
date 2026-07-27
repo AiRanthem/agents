@@ -82,6 +82,7 @@ func main() {
 	var domain string
 	var e2bMaxTimeout int
 	var enableShortSandboxID bool
+	var shortSandboxIDPrefix string
 	var e2bMinResumeTimeout int
 	var sysNs string
 	var peerSelector string
@@ -120,6 +121,11 @@ func main() {
 			"preserved for /kruise/* customized paths).")
 	pflag.IntVar(&e2bMaxTimeout, "e2b-max-timeout", models.DefaultMaxTimeout, "E2B maximum timeout in seconds")
 	pflag.BoolVar(&enableShortSandboxID, "enable-short-sandbox-id", false, "Assign short IDs to successfully claimed or cloned Sandboxes")
+	pflag.StringVar(&shortSandboxIDPrefix, "short-sandbox-id-prefix", "",
+		"Prefix prepended verbatim to newly assigned short Sandbox IDs when --enable-short-sandbox-id is set; "+
+			"must start with a lowercase letter or digit and otherwise contain only lowercase letters, digits, or hyphens; "+
+			"no length limit is enforced here—operators must keep the resulting ID within Kubernetes label and DNS limits; "+
+			"use the same value on every sandbox-manager replica")
 	pflag.IntVar(&e2bMinResumeTimeout, "e2b-min-resume-timeout", models.DefaultMinResumeTimeoutSeconds,
 		"Minimum value (seconds) for the timeout parameter carried by the E2B connect API; "+
 			"timeout values below this floor will be raised to this value.")
@@ -334,6 +340,7 @@ func main() {
 			ExtProcMaxConcurrency: uint32(extProcMaxConcurrency),
 			MemberlistBindPort:    memberlistBindPort,
 			EnableShortSandboxID:  enableShortSandboxID,
+			ShortSandboxIDPrefix:  shortSandboxIDPrefix,
 			RestConfig:            clientConfig,
 			Quota:                 quotaOpts,
 		},

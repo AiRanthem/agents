@@ -34,6 +34,7 @@ func TestInitOptions(t *testing.T) {
 		expectMaxCreateQPS       int
 		expectMemberlistBindPort int
 		expectEnableShortID      bool
+		expectShortIDPrefix      string
 	}{
 		{
 			name:                     "all empty fields should use defaults",
@@ -186,6 +187,7 @@ func TestInitOptions(t *testing.T) {
 				SandboxNamespace:     "sandbox-ns",
 				SandboxLabelSelector: "env=prod",
 				EnableShortSandboxID: true,
+				ShortSandboxIDPrefix: "prod-",
 			},
 			expectSystemNamespace:    utils.DefaultSandboxDeployNamespace,
 			expectMaxClaimWorkers:    consts.DefaultClaimWorkers,
@@ -193,6 +195,7 @@ func TestInitOptions(t *testing.T) {
 			expectMaxCreateQPS:       consts.DefaultCreateQPS,
 			expectMemberlistBindPort: DefaultMemberlistBindPort,
 			expectEnableShortID:      true,
+			expectShortIDPrefix:      "prod-",
 		},
 	}
 
@@ -206,6 +209,7 @@ func TestInitOptions(t *testing.T) {
 			assert.Equal(t, tt.expectMaxCreateQPS, result.MaxCreateQPS)
 			assert.Equal(t, tt.expectMemberlistBindPort, result.MemberlistBindPort)
 			assert.Equal(t, tt.expectEnableShortID, result.EnableShortSandboxID)
+			assert.Equal(t, tt.expectShortIDPrefix, result.ShortSandboxIDPrefix)
 
 			// Verify non-configurable fields are preserved
 			if tt.input.PeerSelector != "" {

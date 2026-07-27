@@ -80,6 +80,7 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 			proxy:              proxy.NewServer(opts),
 			memberlistBindPort: opts.MemberlistBindPort,
 			enableShortID:      opts.EnableShortSandboxID,
+			shortIDPrefix:      opts.ShortSandboxIDPrefix,
 			primary:            &primaryState{},
 		},
 		opts: opts,
@@ -159,6 +160,10 @@ func (b *SandboxManagerBuilder) WithQuotaEnforcer(qe QuotaEnforcer) *SandboxMana
 }
 
 func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
+	if err := sandboxid.ValidatePrefix(b.opts.ShortSandboxIDPrefix); err != nil {
+		return nil, errors.NewError(errors.ErrorInternal, "short sandbox id prefix: %v", err)
+	}
+
 	// Build infra
 	if b.buildInfraFunc == nil {
 		return nil, errors.NewError(errors.ErrorInternal, "infra builder is not configured: call WithSandboxInfra or WithCustomInfra before Build")
@@ -214,6 +219,7 @@ type SandboxManager struct {
 	routeSubscription infra.RouteSandboxSubscription
 
 	enableShortID bool
+	shortIDPrefix string
 
 	primary *primaryState
 	elector *primaryElector

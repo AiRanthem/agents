@@ -117,6 +117,7 @@ func setupTestManager(t *testing.T, opts ...config.SandboxManagerOptions) (*Sand
 		infra:         infraInstance,
 		proxy:         proxyServer,
 		enableShortID: infraOption.EnableShortSandboxID,
+		shortIDPrefix: infraOption.ShortSandboxIDPrefix,
 	}
 
 	return manager, fc
@@ -336,8 +337,11 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 			},
 		},
 		{
-			name:           "Assignment enabled transitions recycled legacy sandbox across claim surfaces",
-			managerOptions: config.SandboxManagerOptions{EnableShortSandboxID: true},
+			name: "Assignment enabled transitions recycled legacy sandbox across claim surfaces",
+			managerOptions: config.SandboxManagerOptions{
+				EnableShortSandboxID: true,
+				ShortSandboxIDPrefix: "claim-",
+			},
 			opts: infra.ClaimSandboxOptions{
 				User:     username,
 				Template: "short-id-pool",
@@ -354,8 +358,9 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				sandbox.Status.RecycledCount = 1
 			},
 			postCheck: func(t *testing.T, manager *SandboxManager, client ctrlclient.Client, sbx infra.Sandbox) {
-				expectedID, err := sandboxid.GenerateShort(sbx.GetUID())
+				encodedID, err := sandboxid.GenerateShort(sbx.GetUID())
 				require.NoError(t, err)
+				expectedID := "claim-" + encodedID
 				assert.Equal(t, expectedID, sbx.GetLabels()[agentsv1alpha1.LabelSandboxID])
 				assert.Equal(t, "applied-before-assignment", sbx.GetLabels()["test.example/post-modifier"])
 				assert.Equal(t, expectedID, manager.ResolveSandboxID(sbx))
@@ -1129,8 +1134,11 @@ func TestSandboxManager_CloneSandbox(t *testing.T) {
 		errorCheck             func(t *testing.T, client ctrlclient.Client)
 	}{
 		{
-			name:           "successful clone assigns identity from clone UID",
-			managerOptions: config.SandboxManagerOptions{EnableShortSandboxID: true},
+			name: "successful clone assigns identity from clone UID",
+			managerOptions: config.SandboxManagerOptions{
+				EnableShortSandboxID: true,
+				ShortSandboxIDPrefix: "clone-",
+			},
 			opts: infra.CloneSandboxOptions{
 				User:             user,
 				CheckPointID:     checkpointID,
@@ -1140,11 +1148,12 @@ func TestSandboxManager_CloneSandbox(t *testing.T) {
 			createdUID:     types.UID("123e4567-e89b-12d3-a456-426614174001"),
 			setupResources: true,
 			postCheck: func(t *testing.T, manager *SandboxManager, client ctrlclient.Client, sbx infra.Sandbox) {
-				expectedID, err := sandboxid.GenerateShort(sbx.GetUID())
+				encodedID, err := sandboxid.GenerateShort(sbx.GetUID())
 				require.NoError(t, err)
 				checkpointDerivedID, err := sandboxid.GenerateShort(types.UID("123e4567-e89b-12d3-a456-426614174099"))
 				require.NoError(t, err)
-				assert.NotEqual(t, checkpointDerivedID, expectedID)
+				expectedID := "clone-" + encodedID
+				assert.NotEqual(t, checkpointDerivedID, encodedID)
 				assert.Equal(t, expectedID, sbx.GetLabels()[agentsv1alpha1.LabelSandboxID])
 				assert.Equal(t, expectedID, manager.ResolveSandboxID(sbx))
 
