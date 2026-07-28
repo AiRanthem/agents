@@ -283,7 +283,7 @@ flowchart LR
     S[Sandbox CR] --> R[pkg/sandboxid resolver]
     R --> M[SandboxManager facade]
     R --> C[Claimed-Sandbox cache index]
-    R --> P[sandboxroute FromSandbox]
+    R --> P[sandboxroute ProjectSandbox]
     M --> E[E2B responses / Checkpoints / pagination]
     P --> MS[Manager Route Store]
     P --> GS[Gateway Route Store]
@@ -299,11 +299,15 @@ flowchart LR
 | infra | Generic mutation/persistence plus neutral Sandbox informer event adaptation |
 | E2B server | Request validation and response/error presentation |
 
-The backend-neutral `infra.Sandbox` interface no longer exposes `GetSandboxID()` or `GetRoute()`.
-Manager wraps `infra.Sandbox` in a manager-owned projection source that resolves the ID and runtime
-token without moving either policy into Infra, then passes that source to shared stateless projection.
-Infra adds only the format-neutral `GetPodIP()` capability and may retain an opaque Route reader
-for its existing cache-staleness check.
+The backend-neutral `infra.Sandbox` interface keeps `GetRoute()` only as a pure delegate with no
+projection logic of its own. It keeps a
+read-only, label-aware `GetSandboxID()` (persisted label first, legacy fallback) with no assignment
+or format policy, adds the format-neutral `GetIP()` capability, and may retain an opaque Route
+reader for its existing cache-staleness check. ID, access-token, and traffic-auth derivation are
+centralized inside shared stateless projection (`sandboxroute.ProjectSandbox`), and
+`infra.Sandbox.GetRoute()` is a pure delegate to it, so Manager call sites need no wrapper. This supersedes the earlier
+per-component projection-source wrappers, which duplicated the derivation policy and had already
+diverged on the envd token fallback.
 
 Manager projection remains in the sandbox-manager composition root. Manager consumes a required
 neutral `RouteSandboxSource` subscription; the concrete `sandboxcr` source owns informer
@@ -314,9 +318,9 @@ Sandbox informer before its manager starts. Route maintenance performs no APIRea
 components use the same neutral routing implementation, while Running-state enforcement remains in
 their request paths.
 
-The gateway informer adapter passes a lightweight Sandbox CR projection source that owns
-label-aware Sandbox-ID resolution and token compatibility to shared `sandboxroute.FromSandbox`,
-while its local registry wraps the shared Store. Every informer-visible, non-deleting Sandbox is
+The gateway informer adapter projects the watched Sandbox CR through the shared
+`sandboxroute.ProjectSandbox` entry point, which applies the same centralized ID resolution and
+token compatibility as every other producer, while its local registry wraps the shared Store. Every informer-visible, non-deleting Sandbox is
 projected and Upserted, regardless of state. A deletionTimestamp update or Delete event emits
 partial `Route{Namespace,Name,ResourceVersion}` directly from the event object. Namespace and
 selector filtering happen at the informer boundary, so objects outside the observation scope do
@@ -341,7 +345,7 @@ copied labels, forged peer Routes, and cross-cluster delivery have undefined beh
 ### Shared Routing Model
 
 Manager proxy and sandbox-gateway remain separate processes and therefore keep separate in-memory
-stores. They share the same `pkg/sandboxroute` Route, `FromSandbox`, and Store
+stores. They share the same `pkg/sandboxroute` Route, `ProjectSandbox`, and Store
 implementation.
 
 Each full Route carries:

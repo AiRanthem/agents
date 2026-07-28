@@ -35,6 +35,8 @@ import (
 	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
@@ -65,6 +67,14 @@ type Sandbox struct {
 
 func (s *Sandbox) GetIP() string {
 	return s.Status.PodInfo.PodIP
+}
+
+func (s *Sandbox) GetSandboxID() string {
+	return sandboxid.Resolve(s.Sandbox)
+}
+
+func (s *Sandbox) GetRoute() (sandboxroute.Route, error) {
+	return sandboxroute.ProjectSandbox(s.Sandbox)
 }
 
 var DefaultDeleteSandbox = deleteSandbox

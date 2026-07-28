@@ -77,10 +77,11 @@ func TestManagerProjectionAccessTokenCompatibility(t *testing.T) {
 			expectToken: "runtime-token",
 		},
 		{
-			name: "legacy envd token is not used",
+			name: "legacy envd token fallback",
 			annotations: map[string]string{
 				agentsv1alpha1.AnnotationEnvdAccessToken: "legacy-token",
 			},
+			expectToken: "legacy-token",
 		},
 		{
 			name: "runtime token wins over legacy envd token",
@@ -97,7 +98,7 @@ func TestManagerProjectionAccessTokenCompatibility(t *testing.T) {
 			sandbox := newManagerRouteTestSandbox("team-a", "token")
 			sandbox.Annotations = tt.annotations
 
-			route, err := (&SandboxManager{}).projectInfraSandbox(sandboxcr.AsSandbox(sandbox, nil))
+			route, err := sandboxcr.AsSandbox(sandbox, nil).GetRoute()
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expectToken, route.AccessToken)

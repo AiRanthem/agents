@@ -35,7 +35,6 @@ import (
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
-	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
 	"github.com/openkruise/agents/pkg/utils"
@@ -221,7 +220,7 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		log.Error(err, "sandbox creation failed")
 		return web.ApiResponse[*models.Sandbox]{}, mapInfraErrorToApiError(err)
 	}
-	log.Info("sandbox created", "id", sc.manager.ResolveSandboxID(sbx), "sbx", klog.KObj(sbx),
+	log.Info("sandbox created", "id", sbx.GetSandboxID(), "sbx", klog.KObj(sbx),
 		"resourceVersion", sbx.GetResourceVersion(), "totalCost", time.Since(claimStart))
 
 	// Create network CRs (TrafficPolicy) if network config is provided.
@@ -314,7 +313,7 @@ func (sc *Controller) createSandboxWithClone(ctx context.Context, request models
 		log.Error(err, "sandbox clone failed")
 		return web.ApiResponse[*models.Sandbox]{}, mapInfraErrorToApiError(err)
 	}
-	log.Info("sandbox cloned", "id", sc.manager.ResolveSandboxID(sbx), "sbx", klog.KObj(sbx),
+	log.Info("sandbox cloned", "id", sbx.GetSandboxID(), "sbx", klog.KObj(sbx),
 		"resourceVersion", sbx.GetResourceVersion(), "totalCost", time.Since(start))
 
 	// Create network CRs (TrafficPolicy) if network config is provided.
@@ -536,7 +535,7 @@ func createNetworkPolicyForSandbox(ctx context.Context, sbx infra.Sandbox, reque
 		DenyOut:  request.Network.DenyOut,
 	}); netErr != nil {
 		log.Error(netErr, "failed to create network policy, sandbox creation failed",
-			"sandboxID", sandboxid.Resolve(sbx))
+			"sandboxID", sbx.GetSandboxID())
 		killed := killSandboxAfterFailure(ctx, sbx, log)
 		return &web.ApiError{
 			Code:    http.StatusInternalServerError,
@@ -559,9 +558,9 @@ func killSandboxAfterFailure(ctx context.Context, sbx infra.Sandbox, log klog.Lo
 	}
 	if killErr := sbx.Kill(cleanupCtx); killErr != nil {
 		log.Error(killErr, "failed to kill sandbox after post-creation failure",
-			"sandboxID", sandboxid.Resolve(sbx))
+			"sandboxID", sbx.GetSandboxID())
 		return false
 	}
-	log.Info("sandbox killed after post-creation failure", "sandboxID", sandboxid.Resolve(sbx))
+	log.Info("sandbox killed after post-creation failure", "sandboxID", sbx.GetSandboxID())
 	return true
 }

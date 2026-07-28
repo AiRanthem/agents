@@ -19,50 +19,39 @@ package sandboxroute
 import (
 	"errors"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/identity"
+	"github.com/openkruise/agents/pkg/sandboxid"
+	"github.com/openkruise/agents/pkg/utils"
 )
 
-// ProjectionSource exposes the backend-neutral Sandbox data needed to construct a Route.
-type ProjectionSource interface {
-	metav1.Object
-	GetIP() string
-	GetState() (state, reason string)
-	GetID() string
-	GetAccessToken() string
-	RequiresTrafficAuth() bool
-}
-
-// ProjectRoute constructs a Route from a projection-ready Sandbox source.
-func ProjectRoute(source ProjectionSource) (Route, error) {
-	if source == nil {
-		return Route{}, errors.New("project route: source is nil")
+// ProjectSandbox constructs a Route from a Sandbox CR. ID, access-token, and
+// traffic-auth derivation are centralized here so every component projects
+// routes with identical compatibility policy. A sandbox without a Pod IP is
+// always treated as creating, matching the existing manager and gateway
+// behavior.
+func ProjectSandbox(sandbox *agentsv1alpha1.Sandbox) (Route, error) {
+	if sandbox == nil {
+		return Route{}, errors.New("project route: sandbox is nil")
 	}
 
-	ip := source.GetIP()
-	annotations := source.GetAnnotations()
+	ip := sandbox.Status.PodInfo.PodIP
+	state := agentsv1alpha1.SandboxStateCreating
+	if ip != "" {
+		state, _ = utils.GetSandboxState(sandbox)
+	}
+	annotations := sandbox.GetAnnotations()
 
 	return admitRoute(Route{
 		IP:                 ip,
-		ID:                 source.GetID(),
-		Namespace:          source.GetNamespace(),
-		Name:               source.GetName(),
-		UID:                source.GetUID(),
+		ID:                 sandboxid.Resolve(sandbox),
+		Namespace:          sandbox.Namespace,
+		Name:               sandbox.Name,
+		UID:                sandbox.UID,
 		Owner:              annotations[agentsv1alpha1.AnnotationOwner],
-		State:              stateOf(source, ip),
-		ResourceVersion:    source.GetResourceVersion(),
-		AccessToken:        source.GetAccessToken(),
-		RequireTrafficAuth: source.RequiresTrafficAuth(),
+		State:              state,
+		ResourceVersion:    sandbox.ResourceVersion,
+		AccessToken:        utils.GetAccessToken(sandbox),
+		RequireTrafficAuth: identity.IsAccessTokenRequested(sandbox),
 	})
-}
-
-// stateOf returns the routing-normalized state. A source without a Pod IP is
-// always treated as creating, matching the existing manager and gateway behavior.
-func stateOf(source ProjectionSource, ip string) string {
-	state, _ := source.GetState()
-	if ip == "" {
-		return agentsv1alpha1.SandboxStateCreating
-	}
-	return state
 }

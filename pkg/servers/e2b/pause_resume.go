@@ -130,7 +130,7 @@ func (sc *Controller) buildPauseOptions(ctx context.Context, sbx infra.Sandbox, 
 	if headerRetention != nil {
 		retention = *headerRetention
 	} else {
-		retention, reservePausedFor = resolvePersistedPauseRetention(ctx, sc.manager.ResolveSandboxID(sbx), sbx.GetAnnotations())
+		retention, reservePausedFor = resolvePersistedPauseRetention(ctx, sbx.GetSandboxID(), sbx.GetAnnotations())
 	}
 	timeoutOpts := buildPauseTimeoutOptions(sbx.GetTimeout(), now, retention)
 	return infra.PauseOptions{
@@ -236,7 +236,7 @@ func computeTimeoutOptions(autoPause bool, now time.Time, timeoutSeconds int, pa
 
 func (sc *Controller) buildSetTimeoutOptions(ctx context.Context, sbx infra.Sandbox, autoPause bool, now time.Time, timeoutSeconds int) (timeout.Options, map[string]string) {
 	if autoPause {
-		retention, reservePausedFor := resolvePersistedPauseRetention(ctx, sc.manager.ResolveSandboxID(sbx), sbx.GetAnnotations())
+		retention, reservePausedFor := resolvePersistedPauseRetention(ctx, sbx.GetSandboxID(), sbx.GetAnnotations())
 		return computeTimeoutOptions(true, now, timeoutSeconds, retention), reservePausedForAnnotations(reservePausedFor)
 	}
 	return computeTimeoutOptions(false, now, timeoutSeconds, 0), nil
@@ -330,7 +330,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 // post-Resume value, and concurrent-writer races resolve to the longer
 // timeout. Short-circuits for never-timeout sandboxes.
 func (sc *Controller) updateConnectTimeout(ctx context.Context, sbx infra.Sandbox, timeoutSeconds int, preConnectState string, autoPause bool, currentEndAt time.Time) *web.ApiError {
-	log := klog.FromContext(ctx).WithValues("sandboxID", sc.manager.ResolveSandboxID(sbx))
+	log := klog.FromContext(ctx).WithValues("sandboxID", sbx.GetSandboxID())
 
 	if currentEndAt.IsZero() {
 		log.Info("skip resetting timeout for never-timeout sandbox")

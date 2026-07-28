@@ -28,36 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/identity"
+	"github.com/openkruise/agents/pkg/sandboxid"
 )
-
-type projectionTestSource struct {
-	metav1.ObjectMeta
-	podIP       string
-	state       string
-	id          string
-	accessToken string
-	requireAuth bool
-}
-
-func (s *projectionTestSource) GetIP() string {
-	return s.podIP
-}
-
-func (s *projectionTestSource) GetState() (string, string) {
-	return s.state, ""
-}
-
-func (s *projectionTestSource) GetID() string {
-	return s.id
-}
-
-func (s *projectionTestSource) GetAccessToken() string {
-	return s.accessToken
-}
-
-func (s *projectionTestSource) RequiresTrafficAuth() bool {
-	return s.requireAuth
-}
 
 func TestRouteAdmissionValidation(t *testing.T) {
 	tests := []struct {
@@ -162,63 +135,149 @@ func TestRouteSecurityAndJSONCompatibility(t *testing.T) {
 	}
 }
 
-func TestProjectRoute(t *testing.T) {
-	source := &projectionTestSource{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns", Name: "name", UID: "uid", ResourceVersion: "7",
-			Annotations: map[string]string{agentsv1alpha1.AnnotationOwner: "owner"},
-		},
-		podIP:       "10.0.0.1",
-		state:       agentsv1alpha1.SandboxStateRunning,
-		id:          "opaque-id",
-		accessToken: "runtime-token",
-		requireAuth: true,
+func TestProjectSandboxDerivation(t *testing.T) {
+	newSandbox := func(labels, annotations map[string]string) *agentsv1alpha1.Sandbox {
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations[agentsv1alpha1.AnnotationOwner] = "owner"
+		return &agentsv1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "ns", Name: "name", UID: "uid", ResourceVersion: "7",
+				Labels: labels, Annotations: annotations,
+			},
+			Status: agentsv1alpha1.SandboxStatus{
+				Phase:   agentsv1alpha1.SandboxRunning,
+				PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
+				Conditions: []metav1.Condition{{
+					Type:   string(agentsv1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				}},
+			},
+		}
 	}
-	emptyID := *source
-	emptyID.id = ""
-	emptyIP := *source
-	emptyIP.podIP = ""
 	tests := []struct {
 		name        string
-		source      ProjectionSource
-		expectIP    string
-		expectState string
+		sandbox     *agentsv1alpha1.Sandbox
+		expectID    string
 		expectToken string
+		expectAuth  bool
 		expectError string
 	}{
 		{
-			name:        "projection",
-			source:      source,
-			expectIP:    "10.0.0.1",
-			expectState: agentsv1alpha1.SandboxStateRunning,
+			name:     "legacy ID resolution",
+			sandbox:  newSandbox(nil, nil),
+			expectID: "ns--name",
+		},
+		{
+			name:     "short label ID wins",
+			sandbox:  newSandbox(map[string]string{sandboxid.LabelKey: "short-id"}, nil),
+			expectID: "short-id",
+		},
+		{
+			name: "runtime token wins over legacy envd token",
+			sandbox: newSandbox(nil, map[string]string{
+				agentsv1alpha1.AnnotationRuntimeAccessToken: "runtime-token",
+				agentsv1alpha1.AnnotationEnvdAccessToken:    "legacy-token",
+			}),
+			expectID:    "ns--name",
 			expectToken: "runtime-token",
 		},
 		{
-			name:        "empty IP normalizes to creating",
-			source:      &emptyIP,
-			expectState: agentsv1alpha1.SandboxStateCreating,
-			expectToken: "runtime-token",
+			name: "legacy envd token fallback",
+			sandbox: newSandbox(nil, map[string]string{
+				agentsv1alpha1.AnnotationEnvdAccessToken: "legacy-token",
+			}),
+			expectID:    "ns--name",
+			expectToken: "legacy-token",
 		},
-		{name: "nil source", expectError: "source is nil"},
-		{name: "empty resolution", source: &emptyID, expectError: "ID must not be empty"},
+		{
+			name: "jwt auth requires exact true",
+			sandbox: newSandbox(nil, map[string]string{
+				identity.AnnotationEnableJwtAuth: agentsv1alpha1.True,
+			}),
+			expectID:   "ns--name",
+			expectAuth: true,
+		},
+		{
+			name: "jwt auth non-true value is ignored",
+			sandbox: newSandbox(nil, map[string]string{
+				identity.AnnotationEnableJwtAuth: "True",
+			}),
+			expectID: "ns--name",
+		},
+		{
+			name:        "empty metadata rejected as invalid legacy ID",
+			sandbox:     &agentsv1alpha1.Sandbox{},
+			expectError: "invalid legacy sandbox ID",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			route, err := ProjectRoute(tt.source)
+			route, err := ProjectSandbox(tt.sandbox)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, fullRoute("opaque-id", "ns", "name", "uid", "7"), Route{
+			assert.Equal(t, fullRoute(tt.expectID, "ns", "name", "uid", "7"), Route{
 				ID: route.ID, Namespace: route.Namespace, Name: route.Name, UID: route.UID, ResourceVersion: route.ResourceVersion,
 			})
-			assert.Equal(t, tt.expectIP, route.IP)
-			assert.Equal(t, tt.expectState, route.State)
+			assert.Equal(t, "10.0.0.1", route.IP)
+			assert.Equal(t, agentsv1alpha1.SandboxStateRunning, route.State)
 			assert.Equal(t, "owner", route.Owner)
 			assert.Equal(t, tt.expectToken, route.AccessToken)
-			assert.True(t, route.RequireTrafficAuth)
+			assert.Equal(t, tt.expectAuth, route.RequireTrafficAuth)
+		})
+	}
+}
+
+func TestProjectSandbox(t *testing.T) {
+	sandbox := &agentsv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "ns", Name: "name", UID: "uid", ResourceVersion: "7",
+			Annotations: map[string]string{agentsv1alpha1.AnnotationRuntimeAccessToken: "runtime-token"},
+		},
+		Status: agentsv1alpha1.SandboxStatus{
+			Phase:   agentsv1alpha1.SandboxRunning,
+			PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
+			Conditions: []metav1.Condition{{
+				Type:   string(agentsv1alpha1.SandboxConditionReady),
+				Status: metav1.ConditionTrue,
+			}},
+		},
+	}
+	tests := []struct {
+		name        string
+		sandbox     *agentsv1alpha1.Sandbox
+		expectState string
+		expectError string
+	}{
+		{name: "nil sandbox", expectError: "source is nil"},
+		{name: "running projection", sandbox: sandbox, expectState: agentsv1alpha1.SandboxStateRunning},
+		{
+			name: "empty IP normalizes to creating",
+			sandbox: func() *agentsv1alpha1.Sandbox {
+				clone := sandbox.DeepCopy()
+				clone.Status.PodInfo.PodIP = ""
+				return clone
+			}(),
+			expectState: agentsv1alpha1.SandboxStateCreating,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route, err := ProjectSandbox(tt.sandbox)
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "ns--name", route.ID)
+			assert.Equal(t, tt.expectState, route.State)
+			assert.Equal(t, "runtime-token", route.AccessToken)
 		})
 	}
 }

@@ -26,6 +26,6 @@ import (
 // passes the opaque resolved value to infra. A caller-supplied value is always
 // overwritten so server adapters cannot spoof historical identity.
 func (m *SandboxManager) CreateCheckpoint(ctx context.Context, sandbox infra.Sandbox, opts infra.CreateCheckpointOptions) (string, error) {
-	opts.SandboxID = m.ResolveSandboxID(sandbox)
+	opts.SandboxID = sandbox.GetSandboxID()
 	return sandbox.CreateCheckpoint(ctx, opts)
 }

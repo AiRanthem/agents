@@ -103,7 +103,7 @@ func (sc *Controller) getNamespaceOfUser(user *models.CreatedTeamAPIKey) string 
 
 func (sc *Controller) convertToE2BSandbox(sbx infra.Sandbox, accessToken, domain string) *models.Sandbox {
 	sandbox := &models.Sandbox{
-		SandboxID:       sc.manager.ResolveSandboxID(sbx),
+		SandboxID:       sbx.GetSandboxID(),
 		TemplateID:      sbx.GetTemplate(),
 		Domain:          domain,
 		EnvdVersion:     "0.2.10",
