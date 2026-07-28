@@ -268,7 +268,13 @@ type Sandbox interface {
 	Pause(ctx context.Context, opts PauseOptions) error   // Pause a Sandbox
 	Resume(ctx context.Context, opts ResumeOptions) error // Resume a paused Sandbox
 	GetIP() string
-	GetState() (string, string)   // Get Sandbox State (pending, running, paused, killing, etc.)
+	GetState() (string, string) // Get Sandbox State (pending, running, paused, killing, etc.)
+	// GetSandboxID returns the label-aware public Sandbox ID: the short ID from
+	// the sandbox-id label when assigned, otherwise the legacy namespace--name form.
+	GetSandboxID() string
+	// GetRoute projects this sandbox into its gateway route; it is a pure
+	// delegate to sandboxroute.ProjectSandbox.
+	GetRoute() (sandboxroute.Route, error)
 	GetTemplate() string          // Get the template name of the Sandbox
 	GetResource() SandboxResource // Get the CPU / Memory requirements of the Sandbox
 	// GetTrafficAccessToken returns the access token minted for accessing this
@@ -306,7 +312,8 @@ type Sandbox interface {
 
 // MergePodLabels merges the given labels into the sandbox's pod template labels.
 // Existing labels with the same key are overwritten. The sandbox's pod template
-// is initialized if necessary.
+// labels map is initialized if necessary; creating a missing pod template remains
+// the responsibility of the Sandbox implementation.
 func MergePodLabels(sbx Sandbox, labels map[string]string) {
 	if len(labels) == 0 {
 		return
@@ -323,7 +330,8 @@ func MergePodLabels(sbx Sandbox, labels map[string]string) {
 
 // MergePodAnnotations merges the given annotations into the sandbox's pod
 // template annotations. Existing annotations with the same key are overwritten.
-// The sandbox's pod template annotations map is initialized if necessary.
+// The annotations map is initialized if necessary; creating a missing pod
+// template remains the responsibility of the Sandbox implementation.
 func MergePodAnnotations(sbx Sandbox, annotations map[string]string) {
 	if len(annotations) == 0 {
 		return

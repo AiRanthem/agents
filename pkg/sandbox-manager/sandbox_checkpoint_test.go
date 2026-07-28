@@ -25,6 +25,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
 type checkpointSandboxStub struct {
@@ -50,6 +51,11 @@ func (s *checkpointSandboxStub) GetLabels() map[string]string {
 
 func (s *checkpointSandboxStub) GetAnnotations() map[string]string {
 	return s.annotations
+}
+
+// GetSandboxID must not fall through to the nil embedded infra.Sandbox.
+func (s *checkpointSandboxStub) GetSandboxID() string {
+	return sandboxid.Resolve(s)
 }
 
 func (s *checkpointSandboxStub) CreateCheckpoint(_ context.Context, opts infra.CreateCheckpointOptions) (string, error) {

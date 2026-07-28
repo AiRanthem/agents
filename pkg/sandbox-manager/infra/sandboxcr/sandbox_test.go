@@ -699,6 +699,25 @@ func TestSandbox_retryUpdate_ConflictRefreshesFromAPIReader(t *testing.T) {
 	assert.False(t, stored.Spec.Paused)
 }
 
+func TestSandbox_GetSandboxID(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   string
+	}{
+		{name: "legacy fallback without label", want: "team-a--sandbox-a"},
+		{name: "short label wins", labels: map[string]string{v1alpha1.LabelSandboxID: "short-id"}, want: "short-id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := AsSandbox(&v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
+				Namespace: "team-a", Name: "sandbox-a", Labels: tt.labels,
+			}}, nil)
+			assert.Equal(t, tt.want, s.GetSandboxID())
+		})
+	}
+}
+
 func TestSandbox_GetTemplate(t *testing.T) {
 	tests := []struct {
 		name string

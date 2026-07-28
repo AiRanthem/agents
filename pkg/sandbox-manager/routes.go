@@ -22,38 +22,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 
-	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
-	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/utils"
 )
-
-type managerProjectionSource struct {
-	infra.Sandbox
-}
-
-var _ sandboxroute.ProjectionSource = (*managerProjectionSource)(nil)
-
-func newManagerProjectionSource(sandbox infra.Sandbox) *managerProjectionSource {
-	if sandbox == nil {
-		return nil
-	}
-	return &managerProjectionSource{Sandbox: sandbox}
-}
-
-func (s *managerProjectionSource) GetID() string {
-	return sandboxid.Resolve(s.Sandbox)
-}
-
-func (s *managerProjectionSource) GetAccessToken() string {
-	return s.GetAnnotations()[agentsv1alpha1.AnnotationRuntimeAccessToken]
-}
-
-func (s *managerProjectionSource) RequiresTrafficAuth() bool {
-	return s.GetAnnotations()[identity.AnnotationEnableJwtAuth] == agentsv1alpha1.True
-}
 
 func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infra.RouteSandboxEvent) {
 	if event.Delete != nil {
@@ -81,17 +53,13 @@ func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infr
 		m.logRouteMutation(ctx, "delete", key, result)
 		return
 	}
-	route, err := m.projectInfraSandbox(event.Sandbox)
+	route, err := event.Sandbox.GetRoute()
 	if err != nil {
 		klog.FromContext(ctx).Error(err, "failed to project manager route", "namespace", key.Namespace, "name", key.Name)
 		return
 	}
 	result := m.proxy.SetRoute(ctx, route)
 	m.logRouteMutation(ctx, "upsert", key, result)
-}
-
-func (m *SandboxManager) projectInfraSandbox(sandbox infra.Sandbox) (sandboxroute.Route, error) {
-	return sandboxroute.ProjectRoute(newManagerProjectionSource(sandbox))
 }
 
 func (m *SandboxManager) logRouteMutation(ctx context.Context, operation string, key types.NamespacedName, result sandboxroute.MutationResult) {

@@ -25,7 +25,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,16 +35,10 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
-	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils/pagination"
 )
-
-// ResolveSandboxID returns the final public ID of a Sandbox for server-facing use.
-func (m *SandboxManager) ResolveSandboxID(sandbox metav1.Object) string {
-	return sandboxid.Resolve(sandbox)
-}
 
 // ClaimSandboxOptions wraps infra-level claim options with an optional quota spec.
 // The manager builds the admission internally from Quota and the infra User field.
@@ -329,7 +322,7 @@ func (m *SandboxManager) syncRoute(ctx context.Context, sbx infra.Sandbox, refre
 		}
 	}
 	start := time.Now()
-	route, err := m.projectInfraSandbox(sbx)
+	route, err := sbx.GetRoute()
 	if err != nil {
 		return err
 	}
@@ -416,7 +409,7 @@ func (m *SandboxManager) deleteRouteAndSync(ctx context.Context, sbx infra.Sandb
 		ResourceVersion: sbx.GetResourceVersion(),
 	})
 	m.logRouteMutation(ctx, "delete", key, result)
-	route, err := m.projectInfraSandbox(sbx)
+	route, err := sbx.GetRoute()
 	if err != nil {
 		log.Error(err, "failed to project deleted sandbox route")
 		return

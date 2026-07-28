@@ -152,6 +152,18 @@ remains on the wire for compatibility and validation but SHALL NOT participate i
 - **WHEN** any shared Route is formatted for logs
 - **THEN** its access token is rendered as `***`
 
+#### Scenario: Runtime access token takes priority
+- **WHEN** a projected Sandbox carries both the runtime access-token annotation and the legacy envd access-token annotation
+- **THEN** every component's projected Route carries the runtime token
+
+#### Scenario: Legacy envd token fallback
+- **WHEN** a projected Sandbox carries only the legacy envd access-token annotation
+- **THEN** every component's projected Route falls back to the envd token
+
+#### Scenario: Traffic auth requires the exact enable value
+- **WHEN** a projected Sandbox's JWT-auth annotation is absent or any value other than exactly `true`
+- **THEN** the projected Route does not require traffic auth
+
 #### Scenario: Active route is looked up
 - **WHEN** a caller gets an active Sandbox ID
 - **THEN** the Store resolves SandboxID to ObjectKey and reads the authoritative Route record under the same read lock

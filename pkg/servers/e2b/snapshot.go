@@ -50,7 +50,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 		log.Info("cannot create snapshot: sandbox is not running", "state", state, "reason", reason)
 		return web.ApiResponse[*models.Snapshot]{}, withSandboxResource(&web.ApiError{
 			Code:    http.StatusBadRequest,
-			Message: fmt.Sprintf("Sandbox %s is not running", sc.manager.ResolveSandboxID(sbx)),
+			Message: fmt.Sprintf("Sandbox %s is not running", sbx.GetSandboxID()),
 		}, sbx)
 	}
 	ctx, span := tracing.StartManagerSpan(ctx, tracing.SpanManagerCreateSnapshot)

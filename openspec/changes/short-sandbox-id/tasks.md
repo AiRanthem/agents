@@ -5,7 +5,7 @@
   including table-driven round-trip, invalid-encoding, fallback, trust, invalid-UID, and idempotency
   tests (design §§5, 7.1, 11.6, 18.2).
 - [x] 1.3 Add `--enable-short-sandbox-id=false` to sandbox-manager and make it gate assignment only, never label-aware resolution (design §6; spec: Flag-controlled final assignment).
-- [x] 1.4 Expose `SandboxManager.ResolveSandboxID` and route server-facing ID resolution through the manager facade (design §7.2).
+- [x] 1.4 Expose `SandboxManager.ResolveSandboxID` and route server-facing ID resolution through the manager facade (design §7.2). Revised: the facade became a pure pass-through after `infra.Sandbox.GetSandboxID()` was restored and was removed; servers call `GetSandboxID()` directly.
 
 ## 2. Generic Infra Mutation Plumbing
 
@@ -42,7 +42,7 @@
 
 ## 6. Shared Route, Projection, and Store
 
-- [x] 6.1 Add the neutral `pkg/sandboxroute` Route, projection-ready `ProjectionSource`, stateless `FromSandbox`, token-redacting `String`, and temporary compatibility aliases required for staged call-site migration (design §§11.1-11.2).
+- [x] 6.1 Add the neutral `pkg/sandboxroute` Route, projection-ready `ProjectionSource`, stateless `ProjectRoute`, token-redacting `String`, and temporary compatibility aliases required for staged call-site migration (design §§11.1-11.2). Revised: ID/token/traffic-auth derivation now lives inside `ProjectSandbox`, the sole exported projection entry point taking the Sandbox CR directly; the intermediate `ProjectionSource` abstraction was later collapsed.
 - [x] 6.2 Implement Store state for ObjectKey-backed full records, deletion fences, an active
   SandboxID-to-ObjectKey index, and structured mutation results (design §11.3).
 - [x] 6.3 Validate resourceVersions at the Route boundary and use Kubernetes' older/equal/newer comparison semantics in the Store (design §11.4).
@@ -80,8 +80,8 @@
 - [x] 8.1 Keep manager route projection and feeder composition in sandbox-manager, require neutral
   route sources to honor their configured observation scope, and remove Repairer ownership (design
   §§7.2-7.3, 11.7).
-- [x] 8.2 Remove `GetSandboxID` and `GetRoute` from `infra.Sandbox`, add only format-neutral `GetPodIP`, and keep any infra staleness dependency as an opaque Route reader (design §7.3).
-- [x] 8.3 Wrap `infra.Sandbox` in a manager-owned `ProjectionSource` and pass it to shared `FromSandbox`, without asking infra to select an ID, choose token compatibility, or construct a Route (design §§7.2, 11.2).
+- [x] 8.2 Remove `GetSandboxID` and `GetRoute` from `infra.Sandbox`, add only format-neutral `GetIP`, and keep any infra staleness dependency as an opaque Route reader (design §7.3). Revised: a read-only, label-aware `GetSandboxID` was restored on `infra.Sandbox` (resolution only, no assignment policy) for caller readability; `GetRoute` was also restored, but only as a pure delegate to `sandboxroute.ProjectSandbox` with no projection logic in infra.
+- [x] 8.3 Wrap `infra.Sandbox` in a manager-owned `ProjectionSource` and pass it to shared `ProjectRoute` (design §§7.2, 11.2). Revised: the manager wrapper was removed; `infra.Sandbox.GetRoute()` delegates to the shared `sandboxroute.ProjectSandbox`, which owns ID/token derivation, fixing the wrapper's missing envd token fallback.
 - [x] 8.4 Route cache events and claim/clone/pause/resume/delete/recycle lifecycle synchronization through shared stateless projection and authority-specific Store operations (design §11.7).
 - [x] 8.5 Replace manager proxy route storage and peer refresh handling with the shared Store while preserving component-specific status policy and HTTP result mapping (design §§11.1, 11.6-11.7).
 - [x] 8.6 Register the neutral route subscription before the shared cache starts so initial LIST Add
@@ -94,7 +94,7 @@
 
 ## 9. Sandbox-Gateway Route Integration
 
-- [x] 9.1 Wrap gateway registry around the shared Store and pass a lightweight state-snapshot source that owns label-aware ID resolution and token compatibility directly to shared `FromSandbox` (design §§11.1-11.2).
+- [x] 9.1 Wrap gateway registry around the shared Store and project informer Sandboxes through shared projection (design §§11.1-11.2). Revised: the gateway wrapper was replaced by the shared `ProjectSandbox` entry point; ID resolution and token compatibility are centralized in `ProjectSandbox`.
 - [x] 9.2 Replace key-only reconciliation with a raw informer handler that projects full Routes and
   preserves deletion object resourceVersions (design §§11.2, 11.5, 11.7).
 - [x] 9.3 Remove injected mixed-version delete fallback construction from gateway reconciliation and
@@ -113,10 +113,10 @@
 
 ## 10. E2B, Checkpoint, and Pagination Surfaces
 
-- [x] 10.1 Replace E2B direct infra ID selection in response conversion, logs, pagination, and operation context with `SandboxManager.ResolveSandboxID` (design §§7.2, 7.4, 16).
+- [x] 10.1 Replace E2B direct infra ID selection in response conversion, logs, pagination, and operation context with `SandboxManager.ResolveSandboxID` (design §§7.2, 7.4, 16). Revised: E2B now calls the neutral `infra.Sandbox.GetSandboxID()` directly; the manager facade was removed.
 - [x] 10.2 Add protected response-only `e2b.agents.kruise.io/sandbox-resource` metadata after ordinary filtering and prevent user override or persistence (design §13.1).
 - [x] 10.3 Append `sandboxResource=<namespace>/<name>` only to downstream errors after successful lookup and ownership authorization, preserving error codes and withholding context from not-found and unauthorized responses (design §13.2).
-- [x] 10.4 Use neutral `GetPodIP` for opt-in E2B Pod-IP metadata without constructing a Route (design §§7.3-7.4, 18.7).
+- [x] 10.4 Use neutral `GetIP` for opt-in E2B Pod-IP metadata without constructing a Route (design §§7.3-7.4, 18.7).
 - [x] 10.5 Route Checkpoint creation through manager core, overwrite the internal option with the final resolved ID, and reject an empty core-supplied ID in infra (design §12.1).
 - [x] 10.6 Keep Checkpoint history and Sandbox pagination IDs opaque and point-in-time, updating fixtures that assume reversibility while retaining explicit legacy cases (design §12).
 - [x] 10.7 Extend E2B response/error/list/snapshot tables for protected metadata, spoofing, authorization disclosure, Pod IP, historical Checkpoints, empty IDs, and opaque pagination (design §18.7).
@@ -135,7 +135,7 @@
 - [x] 12.2 Run focused unit tests only for changed packages under `pkg/`; do not run E2E tests under `test/` (design §18.8).
 - [x] 12.3 Statically confirm only manager core writes the Sandbox-ID label and that API/controller code outside core only compares the reserved key for validation or recycle preservation (design §18.8).
 - [x] 12.4 Statically confirm infra, E2B, cache, proxy utilities, and shared routing contain no Sandbox-ID format/assignment policy or prohibited manager-domain imports (design §18.8).
-- [x] 12.5 Statically confirm `infra.Sandbox` exposes neither `GetSandboxID` nor `GetRoute`, route
+- [x] 12.5 Statically confirm `infra.Sandbox.GetRoute` is a pure delegate to shared projection (its restored `GetSandboxID` is resolution-only), route
   maintenance contains no Repairer or APIReader query, gateway performs no direct production ID
   concatenation, and no new code parses client IDs on `--` (design §18.8).
 - [x] 12.6 Build sandbox-manager and sandbox-gateway binaries to `/private/tmp` only after focused tests and static checks pass (design §18.8).
@@ -143,8 +143,8 @@
 ## 13. Route Projection Simplification
 
 - [x] 13.1 Remove the stateful `Projector`, `ProjectionInput`, and projector fields/options from manager and gateway composition.
-- [x] 13.2 Centralize Sandbox metadata, state normalization, owner, resolved ID, and access-token assembly in `sandboxroute.FromSandbox`, while keeping component-specific resolution in projection sources and avoiding `infra.Sandbox.GetRoute()`.
-- [x] 13.3 Keep manager and gateway validation/retry semantics unchanged; retain gateway token fallback in its projection source and use one cached state snapshot for inclusion and projection.
+- [x] 13.2 Centralize Sandbox metadata, state normalization, owner, resolved ID, and access-token assembly in `sandboxroute.ProjectSandbox`, avoiding projection logic in infra. Revised: derivation moved fully into the shared projection; per-component projection sources were deleted and `infra.Sandbox.GetRoute()` is a pure delegate.
+- [x] 13.3 Keep manager and gateway validation/retry semantics unchanged; the envd token fallback now applies to both components through centralized derivation, and `ProjectSandbox` evaluates the state once per projection.
 - [x] 13.4 Update focused projection, manager, and gateway tests and re-run strict OpenSpec validation plus the affected builds.
 
 ## 14. Configurable Short-ID Prefix

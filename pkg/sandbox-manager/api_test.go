@@ -309,7 +309,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 			templateSetup: map[string]int{"legacy-pool": 1},
 			postCheck: func(t *testing.T, manager *SandboxManager, client ctrlclient.Client, sbx infra.Sandbox) {
 				legacyID := sandboxid.Legacy(sbx.GetNamespace(), sbx.GetName())
-				assert.Equal(t, legacyID, manager.ResolveSandboxID(sbx))
+				assert.Equal(t, legacyID, sbx.GetSandboxID())
 				assert.Empty(t, sbx.GetLabels()[agentsv1alpha1.LabelSandboxID])
 				persisted := &agentsv1alpha1.Sandbox{}
 				require.NoError(t, client.Get(t.Context(), types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, persisted))
@@ -327,7 +327,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				sandbox.Labels[agentsv1alpha1.LabelSandboxID] = "existing-short-id"
 			},
 			postCheck: func(t *testing.T, manager *SandboxManager, client ctrlclient.Client, sbx infra.Sandbox) {
-				assert.Equal(t, "existing-short-id", manager.ResolveSandboxID(sbx))
+				assert.Equal(t, "existing-short-id", sbx.GetSandboxID())
 				persisted := &agentsv1alpha1.Sandbox{}
 				require.NoError(t, client.Get(t.Context(), types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, persisted))
 				assert.Equal(t, "existing-short-id", persisted.Labels[agentsv1alpha1.LabelSandboxID])
@@ -363,7 +363,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				expectedID := "claim-" + encodedID
 				assert.Equal(t, expectedID, sbx.GetLabels()[agentsv1alpha1.LabelSandboxID])
 				assert.Equal(t, "applied-before-assignment", sbx.GetLabels()["test.example/post-modifier"])
-				assert.Equal(t, expectedID, manager.ResolveSandboxID(sbx))
+				assert.Equal(t, expectedID, sbx.GetSandboxID())
 
 				persisted := &agentsv1alpha1.Sandbox{}
 				require.NoError(t, client.Get(t.Context(), types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, persisted))
@@ -527,7 +527,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 					tt.postCheck(t, manager, client, claimed)
 				}
 				// check route
-				sandboxID := manager.ResolveSandboxID(claimed)
+				sandboxID := claimed.GetSandboxID()
 				assert.Eventually(t, func() bool {
 					route, ok := manager.proxy.LoadRoute(sandboxID)
 					if !ok {
@@ -1060,7 +1060,7 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 			}
 
 			// Set initial route in proxy
-			initialRoute, err := manager.projectInfraSandbox(sbx)
+			initialRoute, err := sbx.GetRoute()
 			require.NoError(t, err)
 			manager.proxy.SetRoute(t.Context(), initialRoute)
 
@@ -1155,7 +1155,7 @@ func TestSandboxManager_CloneSandbox(t *testing.T) {
 				expectedID := "clone-" + encodedID
 				assert.NotEqual(t, checkpointDerivedID, encodedID)
 				assert.Equal(t, expectedID, sbx.GetLabels()[agentsv1alpha1.LabelSandboxID])
-				assert.Equal(t, expectedID, manager.ResolveSandboxID(sbx))
+				assert.Equal(t, expectedID, sbx.GetSandboxID())
 
 				persisted := &agentsv1alpha1.Sandbox{}
 				require.NoError(t, client.Get(t.Context(), types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, persisted))
@@ -1586,7 +1586,7 @@ func TestSandboxManager_DeleteSandbox(t *testing.T) {
 			}
 
 			// Set initial route
-			initialRoute, err := manager.projectInfraSandbox(sbx)
+			initialRoute, err := sbx.GetRoute()
 			require.NoError(t, err)
 			manager.proxy.SetRoute(t.Context(), initialRoute)
 
@@ -2067,10 +2067,10 @@ func TestSandboxManager_deleteRouteAndSync(t *testing.T) {
 			require.NoError(t, err)
 
 			if tt.setRouteInProxy {
-				initialRoute, err := manager.projectInfraSandbox(sbx)
+				initialRoute, err := sbx.GetRoute()
 				require.NoError(t, err)
 				manager.proxy.SetRoute(t.Context(), initialRoute)
-				_, ok := manager.proxy.LoadRoute(manager.ResolveSandboxID(sbx))
+				_, ok := manager.proxy.LoadRoute(sbx.GetSandboxID())
 				require.True(t, ok, "route should exist before deleteRouteAndSync")
 			}
 
@@ -2078,7 +2078,7 @@ func TestSandboxManager_deleteRouteAndSync(t *testing.T) {
 				manager.deleteRouteAndSync(t.Context(), sbx)
 			})
 
-			_, ok := manager.proxy.LoadRoute(manager.ResolveSandboxID(sbx))
+			_, ok := manager.proxy.LoadRoute(sbx.GetSandboxID())
 			assert.False(t, ok, "route should not exist after deleteRouteAndSync")
 		})
 	}
@@ -2321,7 +2321,7 @@ func TestSandboxManagerReleaseQuotaAfterDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	initialRoute, err := manager.projectInfraSandbox(sbx)
+	initialRoute, err := sbx.GetRoute()
 	require.NoError(t, err)
 	manager.proxy.SetRoute(t.Context(), initialRoute)
 
