@@ -27,7 +27,6 @@ import (
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -248,28 +247,22 @@ func newControllerManager(cfg *rest.Config, opts config.SandboxManagerOptions, h
 	return mgr, nil
 }
 
-// SandboxIDResolver returns the single claimed-Sandbox index key for an object.
-type SandboxIDResolver func(metav1.Object) string
-
-// Options configures optional cache behavior while preserving legacy defaults.
-type Options struct {
-	// Health is the informer health gate shared with the controller-runtime
-	// manager. Nil disables SandboxInformerHealthy gating.
-	Health *InformerHealth
-
-	SandboxIDResolver SandboxIDResolver
+// NewCache creates a new Cache instance from a pre-configured controller manager.
+// The metadata must have been returned by NewControllerManager.
+func NewCache(mgr ctrl.Manager) (*Cache, error) {
+	return NewCacheWithHealth(mgr, nil)
 }
 
-// NewCacheWithOptions creates a cache backed by the given manager and optional
-// behavior overrides (including the informer health gate).
-func NewCacheWithOptions(mgr ctrl.Manager, options Options) (*Cache, error) {
+// NewCacheWithHealth creates a cache backed by the given manager and informer
+// health gate.
+func NewCacheWithHealth(mgr ctrl.Manager, health *InformerHealth) (*Cache, error) {
 	waitHooks := &sync.Map{}
 	handlers, err := controllers.SetupCacheControllersWithManager(mgr, waitHooks)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup cache controllers: %w", err)
 	}
 	// Register field indexes
-	if err := AddIndexesToCache(mgr.GetCache(), options); err != nil {
+	if err := AddIndexesToCache(mgr.GetCache()); err != nil {
 		return nil, fmt.Errorf("failed to add indexes to cache: %w", err)
 	}
 
@@ -279,7 +272,7 @@ func NewCacheWithOptions(mgr ctrl.Manager, options Options) (*Cache, error) {
 		mgr:         mgr,
 		waitHooks:   waitHooks,
 		controllers: handlers,
-		health:      options.Health,
+		health:      health,
 	}, nil
 }
 
@@ -319,11 +312,14 @@ func (c *Cache) Stop(ctx context.Context) {
 func (c *Cache) GetClaimedSandbox(ctx context.Context, opts GetClaimedSandboxOptions) (*agentsv1alpha1.Sandbox, error) {
 	resultVal, err, _ := c.indexGetGroup.Do("claimed-sandbox:"+opts.Namespace+":"+opts.SandboxID, func() (any, error) {
 		list := &agentsv1alpha1.SandboxList{}
-		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(1)); err != nil {
+		if err := listObjectWithUserAndNamespace(ctx, c.client, list, "", opts.Namespace, ctrlclient.MatchingFields{IndexClaimedSandboxID: opts.SandboxID}, ctrlclient.Limit(2)); err != nil {
 			return nil, err
 		}
 		if len(list.Items) == 0 {
 			return nil, fmt.Errorf("%w: sandbox %s not found in cache", ErrSandboxNotFound, opts.SandboxID)
+		}
+		if len(list.Items) > 1 {
+			return nil, fmt.Errorf("%w %s: duplicate reserved sandbox-id labels are unsupported", ErrSandboxIDAmbiguous, opts.SandboxID)
 		}
 		return &list.Items[0], nil
 	})

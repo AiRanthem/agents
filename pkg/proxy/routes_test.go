@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -362,6 +363,32 @@ func TestSyncRouteWithPeers_TwoNodes_OneFails(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return len(peer1.getReceived()) >= 1
 	}, 3*time.Second, 50*time.Millisecond)
+}
+
+func TestSyncRouteWithPeers_RejectedNotRetried(t *testing.T) {
+	var requestCount atomic.Int64
+	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
+	}))
+	defer rejecting.Close()
+
+	muxTransport := &muxRoundTripper{
+		routes: map[string]string{
+			fmt.Sprintf("127.0.0.1:%d", SystemPort): rejecting.URL[7:],
+		},
+	}
+	origClient := requestPeerClient
+	requestPeerClient = &http.Client{Timeout: 5 * time.Second, Transport: muxTransport}
+	defer func() { requestPeerClient = origClient }()
+
+	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
+	s := newTestServer(pm)
+
+	err := s.SyncRouteWithPeers(testProxyRoute("sb-reject", "1.2.3.4", "1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status code: 400")
+	assert.Equal(t, int64(1), requestCount.Load(), "a 4xx peer response must not be retried")
 }
 
 // muxRoundTripper routes requests to different backends based on request host

@@ -31,7 +31,7 @@ import (
 	"github.com/openkruise/agents/pkg/discovery"
 )
 
-// Index name constants (consistent with sandboxcr/index.go values)
+// Index name constants
 var (
 	IndexSandboxPool            = "sandboxPool"
 	IndexClaimedSandboxID       = "sandboxID"
@@ -63,8 +63,7 @@ type IndexFunc struct {
 // GetIndexFuncs returns all field index functions used by the cache.
 // This is the single source of truth for index definitions, shared between
 // AddIndexesToCache (production) and NewTestCache (testing).
-func GetIndexFuncs(options Options) []IndexFunc {
-	sandboxIDResolver := getSandboxIDResolver(options)
+func GetIndexFuncs() []IndexFunc {
 	return []IndexFunc{
 		{
 			Obj:       &agentsv1alpha1.Sandbox{},
@@ -94,7 +93,7 @@ func GetIndexFuncs(options Options) []IndexFunc {
 					return nil
 				}
 				if sbx.Labels[agentsv1alpha1.LabelSandboxIsClaimed] == agentsv1alpha1.True {
-					return []string{sandboxIDResolver(sbx)}
+					return []string{sandboxid.Resolve(sbx)}
 				}
 				return nil
 			},
@@ -198,21 +197,14 @@ func GetIndexFuncs(options Options) []IndexFunc {
 	}
 }
 
-func getSandboxIDResolver(options Options) SandboxIDResolver {
-	if options.SandboxIDResolver != nil {
-		return options.SandboxIDResolver
-	}
-	return sandboxid.Resolve
-}
-
 // AddIndexesToCache registers all required field indexes on the controller-runtime cache.
 // Indexes whose OptionalGVK is reliably absent from API server discovery (e.g. the
 // corresponding CRD is not installed) are skipped instead of failing the startup.
-func AddIndexesToCache(c ctrlcache.Cache, options Options) error {
+func AddIndexesToCache(c ctrlcache.Cache) error {
 	if c == nil {
 		return nil
 	}
-	for _, idx := range GetIndexFuncs(options) {
+	for _, idx := range GetIndexFuncs() {
 		if !idx.OptionalGVK.Empty() && !discoverGVK(idx.OptionalGVK) {
 			klog.InfoS("Skipping field index for absent CRD", "field", idx.FieldName, "gvk", idx.OptionalGVK.String())
 			continue

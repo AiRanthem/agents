@@ -72,11 +72,8 @@ type failingRouteSandboxSource struct {
 func (s failingRouteSandboxSource) Subscribe(
 	context.Context,
 	infra.RouteSandboxEventHandler,
-) (infra.RouteSandboxSubscription, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	return &managerRouteSubscription{}, nil
+) error {
+	return s.err
 }
 
 type panicAPIReaderCache struct {
@@ -154,7 +151,8 @@ func TestSandboxManagerBuilderValidatesShortIDPrefixBeforeInfra(t *testing.T) {
 		expectError string
 	}{
 		{name: "invalid characters are rejected", prefix: "INVALID_", expectError: "short sandbox id prefix"},
-		{name: "long prefix passes validation", prefix: strings.Repeat("a", 128), expectError: "infra builder is not configured"},
+		{name: "37-character prefix passes length validation", prefix: strings.Repeat("a", 37), expectError: "infra builder is not configured"},
+		{name: "38-character prefix is rejected", prefix: strings.Repeat("a", 38), expectError: "too long"},
 	}
 
 	for _, tt := range tests {
@@ -463,7 +461,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 			}).
 			Build()
 		require.NoError(t, err)
-		_, err = manager.routeSource.Subscribe(t.Context(), manager.handleRouteSandboxEvent)
+		err = manager.routeSource.Subscribe(t.Context(), manager.handleRouteSandboxEvent)
 		require.ErrorIs(t, err, registerErr)
 	})
 

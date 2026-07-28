@@ -147,7 +147,6 @@ func StartManager(ctx context.Context, options ManagerOptions) error {
 		return errors.New("gateway manager route dependencies must not be nil")
 	}
 	options.Registry.SetReady(false)
-	defer options.Registry.SetReady(false)
 
 	cacheOptions, err := buildGatewayCacheOptions(options.Namespace, options.LabelSelector)
 	if err != nil {

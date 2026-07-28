@@ -43,15 +43,15 @@ func (i *Infra) GetRouteSandboxSource() infra.RouteSandboxSource {
 func (s *routeSandboxSource) Subscribe(
 	ctx context.Context,
 	handler infra.RouteSandboxEventHandler,
-) (infra.RouteSandboxSubscription, error) {
+) error {
 	if handler == nil {
-		return nil, fmt.Errorf("route sandbox event handler must not be nil")
+		return fmt.Errorf("route sandbox event handler must not be nil")
 	}
 	if s == nil || s.cache == nil {
-		return nil, fmt.Errorf("route sandbox cache is not configured")
+		return fmt.Errorf("route sandbox cache is not configured")
 	}
 
-	registration, err := s.cache.AddSandboxEventHandler(ctx, toolscache.ResourceEventHandlerFuncs{
+	_, err := s.cache.AddSandboxEventHandler(ctx, toolscache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			s.handleObjectEvent(ctx, handler, obj)
 		},
@@ -63,9 +63,9 @@ func (s *routeSandboxSource) Subscribe(
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("register route sandbox informer handler: %w", err)
+		return fmt.Errorf("register route sandbox informer handler: %w", err)
 	}
-	return registration, nil
+	return nil
 }
 
 func (s *routeSandboxSource) handleObjectEvent(

@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,9 @@ import (
 const (
 	RequestPeerTimeout = 100 * time.Millisecond
 )
+
+// errPeerRejected marks a deterministic 4xx peer response that must not be retried.
+var errPeerRejected = errors.New("peer rejected request")
 
 var requestPeerClient = &http.Client{
 	Timeout: RequestPeerTimeout,
@@ -50,6 +54,9 @@ func requestPeer(method, ip, path string, body []byte) error {
 		_ = Body.Close()
 	}(resp.Body)
 
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return fmt.Errorf("%w: request to peer %s failed with status code: %d", errPeerRejected, ip, resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("request to peer %s failed with status code: %d", ip, resp.StatusCode)
 	}

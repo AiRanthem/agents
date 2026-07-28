@@ -33,6 +33,9 @@ const (
 	LabelKey = agentsv1alpha1.LabelSandboxID
 	// LegacySeparator separates namespace and name in a legacy Sandbox ID.
 	LegacySeparator = "--"
+	// ShortIDLength is the fixed length of an encoded short ID: 16 UID bytes
+	// as unpadded Base32. Length policy on top of it is owned by callers.
+	ShortIDLength = 26
 )
 
 var shortEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)

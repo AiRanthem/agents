@@ -129,6 +129,8 @@ func TestProjectSandboxDerivation(t *testing.T) {
 		expectID    string
 		expectToken string
 		expectAuth  bool
+		expectState string
+		expectIP    string
 		expectError string
 	}{
 		{
@@ -174,6 +176,21 @@ func TestProjectSandboxDerivation(t *testing.T) {
 			expectID: "ns--name",
 		},
 		{
+			name: "empty IP normalizes to creating",
+			sandbox: func() *agentsv1alpha1.Sandbox {
+				sandbox := newSandbox(nil, nil)
+				sandbox.Status.PodInfo.PodIP = ""
+				return sandbox
+			}(),
+			expectID:    "ns--name",
+			expectState: agentsv1alpha1.SandboxStateCreating,
+			expectIP:    "",
+		},
+		{
+			name:        "nil sandbox rejected",
+			expectError: "sandbox is nil",
+		},
+		{
 			name:        "empty metadata rejected",
 			sandbox:     &agentsv1alpha1.Sandbox{},
 			expectError: "route namespace and name must not be empty",
@@ -191,60 +208,17 @@ func TestProjectSandboxDerivation(t *testing.T) {
 			assert.Equal(t, fullRoute(tt.expectID, "ns", "name", "uid", "7"), Route{
 				ID: route.ID, Namespace: route.Namespace, Name: route.Name, UID: route.UID, ResourceVersion: route.ResourceVersion,
 			})
-			assert.Equal(t, "10.0.0.1", route.IP)
-			assert.Equal(t, agentsv1alpha1.SandboxStateRunning, route.State)
+			expectState := tt.expectState
+			expectIP := tt.expectIP
+			if expectState == "" {
+				expectState = agentsv1alpha1.SandboxStateRunning
+				expectIP = "10.0.0.1"
+			}
+			assert.Equal(t, expectIP, route.IP)
+			assert.Equal(t, expectState, route.State)
 			assert.Equal(t, "owner", route.Owner)
 			assert.Equal(t, tt.expectToken, route.AccessToken)
 			assert.Equal(t, tt.expectAuth, route.RequireTrafficAuth)
-		})
-	}
-}
-
-func TestProjectSandbox(t *testing.T) {
-	sandbox := &agentsv1alpha1.Sandbox{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "ns", Name: "name", UID: "uid", ResourceVersion: "7",
-			Annotations: map[string]string{agentsv1alpha1.AnnotationRuntimeAccessToken: "runtime-token"},
-		},
-		Status: agentsv1alpha1.SandboxStatus{
-			Phase:   agentsv1alpha1.SandboxRunning,
-			PodInfo: agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
-			Conditions: []metav1.Condition{{
-				Type:   string(agentsv1alpha1.SandboxConditionReady),
-				Status: metav1.ConditionTrue,
-			}},
-		},
-	}
-	tests := []struct {
-		name        string
-		sandbox     *agentsv1alpha1.Sandbox
-		expectState string
-		expectError string
-	}{
-		{name: "nil sandbox", expectError: "sandbox is nil"},
-		{name: "running projection", sandbox: sandbox, expectState: agentsv1alpha1.SandboxStateRunning},
-		{
-			name: "empty IP normalizes to creating",
-			sandbox: func() *agentsv1alpha1.Sandbox {
-				clone := sandbox.DeepCopy()
-				clone.Status.PodInfo.PodIP = ""
-				return clone
-			}(),
-			expectState: agentsv1alpha1.SandboxStateCreating,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			route, err := ProjectSandbox(tt.sandbox)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, "ns--name", route.ID)
-			assert.Equal(t, tt.expectState, route.State)
-			assert.Equal(t, "runtime-token", route.AccessToken)
 		})
 	}
 }

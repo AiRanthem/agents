@@ -59,15 +59,12 @@ type RouteSandboxEvent struct {
 // RouteSandboxEventHandler consumes one neutral Sandbox informer event.
 type RouteSandboxEventHandler func(context.Context, RouteSandboxEvent)
 
-type RouteSandboxSubscription interface {
-	Remove() error
-}
-
 // RouteSandboxSource hides backend-specific informer registration. Sources
 // emit only Sandboxes within their configured observation scope, leaving
-// projection and route mutation in Manager.
+// projection and route mutation in Manager. A subscription lives for the
+// process lifetime.
 type RouteSandboxSource interface {
-	Subscribe(context.Context, RouteSandboxEventHandler) (RouteSandboxSubscription, error)
+	Subscribe(context.Context, RouteSandboxEventHandler) error
 }
 
 type QuotaSandboxSource interface {

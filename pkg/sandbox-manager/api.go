@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -223,7 +224,7 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	sbx, err := m.infra.GetSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "failed to get sandbox from cache")
-		return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found", opts.SandboxID)
+		return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found: %v", opts.SandboxID, err)
 	}
 
 	state, reason := sbx.GetState()
@@ -236,10 +237,8 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	if len(expectedStates) == 0 {
 		return sbx, nil
 	}
-	for _, expectedState := range expectedStates {
-		if state == expectedState {
-			return sbx, nil
-		}
+	if slices.Contains(expectedStates, state) {
+		return sbx, nil
 	}
 	log.Error(nil, "sandbox state is not expected", "state", state, "reason", reason, "expectedStates", expectedStates)
 	return nil, managererrors.NewError(managererrors.ErrorBadRequest, "sandbox %s is not healthy (state %s, reason %s)", opts.SandboxID, state, reason)

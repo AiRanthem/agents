@@ -97,7 +97,7 @@ func setupTestManager(t *testing.T, opts ...config.SandboxManagerOptions) (*Sand
 	}
 	infraOption = config.InitOptions(infraOption)
 
-	cache, fc, err := cachetest.NewTestCacheWithOptions(t, infracache.Options{})
+	cache, fc, err := cachetest.NewTestCache(t)
 	if err != nil {
 		t.Fatalf("Failed to create test cache: %v", err)
 	}
@@ -697,7 +697,14 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 		},
 	}
 
-	sandboxes := []*agentsv1alpha1.Sandbox{runningSbx, pausedSbx, availableSbx, failedSbx}
+	dupSbxA := runningSbx.DeepCopy()
+	dupSbxA.Name = "dup-pod-a"
+	dupSbxA.Labels[agentsv1alpha1.LabelSandboxID] = "dup-short-id"
+	dupSbxB := runningSbx.DeepCopy()
+	dupSbxB.Name = "dup-pod-b"
+	dupSbxB.Labels[agentsv1alpha1.LabelSandboxID] = "dup-short-id"
+
+	sandboxes := []*agentsv1alpha1.Sandbox{runningSbx, pausedSbx, availableSbx, failedSbx, dupSbxA, dupSbxB}
 	now := metav1.Now()
 	for _, sbx := range sandboxes {
 		sbx.CreationTimestamp = now
@@ -711,6 +718,8 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 		expectError       bool
 		expectedErrorCode errors.ErrorCode
 		expectedState     string
+		expectMessage     string
+		absentMessage     string
 	}{
 		{
 			name:              "Get running pod",
@@ -746,6 +755,15 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 			expectError:       true,
 			expectedErrorCode: errors.ErrorNotFound,
 			expectedState:     "",
+			absentMessage:     "duplicate reserved",
+		},
+		{
+			name:              "Get duplicate-labeled pod should return opaque 404 with duplicate reason",
+			sandboxID:         "dup-short-id",
+			expectError:       true,
+			expectedErrorCode: errors.ErrorNotFound,
+			expectedState:     "",
+			expectMessage:     "duplicate reserved sandbox-id labels are unsupported",
 		},
 	}
 
@@ -760,8 +778,16 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("Expected error but got none")
-				} else if errors.GetErrCode(err) != tt.expectedErrorCode {
-					t.Errorf("Expected error code %s, got %s", tt.expectedErrorCode, errors.GetErrCode(err))
+				} else {
+					if errors.GetErrCode(err) != tt.expectedErrorCode {
+						t.Errorf("Expected error code %s, got %s", tt.expectedErrorCode, errors.GetErrCode(err))
+					}
+					if tt.expectMessage != "" {
+						assert.Contains(t, err.Error(), tt.expectMessage)
+					}
+					if tt.absentMessage != "" {
+						assert.NotContains(t, err.Error(), tt.absentMessage)
+					}
 				}
 			} else {
 				if err != nil {

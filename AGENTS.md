@@ -73,6 +73,10 @@ constraints specific to its subtree; do not repeat this file in child guides.
   `hack/boilerplate.go.txt`. Keep code comments in English.
 - Prefer table-driven unit tests. Extend a suitable existing table; use a
   standalone test only when no table fits.
+- Do not introduce test stubs, fakes, or mocks unless necessary. Prefer
+  exercising real implementations or existing test infrastructure first.
+- Do not create abstract interfaces or new types unless necessary. Introduce
+  an abstraction only when a concrete, current need requires it.
 - Test only when needed, using the narrowest changed package or selected test
   (`-run`, `-count=1`). Do not run unrelated tests or repeat stable tests. For
   probabilistic failures, races, or other concurrency risks, rerun the relevant

@@ -53,6 +53,7 @@ func init() {
 			JWTAuthManager: jwtAuthManager,
 		}); err != nil {
 			api.LogErrorf("sandbox controller manager exited with error: %v", err)
+			os.Exit(1)
 		}
 	}()
 

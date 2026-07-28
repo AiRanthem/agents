@@ -179,12 +179,3 @@ func TestSandboxManagerHandleKeyOnlyTombstoneDelete(t *testing.T) {
 	_, present = manager.proxy.LoadRoute(id)
 	assert.False(t, present, "the removed record RV must become the deletion fence")
 }
-
-type managerRouteSubscription struct {
-	removed bool
-}
-
-func (s *managerRouteSubscription) Remove() error {
-	s.removed = true
-	return nil
-}

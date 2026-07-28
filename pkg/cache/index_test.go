@@ -51,7 +51,7 @@ func containsField(fields []string, field string) bool {
 }
 
 func TestGetIndexFuncs_OptionalGVK(t *testing.T) {
-	for _, idx := range GetIndexFuncs(Options{}) {
+	for _, idx := range GetIndexFuncs() {
 		_, isTrafficPolicy := idx.Obj.(*agentsv1alpha1.TrafficPolicy)
 		wantGVK := schema.GroupVersionKind{}
 		if isTrafficPolicy {
@@ -65,7 +65,7 @@ func TestGetIndexFuncs_OptionalGVK(t *testing.T) {
 
 func TestAddIndexesToCache(t *testing.T) {
 	allFields := make([]string, 0)
-	for _, idx := range GetIndexFuncs(Options{}) {
+	for _, idx := range GetIndexFuncs() {
 		allFields = append(allFields, idx.FieldName)
 	}
 	withoutTrafficPolicy := make([]string, 0, len(allFields)-1)
@@ -100,7 +100,7 @@ func TestAddIndexesToCache(t *testing.T) {
 			t.Cleanup(func() { discoverGVK = old })
 
 			c := &recordingCache{}
-			if err := AddIndexesToCache(c, Options{}); err != nil {
+			if err := AddIndexesToCache(c); err != nil {
 				t.Fatalf("AddIndexesToCache() error = %v", err)
 			}
 			if len(c.fields) != len(tt.wantFields) {
@@ -116,7 +116,7 @@ func TestAddIndexesToCache(t *testing.T) {
 }
 
 func TestAddIndexesToCache_NilCache(t *testing.T) {
-	if err := AddIndexesToCache(nil, Options{}); err != nil {
+	if err := AddIndexesToCache(nil); err != nil {
 		t.Errorf("AddIndexesToCache(nil) error = %v, want nil", err)
 	}
 }
