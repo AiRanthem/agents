@@ -64,7 +64,8 @@ Kubernetes Sandbox UID and an optional operator-configured prefix. The selected 
 The migration is deliberately one-way and per-Sandbox. The feature flag controls only whether a
 new short ID is assigned; all components always honor an existing label. Manager and gateway share
 one routing implementation that atomically replaces legacy routes with short routes, supports old
-peer payloads during binary rollout, and resolves active IDs through ObjectKey-backed records.
+peer senders during binary rollout by ignoring their ID-only payloads, and resolves active IDs
+through ObjectKey-backed records.
 
 ## Motivation
 
@@ -276,29 +277,27 @@ The design separates identity policy from neutral consumers:
 ```mermaid
 flowchart LR
     S[Sandbox CR] --> R[pkg/sandboxid resolver]
-    R --> M[SandboxManager facade]
     R --> C[Claimed-Sandbox cache index]
-    R --> P[sandboxroute FromSandbox]
-    M --> E[E2B responses / Checkpoints / pagination]
+    R --> P[sandboxroute ProjectSandbox]
+    R --> E[E2B responses / Checkpoints / pagination]
     P --> MS[Manager Route Store]
     P --> GS[Gateway Route Store]
 ```
 
 | Package or layer | Responsibility |
 |---|---|
-| `pkg/sandboxid` | Persisted-label resolution, legacy fallback decision, Base32 encoding, assignment |
-| `pkg/utils` | Existing reversible `<namespace>--<name>` legacy wire codec |
+| `pkg/sandboxid` | Persisted-label resolution, direct legacy encoding, Base32 encoding, assignment |
 | sandbox-manager core | Feature flag, modifier protection, Checkpoint orchestration, manager route projection |
-| `pkg/cache` | Neutral indexed lookup with an injected resolver |
+| `pkg/cache` | Label-aware indexed lookup with an optional resolver override |
 | `pkg/sandboxroute` | Neutral Route type and stateless projection, ObjectKey-backed Store, active ID index, RV fencing |
 | infra | Generic mutation/persistence plus neutral Sandbox informer event adaptation |
-| E2B server | Request validation and response/error presentation |
+| E2B server | Request validation, including the create-team legacy namespace restriction, and response/error presentation |
 
-The backend-neutral `infra.Sandbox` interface no longer exposes `GetSandboxID()` or `GetRoute()`.
-Manager wraps `infra.Sandbox` in a manager-owned projection source that resolves the ID and runtime
-token without moving either policy into Infra, then passes that source to shared stateless projection.
-Infra adds only the format-neutral `GetPodIP()` capability and may retain an opaque Route reader
-for its existing cache-staleness check.
+The backend-neutral `infra.Sandbox` interface keeps `GetRoute()` only as a pure delegate to
+`sandboxroute.ProjectSandbox` and keeps a read-only, label-aware `GetSandboxID()` with no assignment
+policy. It also exposes format-neutral `GetIP()` and may retain an opaque Route reader for its
+existing cache-staleness check. ID, access-token, and traffic-auth derivation are centralized in
+`ProjectSandbox`.
 
 Manager projection remains in the sandbox-manager composition root. Manager consumes a required
 neutral `RouteSandboxSource` subscription; the concrete `sandboxcr` source owns informer
@@ -309,20 +308,18 @@ Sandbox informer before its manager starts. Route maintenance performs no APIRea
 components use the same neutral routing implementation, while Running-state enforcement remains in
 their request paths.
 
-The gateway informer adapter passes a lightweight Sandbox CR projection source that owns
-label-aware Sandbox-ID resolution and token compatibility to shared `sandboxroute.FromSandbox`,
-while its local registry wraps the shared Store. Every informer-visible, non-deleting Sandbox is
-projected and Upserted, regardless of state. A deletionTimestamp update or Delete event emits
-partial `Route{Namespace,Name,ResourceVersion}` directly from the event object. Namespace and
-selector filtering happen at the informer boundary, so objects outside the observation scope do
-not enter the Store through the informer feeder.
+The gateway informer adapter projects each watched Sandbox CR through
+`sandboxroute.ProjectSandbox`, while its local registry wraps the shared Store. Every
+informer-visible, non-deleting Sandbox is projected and Upserted, regardless of state. A
+deletionTimestamp update or Delete event emits partial `Route{Namespace,Name,ResourceVersion}`
+directly from the event object. Namespace and selector filtering happen at the informer boundary,
+so objects outside the observation scope do not enter the Store through the informer feeder.
 
 ### Cache Lookup
 
-The claimed-Sandbox index produces exactly one key per Sandbox using an injected resolver. The
-sandbox-manager cache always injects label-aware resolution, regardless of the assignment flag.
-Other cache callers keep the legacy resolver by default; a broader cache ownership refactor is out
-of scope.
+The claimed-Sandbox index produces exactly one key per Sandbox using `sandboxid.Resolve` by default,
+regardless of the assignment flag or caller. `Options.SandboxIDResolver` remains available only as
+an explicit override.
 
 When a label update is observed, the informer index moves the Sandbox from its legacy key to the
 short key without retaining an alias. Client IDs remain opaque: cache or API fallbacks never split
@@ -336,7 +333,7 @@ copied labels, forged peer Routes, and cross-cluster delivery have undefined beh
 ### Shared Routing Model
 
 Manager proxy and sandbox-gateway remain separate processes and therefore keep separate in-memory
-stores. They share the same `pkg/sandboxroute` Route, `FromSandbox`, and Store
+stores. They share the same `pkg/sandboxroute` Route, `ProjectSandbox`, and Store
 implementation.
 
 Each full Route carries:
@@ -346,13 +343,17 @@ Each full Route carries:
 - UID and resourceVersion;
 - existing IP, owner, state, and access-token fields.
 
-Namespace and name are additive JSON fields with `omitempty`. Old receivers ignore them. Store
-entries resolve ObjectKey internally: when both fields are absent and ID reversibly encodes the
-legacy `<namespace>--<name>` form, the first separator supplies namespace/name. Upsert then applies
-full-Route validation; Delete validates only the resolved key and RV, so an explicit-key deletion
-does not require ID or UID. An opaque/short ID-only Route, a partial ObjectKey, or an
-operation-specific missing field is rejected without Store mutation; a peer request receives
-`400 Bad Request`. Client-facing lookup continues treating IDs as opaque.
+Namespace and name are additive JSON fields with `omitempty`. Old receivers ignore them. The Store
+accepts only explicit ObjectKeys: Upsert validates a complete Route, while Delete validates the
+explicit key and RV and therefore does not require ID or UID. ID-only and partial-key Store calls
+are invalid and allocate no record, active index, or deletion fence. Client-facing lookup continues
+treating IDs as opaque.
+
+During the disabled rolling-upgrade stage, a new peer endpoint recognizes exactly one compatibility
+shape after JSON decoding and before state or RV checks: both ObjectKey fields are empty and ID is
+non-empty. It logs at debug level, returns `204 No Content`, and does not call the Store or update
+route count. Other malformed shapes continue through normal endpoint and Store validation and
+receive `400 Bad Request`.
 
 The shared `Route.String()` continues redacting `AccessToken` as `***` in logs.
 
@@ -369,16 +370,15 @@ SandboxID-to-ObjectKey index under one lock. Complete Routes exist only in the O
 `Get` resolves ID to ObjectKey and then reads the authoritative record under the same read
 lock. Record install, ID transition, and deletion update the index incrementally
 under the write lock, without materializing a second Route copy or rescanning all records.
-`Upsert(Route)` performs full internal admission. `Delete(Route)` validates only ObjectKey/RV and
-ignores ID, UID, access token, and unrelated Route fields when namespace/name are explicit. Legacy
-ID-only Routes use the same ordering paths after internal ObjectKey resolution; the Store has no
-compatibility-only record shape or peer-specific mutation method. Because the Store now exposes
+`Upsert(Route)` directly validates a full Route. `Delete(Route)` validates only ObjectKey/RV and
+ignores ID, UID, access token, and unrelated Route fields. The Store has no ID decoder,
+compatibility-only record shape, or peer-specific mutation method. Because the Store now exposes
 only point reads (`Get`) and a count (`Len`), the manager debug endpoint no longer lists the
 in-memory route table.
 
 The normal event path applies explicit resource-version rules:
 
-Routes require a well-formed positive-integer RV. Route admission rejects malformed values, and a
+Routes require a well-formed positive-integer RV. Route validation rejects malformed values, and a
 malformed peer payload receives `400 Bad Request`. Valid RVs are compared with Kubernetes'
 resource-version comparator.
 
@@ -407,6 +407,7 @@ Peer endpoint behavior is:
 
 | Event | HTTP result |
 |---|---|
+| Non-empty ID-only payload from an old peer, with any state or RV | `204 No Content` ignored before Store mutation |
 | Malformed or partial Route | `400 Bad Request` |
 | Well-formed older or equal-RV event | `204 No Content` no-op |
 
@@ -501,16 +502,17 @@ has no manager-enforced length limit, and must be identical across sandbox-manag
 Strict adherence to this rollout protocol is a trusted correctness precondition. Before enabling
 short assignment, all old manager/gateway replicas and their in-flight or retry peer traffic must
 be terminated. After any short ID is assigned, old binaries must never run or receive traffic
-again, including through rollback. Admission-normalized legacy updates use the ordinary Store
-upsert path; violating this precondition is unsupported and may temporarily replace a short route
-until a strictly newer authoritative event arrives.
+again, including through rollback. During the disabled rolling stage, old-sender to new-receiver
+ID-only refreshes are intentionally dropped; each instance's informer List/Watch is the convergence
+path. Until it catches up, a new receiver may briefly have no route or retain stale state/IP.
 
 The first rollout also assumes no Sandbox already carries a short-ID label.
 
 1. Deploy new sandbox-manager and sandbox-gateway binaries with short assignment disabled.
 2. Manager and gateway may roll out in either order.
 3. New senders include namespace/name; old receivers ignore the additive fields.
-4. New receivers resolve reversible legacy ID-only messages inside Store mutation.
+4. New receivers return `204` for old ID-only messages without Store mutation and converge from
+   their own informer.
 5. Wait for all old replicas and their retry traffic to terminate before enabling assignment.
 6. Confirm all informer handlers are synchronized.
 
@@ -537,8 +539,8 @@ flag off is safe for stopping further assignments, but it is not a data rollback
 - unlabeled Sandboxes stay legacy;
 - labels are not removed automatically.
 
-Legacy ID resolution for unlabeled Sandboxes remains supported. Legacy Route admission
-normalization may be removed separately after operators confirm no supported old sender remains.
+Legacy ID resolution for unlabeled Sandboxes remains supported. Legacy ID reverse parsing is not
+supported; all Store mutations require an explicit ObjectKey.
 
 ## Risks and Mitigations
 
@@ -547,6 +549,7 @@ normalization may be removed separately after operators confirm no supported old
 | Final assignment adds API traffic and a new failure point | Disabled by default; one informer Get per enabled operation (APIReader only on conflict), one Update only on first assignment; retain operation-stage timing and error logs |
 | Client receives short ID before every informer sees the label | Return only after persistence; keep existing eventual-consistency retries; do not create a second alias |
 | Late supported peer events delete or revive a newer route | ObjectKey/RV ordering plus permanent deletion fences |
+| Old sender refresh is dropped by a new receiver during binary rollout | Return `204` and rely on each receiver's informer List/Watch; accept a brief missing or stale route before convergence |
 | Permanent fences consume memory | Informer filtering avoids allocations for out-of-scope objects; every ObjectKey accepted from informer, lifecycle, or peer feeders contributes to growth, with 100,000 keys costing tens of MiB |
 | `DeletedFinalStateUnknown` lacks a trustworthy final RV | Use deletionTimestamp updates and normal DELETE events; apply an empty-RV best-effort delete and accept the remaining narrow risk without APIReader repair |
 | Cluster administrator writes or copies the reserved label | Outside the supported protocol and explicitly undefined; only core assignment may write the label |
@@ -576,9 +579,9 @@ concurrency harnesses.
 | Encoding and resolution | Legacy fallback, existing-label trust, deterministic 26-character encoding, explicit prefix character validation without a length limit, concatenation, invalid UID, idempotent assignment |
 | Mutation boundaries | E2B/SandboxClaim rejection, modifier add/change/delete protection, feature-disabled protection |
 | Recycle | User metadata tracking excludes the key; crafted cleanup metadata cannot delete it |
-| Cache | Resolver injection, legacy-to-short index move, unique opaque lookup |
+| Cache | Label-aware default resolution, resolver override, legacy-to-short index move, unique opaque lookup |
 | Route Store | Atomic ID switch, ID-to-ObjectKey-to-record lookup, strictly newer RV upsert, permanent fences, and record/fence mutual exclusion |
-| Deletes and compatibility | Unified ObjectKey/RV deletion, normal DELETE, object-bearing and key-only `DeletedFinalStateUnknown`, informer-scope transitions, legacy Route admission, peer no-op semantics, old/new Route JSON compatibility, HTTP mapping |
+| Deletes and compatibility | Full-Route-only Store mutation, unified ObjectKey/RV deletion, normal DELETE, object-bearing and key-only `DeletedFinalStateUnknown`, informer-scope transitions, ID-only peer ignore, old/new Route JSON compatibility, HTTP mapping |
 | Readiness and health | Initial-sync writes before ready, read gating, multiple informer registration health, and Remove |
 | Layer boundaries | No ID/Route policy in infra; route maintenance consumes neutral informer events and performs no APIReader query |
 | E2B and Checkpoint | Protected metadata, authorized error context, no disclosure, historical Checkpoint IDs, opaque pagination |

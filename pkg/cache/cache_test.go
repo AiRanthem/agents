@@ -35,6 +35,7 @@ import (
 	"github.com/openkruise/agents/pkg/cache"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -55,7 +56,7 @@ func TestCache_GetClaimedSandbox(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		c, _, err := cachetest.NewTestCache(t, sbx)
 		require.NoError(t, err)
-		sandboxID := utils.GetSandboxID(sbx)
+		sandboxID := sandboxid.Legacy(sbx.Namespace, sbx.Name)
 		got, err := c.GetClaimedSandbox(t.Context(), cache.GetClaimedSandboxOptions{SandboxID: sandboxID})
 		require.NoError(t, err)
 		require.NotNil(t, got)
@@ -81,37 +82,40 @@ func TestCache_GetClaimedSandboxWithResolver(t *testing.T) {
 		expectError string
 	}{
 		{
-			name:       "default resolver keeps legacy lookup",
+			name:       "default resolver uses legacy ID without label",
 			sandbox:    claimedSandboxForIDTest("default", "legacy", ""),
 			sandboxID:  "default--legacy",
 			expectName: "legacy",
 		},
 		{
-			name: "injected resolver uses authoritative label",
-			options: cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
-			},
+			name:       "default resolver uses authoritative label",
 			sandbox:    claimedSandboxForIDTest("default", "labeled", "short-id"),
 			sandboxID:  "short-id",
 			expectName: "labeled",
 		},
 		{
-			name: "injected resolver falls back for unlabeled sandbox",
-			options: cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
-			},
-			sandbox:    claimedSandboxForIDTest("default", "unlabeled", ""),
-			sandboxID:  "default--unlabeled",
-			expectName: "unlabeled",
-		},
-		{
-			name: "injected resolver does not retain legacy alias",
-			options: cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
-			},
+			name:        "default resolver does not retain legacy alias",
 			sandbox:     claimedSandboxForIDTest("default", "labeled", "short-id"),
 			sandboxID:   "default--labeled",
 			expectError: cache.ErrSandboxNotFound.Error(),
+		},
+		{
+			name: "injected resolver overrides default",
+			options: cache.Options{
+				SandboxIDResolver: overrideSandboxIDForCacheTest,
+			},
+			sandbox:    claimedSandboxForIDTest("default", "labeled", "short-id"),
+			sandboxID:  "override-short-id",
+			expectName: "labeled",
+		},
+		{
+			name: "injected resolver controls unlabeled sandbox",
+			options: cache.Options{
+				SandboxIDResolver: overrideSandboxIDForCacheTest,
+			},
+			sandbox:    claimedSandboxForIDTest("default", "unlabeled", ""),
+			sandboxID:  "override-default--unlabeled",
+			expectName: "unlabeled",
 		},
 	}
 
@@ -136,7 +140,7 @@ func TestCache_GetClaimedSandboxWithResolver(t *testing.T) {
 	}
 }
 
-func TestCache_GetClaimedSandboxMovesInjectedIndexOnLabelUpdate(t *testing.T) {
+func TestCache_GetClaimedSandboxMovesDefaultIndexOnLabelUpdate(t *testing.T) {
 	tests := []struct {
 		name        string
 		legacyID    string
@@ -154,9 +158,7 @@ func TestCache_GetClaimedSandboxMovesInjectedIndexOnLabelUpdate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sbx := claimedSandboxForIDTest("default", "moving-sandbox", "")
-			c, fakeClient, err := cachetest.NewTestCacheWithOptions(t, cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
-			}, sbx)
+			c, fakeClient, err := cachetest.NewTestCache(t, sbx)
 			require.NoError(t, err)
 
 			before, err := c.GetClaimedSandbox(t.Context(), cache.GetClaimedSandboxOptions{
@@ -197,17 +199,22 @@ func TestClaimedSandboxIndexUsesOneResolvedKey(t *testing.T) {
 		expectID string
 	}{
 		{
-			name:     "default resolver emits only legacy key",
-			sandbox:  claimedSandboxForIDTest("default", "legacy", "short-id"),
+			name:     "default resolver emits only legacy key without label",
+			sandbox:  claimedSandboxForIDTest("default", "legacy", ""),
 			expectID: "default--legacy",
 		},
 		{
-			name: "injected resolver emits only short key",
+			name:     "default resolver emits only short key with label",
+			sandbox:  claimedSandboxForIDTest("default", "legacy", "short-id"),
+			expectID: "short-id",
+		},
+		{
+			name: "injected resolver overrides the resolved key",
 			options: cache.Options{
-				SandboxIDResolver: resolveSandboxIDForCacheTest,
+				SandboxIDResolver: overrideSandboxIDForCacheTest,
 			},
 			sandbox:  claimedSandboxForIDTest("default", "labeled", "short-id"),
-			expectID: "short-id",
+			expectID: "override-short-id",
 		},
 	}
 
@@ -238,11 +245,8 @@ func claimedSandboxForIDTest(namespace, name, sandboxID string) *agentsv1alpha1.
 	}}
 }
 
-func resolveSandboxIDForCacheTest(obj metav1.Object) string {
-	if sandboxID := obj.GetLabels()[agentsv1alpha1.LabelSandboxID]; sandboxID != "" {
-		return sandboxID
-	}
-	return obj.GetNamespace() + "--" + obj.GetName()
+func overrideSandboxIDForCacheTest(obj metav1.Object) string {
+	return "override-" + sandboxid.Resolve(obj)
 }
 
 func TestCache_GetCheckpoint(t *testing.T) {

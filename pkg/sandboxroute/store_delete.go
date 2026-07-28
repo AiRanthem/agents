@@ -69,8 +69,8 @@ func (s *Store) Delete(route Route) MutationResult {
 }
 
 func validateDeleteRoute(route Route) (types.NamespacedName, Reason) {
-	key, err := routeObjectKey(route)
-	if err != nil {
+	key, ok := route.ObjectKey()
+	if !ok {
 		return types.NamespacedName{}, ReasonInvalidRoute
 	}
 	if route.ResourceVersion == "" {

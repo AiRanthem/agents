@@ -26,11 +26,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
-// LabelKey is the reserved Sandbox label containing an authoritative ID.
-const LabelKey = agentsv1alpha1.LabelSandboxID
+const (
+	// LabelKey is the reserved Sandbox label containing an authoritative ID.
+	LabelKey = agentsv1alpha1.LabelSandboxID
+	// LegacySeparator separates namespace and name in a legacy Sandbox ID.
+	LegacySeparator = "--"
+)
 
 var shortEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -44,10 +47,7 @@ func Resolve(sandbox metav1.Object) string {
 
 // Legacy returns the legacy namespace-and-name Sandbox ID.
 func Legacy(namespace, name string) string {
-	return utils.GetSandboxID(&agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-		Namespace: namespace,
-		Name:      name,
-	}})
+	return namespace + LegacySeparator + name
 }
 
 // GenerateShort encodes all 128 bits of a Kubernetes UID as lowercase unpadded Base32.

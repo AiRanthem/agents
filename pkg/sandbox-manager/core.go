@@ -93,10 +93,7 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 		if err != nil {
 			return nil, err
 		}
-		cache, err := infracache.NewCacheWithOptions(mgr, infracache.Options{
-			Health:            health,
-			SandboxIDResolver: sandboxid.Resolve,
-		})
+		cache, err := infracache.NewCacheWithOptions(mgr, infracache.Options{Health: health})
 		if err != nil {
 			return nil, err
 		}

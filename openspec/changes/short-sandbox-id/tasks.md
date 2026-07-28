@@ -1,9 +1,10 @@
 ## 1. Sandbox ID Contract and Configuration
 
 - [x] 1.1 Add the schema-level reserved Sandbox label constant while keeping the existing Checkpoint annotation constant and metadata maps distinct (design §§4.1, 12.1).
-- [x] 1.2 Add label-aware ID resolution/assignment plus the legacy encoder and peer-boundary decoder,
-  including table-driven round-trip, invalid-encoding, fallback, trust, invalid-UID, and idempotency
-  tests (design §§5, 7.1, 11.6, 18.2).
+- [x] 1.2 Add label-aware ID resolution/assignment plus direct legacy encoding and its exported
+  separator in `pkg/sandboxid`, with table-driven encoding, fallback, trust, invalid-UID, and
+  idempotency tests; keep the create-team restriction in the E2B API validator and remove legacy ID
+  reverse parsing (design §§5, 7.1, 11.6, 18.2).
 - [x] 1.3 Add `--enable-short-sandbox-id=false` to sandbox-manager and make it gate assignment only, never label-aware resolution (design §6; spec: Flag-controlled final assignment).
 - [x] 1.4 Expose `SandboxManager.ResolveSandboxID` and route server-facing ID resolution through the manager facade (design §7.2). Revised: the facade became a pure pass-through after `infra.Sandbox.GetSandboxID()` was restored and was removed; servers call `GetSandboxID()` directly.
 
@@ -35,8 +36,10 @@
 
 ## 5. Neutral Cache Lookup
 
-- [x] 5.1 Add optional claimed-Sandbox ID resolver injection to `pkg/cache` while retaining the legacy resolver for existing callers (design §10).
-- [x] 5.2 Inject label-aware resolution from sandbox-manager regardless of the assignment flag and avoid importing the manager-domain package from cache (design §§7.1, 10).
+- [x] 5.1 Use `sandboxid.Resolve` as the claimed-Sandbox cache default while retaining optional
+  resolver injection as an explicit override (design §10).
+- [x] 5.2 Remove redundant sandbox-manager resolver injection so SandboxClaim and every other
+  default cache caller are label-aware regardless of the assignment flag (design §§7.1, 10).
 - [x] 5.3 Keep claimed-Sandbox lookup to one indexed result under the system-owned global-ID uniqueness contract without parsing the client ID (design §10).
 - [x] 5.4 Extend cache tables for default and injected resolvers, label-driven index movement, and one-key-only behavior (design §18.6).
 
@@ -48,16 +51,16 @@
 - [x] 6.3 Validate resourceVersions at the Route boundary and use Kubernetes' older/equal/newer comparison semantics in the Store (design §11.4).
 - [x] 6.4 Implement strictly-newer full-route upsert and atomic legacy-to-short replacement using
   only ObjectKey resourceVersion ordering (design §11.4).
-- [x] 6.5 Resolve ObjectKeys internally for both operations, apply full validation only to Upsert,
-  and apply key/RV validation to Delete while rejecting opaque/short ID-only or partial Routes
-  (design §§11.4, 11.6).
+- [x] 6.5 Require explicit ObjectKeys for both operations, apply full validation only to Upsert,
+  and apply key/RV validation to Delete while rejecting every ID-only or partial Route without
+  allocating Store state (design §§11.4, 11.6).
 - [x] 6.6 Store each complete Route only in the ObjectKey record table, resolve active reads through
   SandboxID-to-ObjectKey and then ObjectKey-to-record lookup, and maintain that index incrementally
   under the Store lock (design §11.3).
 - [x] 6.7 Implement unified `Delete(Route)`, permanent RV-only fences, and the empty-RV
   synthetic-tombstone fallback (design §11.5).
-- [x] 6.8 Add focused Store, codec, peer-boundary, and projection tables for RV fences, delete,
-  record/fence mutual exclusion, normalization/rejection, token compatibility, state normalization,
+- [x] 6.8 Add focused Store, encoding, peer-boundary, and projection tables for RV fences, delete,
+  record/fence mutual exclusion, full-shape rejection, token compatibility, state normalization,
   and token redaction (design §18.6).
 
 ## 7. Informer-Driven Deletion Fencing
@@ -98,15 +101,16 @@
 - [x] 9.2 Replace key-only reconciliation with a raw informer handler that projects full Routes and
   preserves deletion object resourceVersions (design §§11.2, 11.5, 11.7).
 - [x] 9.3 Remove injected mixed-version delete fallback construction from gateway reconciliation and
-  centralize reversible legacy ObjectKey decoding inside Store mutation without parsing client
-  lookup IDs (design §§7.1, 11.5-11.6).
-- [x] 9.4 Normalize legacy peer updates/deletes inside their Store entries, then apply the same
-  ordering rules while preserving `400`/`204` endpoint results (design §§11.5-11.7, 17).
+  require every Store mutation to carry an explicit ObjectKey without parsing client or Route IDs
+  (design §§7.1, 11.5-11.6).
+- [x] 9.4 Ignore non-empty ID-only peer updates/deletes at each endpoint before state/RV checks and
+  Store mutation, returning `204`; preserve `400` for all other invalid shapes (design
+  §§11.5-11.7, 17).
 - [x] 9.5 Gate only Registry reads on initial handler synchronization while accepting informer and
   peer mutations before ready (design §§11.7-11.8).
-- [x] 9.6 Extend gateway adapter, registry, and peer endpoint tables for full and reversible legacy
-  payloads, opaque/partial rejection, stale peer no-ops, event-object deletion, tombstones, and
-  initial-sync writes (design §18.6).
+- [x] 9.6 Extend gateway adapter, registry, and peer endpoint tables for full payloads, ID-only peer
+  ignore with or without RV, partial/empty rejection, stale peer no-ops, event-object deletion,
+  tombstones, and initial-sync writes (design §18.6).
 - [x] 9.7 Apply gateway namespace/selector options to the Sandbox informer, remove handler-level
   visibility/state exclusion branches and the obsolete secondary delete API, and keep Running
   enforcement in the request filter (design §§11.7-11.8, 18.6).

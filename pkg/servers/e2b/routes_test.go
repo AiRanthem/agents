@@ -470,9 +470,7 @@ func TestGetUserFromContext(t *testing.T) {
 	}
 }
 
-// TestValidateTeamNamespace_RejectsDoubleDash verifies the API key creation guard rejects
-// namespace names containing the sandbox ID separator before consulting Kubernetes.
-func TestValidateTeamNamespace_RejectsDoubleDash(t *testing.T) {
+func TestValidateTeamNamespace(t *testing.T) {
 	controller, fc, teardown := Setup(t)
 	defer teardown()
 
@@ -493,6 +491,7 @@ func TestValidateTeamNamespace_RejectsDoubleDash(t *testing.T) {
 		wantMsg   string
 	}{
 		{name: "valid namespace passes", teamName: "team-a", expectErr: false},
+		{name: "empty namespace rejected", expectErr: true, wantCode: http.StatusBadRequest, wantMsg: "must not be empty"},
 		{name: "double-dash rejected even when namespace exists", teamName: "team--blue", expectErr: true, wantCode: http.StatusBadRequest, wantMsg: "must not contain"},
 		{name: "double-dash at start", teamName: "--prefix", expectErr: true, wantCode: http.StatusBadRequest, wantMsg: "must not contain"},
 		{name: "missing namespace returns 400 too but for different reason", teamName: "no-such-ns", expectErr: true, wantCode: http.StatusBadRequest, wantMsg: "does not exist"},

@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 func TestResolve(t *testing.T) {
@@ -54,21 +53,22 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestLegacyCompatibility(t *testing.T) {
+func TestLegacy(t *testing.T) {
 	tests := []struct {
 		name      string
 		namespace string
 		sandbox   string
+		expected  string
 	}{
-		{name: "standard names", namespace: "team-a", sandbox: "sandbox-a"},
-		{name: "empty namespace remains compatible", namespace: "", sandbox: "sandbox-a"},
-		{name: "empty name remains compatible", namespace: "team-a", sandbox: ""},
+		{name: "standard names", namespace: "team-a", sandbox: "sandbox-a", expected: "team-a--sandbox-a"},
+		{name: "name contains separator", namespace: "team-a", sandbox: "sandbox--a", expected: "team-a--sandbox--a"},
+		{name: "empty namespace preserves encoding", namespace: "", sandbox: "sandbox-a", expected: "--sandbox-a"},
+		{name: "empty name preserves encoding", namespace: "team-a", sandbox: "", expected: "team-a--"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Namespace: tt.namespace, Name: tt.sandbox}}
-			assert.Equal(t, utils.GetSandboxID(sandbox), Legacy(tt.namespace, tt.sandbox))
+			assert.Equal(t, tt.expected, Legacy(tt.namespace, tt.sandbox))
 			assert.Equal(t, agentsv1alpha1.LabelSandboxID, LabelKey)
 		})
 	}
