@@ -237,9 +237,9 @@ type Builder interface {
 	Build() Infrastructure
 }
 
-// RouteVersionReader exposes local route state needed to detect an informer
+// RouteReader exposes local route state needed to detect an informer
 // cache hit that lags a previously observed routing event.
-type RouteVersionReader interface {
+type RouteReader interface {
 	LoadRoute(sandboxID string) (sandboxroute.Route, bool)
 }
 

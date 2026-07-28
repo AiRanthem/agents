@@ -356,7 +356,7 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	infraInstance := NewInfraBuilder(options).
 		WithCache(testCache).
 		WithAPIReader(fc).
-		WithRouteVersionReader(proxy.NewServer(options)).
+		WithRouteReader(proxy.NewServer(options)).
 		Build()
 	require.NoError(t, infraInstance.Run(t.Context()))
 	infraImpl := infraInstance.(*Infra)
@@ -1234,80 +1234,6 @@ func TestSandbox_GetClaimTime(t *testing.T) {
 			} else {
 				assert.Equal(t, tt.expected, result)
 			}
-		})
-	}
-}
-
-func TestSandbox_GetPodIP(t *testing.T) {
-	tests := []struct {
-		name       string
-		sandbox    *v1alpha1.Sandbox
-		expectedIP string
-	}{
-		{
-			name: "available sandbox with owner",
-			sandbox: &v1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "available-sandbox",
-					Namespace: "default",
-					Annotations: map[string]string{
-						v1alpha1.AnnotationOwner: "test-owner",
-					},
-					OwnerReferences: GetSbsOwnerReference(),
-				},
-				Status: v1alpha1.SandboxStatus{
-					Phase: v1alpha1.SandboxRunning,
-					Conditions: []metav1.Condition{
-						{
-							Type:   string(v1alpha1.SandboxConditionReady),
-							Status: metav1.ConditionTrue,
-						},
-					},
-					PodInfo: v1alpha1.PodInfo{
-						PodIP: "10.0.0.1",
-					},
-				},
-			},
-			expectedIP: "10.0.0.1",
-		},
-		{
-			name: "running sandbox without owner",
-			sandbox: &v1alpha1.Sandbox{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "running-sandbox",
-					Namespace: "default",
-				},
-				Status: v1alpha1.SandboxStatus{
-					Phase: v1alpha1.SandboxRunning,
-					Conditions: []metav1.Condition{
-						{
-							Type:   string(v1alpha1.SandboxConditionReady),
-							Status: metav1.ConditionTrue,
-						},
-					},
-					PodInfo: v1alpha1.PodInfo{
-						PodIP: "10.0.0.2",
-					},
-				},
-			},
-			expectedIP: "10.0.0.2",
-		},
-		{
-			name: "sandbox without pod IP",
-			sandbox: &v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-				Namespace: "default",
-				Name:      "without-pod-ip",
-			}},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Sandbox{
-				Sandbox: tt.sandbox,
-			}
-
-			assert.Equal(t, tt.expectedIP, s.GetPodIP())
 		})
 	}
 }

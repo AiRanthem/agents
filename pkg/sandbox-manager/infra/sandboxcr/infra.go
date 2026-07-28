@@ -77,8 +77,8 @@ func (b *InfraBuilder) WithAPIReader(reader client.Reader) *InfraBuilder {
 	return b
 }
 
-func (b *InfraBuilder) WithRouteVersionReader(reader infra.RouteVersionReader) *InfraBuilder {
-	b.instance.RouteVersions = reader
+func (b *InfraBuilder) WithRouteReader(reader infra.RouteReader) *InfraBuilder {
+	b.instance.Routes = reader
 	return b
 }
 
@@ -95,9 +95,9 @@ func (b *InfraBuilder) Build() infra.Infrastructure {
 }
 
 type Infra struct {
-	Cache         cache.Provider
-	APIReader     client.Reader
-	RouteVersions infra.RouteVersionReader
+	Cache     cache.Provider
+	APIReader client.Reader
+	Routes    infra.RouteReader
 
 	// RuntimeTLSBundle is the client TLS bundle for reaching TLS-capable
 	// agent-runtimes; nil disables runtime TLS for this manager, so every
@@ -181,7 +181,7 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 		}
 		metrics.RetryCost += tryMetrics.Total
 		lastErr = claimErr
-		if isTerminalMutationError(claimErr) {
+		if errors.As(claimErr, &terminalMutationError{}) {
 			return false, claimErr
 		}
 		if errors.As(claimErr, &retriableError{}) {
@@ -256,7 +256,7 @@ func (i *Infra) CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions
 		}
 		metrics.LastError = cloneErr
 		lastErr = cloneErr
-		if isTerminalMutationError(cloneErr) {
+		if errors.As(cloneErr, &terminalMutationError{}) {
 			return false, cloneErr
 		}
 		if errors.As(cloneErr, &retriableError{}) {
@@ -411,8 +411,8 @@ func (i *Infra) lookupSandbox(ctx context.Context, opts infra.GetSandboxOptions)
 		got, err := i.Cache.GetClaimedSandbox(ctx, cache.GetClaimedSandboxOptions{Namespace: opts.Namespace, SandboxID: opts.SandboxID})
 		if err == nil {
 			lookup.sandbox = got
-			if i.RouteVersions != nil {
-				route, ok := i.RouteVersions.LoadRoute(opts.SandboxID)
+			if i.Routes != nil {
+				route, ok := i.Routes.LoadRoute(opts.SandboxID)
 				lookup.routeResourceVersion, lookup.hasRoute = route.ResourceVersion, ok
 			}
 			return true, nil

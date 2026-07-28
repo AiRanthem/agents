@@ -65,19 +65,6 @@ func (r *Registry) Get(id string) (sandboxroute.Route, bool) {
 	return r.store.Get(id)
 }
 
-// GetIfReady checks lifecycle readiness and reads one active route.
-func (r *Registry) GetIfReady(id string) (sandboxroute.Route, bool, bool) {
-	// ponytail: ready is read separately from the Store lookup, so a concurrent
-	// SetReady may flip between the two. ready only moves false->true once at
-	// startup and back to false on shutdown, so the worst case is one extra
-	// successful read during teardown, which is harmless.
-	if !r.ready.Load() {
-		return sandboxroute.Route{}, false, false
-	}
-	route, found := r.store.Get(id)
-	return route, found, true
-}
-
 // Upsert applies a route update regardless of readiness.
 func (r *Registry) Upsert(route sandboxroute.Route) sandboxroute.MutationResult {
 	return r.store.Upsert(route)

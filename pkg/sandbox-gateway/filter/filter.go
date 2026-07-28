@@ -92,9 +92,13 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		zap.Int("sandboxPort", sandboxPort),
 		zap.Any("extraHeaders", extraHeaders))
 
-	// Look up the pod IP from registry
-	route, ok, ready := registry.GetRegistry().GetIfReady(sandboxID)
-	if !ready {
+	// Look up the pod IP from registry. Readiness is read separately from the
+	// route lookup, so a concurrent SetReady may flip between the two. ready
+	// only moves false->true once at startup and back to false on shutdown, so
+	// the worst case is one extra successful read during teardown, which is
+	// harmless.
+	routeRegistry := registry.GetRegistry()
+	if !routeRegistry.Ready() {
 		logger.Warn("Sandbox gateway route registry is not ready")
 		f.callbacks.DecoderFilterCallbacks().SendLocalReply(
 			503,
@@ -105,6 +109,7 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 		)
 		return api.LocalReply
 	}
+	route, ok := routeRegistry.Get(sandboxID)
 	if !ok {
 		logger.Warn("Sandbox not found in registry", zap.String("sandboxID", sandboxID))
 		f.callbacks.DecoderFilterCallbacks().SendLocalReply(

@@ -133,7 +133,7 @@ func buildQuotaTestManager(t *testing.T, spyCache *quotaInitCache) *SandboxManag
 			base := sandboxcr.NewInfraBuilder(opts).
 				WithCache(spyCache).
 				WithAPIReader(apiReader).
-				WithRouteVersionReader(proxyServer)
+				WithRouteReader(proxyServer)
 			return routeSourceOverrideBuilder{base: base, source: failingRouteSandboxSource{}}, nil
 		}).
 		Build()
@@ -239,7 +239,7 @@ func TestManagerStopClosesQuotaRedis(t *testing.T) {
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(cache).
 				WithAPIReader(fc).
-				WithRouteVersionReader(proxyServer), nil
+				WithRouteReader(proxyServer), nil
 		}).
 		Build()
 	require.NoError(t, err)

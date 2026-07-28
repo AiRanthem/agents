@@ -79,11 +79,7 @@ type Server struct {
 }
 
 // NewServer creates a new peer server
-func NewServer(
-	client client.Client,
-	port int,
-	readinessChecks ...ReadinessCheck,
-) *Server {
+func NewServer(client client.Client, port int, readinessChecks ...ReadinessCheck) *Server {
 	server := &Server{
 		port:               normalizePort(port, proxy.SystemPort),
 		client:             client,

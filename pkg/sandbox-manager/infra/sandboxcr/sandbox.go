@@ -266,10 +266,6 @@ func (s *Sandbox) GetTrafficAccessTokenExpiration() string {
 	return s.trafficToken.AccessTokenExpiration
 }
 
-func (s *Sandbox) GetPodIP() string {
-	return s.Sandbox.Status.PodInfo.PodIP
-}
-
 func setTimeout(sbx *agentsv1alpha1.Sandbox, opts timeout.Options) {
 	if !opts.PauseTime.IsZero() {
 		sbx.Spec.PauseTime = ptr.To(metav1.NewTime(timeout.NormalizeTime(opts.PauseTime)))
