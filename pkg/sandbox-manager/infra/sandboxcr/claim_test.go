@@ -60,6 +60,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	pkgutils "github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
@@ -1226,7 +1227,7 @@ func TestCheckSandboxInplaceUpdate(t *testing.T) {
 			CreateSandboxWithStatus(t, fc, sbx)
 
 			gotSbx, err := testInfra.Cache.GetClaimedSandbox(t.Context(), infracache.GetClaimedSandboxOptions{
-				SandboxID: pkgutils.GetSandboxID(sbx),
+				SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
 			})
 			assert.NoError(t, err)
 			if err != nil {

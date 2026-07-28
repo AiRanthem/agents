@@ -21,8 +21,6 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/resourceversion"
-
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 // Route represents one sandbox routing rule.
@@ -72,35 +70,4 @@ func (r Route) validate() error {
 		return fmt.Errorf("route resource version is invalid: %w", err)
 	}
 	return nil
-}
-
-// admitRoute normalizes and validates a Route before it enters a Store.
-func admitRoute(route Route) (Route, error) {
-	key, err := routeObjectKey(route)
-	if err != nil {
-		return Route{}, err
-	}
-	route.Namespace = key.Namespace
-	route.Name = key.Name
-	if err := route.validate(); err != nil {
-		return Route{}, err
-	}
-	return route, nil
-}
-
-// routeObjectKey returns an explicit ObjectKey or decodes a reversible legacy
-// ID when both ObjectKey fields are absent.
-func routeObjectKey(route Route) (types.NamespacedName, error) {
-	switch {
-	case route.Namespace != "" && route.Name != "":
-		return types.NamespacedName{Namespace: route.Namespace, Name: route.Name}, nil
-	case route.Namespace != "" || route.Name != "":
-		return types.NamespacedName{}, fmt.Errorf("route namespace and name must both be set or both be empty")
-	}
-
-	key, err := utils.ParseLegacySandboxID(route.ID)
-	if err != nil {
-		return types.NamespacedName{}, err
-	}
-	return key, nil
 }

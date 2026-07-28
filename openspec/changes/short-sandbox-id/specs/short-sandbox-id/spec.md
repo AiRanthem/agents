@@ -177,20 +177,21 @@ remains on the wire for compatibility and validation but SHALL NOT participate i
 - **THEN** the Store ignores it as stale without requeueing or changing current state
 
 ### Requirement: Operation-specific Route validation and version-fenced deletion
-The routing system MUST resolve ObjectKey internally for each Store mutation, MUST apply full-Route
+The routing Store MUST require an explicit ObjectKey for every mutation, MUST apply full-Route
 validation to Upsert and ObjectKey/RV validation to Delete, MUST use ObjectKey/RV-fenced deletion,
-and MUST prevent stale updates and deletes from replacing or removing current ownership.
+and MUST prevent stale updates and deletes from replacing or removing current ownership. It MUST
+NOT reverse-parse a Route ID to recover ObjectKey.
 
-#### Scenario: A reversible ID-only Route is admitted
-- **WHEN** a Route has namespace and name absent and its non-empty ID is a reversible `<namespace>--<name>` legacy value
-- **THEN** Route admission splits the first separator, fills the ObjectKey, validates the full Route, and dispatches only that full Route to the Store
+#### Scenario: An old peer sends an ID-only Route
+- **WHEN** JSON decoding succeeds and a peer Route has both namespace and name absent with a non-empty ID, for any state or resourceVersion
+- **THEN** the endpoint logs at debug level and returns `204 No Content` before state/resourceVersion checks, Store mutation, or route-count update
 
-#### Scenario: A local producer emits a reversible ID-only Route
-- **WHEN** a local projection bug produces a Route whose ObjectKey is absent and whose ID reversibly encodes `<namespace>--<name>`
-- **THEN** the same global admission rule intentionally normalizes it rather than rejecting it, while client-facing lookup continues treating that ID as opaque
+#### Scenario: Store receives an ID-only or partial-key Route
+- **WHEN** Upsert or Delete is called without both explicit ObjectKey fields
+- **THEN** the Store returns invalid and creates no record, active index, or deletion fence
 
 #### Scenario: Peer sends a partial or malformed upsert
-- **WHEN** exactly one ObjectKey field is present, an ID-only value is opaque/short, ID, UID, or resourceVersion is missing, or resourceVersion is not a well-formed positive integer
+- **WHEN** exactly one ObjectKey field is present, the ID is empty, a full Route lacks UID or resourceVersion, or resourceVersion is not a well-formed positive integer
 - **THEN** the peer endpoint returns `400 Bad Request` without Store mutation
 
 #### Scenario: Peer sends a minimal explicit-key deletion
@@ -198,7 +199,7 @@ and MUST prevent stale updates and deletes from replacing or removing current ow
 - **THEN** Delete accepts it and ignores fields unrelated to ObjectKey/RV
 
 #### Scenario: Peer sends a malformed deletion
-- **WHEN** a deletion Route has a partial ObjectKey, an opaque/short ID-only value, or a missing or malformed resourceVersion
+- **WHEN** a deletion Route has a partial ObjectKey or empty ID/object shape, or an explicit-key deletion has a missing or malformed resourceVersion
 - **THEN** the peer endpoint returns `400 Bad Request` without Store mutation
 
 #### Scenario: Stale peer event arrives
@@ -310,7 +311,7 @@ supported, and rollback to such a binary is prohibited.
 
 #### Scenario: Initial binary rollout
 - **WHEN** no Sandbox already carries a short-ID label and assignment remains disabled
-- **THEN** manager and gateway may roll out in either order while new receivers normalize reversible legacy ID-only messages through Route admission
+- **THEN** manager and gateway may roll out in either order while new receivers ignore old ID-only peer messages and their own informer List/Watch eventually converges route state, accepting a brief missing route or stale state/IP before convergence
 
 #### Scenario: Activation readiness is incomplete
 - **WHEN** any old replica or retry traffic remains or an informer handler is not synchronized

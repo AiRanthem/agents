@@ -32,16 +32,16 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
-func TestRouteAdmissionValidation(t *testing.T) {
+func TestRouteValidation(t *testing.T) {
 	tests := []struct {
 		name        string
 		route       Route
 		expectError string
 	}{
 		{name: "full", route: fullRoute("id", "ns", "name", "uid", "1")},
-		{name: "opaque ID only", route: idOnlyRoute("id", "uid", "1"), expectError: "invalid legacy sandbox ID"},
-		{name: "partial namespace", route: Route{ID: "id", Namespace: "ns", UID: "uid", ResourceVersion: "1"}, expectError: "both be set or both be empty"},
-		{name: "partial name", route: Route{ID: "id", Name: "name", UID: "uid", ResourceVersion: "1"}, expectError: "both be set or both be empty"},
+		{name: "ID only", route: idOnlyRoute("id", "uid", "1"), expectError: "namespace and name must not be empty"},
+		{name: "partial namespace", route: Route{ID: "id", Namespace: "ns", UID: "uid", ResourceVersion: "1"}, expectError: "namespace and name must not be empty"},
+		{name: "partial name", route: Route{ID: "id", Name: "name", UID: "uid", ResourceVersion: "1"}, expectError: "namespace and name must not be empty"},
 		{name: "missing ID", route: Route{Namespace: "ns", Name: "name", UID: "uid", ResourceVersion: "1"}, expectError: "ID must not be empty"},
 		{name: "missing UID", route: Route{ID: "id", Namespace: "ns", Name: "name", ResourceVersion: "1"}, expectError: "UID must not be empty"},
 		{name: "missing resource version", route: Route{ID: "id", Namespace: "ns", Name: "name", UID: "uid"}, expectError: "resource version must not be empty"},
@@ -55,46 +55,13 @@ func TestRouteAdmissionValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := admitRoute(tt.route)
+			err := tt.route.validate()
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)
 				return
 			}
 			require.NoError(t, err)
-		})
-	}
-}
-
-func TestRouteAdmissionNormalization(t *testing.T) {
-	tests := []struct {
-		name        string
-		route       Route
-		expectRoute Route
-		expectError string
-	}{
-		{
-			name: "full route unchanged", route: fullRoute("opaque", "ns", "name", "uid", "1"),
-			expectRoute: fullRoute("opaque", "ns", "name", "uid", "1"),
-		},
-		{
-			name: "legacy ID-only route normalized", route: idOnlyRoute("ns--name--suffix", "uid", "1"),
-			expectRoute: fullRoute("ns--name--suffix", "ns", "name--suffix", "uid", "1"),
-		},
-		{name: "opaque ID-only route rejected", route: idOnlyRoute("opaque", "uid", "1"), expectError: "invalid legacy sandbox ID"},
-		{name: "partial namespace rejected", route: Route{ID: "ns--name", Namespace: "ns"}, expectError: "both be set or both be empty"},
-		{name: "partial name rejected", route: Route{ID: "ns--name", Name: "name"}, expectError: "both be set or both be empty"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			route, err := admitRoute(tt.route)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.expectRoute, route)
 		})
 	}
 }
@@ -207,9 +174,9 @@ func TestProjectSandboxDerivation(t *testing.T) {
 			expectID: "ns--name",
 		},
 		{
-			name:        "empty metadata rejected as invalid legacy ID",
+			name:        "empty metadata rejected",
 			sandbox:     &agentsv1alpha1.Sandbox{},
-			expectError: "invalid legacy sandbox ID",
+			expectError: "route namespace and name must not be empty",
 		},
 	}
 	for _, tt := range tests {
@@ -254,7 +221,7 @@ func TestProjectSandbox(t *testing.T) {
 		expectState string
 		expectError string
 	}{
-		{name: "nil sandbox", expectError: "source is nil"},
+		{name: "nil sandbox", expectError: "sandbox is nil"},
 		{name: "running projection", sandbox: sandbox, expectState: agentsv1alpha1.SandboxStateRunning},
 		{
 			name: "empty IP normalizes to creating",

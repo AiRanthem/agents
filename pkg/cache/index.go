@@ -19,9 +19,9 @@ package cache
 import (
 	"context"
 
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/utils"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/klog/v2"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
@@ -202,14 +202,7 @@ func getSandboxIDResolver(options Options) SandboxIDResolver {
 	if options.SandboxIDResolver != nil {
 		return options.SandboxIDResolver
 	}
-	return legacySandboxIDResolver
-}
-
-func legacySandboxIDResolver(obj metav1.Object) string {
-	return utils.GetSandboxID(&agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-		Namespace: obj.GetNamespace(),
-		Name:      obj.GetName(),
-	}})
+	return sandboxid.Resolve
 }
 
 // AddIndexesToCache registers all required field indexes on the controller-runtime cache.

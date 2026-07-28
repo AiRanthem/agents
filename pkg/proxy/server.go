@@ -164,6 +164,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to unmarshal body: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
+	if route.Namespace == "" && route.Name == "" && route.ID != "" {
+		log.V(utils.DebugLogLevel).Info("ignoring legacy ID-only peer route refresh", "id", route.ID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	var result sandboxroute.MutationResult
 	if route.State == v1alpha1.SandboxStateDead {
 		if route.ResourceVersion == "" {

@@ -42,7 +42,7 @@ func ProjectSandbox(sandbox *agentsv1alpha1.Sandbox) (Route, error) {
 	}
 	annotations := sandbox.GetAnnotations()
 
-	return admitRoute(Route{
+	route := Route{
 		IP:                 ip,
 		ID:                 sandboxid.Resolve(sandbox),
 		Namespace:          sandbox.Namespace,
@@ -53,5 +53,9 @@ func ProjectSandbox(sandbox *agentsv1alpha1.Sandbox) (Route, error) {
 		ResourceVersion:    sandbox.ResourceVersion,
 		AccessToken:        utils.GetAccessToken(sandbox),
 		RequireTrafficAuth: identity.IsAccessTokenRequested(sandbox),
-	})
+	}
+	if err := route.validate(); err != nil {
+		return Route{}, err
+	}
+	return route, nil
 }

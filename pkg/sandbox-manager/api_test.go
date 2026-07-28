@@ -97,7 +97,7 @@ func setupTestManager(t *testing.T, opts ...config.SandboxManagerOptions) (*Sand
 	}
 	infraOption = config.InitOptions(infraOption)
 
-	cache, fc, err := cachetest.NewTestCacheWithOptions(t, infracache.Options{SandboxIDResolver: sandboxid.Resolve})
+	cache, fc, err := cachetest.NewTestCacheWithOptions(t, infracache.Options{})
 	if err != nil {
 		t.Fatalf("Failed to create test cache: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestSandboxManager_NamespaceAwareSandboxOptions(t *testing.T) {
 
 	got, err := manager.GetSandbox(t.Context(), testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 		Namespace: "team-b",
-		SandboxID: utils.GetSandboxID(sandboxes[1]),
+		SandboxID: sandboxid.Legacy(sandboxes[1].Namespace, sandboxes[1].Name),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "team-b", got.GetNamespace())
@@ -598,7 +598,7 @@ func TestSandboxManager_NamespaceAwareSandboxOptions(t *testing.T) {
 	defer cancel()
 	_, err = manager.GetSandbox(getCtx, testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
 		Namespace: "team-a",
-		SandboxID: utils.GetSandboxID(sandboxes[1]),
+		SandboxID: sandboxid.Legacy(sandboxes[1].Namespace, sandboxes[1].Name),
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
@@ -816,14 +816,14 @@ func TestSandboxManager_GetSandboxExpectedStates(t *testing.T) {
 		{
 			name:           "owned not-ready running sandbox is returned",
 			user:           testUser,
-			sandboxID:      utils.GetSandboxID(notReadySbx),
+			sandboxID:      sandboxid.Legacy(notReadySbx.Namespace, notReadySbx.Name),
 			expectedState:  agentsv1alpha1.SandboxStateDead,
 			expectedReason: "RunningResourceClaimedButNotReady",
 		},
 		{
 			name:              "non-owner is rejected",
 			user:              "other-user",
-			sandboxID:         utils.GetSandboxID(notReadySbx),
+			sandboxID:         sandboxid.Legacy(notReadySbx.Namespace, notReadySbx.Name),
 			expectError:       "not owned",
 			expectedErrorCode: errors.ErrorNotAllowed,
 		},
@@ -922,7 +922,7 @@ func TestSandboxManager_PauseSandbox(t *testing.T) {
 
 			// Get sandbox
 			sbx, err := manager.GetSandbox(t.Context(), testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
-				SandboxID: utils.GetSandboxID(sandbox),
+				SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 			})
 			if err != nil {
 				t.Fatalf("Failed to get sandbox: %v", err)
@@ -954,15 +954,15 @@ func TestSandboxManager_PauseSandbox(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Verify route is synced (InplaceRefresh should have updated it)
-			route, ok := manager.proxy.LoadRoute(utils.GetSandboxID(sandbox))
+			route, ok := manager.proxy.LoadRoute(sandboxid.Legacy(sandbox.Namespace, sandbox.Name))
 			assert.True(t, ok, "Route should be synced")
-			assert.Equal(t, utils.GetSandboxID(sandbox), route.ID)
+			assert.Equal(t, sandboxid.Legacy(sandbox.Namespace, sandbox.Name), route.ID)
 			assert.Equal(t, tt.expectedIP, route.IP)
 			assert.Equal(t, testUser, route.Owner)
 			// Verify sandbox state matches expected
 			if tt.expectedState != "" {
 				actualSbx, err := manager.GetSandbox(t.Context(), testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
-					SandboxID: utils.GetSandboxID(sandbox),
+					SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 				})
 				if err == nil {
 					actualState, _ := actualSbx.GetState()
@@ -1053,7 +1053,7 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 
 			// Get sandbox
 			sbx, err := manager.GetSandbox(t.Context(), testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
-				SandboxID: utils.GetSandboxID(sandbox),
+				SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 			})
 			if err != nil {
 				t.Fatalf("Failed to get sandbox: %v", err)
@@ -1097,9 +1097,9 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 			assert.NoError(t, err)
 
 			// Verify route is synced
-			route, ok := manager.proxy.LoadRoute(utils.GetSandboxID(sandbox))
+			route, ok := manager.proxy.LoadRoute(sandboxid.Legacy(sandbox.Namespace, sandbox.Name))
 			assert.True(t, ok, "Route should be synced")
-			assert.Equal(t, utils.GetSandboxID(sandbox), route.ID)
+			assert.Equal(t, sandboxid.Legacy(sandbox.Namespace, sandbox.Name), route.ID)
 			assert.Equal(t, tt.expectedIP, route.IP)
 			assert.Equal(t, testUser, route.Owner)
 			assert.Equal(t, tt.expectedState, route.State)
@@ -1579,7 +1579,7 @@ func TestSandboxManager_DeleteSandbox(t *testing.T) {
 
 			// Get sandbox
 			sbx, err := manager.GetSandbox(t.Context(), testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
-				SandboxID: utils.GetSandboxID(sandbox),
+				SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 			})
 			if err != nil {
 				t.Fatalf("Failed to get sandbox: %v", err)
@@ -1612,7 +1612,7 @@ func TestSandboxManager_DeleteSandbox(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 				defer cancel()
 				_, getErr := manager.GetSandbox(ctx, testUser, []string{agentsv1alpha1.SandboxStateRunning, agentsv1alpha1.SandboxStatePaused}, infra.GetSandboxOptions{
-					SandboxID: utils.GetSandboxID(sandbox),
+					SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 				})
 				assert.Error(t, getErr, "sandbox should not be found after deletion")
 			}
@@ -2062,7 +2062,7 @@ func TestSandboxManager_deleteRouteAndSync(t *testing.T) {
 			CreateSandboxWithStatus(t, client, sandbox)
 
 			sbx, err := manager.GetSandbox(t.Context(), testUser, nil, infra.GetSandboxOptions{
-				SandboxID: utils.GetSandboxID(sandbox),
+				SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 			})
 			require.NoError(t, err)
 
@@ -2317,7 +2317,7 @@ func TestSandboxManagerReleaseQuotaAfterDelete(t *testing.T) {
 	CreateSandboxWithStatus(t, client, sandbox)
 
 	sbx, err := manager.GetSandbox(t.Context(), testUser, nil, infra.GetSandboxOptions{
-		SandboxID: utils.GetSandboxID(sandbox),
+		SandboxID: sandboxid.Legacy(sandbox.Namespace, sandbox.Name),
 	})
 	require.NoError(t, err)
 

@@ -224,20 +224,14 @@ func TestStoreDelete(t *testing.T) {
 			expectReason: ReasonInvalidRoute,
 		},
 		{
-			name:         "legacy ID supplies ObjectKey",
+			name:         "ID-only delete is invalid",
 			deletion:     Route{ID: "ns--one", ResourceVersion: "2"},
-			expectResult: EventResultApplied,
-			expectFence:  "2",
-		},
-		{
-			name:         "partial ObjectKey is invalid",
-			deletion:     Route{ID: "ns--one", Namespace: key.Namespace, ResourceVersion: "2"},
 			expectResult: EventResultInvalid,
 			expectReason: ReasonInvalidRoute,
 		},
 		{
-			name:         "opaque ID cannot supply ObjectKey",
-			deletion:     Route{ID: "opaque", ResourceVersion: "2"},
+			name:         "partial ObjectKey is invalid",
+			deletion:     Route{ID: "ns--one", Namespace: key.Namespace, ResourceVersion: "2"},
 			expectResult: EventResultInvalid,
 			expectReason: ReasonInvalidRoute,
 		},
@@ -256,6 +250,54 @@ func TestStoreDelete(t *testing.T) {
 			assert.Equal(t, tt.expectRoute, hasRoute)
 			assert.Equal(t, tt.expectFence, store.deletionByObject[key])
 			assertStoreObjectInvariant(t, store, key)
+		})
+	}
+}
+
+func TestStoreRejectsRoutesWithoutFullObjectKeyWithoutAllocatingState(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Store) MutationResult
+	}{
+		{
+			name: "ID-only upsert",
+			mutate: func(store *Store) MutationResult {
+				return store.Upsert(idOnlyRoute("ns--one", "uid-a", "1"))
+			},
+		},
+		{
+			name: "partial-key upsert",
+			mutate: func(store *Store) MutationResult {
+				return store.Upsert(Route{
+					ID: "id", Namespace: "ns", UID: "uid-a", ResourceVersion: "1",
+				})
+			},
+		},
+		{
+			name: "ID-only delete",
+			mutate: func(store *Store) MutationResult {
+				return store.Delete(Route{ID: "ns--one", ResourceVersion: "1"})
+			},
+		},
+		{
+			name: "partial-key delete",
+			mutate: func(store *Store) MutationResult {
+				return store.Delete(Route{ID: "id", Namespace: "ns", ResourceVersion: "1"})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewStore()
+			result := tt.mutate(store)
+			assert.Equal(t, MutationResult{
+				Result: EventResultInvalid,
+				Reason: ReasonInvalidRoute,
+			}, result)
+			assert.Empty(t, store.recordByObject)
+			assert.Empty(t, store.activeKeyByID)
+			assert.Empty(t, store.deletionByObject)
 		})
 	}
 }

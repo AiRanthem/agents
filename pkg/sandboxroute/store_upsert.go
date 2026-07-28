@@ -24,8 +24,7 @@ import (
 // Upsert installs a Route only when its resource version is strictly newer
 // than the ObjectKey's current record or deletion fence.
 func (s *Store) Upsert(route Route) MutationResult {
-	route, err := admitRoute(route)
-	if err != nil {
+	if err := route.validate(); err != nil {
 		return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 	}
 

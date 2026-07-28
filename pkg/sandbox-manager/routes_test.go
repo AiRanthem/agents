@@ -153,6 +153,33 @@ func TestSandboxManagerHandleRouteSandboxEvent(t *testing.T) {
 	assert.False(t, present)
 }
 
+func TestSandboxManagerHandleKeyOnlyTombstoneDelete(t *testing.T) {
+	manager := newRouteTestManager(t)
+	sandbox := newManagerRouteTestSandbox("team-a", "sandbox")
+	id := "team-a--sandbox"
+
+	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+		Sandbox: sandboxcr.AsSandbox(sandbox, nil),
+	})
+	_, present := manager.proxy.LoadRoute(id)
+	require.True(t, present)
+
+	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+		Delete: &sandboxroute.Route{
+			Namespace: sandbox.Namespace,
+			Name:      sandbox.Name,
+		},
+	})
+	_, present = manager.proxy.LoadRoute(id)
+	assert.False(t, present)
+
+	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+		Sandbox: sandboxcr.AsSandbox(sandbox.DeepCopy(), nil),
+	})
+	_, present = manager.proxy.LoadRoute(id)
+	assert.False(t, present, "the removed record RV must become the deletion fence")
+}
+
 type managerRouteSubscription struct {
 	removed bool
 }

@@ -181,13 +181,11 @@ func TestHandleRefresh(t *testing.T) {
 			expectAuth:    true,
 		},
 		{
-			name:          "old peer ID-only running route accepted",
-			method:        http.MethodPost,
-			route:         route("ns--a", "", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "ns--a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
+			name:         "old peer ID-only running route ignored",
+			method:       http.MethodPost,
+			route:        route("ns--a", "", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
+			expectStatus: http.StatusNoContent,
+			expectID:     "ns--a",
 		},
 		{
 			name:         "partial ObjectKey rejected",
@@ -197,11 +195,18 @@ func TestHandleRefresh(t *testing.T) {
 			expectID:     "short-a",
 		},
 		{
-			name:         "opaque ID-only route rejected",
+			name:         "opaque ID-only route ignored",
 			method:       http.MethodPost,
 			route:        route("short-a", "", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
+			expectStatus: http.StatusNoContent,
 			expectID:     "short-a",
+		},
+		{
+			name:         "ID-only running route without resource version ignored",
+			method:       http.MethodPost,
+			route:        route("ns--a", "", "", "uid-a", "", v1alpha1.SandboxStateRunning),
+			expectStatus: http.StatusNoContent,
+			expectID:     "ns--a",
 		},
 		{
 			name:         "missing UID rejected",
@@ -214,6 +219,12 @@ func TestHandleRefresh(t *testing.T) {
 			name:         "missing ID rejected",
 			method:       http.MethodPost,
 			route:        route("", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning),
+			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "empty object rejected",
+			method:       http.MethodPost,
+			route:        &sandboxroute.Route{},
 			expectStatus: http.StatusBadRequest,
 		},
 		{
@@ -287,14 +298,28 @@ func TestHandleRefresh(t *testing.T) {
 			expectID:     "short-a",
 		},
 		{
-			name:   "old peer ID-only delete removes current short ID",
+			name:   "old peer ID-only delete leaves current short ID unchanged",
 			method: http.MethodPost,
 			setup: func(registry *registry.Registry) {
 				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
 			},
-			route:        route("ns--a", "", "", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusNoContent,
-			expectID:     "short-a",
+			route:         route("ns--a", "", "", "", "2", v1alpha1.SandboxStateDead),
+			expectStatus:  http.StatusNoContent,
+			expectID:      "short-a",
+			expectPresent: true,
+			expectIP:      "10.0.0.1",
+		},
+		{
+			name:   "old peer ID-only delete without resource version leaves current short ID unchanged",
+			method: http.MethodPost,
+			setup: func(registry *registry.Registry) {
+				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
+			},
+			route:         route("ns--a", "", "", "", "", v1alpha1.SandboxStateDead),
+			expectStatus:  http.StatusNoContent,
+			expectID:      "short-a",
+			expectPresent: true,
+			expectIP:      "10.0.0.1",
 		},
 		{
 			name:         "partial delete ObjectKey is rejected",
@@ -304,10 +329,10 @@ func TestHandleRefresh(t *testing.T) {
 			expectID:     "short-a",
 		},
 		{
-			name:         "opaque ID-only delete is rejected",
+			name:         "opaque ID-only delete is ignored",
 			method:       http.MethodPost,
 			route:        route("short-a", "", "", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusBadRequest,
+			expectStatus: http.StatusNoContent,
 			expectID:     "short-a",
 		},
 		{
@@ -330,13 +355,13 @@ func TestHandleRefresh(t *testing.T) {
 			expectIP:      "10.0.0.1",
 		},
 		{
-			name:   "opaque ID-only update cannot alter full route",
+			name:   "ID-only update cannot alter full route",
 			method: http.MethodPost,
 			setup: func(registry *registry.Registry) {
 				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
 			},
 			route:         route("short-a", "", "", "uid-a", "99", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusBadRequest,
+			expectStatus:  http.StatusNoContent,
 			expectID:      "short-a",
 			expectPresent: true,
 			expectIP:      "10.0.0.1",

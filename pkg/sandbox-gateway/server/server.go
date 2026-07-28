@@ -214,6 +214,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to decode request: %v", err), http.StatusBadRequest)
 		return
 	}
+	if route.Namespace == "" && route.Name == "" && route.ID != "" {
+		log.V(utils.DebugLogLevel).Info("Ignoring legacy ID-only peer route refresh", "id", route.ID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	log.V(utils.DebugLogLevel).Info("Received route refresh", "route", route)
 	var result sandboxroute.MutationResult
