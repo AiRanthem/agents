@@ -2527,7 +2527,7 @@ func TestTryClaimSandbox_LockConflict(t *testing.T) {
 			infraInstance := NewInfraBuilder(options).
 				WithCache(testCache).
 				WithAPIReader(fc).
-				WithRouteVersionReader(proxy.NewServer(options)).
+				WithRouteReader(proxy.NewServer(options)).
 				Build()
 			require.NoError(t, infraInstance.Run(t.Context()))
 			infraInst := infraInstance.(*Infra)
@@ -3013,7 +3013,7 @@ func TestTryClaimSandbox_ModifierErrorStopsBeforeLock(t *testing.T) {
 			assert.Nil(t, claimed)
 			assert.Equal(t, 1, modifierCalls)
 			assert.Zero(t, admissionCalls)
-			assert.True(t, isTerminalMutationError(err))
+			assert.True(t, errors.As(err, &terminalMutationError{}))
 
 			assert.NotContains(t, informerOwned.GetAnnotations(), "test.example/modifier")
 			persisted := &v1alpha1.Sandbox{}
@@ -3211,7 +3211,7 @@ func TestTryClaimSandbox_ReleasesAdmissionOnRejectedLockWrite(t *testing.T) {
 				infraInstance := NewInfraBuilder(options).
 					WithCache(testCache).
 					WithAPIReader(fc).
-					WithRouteVersionReader(proxy.NewServer(options)).
+					WithRouteReader(proxy.NewServer(options)).
 					Build()
 				require.NoError(t, infraInstance.Run(t.Context()))
 				testInfra := infraInstance.(*Infra)

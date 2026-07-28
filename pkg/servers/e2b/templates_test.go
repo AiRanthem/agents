@@ -538,7 +538,7 @@ func TestListTemplatesUsesCacheProvider(t *testing.T) {
 			return sandboxcr.NewInfraBuilder(opts).
 				WithCache(spyCache).
 				WithAPIReader(spyCache.GetAPIReader()).
-				WithRouteVersionReader(proxy.NewServer(opts)), nil
+				WithRouteReader(proxy.NewServer(opts)), nil
 		}).
 		Build()
 	require.NoError(t, err)

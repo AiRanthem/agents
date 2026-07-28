@@ -63,11 +63,6 @@ func (e terminalMutationError) Unwrap() error {
 	return e.err
 }
 
-func isTerminalMutationError(err error) bool {
-	var terminalErr terminalMutationError
-	return errors.As(err, &terminalErr)
-}
-
 // classifyCreateError classifies a Kubernetes API error from a Create
 // operation into one of three categories:
 // - ambiguous: transient server errors, conflicts, network errors -> managererrors.Error{ErrorInternal}

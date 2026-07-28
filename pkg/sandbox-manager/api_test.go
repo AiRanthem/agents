@@ -106,7 +106,7 @@ func setupTestManager(t *testing.T, opts ...config.SandboxManagerOptions) (*Sand
 	infraInstance := sandboxcr.NewInfraBuilder(infraOption).
 		WithCache(cache).
 		WithAPIReader(fc).
-		WithRouteVersionReader(proxyServer).
+		WithRouteReader(proxyServer).
 		Build()
 
 	if err := infraInstance.Run(t.Context()); err != nil {
@@ -1380,8 +1380,6 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 				namespace, name, ok := parseSandboxID(tt.sandboxID)
 				require.True(t, ok)
 
-				// Keep the route backed by a real Sandbox so the background route
-				// reconciler does not classify this test route as orphaned.
 				sandbox := &agentsv1alpha1.Sandbox{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      name,

@@ -102,7 +102,7 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 		}
 		return sandboxcr.NewInfraBuilder(b.opts).
 			WithCache(cache).
-			WithRouteVersionReader(b.instance.proxy).
+			WithRouteReader(b.instance.proxy).
 			WithAPIReader(mgr.GetAPIReader()).
 			WithRuntimeTLSBundle(b.runtimeTLSBundle), nil
 	}

@@ -91,7 +91,7 @@ func NewTestInfra(t *testing.T, opts ...config.SandboxManagerOptions) (*Infra, c
 	infraInstance := NewInfraBuilder(options).
 		WithCache(cache).
 		WithAPIReader(fc).
-		WithRouteVersionReader(stubRouteVersionReader{}).
+		WithRouteReader(stubRouteReader{}).
 		Build()
 	if err := infraInstance.Run(t.Context()); err != nil {
 		return nil, nil
@@ -341,7 +341,7 @@ func TestInfra_GetClaimedSandbox_CacheMiss_WaitsUntilCacheHit(t *testing.T) {
 			infraInstance := NewInfraBuilder(options).
 				WithCache(retryCache).
 				WithAPIReader(stub).
-				WithRouteVersionReader(stubRouteVersionReader{}).
+				WithRouteReader(stubRouteReader{}).
 				Build().(*Infra)
 
 			if tt.withRoute {
@@ -398,7 +398,7 @@ func TestInfra_GetClaimedSandbox_SharedContextError_RetriesWhileContextLive(t *t
 			infraInstance := NewInfraBuilder(options).
 				WithCache(retryCache).
 				WithAPIReader(stub).
-				WithRouteVersionReader(stubRouteVersionReader{}).
+				WithRouteReader(stubRouteReader{}).
 				Build().(*Infra)
 
 			// Shared context sentinel errors can be returned by cache helpers
@@ -1230,9 +1230,9 @@ func (r *stubAPIReader) List(_ context.Context, _ client.ObjectList, _ ...client
 	panic("stubAPIReader.List: unexpected call from GetClaimedSandbox path")
 }
 
-type stubRouteVersionReader map[string]string
+type stubRouteReader map[string]string
 
-func (r stubRouteVersionReader) LoadRoute(sandboxID string) (sandboxroute.Route, bool) {
+func (r stubRouteReader) LoadRoute(sandboxID string) (sandboxroute.Route, bool) {
 	resourceVersion, ok := r[sandboxID]
 	if !ok {
 		return sandboxroute.Route{}, false
@@ -1241,7 +1241,7 @@ func (r stubRouteVersionReader) LoadRoute(sandboxID string) (sandboxroute.Route,
 }
 
 func setRouteResourceVersion(infraInstance *Infra, sandboxID, resourceVersion string) {
-	infraInstance.RouteVersions.(stubRouteVersionReader)[sandboxID] = resourceVersion
+	infraInstance.Routes.(stubRouteReader)[sandboxID] = resourceVersion
 }
 
 func newInfraWithStubAPIReader(t *testing.T, apiObjects ...*v1alpha1.Sandbox) (*Infra, client.Client, *stubAPIReader) {
@@ -1258,7 +1258,7 @@ func newInfraWithStubAPIReader(t *testing.T, apiObjects ...*v1alpha1.Sandbox) (*
 	infraInstance := NewInfraBuilder(options).
 		WithCache(c).
 		WithAPIReader(stub).
-		WithRouteVersionReader(stubRouteVersionReader{}).
+		WithRouteReader(stubRouteReader{}).
 		Build().(*Infra)
 	require.NoError(t, infraInstance.Run(t.Context()))
 	return infraInstance, fc, stub

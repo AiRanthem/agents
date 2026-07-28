@@ -31,15 +31,13 @@ func TestRegistryMutationsDoNotRequireReadiness(t *testing.T) {
 	route := fullRoute("short-a", "ns", "a", "uid-a", "1")
 	assert.Equal(t, sandboxroute.EventResultApplied, registry.Upsert(route).Result)
 
-	_, present, ready := registry.GetIfReady(route.ID)
-	assert.False(t, ready)
-	assert.False(t, present)
+	assert.False(t, registry.Ready())
 	_, stored := registry.Get(route.ID)
 	assert.True(t, stored)
 
 	registry.SetReady(true)
-	got, present, ready := registry.GetIfReady(route.ID)
-	assert.True(t, ready)
+	assert.True(t, registry.Ready())
+	got, present := registry.Get(route.ID)
 	assert.True(t, present)
 	assert.Equal(t, route, got)
 
@@ -49,8 +47,7 @@ func TestRegistryMutationsDoNotRequireReadiness(t *testing.T) {
 		ResourceVersion: "2",
 	}
 	assert.Equal(t, sandboxroute.EventResultApplied, registry.Delete(deletion).Result)
-	_, present, ready = registry.GetIfReady(route.ID)
-	assert.True(t, ready)
+	_, present = registry.Get(route.ID)
 	assert.False(t, present)
 }
 
