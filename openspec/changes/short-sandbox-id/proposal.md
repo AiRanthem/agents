@@ -100,7 +100,7 @@ messages rather than encoding it back into the ID.
 #### Goals
 
 - Provide a stable UID-derived short suffix; configured prefixes use DNS-compatible characters,
-  while operators own the resulting total length.
+  and their length is validated at startup (at most 37 characters).
 - Preserve legacy behavior for every Sandbox that has no non-empty short-ID label.
 - Ensure one Sandbox has at most one active ID in cache and each physical route store.
 - Allow an unlabeled recycled Sandbox to transition from legacy to short on a later claim.
@@ -128,7 +128,7 @@ messages rather than encoding it back into the ID.
 
 | Role | Scenario | Expected Behavior |
 |---|---|---|
-| Sandbox user | Create a Sandbox in a long namespace with a long generated name | With an empty or suitably short prefix, the returned ID fits safely in the E2B dynamic hostname |
+| Sandbox user | Create a Sandbox in a long namespace with a long generated name | With an empty or suitably short validated prefix, the returned ID fits safely in the E2B dynamic hostname |
 | Existing user | Continue using a Sandbox created before activation | The unlabeled Sandbox keeps its legacy ID |
 | Platform operator | Locate a Sandbox from an opaque ID in a user report | `kubectl get sbx -A -l agents.kruise.io/sandbox-id=<id>` returns the resource |
 | Platform operator | Roll out manager and gateway without a coordinated restart | Both versions interoperate while short assignment remains disabled |
@@ -184,16 +184,19 @@ n6lyz2y2m5g3fbbq4rq6r5kpte
 
 The ID retains all 128 UID bits and is not truncated. An optional prefix is prepended verbatim; no
 separator is added automatically. A non-empty prefix begins with a lowercase letter or digit and
-otherwise uses only lowercase letters, digits, and hyphens. Sandbox-manager does not impose a
-prefix length limit; operators remain responsible for downstream Kubernetes label and DNS length
-constraints:
+otherwise uses only lowercase letters, digits, and hyphens. Sandbox-manager validates the prefix
+length at startup: the 26-character suffix plus the prefix must fit the 63-character Kubernetes
+label value limit, so a prefix longer than 37 characters is rejected. With Native E2B dynamic
+domains (`<port>-<sandbox-id>.<domain>`, a 5-digit port plus a hyphen), operators should keep the
+prefix at or below 31 characters so the DNS label stays within 63 characters; the customized path
+is not subject to that DNS limit:
 
 ```text
 <5 digits>-<optional prefix><26-character suffix>
 ```
 
 Generation fails if an unlabeled Sandbox UID cannot be decoded into 16 bytes. This validation is
-performed only while creating a new label. Prefix character validation occurs during
+performed only while creating a new label. Prefix character and length validation occurs during
 sandbox-manager startup; assignment trusts that validated configuration, and readers still trust
 any existing non-empty value.
 
@@ -293,7 +296,7 @@ flowchart LR
 |---|---|
 | `pkg/sandboxid` | Persisted-label resolution, direct legacy encoding, Base32 encoding, assignment |
 | sandbox-manager core | Feature flag, modifier protection, Checkpoint orchestration, manager route projection |
-| `pkg/cache` | Label-aware indexed lookup with an optional resolver override |
+| `pkg/cache` | Label-aware indexed lookup via the shared `sandboxid` resolver |
 | `pkg/sandboxroute` | Neutral Route type and stateless projection, ObjectKey-backed Store, active ID index, RV fencing |
 | infra | Generic mutation/persistence plus neutral Sandbox informer event adaptation |
 | E2B server | Request validation, including the create-team legacy namespace restriction, and response/error presentation |
@@ -327,18 +330,24 @@ not enter the Store through the informer feeder.
 
 ### Cache Lookup
 
-The claimed-Sandbox index produces exactly one key per Sandbox using `sandboxid.Resolve` by default,
-regardless of the assignment flag or caller. `Options.SandboxIDResolver` remains available only as
-an explicit override.
+The claimed-Sandbox index produces exactly one key per Sandbox using `sandboxid.Resolve` directly,
+regardless of the assignment flag or caller. The former `Options.SandboxIDResolver` override was
+removed; tests construct real labels instead of injecting a resolver.
 
 When a label update is observed, the informer index moves the Sandbox from its legacy key to the
 short key without retaining an alias. Client IDs remain opaque: cache or API fallbacks never split
 an ID on `--` to recover namespace/name.
 
-Lookup requests at most one indexed result. The supported protocol guarantees uniqueness because
-short IDs encode the complete cluster-unique UID, legacy IDs encode the ObjectKey in a disjoint
-format, and only core assignment may write the reserved label. Direct administrative label writes,
-copied labels, forged peer Routes, and cross-cluster delivery have undefined behavior.
+Lookup requests up to two indexed results and fails with a descriptive ambiguity error when more
+than one Sandbox matches; there is no recovery path and the ID is never parsed. Every infra lookup
+failure surfaces as a deterministic not-found at the API, with the underlying error included in
+the public message. Ambiguity is not special-cased: cache-client, API-reader, authorization, and
+other lookup errors are exposed in the same way. The supported protocol still guarantees
+uniqueness because short IDs encode the complete cluster-unique UID, legacy IDs encode the
+ObjectKey in a disjoint format, and only core assignment may write the reserved label. Direct
+administrative label writes, copied labels, forged peer Routes, and cross-cluster delivery have
+undefined behavior; the duplicate check is a cache-lookup backstop only, and the route stores
+remain last-writer-wins with no ambiguity detection.
 
 ### Shared Routing Model
 
@@ -480,8 +489,9 @@ resource key through `label:` extensions.
 ### Checkpoint and Pagination Semantics
 
 Checkpoint persists the final Sandbox ID visible when the Checkpoint is created. E2B calls
-sandbox-manager core, which resolves and supplies the ID explicitly to infra. Infra validates only
-that the value is non-empty and does not know whether it is legacy or short.
+`infra.Sandbox.CreateCheckpoint` directly; infra resolves the identity from the source CR at entry,
+before any refresh. No caller supplies the value, and infra does not know whether it is legacy or
+short.
 
 If a recycled Sandbox later transitions from legacy to short, existing Checkpoints keep their
 legacy source ID and later Checkpoints use the short ID. No historical Checkpoint migration is
@@ -503,7 +513,8 @@ Sandbox-manager adds:
 The default preserves current behavior. Enabling the flag assigns labels only during successful
 claim/clone finalization. Disabling it later stops new assignments but does not change or remove any
 existing label. The prefix is prepended only to newly assigned IDs, includes no implicit separator,
-has no manager-enforced length limit, and must be identical across sandbox-manager replicas.
+is limited to 37 characters, enforced at startup, and must be identical across sandbox-manager
+replicas.
 
 ## Capabilities
 
@@ -606,10 +617,10 @@ concurrency harnesses.
 
 | Area | Required Coverage |
 |---|---|
-| Encoding and resolution | Legacy fallback, existing-label trust, deterministic 26-character encoding, explicit prefix character validation without a length limit, concatenation, invalid UID, idempotent assignment |
+| Encoding and resolution | Legacy fallback, existing-label trust, deterministic 26-character encoding, explicit prefix character and length validation, concatenation, invalid UID, idempotent assignment |
 | Mutation boundaries | E2B/SandboxClaim rejection, modifier add/change/delete protection, feature-disabled protection |
 | Recycle | User metadata tracking excludes the key; crafted cleanup metadata cannot delete it |
-| Cache | Label-aware default resolution, resolver override, legacy-to-short index move, unique opaque lookup |
+| Cache | Label-aware default resolution, legacy-to-short index move, unique opaque lookup, duplicate-ID ambiguity error |
 | Route Store | Atomic ID switch, ID-to-ObjectKey-to-record lookup, strictly newer RV upsert, permanent fences, and record/fence mutual exclusion |
 | Deletes and compatibility | Full-Route-only Store mutation, unified ObjectKey/RV deletion, normal DELETE, object-bearing and key-only `DeletedFinalStateUnknown`, informer-scope transitions, ID-only peer ignore, old/new Route JSON compatibility, HTTP mapping |
 | Readiness and health | Initial-sync writes before ready, read gating, multiple informer registration health, and Remove |

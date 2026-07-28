@@ -6,8 +6,8 @@ shared by sandbox-manager and sandbox-gateway.
 ## Local Invariants
 
 - Existing imports from API and sandbox-manager packages are legacy debt. Do
-  not add new cross-layer dependencies; place shared route data in the existing
-  neutral `pkg/utils/proxyutils` package.
+  not add new cross-layer dependencies; place shared route data in the neutral
+  `pkg/sandboxroute` package.
 - Keep `RequestAdapter` as the seam for protocol parsing, Sandbox mapping, and
   API-versus-Sandbox request classification.
 - Route updates are resource-version monotonic. Older cache or peer events must

@@ -37,6 +37,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/runtime"
@@ -498,9 +499,9 @@ func createCheckpoint(ctx context.Context, c client.Client, cp *v1alpha1.Checkpo
 
 func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracache.Provider, opts infra.CreateCheckpointOptions) (string, error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
-	if opts.SandboxID == "" {
-		return "", errors.New("sandbox ID is required to create checkpoint")
-	}
+	// Resolve the identity from the passed-in CR before any refresh so the
+	// checkpoint records the point-in-time identity the caller referenced.
+	sandboxID := sandboxid.Resolve(sbx)
 
 	// Step 1: Build the Checkpoint with GenerateName. The Checkpoint is the new
 	// owner of the SandboxTemplate; it carries no OwnerReferences itself.
@@ -511,7 +512,7 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 			Annotations: map[string]string{
 				v1alpha1.AnnotationInitRuntimeRequest: sbx.Annotations[v1alpha1.AnnotationInitRuntimeRequest],
 				v1alpha1.AnnotationOwner:              sbx.Annotations[v1alpha1.AnnotationOwner],
-				v1alpha1.AnnotationSandboxID:          opts.SandboxID,
+				v1alpha1.AnnotationSandboxID:          sandboxID,
 			},
 			// Labels are for manual selection by users with kubectl.
 			Labels: map[string]string{

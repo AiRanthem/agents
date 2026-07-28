@@ -39,11 +39,10 @@ func TestRouteSandboxSourceSubscribe(t *testing.T) {
 	source := &routeSandboxSource{cache: provider}
 
 	var events []infra.RouteSandboxEvent
-	subscription, err := source.Subscribe(t.Context(), func(_ context.Context, event infra.RouteSandboxEvent) {
+	err = source.Subscribe(t.Context(), func(_ context.Context, event infra.RouteSandboxEvent) {
 		events = append(events, event)
 	})
 	require.NoError(t, err)
-	require.Same(t, provider.registration, subscription)
 	require.NotNil(t, provider.handler)
 
 	sandbox := routeSourceSandbox()
@@ -74,9 +73,6 @@ func TestRouteSandboxSourceSubscribe(t *testing.T) {
 	assert.Equal(t, "team-a", events[3].Delete.Namespace)
 	assert.Equal(t, "sandbox-a", events[3].Delete.Name)
 	assert.Empty(t, events[3].Delete.ResourceVersion)
-
-	require.NoError(t, subscription.Remove())
-	assert.True(t, provider.registration.removed)
 }
 
 func TestRouteSandboxSourceTombstoneValidation(t *testing.T) {
@@ -102,15 +98,15 @@ func TestRouteSandboxSourceSubscribeValidation(t *testing.T) {
 	require.NoError(t, err)
 	handler := func(context.Context, infra.RouteSandboxEvent) {}
 
-	_, err = (&routeSandboxSource{cache: managerCache}).Subscribe(t.Context(), nil)
+	err = (&routeSandboxSource{cache: managerCache}).Subscribe(t.Context(), nil)
 	require.Error(t, err)
 
-	_, err = (&routeSandboxSource{}).Subscribe(t.Context(), handler)
+	err = (&routeSandboxSource{}).Subscribe(t.Context(), handler)
 	require.Error(t, err)
 
 	expected := errors.New("registration failed")
 	provider := &routeEventProvider{Provider: managerCache, err: expected}
-	_, err = (&routeSandboxSource{cache: provider}).Subscribe(t.Context(), handler)
+	err = (&routeSandboxSource{cache: provider}).Subscribe(t.Context(), handler)
 	require.ErrorIs(t, err, expected)
 }
 
@@ -132,16 +128,13 @@ func (p *routeEventProvider) AddSandboxEventHandler(
 	return p.registration, nil
 }
 
-type routeEventRegistration struct {
-	removed bool
-}
+type routeEventRegistration struct{}
 
 func (r *routeEventRegistration) HasSynced() bool {
 	return true
 }
 
 func (r *routeEventRegistration) Remove() error {
-	r.removed = true
 	return nil
 }
 

@@ -137,9 +137,6 @@ type CloneSandboxOptions struct {
 }
 
 type CreateCheckpointOptions struct {
-	// SandboxID is the point-in-time source identity supplied by manager core.
-	// Infra treats it as opaque and rejects an empty value.
-	SandboxID          string        `json:"-"`
 	KeepRunning        *bool         `json:"keepRunning,omitempty"`
 	TTL                *string       `json:"TTL,omitempty"`
 	PersistentContents []string      `json:"persistentMemory"`

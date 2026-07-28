@@ -72,56 +72,37 @@ func TestCache_GetClaimedSandbox(t *testing.T) {
 	})
 }
 
-func TestCache_GetClaimedSandboxWithResolver(t *testing.T) {
+func TestCache_GetClaimedSandboxIDResolution(t *testing.T) {
 	tests := []struct {
 		name        string
-		options     cache.Options
 		sandbox     *agentsv1alpha1.Sandbox
 		sandboxID   string
 		expectName  string
 		expectError string
 	}{
 		{
-			name:       "default resolver uses legacy ID without label",
+			name:       "legacy ID without label",
 			sandbox:    claimedSandboxForIDTest("default", "legacy", ""),
 			sandboxID:  "default--legacy",
 			expectName: "legacy",
 		},
 		{
-			name:       "default resolver uses authoritative label",
+			name:       "authoritative label wins",
 			sandbox:    claimedSandboxForIDTest("default", "labeled", "short-id"),
 			sandboxID:  "short-id",
 			expectName: "labeled",
 		},
 		{
-			name:        "default resolver does not retain legacy alias",
+			name:        "legacy alias is not retained",
 			sandbox:     claimedSandboxForIDTest("default", "labeled", "short-id"),
 			sandboxID:   "default--labeled",
 			expectError: cache.ErrSandboxNotFound.Error(),
-		},
-		{
-			name: "injected resolver overrides default",
-			options: cache.Options{
-				SandboxIDResolver: overrideSandboxIDForCacheTest,
-			},
-			sandbox:    claimedSandboxForIDTest("default", "labeled", "short-id"),
-			sandboxID:  "override-short-id",
-			expectName: "labeled",
-		},
-		{
-			name: "injected resolver controls unlabeled sandbox",
-			options: cache.Options{
-				SandboxIDResolver: overrideSandboxIDForCacheTest,
-			},
-			sandbox:    claimedSandboxForIDTest("default", "unlabeled", ""),
-			sandboxID:  "override-default--unlabeled",
-			expectName: "unlabeled",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, _, err := cachetest.NewTestCacheWithOptions(t, tt.options, tt.sandbox)
+			c, _, err := cachetest.NewTestCache(t, tt.sandbox)
 			require.NoError(t, err)
 
 			got, err := c.GetClaimedSandbox(t.Context(), cache.GetClaimedSandboxOptions{
@@ -138,6 +119,23 @@ func TestCache_GetClaimedSandboxWithResolver(t *testing.T) {
 			assert.Equal(t, tt.expectName, got.Name)
 		})
 	}
+
+	t.Run("duplicate reserved labels are ambiguous", func(t *testing.T) {
+		first := claimedSandboxForIDTest("default", "dup-a", "dup-short-id")
+		second := claimedSandboxForIDTest("default", "dup-b", "dup-short-id")
+		c, _, err := cachetest.NewTestCache(t, first, second)
+		require.NoError(t, err)
+
+		got, err := c.GetClaimedSandbox(t.Context(), cache.GetClaimedSandboxOptions{
+			Namespace: "default",
+			SandboxID: "dup-short-id",
+		})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, cache.ErrSandboxIDAmbiguous)
+		assert.NotErrorIs(t, err, cache.ErrSandboxNotFound)
+		assert.Contains(t, err.Error(), "duplicate reserved")
+		assert.Nil(t, got)
+	})
 }
 
 func TestCache_GetClaimedSandboxMovesDefaultIndexOnLabelUpdate(t *testing.T) {
@@ -194,34 +192,25 @@ func TestCache_GetClaimedSandboxMovesDefaultIndexOnLabelUpdate(t *testing.T) {
 func TestClaimedSandboxIndexUsesOneResolvedKey(t *testing.T) {
 	tests := []struct {
 		name     string
-		options  cache.Options
 		sandbox  *agentsv1alpha1.Sandbox
 		expectID string
 	}{
 		{
-			name:     "default resolver emits only legacy key without label",
+			name:     "only legacy key without label",
 			sandbox:  claimedSandboxForIDTest("default", "legacy", ""),
 			expectID: "default--legacy",
 		},
 		{
-			name:     "default resolver emits only short key with label",
+			name:     "only short key with label",
 			sandbox:  claimedSandboxForIDTest("default", "legacy", "short-id"),
 			expectID: "short-id",
-		},
-		{
-			name: "injected resolver overrides the resolved key",
-			options: cache.Options{
-				SandboxIDResolver: overrideSandboxIDForCacheTest,
-			},
-			sandbox:  claimedSandboxForIDTest("default", "labeled", "short-id"),
-			expectID: "override-short-id",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var extract func(ctrlclient.Object) []string
-			for _, index := range cache.GetIndexFuncs(tt.options) {
+			for _, index := range cache.GetIndexFuncs() {
 				if index.FieldName == cache.IndexClaimedSandboxID {
 					extract = index.Extract
 					break
@@ -243,10 +232,6 @@ func claimedSandboxForIDTest(namespace, name, sandboxID string) *agentsv1alpha1.
 		Name:      name,
 		Labels:    labels,
 	}}
-}
-
-func overrideSandboxIDForCacheTest(obj metav1.Object) string {
-	return "override-" + sandboxid.Resolve(obj)
 }
 
 func TestCache_GetCheckpoint(t *testing.T) {
@@ -1367,17 +1352,17 @@ func TestRegression_SameActionConcurrentWaitsConverge(t *testing.T) {
 func TestCache_GetSandboxController(t *testing.T) {
 	c, _, err := cachetest.NewTestCache(t)
 	require.NoError(t, err)
-	// Controllers are initialized by SetupCacheControllersWithManager in NewCacheWithOptions
+	// Controllers are initialized by SetupCacheControllersWithManager in NewCacheWithHealth
 	sbxCtrl := c.GetSandboxController()
-	assert.NotNil(t, sbxCtrl, "sandbox controller should be initialized in NewCacheWithOptions")
+	assert.NotNil(t, sbxCtrl, "sandbox controller should be initialized in NewCacheWithHealth")
 }
 
 func TestCache_GetSandboxSetController(t *testing.T) {
 	c, _, err := cachetest.NewTestCache(t)
 	require.NoError(t, err)
-	// Controllers are initialized by SetupCacheControllersWithManager in NewCacheWithOptions
+	// Controllers are initialized by SetupCacheControllersWithManager in NewCacheWithHealth
 	sbsCtrl := c.GetSandboxSetController()
-	assert.NotNil(t, sbsCtrl, "sandboxset controller should be initialized in NewCacheWithOptions")
+	assert.NotNil(t, sbsCtrl, "sandboxset controller should be initialized in NewCacheWithHealth")
 }
 
 // --- BuildCacheConfig tests ---

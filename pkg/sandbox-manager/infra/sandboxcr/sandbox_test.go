@@ -324,7 +324,7 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	releaseUpdates := make(chan struct{})
 
 	builder := fake.NewClientBuilder().WithScheme(scheme)
-	for _, idx := range infracache.GetIndexFuncs(infracache.Options{}) {
+	for _, idx := range infracache.GetIndexFuncs() {
 		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
 	}
 	builder = builder.WithStatusSubresource(&v1alpha1.Sandbox{})
@@ -349,7 +349,7 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 		WithWaitSimulation().
 		Build()
 
-	testCache, err := infracache.NewCacheWithOptions(mgr, infracache.Options{})
+	testCache, err := infracache.NewCache(mgr)
 	require.NoError(t, err)
 	mgr.SetWaitHooks(testCache.GetWaitHooks())
 
@@ -484,7 +484,7 @@ func newRetryUpdateTestCache(
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 
 	builder := fake.NewClientBuilder().WithScheme(scheme)
-	for _, idx := range infracache.GetIndexFuncs(infracache.Options{}) {
+	for _, idx := range infracache.GetIndexFuncs() {
 		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
 	}
 	builder = builder.WithStatusSubresource(&v1alpha1.Sandbox{})
@@ -1375,7 +1375,7 @@ func TestSandbox_TriggerRecycle(t *testing.T) {
 			utilruntime.Must(v1alpha1.AddToScheme(scheme))
 
 			builder := fake.NewClientBuilder().WithScheme(scheme)
-			for _, idx := range infracache.GetIndexFuncs(infracache.Options{}) {
+			for _, idx := range infracache.GetIndexFuncs() {
 				builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
 			}
 			builder = builder.WithStatusSubresource(&v1alpha1.Sandbox{})

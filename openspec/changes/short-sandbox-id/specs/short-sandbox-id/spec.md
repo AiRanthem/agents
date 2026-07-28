@@ -40,7 +40,7 @@ The system SHALL generate a short Sandbox ID suffix by encoding all 16 UUID byte
 - **THEN** generation fails instead of persisting a fallback or truncated ID
 
 ### Requirement: Configurable short-ID prefix
-The system SHALL expose `--short-sandbox-id-prefix=""`, prepend its value verbatim to every newly generated 26-character suffix without adding a separator, reject startup unless a non-empty prefix starts with `[a-z0-9]` and otherwise contains only `[a-z0-9-]`, and SHALL NOT impose a prefix length limit.
+The system SHALL expose `--short-sandbox-id-prefix=""`, prepend its value verbatim to every newly generated 26-character suffix without adding a separator, reject startup unless a non-empty prefix starts with `[a-z0-9]` and otherwise contains only `[a-z0-9-]`, and SHALL reject startup when a prefix would exceed 37 characters (the 63-character Kubernetes label value limit minus the 26-character short-ID suffix).
 
 #### Scenario: Empty prefix preserves the original format
 - **WHEN** short assignment runs with the default empty prefix
@@ -51,12 +51,12 @@ The system SHALL expose `--short-sandbox-id-prefix=""`, prepend its value verbat
 - **THEN** the persisted ID is `prod-` followed immediately by the 26-character encoded UID suffix
 
 #### Scenario: Malformed prefix prevents startup
-- **WHEN** the configured prefix contains invalid characters or starts with a hyphen
+- **WHEN** the configured prefix contains invalid characters, starts with a hyphen, or exceeds the 37-character length limit
 - **THEN** sandbox-manager startup fails before Infra is constructed, even if short assignment is disabled
 
-#### Scenario: Prefix length is unrestricted
-- **WHEN** a syntactically valid prefix exceeds any previous implementation length threshold
-- **THEN** sandbox-manager does not reject it solely because of its length and passes it unchanged to assignment
+#### Scenario: Over-length prefix prevents startup
+- **WHEN** a syntactically valid prefix longer than 37 characters is configured
+- **THEN** sandbox-manager fails startup before Infra is constructed
 
 #### Scenario: Existing label ignores prefix changes
 - **WHEN** a Sandbox already has a non-empty authoritative label
@@ -123,7 +123,7 @@ The system MUST fail the overall claim or clone and use its existing cleanup pat
 - **THEN** the returned Sandbox is refreshed from that attempt's informer Get only when it is not older than the current wrapper view, and no Update is issued
 
 ### Requirement: Opaque unique cache lookup
-The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat client-provided IDs as opaque, and request at most one result under the supported global-ID uniqueness contract.
+The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat client-provided IDs as opaque, request at most two results, and SHALL fail with a descriptive error when duplicates are observed.
 
 #### Scenario: Label update reaches the cache
 - **WHEN** an informer observes a Sandbox transition from unlabeled to a non-empty short-ID label
@@ -131,7 +131,11 @@ The claimed-Sandbox cache SHALL index exactly one resolved ID per Sandbox, treat
 
 #### Scenario: Claimed Sandbox is looked up
 - **WHEN** a client supplies an opaque Sandbox ID
-- **THEN** cache lookup requests at most one indexed result and does not parse the ID for fallback lookup
+- **THEN** cache lookup requests at most two indexed results, fails with a descriptive error when more than one Sandbox matches, and does not parse the ID for fallback lookup
+
+#### Scenario: Infra lookup fails
+- **WHEN** manager receives any infra lookup error, including not-found, duplicate-ID ambiguity, cache-client, API-reader, or authorization failures
+- **THEN** manager returns the existing not-found error category and includes the underlying infra error in the public message
 
 ### Requirement: Shared atomic route projection
 Manager and gateway SHALL use the same ObjectKey-, resourceVersion-, and SandboxID-aware routing
@@ -288,15 +292,15 @@ E2B SHALL add protected namespace/name context to successful metadata and downst
 - **THEN** the response does not disclose namespace or name
 
 ### Requirement: Point-in-time Checkpoint and opaque pagination identity
-Checkpoint creation SHALL persist the non-empty final Sandbox ID supplied by manager core at creation time, and pagination SHALL use the resolved ID as an opaque uniqueness component without parsing or historical rewriting.
+Checkpoint creation SHALL resolve the source Sandbox identity from the source CR at creation time, before any refresh, and persist it; pagination SHALL use the resolved ID as an opaque uniqueness component without parsing or historical rewriting.
 
 #### Scenario: Sandbox transitions after a Checkpoint
 - **WHEN** an unlabeled recycled Sandbox receives a short ID after an earlier Checkpoint was created
 - **THEN** the earlier Checkpoint retains its legacy source ID and later Checkpoints use the short ID
 
-#### Scenario: Empty Checkpoint identity is supplied
-- **WHEN** infra receives an empty SandboxID for Checkpoint creation
-- **THEN** it rejects persistence
+#### Scenario: Caller cannot supply Checkpoint identity
+- **WHEN** a server adapter creates a Checkpoint
+- **THEN** the persisted identity is resolved from the source Sandbox CR and no caller-supplied identity exists
 
 #### Scenario: ID changes between list calls
 - **WHEN** a Sandbox transitions between paginated list requests

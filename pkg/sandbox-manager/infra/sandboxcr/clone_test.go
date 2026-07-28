@@ -2006,15 +2006,14 @@ func TestCreateCheckPoint(t *testing.T) {
 
 	// table-driven tests
 	tests := []struct {
-		name                   string
-		sandbox                *v1alpha1.Sandbox
-		cpStatus               v1alpha1.CheckpointStatus
-		tmplOverride           tmplOverride
-		opts                   infra.CreateCheckpointOptions
-		preserveEmptySandboxID bool
-		injectErr              injectErrTarget
-		expectError            string
-		postCheck              func(t *testing.T, id string, c client.Client)
+		name         string
+		sandbox      *v1alpha1.Sandbox
+		cpStatus     v1alpha1.CheckpointStatus
+		tmplOverride tmplOverride
+		opts         infra.CreateCheckpointOptions
+		injectErr    injectErrTarget
+		expectError  string
+		postCheck    func(t *testing.T, id string, c client.Client)
 	}{
 		{
 			name:    "successful checkpoint creation",
@@ -2025,7 +2024,6 @@ func TestCreateCheckPoint(t *testing.T) {
 			},
 			tmplOverride: tmplOverride{Name: "tmpl-1", UID: "uid-1"},
 			opts: infra.CreateCheckpointOptions{
-				SandboxID:          "opaque-final-id",
 				WaitSuccessTimeout: 5 * time.Second,
 			},
 			postCheck: func(t *testing.T, id string, c client.Client) {
@@ -2034,7 +2032,7 @@ func TestCreateCheckPoint(t *testing.T) {
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-1"}, &cp))
 				assert.Equal(t, "tmpl-1", cp.Name)
 				assert.Equal(t, "test-sandbox-1", *cp.Spec.PodName)
-				assert.Equal(t, "opaque-final-id", cp.Annotations[v1alpha1.AnnotationSandboxID])
+				assert.Equal(t, "default--test-sandbox-1", cp.Annotations[v1alpha1.AnnotationSandboxID])
 				assert.Empty(t, cp.OwnerReferences, "checkpoint should have no owner references")
 				assert.Equal(t, "cp-id-123", cp.Labels[v1alpha1.CheckpointLabelID])
 				var tmpl v1alpha1.SandboxTemplate
@@ -2049,14 +2047,25 @@ func TestCreateCheckPoint(t *testing.T) {
 			},
 		},
 		{
-			name:                   "empty sandbox ID is rejected before persistence",
-			sandbox:                newTestSandbox("test-sandbox-empty-id"),
-			preserveEmptySandboxID: true,
-			expectError:            "sandbox ID is required",
-			postCheck: func(t *testing.T, _ string, c client.Client) {
-				checkpoints := &v1alpha1.CheckpointList{}
-				require.NoError(t, c.List(t.Context(), checkpoints))
-				assert.Empty(t, checkpoints.Items)
+			name: "checkpoint records the short label identity of the source",
+			sandbox: func() *v1alpha1.Sandbox {
+				sbx := newTestSandbox("test-sandbox-short-id")
+				sbx.Labels = map[string]string{v1alpha1.LabelSandboxID: "opaque-short-id"}
+				return sbx
+			}(),
+			cpStatus: v1alpha1.CheckpointStatus{
+				Phase:        v1alpha1.CheckpointSucceeded,
+				CheckpointId: "cp-id-short",
+			},
+			tmplOverride: tmplOverride{Name: "tmpl-short-id", UID: "uid-short-id"},
+			opts: infra.CreateCheckpointOptions{
+				WaitSuccessTimeout: 5 * time.Second,
+			},
+			postCheck: func(t *testing.T, id string, c client.Client) {
+				assert.Equal(t, "cp-id-short", id)
+				var cp v1alpha1.Checkpoint
+				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-short-id"}, &cp))
+				assert.Equal(t, "opaque-short-id", cp.Annotations[v1alpha1.AnnotationSandboxID])
 			},
 		},
 		{
@@ -2402,11 +2411,7 @@ func TestCreateCheckPoint(t *testing.T) {
 				ctx = context.WithValue(ctx, injectErrKey{}, tt.injectErr)
 			}
 
-			opts := tt.opts
-			if opts.SandboxID == "" && !tt.preserveEmptySandboxID {
-				opts.SandboxID = "default-final-id"
-			}
-			id, err := CreateCheckpoint(ctx, tt.sandbox, cache, opts)
+			id, err := CreateCheckpoint(ctx, tt.sandbox, cache, tt.opts)
 
 			if tt.expectError != "" {
 				require.Error(t, err)

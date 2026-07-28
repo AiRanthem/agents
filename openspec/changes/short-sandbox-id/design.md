@@ -86,7 +86,7 @@ Input validation is not the only protection. Sandbox-manager core guards both th
 
 Recycle provides an independent persistence boundary. The reserved key is excluded when `UpdatedMetadataInClaim` is built, and `resetMetadataForPool` skips it even if a historical or manually crafted `UpdatedMetadataInClaim` annotation lists it. A labeled Sandbox therefore cannot return to legacy resolution through metadata cleanup.
 
-The supported protocol assumes that only core assignment writes this reserved label. Because a short ID encodes the complete Kubernetes UID and a legacy ID contains the `--` separator that is absent from the short-ID alphabet, every supported Sandbox ID is unique across live ObjectKeys. Direct administrator writes, copied labels, forged peer Routes, and cross-cluster Route delivery violate this contract and have undefined behavior; readers do not add defensive duplicate-ID state for them.
+The supported protocol assumes that only core assignment writes this reserved label. Because a short ID encodes the complete Kubernetes UID and a legacy ID contains the `--` separator that is absent from the short-ID alphabet, every supported Sandbox ID is unique across live ObjectKeys. Direct administrator writes, copied labels, forged peer Routes, and cross-cluster Route delivery violate this contract and have undefined behavior; readers do not add defensive duplicate-ID state for them. As a backstop, the claimed-Sandbox cache lookup fails loudly when it observes duplicate resolved IDs, while the route stores' active-ID indexes remain last-writer-wins with no ambiguity detection.
 
 ### 4.2 Resolution
 
@@ -135,17 +135,21 @@ n6lyz2y2m5g3fbbq4rq6r5kpte
 
 The complete 128 bits are retained; the value is not truncated. An optional configured prefix is
 prepended verbatim to this suffix; no separator is inserted automatically. A non-empty prefix
-starts with `[a-z0-9]` and otherwise contains only `[a-z0-9-]`. Sandbox-manager does not impose a
-prefix length limit. Operators remain responsible for choosing a prefix that fits downstream
-Kubernetes label and DNS length constraints:
+starts with `[a-z0-9]` and otherwise contains only `[a-z0-9-]`. Manager `Build()` validates the
+prefix length at startup: because the encoded suffix is always `ShortIDLength` (26) characters and
+a Kubernetes label value holds at most 63 characters, a prefix longer than 37 characters is
+rejected. With Native E2B dynamic domains (`<port>-<sandbox-id>.<domain>`, a 5-digit port plus a
+hyphen), operators should additionally keep the prefix at or below 31 characters so the first DNS
+label stays within 63 characters; the customized path is not subject to that DNS limit:
 
 ```text
 <5 digits>-<optional prefix><26 characters>
 ```
 
 If short assignment is requested but the UID cannot be decoded as 16 UUID bytes, assignment fails.
-A configured prefix with invalid characters prevents sandbox-manager from starting, even when
-assignment is disabled. Prefix validation is explicit at Manager construction; `AssignShort`
+A configured prefix with invalid characters or an over-length prefix prevents sandbox-manager from
+starting, even when assignment is disabled. Prefix validation (characters and length) is explicit
+at Manager construction; `AssignShort`
 trusts its caller and only performs generation and concatenation. Once a non-empty label exists,
 read-time resolution trusts it without validation.
 
@@ -166,8 +170,8 @@ The enable flag controls assignment, not read format:
 
 The prefix defaults to empty and affects only IDs assigned after configuration. Operators include
 their own separator when desired, for example `prod-`, and configure the same value on every
-sandbox-manager replica. No prefix length limit is enforced. Changing the prefix never rewrites an
-existing label.
+sandbox-manager replica. Prefixes longer than 37 characters are rejected at startup. Changing the
+prefix never rewrites an existing label.
 
 This distinction is required for safe one-way migration. A labeled Sandbox remains usable after
 the flag is turned off, as long as all running binaries understand label-based resolution.
@@ -200,8 +204,11 @@ func Resolve(sandbox metav1.Object) string
 func Legacy(namespace, name string) string
 func GenerateShort(uid types.UID) (string, error)
 func ValidatePrefix(prefix string) error
+const ShortIDLength = 26
 func AssignShort(sandbox metav1.Object, prefix string) (changed bool, err error)
 ```
+
+`ShortIDLength` states the encoding fact only; prefix length policy stays in the Manager builder.
 
 `Resolve` is the only label-or-legacy decision point. `pkg/sandboxid` directly owns the
 `<namespace>--<name>` encoding and exports its separator. The E2B create-team validator references
@@ -209,16 +216,16 @@ that separator but keeps the API-specific namespace restriction local to its bou
 reverse parsing is removed; client IDs and Route IDs are never decoded for lookup, authorization,
 or ObjectKey recovery.
 
-`pkg/cache` uses the leaf resolver by default and keeps `Options.SandboxIDResolver` as an explicit
-override. `pkg/sandboxroute` calls `sandboxid.Resolve` only inside centralized `ProjectSandbox`
+`pkg/cache` uses the leaf resolver directly with no override injection point. `pkg/sandboxroute`
+calls `sandboxid.Resolve` only inside centralized `ProjectSandbox`
 derivation, and infra's `GetSandboxID()` only delegates to the same resolver; neither reproduces
 the branch elsewhere.
 
 ### 7.2 Sandbox-manager core
 
-`SandboxManager` owns the feature flag and prefix. Its builder validates the prefix before
-constructing Infra, and the Manager decides whether to compose the short-ID assignment callback
-into claim and clone operations.
+`SandboxManager` owns the feature flag and prefix. Its builder validates the prefix characters and
+length before constructing Infra, and the Manager decides whether to compose the short-ID
+assignment callback into claim and clone operations.
 
 Core wraps every caller-supplied pre-lock `Modifier` and final `PostModifier` with the reserved-label guard from Section 4.1. The existing pre-lock modifier becomes error-returning so a guard failure stops before the first persistence. The guard compares both map-entry presence and value; deleting an existing empty entry is therefore also rejected rather than treated as unchanged.
 
@@ -233,7 +240,7 @@ The guard is installed even when assignment is disabled. Core runs last and fill
 
 Servers read the final public ID through the neutral `infra.Sandbox.GetSandboxID()` (label first, legacy fallback); the former `ResolveSandboxID` manager facade was removed as a pure pass-through. E2B uses it for response conversion, logging, pagination, and operation context. Claim and clone expose the resolved final ID only after infra returns the refreshed object.
 
-Core also owns Checkpoint orchestration. `SandboxManager.CreateCheckpoint` resolves the source ID, overwrites the internal `CreateCheckpointOptions.SandboxID`, and delegates persistence to infra. Server callers cannot supply or spoof this value.
+Checkpoint identity needs no core orchestration. Infra resolves the source Sandbox identity from the passed-in CR at `CreateCheckpoint` entry, before any refresh, so the persisted value is the point-in-time identity the caller referenced. The option struct carries no identity field, so server callers cannot supply or spoof this value.
 
 Core owns manager route projection and lifecycle route synchronization. It passes the neutral
 `infra.Sandbox` capability to the shared projection function described in Section 11.2; it never
@@ -367,18 +374,18 @@ The claimed-Sandbox cache index uses exactly one key per Sandbox, produced by
 
 When the label is added, the informer update moves the index entry from the legacy key to the short key. The cache does not retain both aliases.
 
-`Options.SandboxIDResolver` remains an explicit override for tests or specialized callers.
-Sandbox-manager no longer injects the same resolver redundantly, and SandboxClaim and other default
+Cache resolution is always `sandboxid.Resolve`; the former `Options.SandboxIDResolver` override was
+removed. Sandbox-manager no longer injects a resolver, and SandboxClaim and other
 callers receive label-aware indexing automatically.
 
 Lookup accepts the client-provided ID as an opaque value. After a cache hit, any API-reader fallback continues to use the Sandbox object key; it never parses the sandbox ID into namespace/name.
 
-Claimed-Sandbox lookup requests at most one indexed result. Zero results retain the existing not-found behavior and one result succeeds. Duplicate resolved IDs are outside the supported metadata contract, so lookup does not maintain a separate ambiguity path or parse the ID for fallback lookup.
+Claimed-Sandbox lookup requests up to two indexed results. Zero results retain the existing not-found behavior and one result succeeds. When more than one Sandbox matches, `GetClaimedSandbox` fails with the sentinel `ErrSandboxIDAmbiguous`, describing that duplicate reserved sandbox-id labels are unsupported; lookup has no recovery path and never parses the ID for fallback lookup. Manager `GetSandbox` classifies every infra lookup failure as not-found — a deterministic 404 with no new HTTP category — and includes the underlying infra error in the public message. Ambiguity is not special-cased at this boundary; cache-client, API-reader, authorization, and other lookup errors are exposed in the same way. Duplicate resolved IDs remain outside the supported metadata contract; this backstop covers only the cache lookup.
 
 During the allowed label propagation window, a legacy lookup may disappear before a short lookup becomes visible, or vice versa according to cache timing. Existing retry/eventual-consistency behavior handles this; the design does not add aliasing.
 
-`pkg/cache` remains a mechanism rather than a policy owner. It defaults the claimed-Sandbox index
-to the neutral `sandboxid.Resolve` function and accepts an optional override. All ordinary callers
+`pkg/cache` remains a mechanism rather than a policy owner. It uses the neutral `sandboxid.Resolve`
+function for the claimed-Sandbox index. All ordinary callers
 therefore share label-aware behavior without composition-specific injection.
 
 ## 11. Shared Sandbox Routing
@@ -632,7 +639,7 @@ Adapters and request routing continue treating SandboxID as opaque.
 
 ### 12.1 Checkpoint
 
-Checkpoint stores the sandbox ID that was final for the claim which created it. E2B calls `SandboxManager.CreateCheckpoint`; core resolves the source ID, overwrites `CreateCheckpointOptions.SandboxID`, and delegates to `infra.Sandbox.CreateCheckpoint`. Infra validates that the supplied ID is non-empty and only persists it.
+Checkpoint stores the sandbox ID that was final for the claim which created it. E2B calls `infra.Sandbox.CreateCheckpoint` directly; infra resolves the identity from the source CR at entry, before any refresh, and persists it in the Checkpoint annotation. `CreateCheckpointOptions` carries no identity field, so no caller can supply or spoof the value, and resolution always yields a non-empty ID (label first, legacy fallback).
 
 Checkpoint does not know whether the value is legacy or short.
 
@@ -757,7 +764,7 @@ The implementation plan must account for these current format dependencies:
 
 1. The shared legacy helper in `pkg/utils/utils.go` currently calculates `<namespace>--<name>`.
 2. `pkg/cache/index.go` currently uses that helper for the claimed-Sandbox field index; cache construction is shared with the SandboxClaim controller.
-3. `GetClaimedSandbox` requests one indexed result under the supported global-ID uniqueness contract.
+3. `GetClaimedSandbox` requests two indexed results and fails on observed duplicates.
 4. `pkg/utils/proxyutils/route.go` currently uses the helper while constructing Route and must preserve token redaction when Route moves.
 5. `pkg/sandbox-gateway/controller/gateway_controller.go` directly concatenates namespace/name for update and NotFound deletion.
 6. Manager `proxy.Server.routes` and gateway `registry.Registry` are independent single-key stores, and the `proxyutils.Route` struct currently carries no namespace/name fields.
@@ -780,16 +787,17 @@ The implementation plan must account for these current format dependencies:
 
 Migration rules are:
 
-- Replace production ID decisions with `sandboxid.Resolve`; keep cache resolver injection only as
-  an explicit override.
-- Let `pkg/cache` use the neutral `pkg/sandboxid` resolver by default; `pkg/sandboxroute` and infra
+- Replace production ID decisions with `sandboxid.Resolve`; the cache has no resolver injection
+  point.
+- Let `pkg/cache` use the neutral `pkg/sandboxid` resolver directly; `pkg/sandboxroute` and infra
   may call `sandboxid.Resolve` only for centralized projection derivation and `GetSandboxID()`
   resolution respectively.
 - Define only the reserved label-key constant in `api/v1alpha1`; input/recycle code may compare that key but must not resolve, generate, assign, or validate ID values.
 - Reject the reserved key at every user-controlled label boundary, guard manager caller callbacks before persistence, exclude it from `UpdatedMetadataInClaim`, and skip it during recycle cleanup.
 - Change existing infra `Modifier` callbacks to return errors and restrict `PostModifier` to `metav1.Object`; do not add external side effects to either callback.
-- Keep cache resolution label-aware by default while retaining the optional resolver override.
-- Keep claimed-ID lookup as a single-result opaque index lookup under the system-owned uniqueness contract.
+- Keep cache resolution label-aware through direct `sandboxid.Resolve` use.
+- Keep claimed-ID lookup an opaque index lookup that requests two indexed results and fails on
+  observed duplicates.
 - Keep direct legacy encoding and its separator in `pkg/sandboxid`; keep the create-team legacy
   namespace restriction in the E2B API validator, remove reverse parsing entirely, and do not parse
   client-provided lookup or Route IDs.
@@ -826,7 +834,7 @@ Migration rules are:
     204. Any decoded payload with both ObjectKey fields empty and a non-empty ID returns HTTP 204
     before state/RV validation or Store mutation.
 11. An invalid informer object or tombstone key is logged and discarded without Store mutation.
-12. Checkpoint creation rejects an empty core-supplied SandboxID before persistence.
+12. Checkpoint creation resolves the source identity from the passed-in CR at entry, before any refresh, and persists it.
 
 ## 18. Testing Strategy
 
@@ -851,7 +859,7 @@ Use one compact table where practical to cover:
 - non-empty label returned unchanged;
 - absent and empty labels falling back to legacy;
 - deterministic 26-character lowercase unpadded Base32 encoding;
-- empty, valid, arbitrarily long, and malformed configured prefixes;
+- empty, valid, boundary-length (37), over-length (38), and malformed configured prefixes;
 - different UIDs producing different values;
 - invalid UID failing generation;
 - assignment to empty/missing label;
@@ -917,7 +925,7 @@ component-specific policies:
 
 - one legacy or short cache key, never both;
 - label update moves the cache key;
-- default cache construction resolves labels and an explicit override remains honored;
+- default cache construction resolves labels;
 - route legacy-to-short transition removes the old ID key;
 - Store lookup resolves ID to ObjectKey and then reads the authoritative Route record under one lock;
 - a single Store snapshot/list never contains both legacy and short IDs; separate reads spanning a switch are not asserted as transactional;
@@ -967,8 +975,7 @@ Extend existing response/error/list/snapshot tables to cover:
 - authorized downstream errors include `sandboxResource`;
 - not-found and unauthorized errors do not disclose it;
 - opt-in Pod-IP metadata uses `GetIP()` and does not construct a Route;
-- Checkpoint persists the explicit final ID without format knowledge;
-- empty Checkpoint SandboxID is rejected;
+- Checkpoint persists the resolved point-in-time source ID without format knowledge;
 - a Sandbox annotation with the shared key does not affect ID resolution, and a Checkpoint label does not affect source-ID lookup;
 - old Checkpoints remain legacy after a later Sandbox transition;
 - pagination uses the resolved ID opaquely.

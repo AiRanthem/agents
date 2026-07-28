@@ -68,7 +68,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	if request.Extensions.TTL != nil {
 		span.SetAttributes(attribute.String(tracing.AttrSnapshotTTL, *request.Extensions.TTL))
 	}
-	checkpointID, err := sc.manager.CreateCheckpoint(ctx, sbx, infra.CreateCheckpointOptions{
+	checkpointID, err := sbx.CreateCheckpoint(ctx, infra.CreateCheckpointOptions{
 		KeepRunning:        request.Extensions.KeepRunning,
 		TTL:                request.Extensions.TTL,
 		PersistentContents: request.Extensions.PersistentContents,

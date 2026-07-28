@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -93,7 +94,7 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 		if err != nil {
 			return nil, err
 		}
-		cache, err := infracache.NewCacheWithOptions(mgr, infracache.Options{Health: health})
+		cache, err := infracache.NewCacheWithHealth(mgr, health)
 		if err != nil {
 			return nil, err
 		}
@@ -160,6 +161,16 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 	if err := sandboxid.ValidatePrefix(b.opts.ShortSandboxIDPrefix); err != nil {
 		return nil, errors.NewError(errors.ErrorInternal, "short sandbox id prefix: %v", err)
 	}
+	if len(b.opts.ShortSandboxIDPrefix)+sandboxid.ShortIDLength > content.LabelValueMaxLength {
+		return nil, errors.NewError(
+			errors.ErrorInternal,
+			"short sandbox id prefix %q is too long: prefix plus %d-character short ID must fit a %d-character label value, so the prefix may use at most %d characters",
+			b.opts.ShortSandboxIDPrefix,
+			sandboxid.ShortIDLength,
+			content.LabelValueMaxLength,
+			content.LabelValueMaxLength-sandboxid.ShortIDLength,
+		)
+	}
 
 	// Build infra
 	if b.buildInfraFunc == nil {
@@ -212,8 +223,7 @@ type SandboxManager struct {
 	infra infra.Infrastructure
 	proxy *proxy.Server
 
-	routeSource       infra.RouteSandboxSource
-	routeSubscription infra.RouteSandboxSubscription
+	routeSource infra.RouteSandboxSource
 
 	enableShortID bool
 	shortIDPrefix string
@@ -302,11 +312,9 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 	log := klog.FromContext(ctx)
 
 	if m.routeSource != nil {
-		subscription, err := m.routeSource.Subscribe(ctx, m.handleRouteSandboxEvent)
-		if err != nil {
+		if err := m.routeSource.Subscribe(ctx, m.handleRouteSandboxEvent); err != nil {
 			return fmt.Errorf("subscribe manager route feeder: %w", err)
 		}
-		m.routeSubscription = subscription
 	}
 
 	if m.elector != nil {
@@ -334,10 +342,6 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 	}
 
 	if err := m.infra.Run(ctx); err != nil {
-		if m.routeSubscription != nil {
-			_ = m.routeSubscription.Remove()
-			m.routeSubscription = nil
-		}
 		return err
 	}
 	if m.quotaAntiDrift != nil {
@@ -348,12 +352,6 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 
 func (m *SandboxManager) Stop(ctx context.Context) {
 	log := klog.FromContext(ctx)
-	if m.routeSubscription != nil {
-		if err := m.routeSubscription.Remove(); err != nil {
-			log.Error(err, "failed to remove manager route subscription")
-		}
-		m.routeSubscription = nil
-	}
 	if m.elector != nil {
 		m.elector.Stop(ctx)
 	}

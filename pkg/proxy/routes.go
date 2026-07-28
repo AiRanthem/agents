@@ -84,7 +84,7 @@ func (s *Server) SyncRouteWithPeers(route sandboxroute.Route) error {
 				Factor:   1.0,
 				Jitter:   1.2,
 			}, func(err error) bool {
-				return true
+				return !errors.Is(err, errPeerRejected)
 			}, func() error {
 				return requestPeer(http.MethodPost, peerIP, RefreshAPI, body)
 			})

@@ -98,7 +98,7 @@ func TestGenerateShort(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, actual)
-			assert.Len(t, actual, 26)
+			assert.Len(t, actual, ShortIDLength)
 			assert.Regexp(t, `^[a-z2-7]{26}$`, actual)
 		})
 	}
