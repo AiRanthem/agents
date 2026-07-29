@@ -1723,6 +1723,32 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			expectError:         true,
 			expectErrorContains: "is reserved and cannot be set by SandboxClaim",
 		},
+		{
+			name: "non-empty reserved sandbox ID annotation is rejected",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "pool",
+					Annotations:  map[string]string{agentsv1alpha1.AnnotationSandboxID: "injected-id"},
+				},
+			},
+			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			expectError:         true,
+			expectErrorContains: "is reserved and cannot be set by SandboxClaim",
+		},
+		{
+			name: "empty reserved sandbox ID annotation entry is rejected",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "pool",
+					Annotations:  map[string]string{agentsv1alpha1.AnnotationSandboxID: ""},
+				},
+			},
+			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			expectError:         true,
+			expectErrorContains: "is reserved and cannot be set by SandboxClaim",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2895,7 +2921,7 @@ func TestBuildClaimOptions_CSIMount_Test(t *testing.T) {
 						},
 					},
 				}
-				opts.Modifier(mockSandbox)
+				_ = opts.Modifier(mockSandbox)
 				// Verify storage-auth annotation is set with correct JSON content including kms-key-id
 				storageAuthVal := mockSandbox.GetAnnotations()["security.agents.kruise.io/storage-auth"]
 				assert.NotEmpty(t, storageAuthVal, "storage-auth annotation should be injected")

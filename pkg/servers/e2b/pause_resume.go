@@ -51,10 +51,10 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 	if headerValues := r.Header.Values(models.ExtensionHeaderReservePausedSandboxDuration); len(headerValues) > 0 {
 		retention, err := pausedretention.ParseReservePausedSandboxDuration(headerValues[0])
 		if err != nil {
-			return web.ApiResponse[struct{}]{}, &web.ApiError{
+			return web.ApiResponse[struct{}]{}, withSandboxResource(&web.ApiError{
 				Code:    http.StatusBadRequest,
 				Message: fmt.Sprintf("Bad extension param: %s", err.Error()),
-			}
+			}, sbx)
 		}
 		headerRetention = &retention
 		reservePausedFor = &headerValues[0]

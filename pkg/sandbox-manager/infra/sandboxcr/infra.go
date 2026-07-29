@@ -35,6 +35,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	"github.com/openkruise/agents/pkg/utils/runtime"
@@ -470,6 +471,9 @@ func (i *Infra) getSandboxFromAPIReader(ctx context.Context, key client.ObjectKe
 		return nil, err
 	}
 	if fresh.GetLabels()[v1alpha1.LabelSandboxIsClaimed] != v1alpha1.True {
+		return nil, fmt.Errorf("%w: %s", cache.ErrSandboxNotFound, sandboxID)
+	}
+	if sandboxid.Resolve(fresh) != sandboxID {
 		return nil, fmt.Errorf("%w: %s", cache.ErrSandboxNotFound, sandboxID)
 	}
 	return fresh, nil
