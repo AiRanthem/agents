@@ -2,15 +2,25 @@
 
 This directory implements the Manager layer defined by the repository guide.
 
+## Sandbox Identity
+
+- Manager owns the one-way assignment of a missing Sandbox ID, and assignment
+  configuration affects only future assignments.
+- Keep rollout, format, and assignment policy here. Shared identity primitives
+  and Infra remain policy-neutral.
+
+## Route Orchestration
+
+- Manager composes neutral backend observations into the shared route model; it
+  must not maintain a Manager-specific projection or route state machine.
+- Preserve the backend observation scope during route ingestion. Apply
+  lifecycle and authorization policy only when admitting a request.
+
 ## Quota Orchestration
 
-- `InitQuota` wires quota only after Manager construction has provided the
-  required neutral Infra capabilities.
-- Keep `QuotaEnforcer` as the Manager-facing surface for admission, accepted
-  delete release, and API-key cleanup.
-- Build create and clone admissions here from the caller, quota spec, and
-  neutral `infra.SandboxResource`; do not make the API or concrete Infra
-  implementation own quota policy.
+- Manager owns quota orchestration over neutral Infra capabilities. Wire it only
+  after those capabilities are available, and do not move its policy into API
+  or concrete Infra implementations.
 - Release quota only after an accepted sandbox deletion. API-key cleanup is a
   separate Manager operation and must not roll back an already accepted key
   deletion on backend failure.

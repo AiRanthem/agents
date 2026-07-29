@@ -1,7 +1,13 @@
 # OpenKruise Agents Guide
 
-This file contains repository-wide rules. A nested `AGENTS.md` adds only the
-constraints specific to its subtree; do not repeat this file in child guides.
+This file contains repository-wide rules.
+
+## Instruction Scope
+
+- Root rules apply repository-wide; keep durable cross-file or silently critical
+  constraints in the deepest applicable `AGENTS.md`, leave details and public
+  contracts to their owning code, tests, specifications, or proposals, and
+  review changes root-to-leaf before removing guidance.
 
 ## Control Plane Layering
 
@@ -66,6 +72,13 @@ constraints specific to its subtree; do not repeat this file in child guides.
 - Shared packages must stay policy-neutral and must not import domain-specific
   packages merely to make reuse convenient.
 
+## Sandbox Identity
+
+- A persisted system-owned Sandbox ID is immutable. Operations on the same
+  Sandbox preserve it; operations creating a new Sandbox do not inherit it;
+  callers and templates cannot set it. Only Manager assignment policy may
+  initialize a missing ID.
+
 ## Development
 
 - Follow standard Go idioms. Run `gofmt -w` on changed Go files.
@@ -110,22 +123,6 @@ constraints specific to its subtree; do not repeat this file in child guides.
 - Use structured key-value logging. Controllers use
   `logf.FromContext(ctx)`; sandbox-manager code uses
   `klog.FromContext(ctx)`. Do not use `fmt.Println` for runtime logging.
-
-## Paused-Retention Boundary
-
-`pkg/pausedretention` is a stateless, policy-free parser. It reports the
-annotation as duration, presence, and error; it must not choose a default for an
-absent annotation.
-
-- Controller path: an absent annotation means the controller does not manage
-  the policy, does not modify `ShutdownTime`, and never backfills the
-  annotation. An explicitly present invalid value is logged and resolved with
-  the controller's default retention.
-- Sandbox-manager path: an absent annotation means the built-in default
-  (`"forever"`) and accepted writes may backfill the annotation.
-
-Keep those policies at their respective boundaries. Do not add an
-"or default" helper to the shared parser.
 
 ## Repository Hygiene
 
