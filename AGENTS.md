@@ -53,6 +53,14 @@ This file contains repository-wide rules.
 - Controllers may reconcile CRDs directly, but must not reuse sandbox-manager
   API behavior, business orchestration, or Infra implementations.
 
+### Kubernetes Read Discipline
+
+- Never use `APIReader` for `List`; prefer informer-backed clients or caches
+  for Kubernetes reads.
+- Use `APIReader` for `Get` only when informer-backed reads cannot provide
+  acceptable correctness or functionality, and only after explaining why and
+  obtaining explicit user approval.
+
 ### Dependency Rules
 
 - New sandbox-manager dependencies follow `API -> Manager -> Infra`. Do not
