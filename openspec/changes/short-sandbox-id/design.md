@@ -403,6 +403,13 @@ ObjectKey-aware Store, and resource-version comparison. It imports the neutral `
 `pkg/identity` leaves only for `ProjectSandbox` derivation, does not import cache, infra, E2B, proxy,
 or gateway packages, and otherwise treats SandboxID as an opaque string.
 
+The `pkg/sandboxroute/refresh` subpackage owns the peer refresh HTTP contract shared by manager and
+gateway. It depends only on `sandboxroute.Route` and the minimal
+`RouteMutator{Upsert,Delete}` interface. The handler decodes Route JSON, preserves the old
+ID-only compatibility guard, dispatches only `dead` to Delete, dispatches every other state to
+Upsert, passes every mutator result to its optional callback, and maps Store mutation results to
+HTTP. It does not add Store methods or state predicates.
+
 Manager and gateway are separate processes and therefore keep separate in-memory Store instances:
 
 1. sandbox-manager `proxy.Server.routes`;
@@ -551,9 +558,12 @@ intentionally adds no cleanup timer, queue, or API-server verification.
 Namespace and name are additive JSON fields:
 
 - an old receiver ignores the new fields and continues using `route.ID`;
-- a new peer endpoint checks immediately after JSON decoding whether namespace and name are both
+- the shared peer endpoint checks immediately after JSON decoding whether namespace and name are both
   empty while ID is non-empty; it logs at debug level and returns HTTP 204 without Store mutation,
   state/RV checks, or route-count update;
+- only a `dead` Route is a peer deletion and requires a non-empty RV before Delete; every non-Dead
+  state, including Running, Available, Paused, and Creating, is passed to Upsert without an endpoint
+  state whitelist;
 - Store Upsert always requires ID, UID, namespace, name, and a valid RV;
 - Store Delete always requires explicit namespace/name and accepts an empty RV only from the
   informer tombstone adapter; an explicit-key peer delete does not require ID or UID;
@@ -578,18 +588,22 @@ The implementation plan covers every Store feeder explicitly:
 | manager | neutral Infra Sandbox Add/Update | full Route or ObjectKey/RV Delete |
 | manager | neutral Infra Sandbox Delete | ObjectKey/RV Delete |
 | manager | E2B lifecycle operation refresh | full Route |
-| manager | peer refresh | full Route; ID-only old-peer payloads are ignored before Store |
+| manager | peer refresh | non-Dead full Route Upsert or Dead ObjectKey/RV Delete; ID-only old-peer payloads are ignored before Store |
 | gateway | Sandbox informer Add/Update | full Route or ObjectKey/RV Delete |
 | gateway | Sandbox informer Delete | ObjectKey/RV Delete |
-| gateway | peer refresh | full Route; ID-only old-peer payloads are ignored before Store |
+| gateway | peer refresh | non-Dead full Route Upsert or Dead ObjectKey/RV Delete; ID-only old-peer payloads are ignored before Store |
 
 Manager route projection and feeding composition are owned by sandbox-manager core, not `sandboxcr`
 infra. Infra exposes only neutral Sandbox and Delete events within its configured observation
 scope; claim/clone/pause/resume/delete sync all project through `infra.Sandbox.GetRoute()`, a pure
 delegate to `sandboxroute.ProjectSandbox`. Owner checks read `AnnotationOwner` directly from the
 already-authorized Sandbox. Gateway applies namespace and selector as informer filters and retains
-Running-state enforcement in its request path. Peer HTTP status/state interpretation remains
-component-specific, but every accepted update/delete reaches the shared Store.
+Running-state enforcement in its request path. Manager and gateway register the same
+`pkg/sandboxroute/refresh` handler with a `POST /refresh` ServeMux method pattern; the mux provides
+405 responses. Manager injects its concrete Store plus a result-aware callback that updates route
+count only for Applied or Ignored; the handler still passes Invalid to that callback. Gateway
+injects its explicit Registry plus no callback, so peer mutation never reads the process-global
+Registry.
 
 ### 11.8 Informer event and readiness contract
 
@@ -621,7 +635,9 @@ resulting fence. Gateway request filtering continues to reject every non-Running
 
 Gateway readiness gates production reads only. Initial LIST Add callbacks must mutate Registry while
 ready is false; the handler registration marks Registry ready only after `HasSynced`. Peer mutations
-also remain accepted before readiness. `Registry.Clear` resets both Store and readiness.
+also remain accepted before readiness. The peer server runs caller-provided readiness checks first
+and then checks its explicitly injected Registry, returning HTTP 503 when either is not ready.
+`Registry.Clear` resets both Store and readiness.
 
 The shared cache tracks every active Sandbox event-handler registration rather than only the most
 recent one. `SandboxInformerHealthy` requires base informer health and `HasSynced` for all active
@@ -938,6 +954,10 @@ component-specific policies:
 - Upsert and Delete reject ID-only and partial-key calls without allocating Store state;
 - peer endpoints return 204 for non-empty ID-only payloads, including empty-RV running/delete
   shapes, while empty-ID, empty-object, and partial-key payloads remain invalid;
+- the shared refresh handler sends Dead Routes to Delete, sends Running, Available, Paused,
+  Creating, and any other non-Dead state to Upsert, maps invalid mutations to HTTP 400, maps applied
+  and ignored mutations to HTTP 204, and passes each mutator result to the optional post-mutation
+  callback so its caller chooses how to react;
 - an authoritative ObjectKey/RV delete creates a fence even when no record exists;
 - a deletion fence rejects late equal/older events, while a strictly newer event establishes
   current API state and clears the fence;
@@ -959,6 +979,8 @@ component-specific policies:
 - deletionTimestamp updates and normal DELETE preserve their observed RV, while object-bearing and
   key-only `DeletedFinalStateUnknown` tombstones both reach the empty-RV Delete form;
 - gateway initial-sync Add events mutate Registry before ready while production reads remain gated;
+- gateway peer serving mutates its explicitly injected Registry, and readiness evaluates additional
+  checks before that Registry;
 - quota and route registrations are both included in cache health and Remove unregisters each one;
 - route maintenance performs no APIReader Get or List;
 - gateway reconciliation never directly constructs `<namespace>--<name>`;

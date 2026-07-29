@@ -18,7 +18,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,12 +28,10 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/peers"
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
-	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -75,29 +72,37 @@ type Server struct {
 	port               int
 	memberlistBindPort int
 	client             client.Client
+	registry           *registry.Registry
 	readinessCheck     ReadinessCheck
 }
 
 // NewServer creates a new peer server
-func NewServer(client client.Client, port int, readinessChecks ...ReadinessCheck) *Server {
+func NewServer(
+	client client.Client,
+	routeRegistry *registry.Registry,
+	port int,
+	readinessChecks ...ReadinessCheck,
+) *Server {
 	server := &Server{
-		port:               normalizePort(port, proxy.SystemPort),
+		port:               normalizePort(port, refresh.DefaultPort),
 		client:             client,
+		registry:           routeRegistry,
 		memberlistBindPort: getMemberlistBindPort(),
 	}
-	if len(readinessChecks) > 0 {
-		checks := append([]ReadinessCheck(nil), readinessChecks...)
-		server.readinessCheck = func() error {
-			for _, check := range checks {
-				if check == nil {
-					continue
-				}
-				if err := check(); err != nil {
-					return err
-				}
+	checks := append([]ReadinessCheck(nil), readinessChecks...)
+	server.readinessCheck = func() error {
+		for _, check := range checks {
+			if check == nil {
+				continue
 			}
-			return nil
+			if err := check(); err != nil {
+				return err
+			}
 		}
+		if !server.registry.Ready() {
+			return registry.ErrNotReady
+		}
+		return nil
 	}
 	return server
 }
@@ -107,7 +112,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := s.newServeMux()
 
 	s.httpServer = &http.Server{
-		Addr:              fmt.Sprintf(":%d", normalizePort(s.port, proxy.SystemPort)),
+		Addr:              fmt.Sprintf(":%d", normalizePort(s.port, refresh.DefaultPort)),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -152,7 +157,10 @@ func (s *Server) Start(ctx context.Context) error {
 
 func (s *Server) newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc(proxy.RefreshAPI, s.handleRefresh)
+	mux.Handle(
+		http.MethodPost+" "+refresh.Path,
+		refresh.NewHandler(s.registry, nil),
+	)
 	mux.HandleFunc(HealthAPI, s.handleHealth)
 	mux.HandleFunc(ReadyAPI, s.handleReady)
 	return mux
@@ -196,55 +204,4 @@ func (s *Server) Stop(ctx context.Context) error {
 		return errors.Join(errs...)
 	}
 	return nil
-}
-
-// handleRefresh handles the /refresh endpoint for route synchronization
-func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	ctx := r.Context()
-	log := klog.FromContext(ctx)
-
-	var route sandboxroute.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
-		log.Error(err, "Failed to decode refresh request")
-		http.Error(w, fmt.Sprintf("Failed to decode request: %v", err), http.StatusBadRequest)
-		return
-	}
-	if route.Namespace == "" && route.Name == "" && route.ID != "" {
-		log.V(utils.DebugLogLevel).Info("Ignoring legacy ID-only peer route refresh", "id", route.ID)
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	log.V(utils.DebugLogLevel).Info("Received route refresh", "route", route)
-	var result sandboxroute.MutationResult
-	if route.State == v1alpha1.SandboxStateRunning {
-		result = registry.GetRegistry().Upsert(route)
-	} else {
-		if route.ResourceVersion == "" {
-			http.Error(w, string(sandboxroute.ReasonInvalidRoute), http.StatusBadRequest)
-			return
-		}
-		result = registry.GetRegistry().Delete(route)
-	}
-
-	log.V(utils.DebugLogLevel).Info(
-		"Applied peer route refresh",
-		"id", route.ID,
-		"namespace", route.Namespace,
-		"name", route.Name,
-		"result", result.Result,
-		"reason", result.Reason,
-	)
-	switch result.Result {
-	case sandboxroute.EventResultInvalid:
-		log.Error(errors.New(string(result.Reason)), "Rejected invalid route refresh")
-		http.Error(w, string(result.Reason), http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

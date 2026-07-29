@@ -23,6 +23,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
 const (
@@ -41,7 +43,7 @@ func requestPeer(method, ip, path string, body []byte) error {
 	if len(body) > 0 {
 		buf = bytes.NewReader(body)
 	}
-	request, err := http.NewRequest(method, fmt.Sprintf("http://%s:%d%s", ip, SystemPort, path), buf)
+	request, err := http.NewRequest(method, fmt.Sprintf("http://%s:%d%s", ip, refresh.DefaultPort, path), buf)
 	if err != nil {
 		return err
 	}

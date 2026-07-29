@@ -31,6 +31,7 @@ import (
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -226,8 +227,8 @@ func TestListPeers_WithPeers(t *testing.T) {
 // ---- SyncRouteWithPeers tests ----
 
 // startPeerHTTPServer starts a real HTTP server acting as a peer node.
-// It listens on SystemPort (7789) equivalent but returns the actual port for injection.
-// Since requestPeer uses SystemPort, we override the global client and use a custom peer IP
+// It listens on the default peer port equivalent but returns the actual port for injection.
+// Since requestPeer uses refresh.DefaultPort, we override the global client and use a custom peer IP
 // that routes to a httptest server bound to the correct path.
 //
 // Strategy: use net.Listen on a free port, serve /refresh there, then inject the peer as
@@ -245,7 +246,7 @@ type recordingPeer struct {
 func newRecordingPeer() *recordingPeer {
 	rp := &recordingPeer{}
 	mux := http.NewServeMux()
-	mux.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(refresh.Path, func(w http.ResponseWriter, r *http.Request) {
 		var route sandboxroute.Route
 		if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -304,8 +305,8 @@ func TestSyncRouteWithPeers_TwoNodes_Success(t *testing.T) {
 	// To support two different peers, we build a mux transport.
 	muxTransport := &muxRoundTripper{
 		routes: map[string]string{
-			fmt.Sprintf("127.0.0.1:%d", SystemPort): peer1.server.URL[7:], // strip "http://"
-			fmt.Sprintf("127.0.0.2:%d", SystemPort): peer2.server.URL[7:],
+			fmt.Sprintf("127.0.0.1:%d", refresh.DefaultPort): peer1.server.URL[7:], // strip "http://"
+			fmt.Sprintf("127.0.0.2:%d", refresh.DefaultPort): peer2.server.URL[7:],
 		},
 	}
 	origClient := requestPeerClient
@@ -341,7 +342,7 @@ func TestSyncRouteWithPeers_TwoNodes_OneFails(t *testing.T) {
 
 	muxTransport := &muxRoundTripper{
 		routes: map[string]string{
-			fmt.Sprintf("127.0.0.1:%d", SystemPort): peer1.server.URL[7:],
+			fmt.Sprintf("127.0.0.1:%d", refresh.DefaultPort): peer1.server.URL[7:],
 			// 127.0.0.2 has no mapping, will fail to connect
 		},
 	}
@@ -375,7 +376,7 @@ func TestSyncRouteWithPeers_RejectedNotRetried(t *testing.T) {
 
 	muxTransport := &muxRoundTripper{
 		routes: map[string]string{
-			fmt.Sprintf("127.0.0.1:%d", SystemPort): rejecting.URL[7:],
+			fmt.Sprintf("127.0.0.1:%d", refresh.DefaultPort): rejecting.URL[7:],
 		},
 	}
 	origClient := requestPeerClient
@@ -416,14 +417,14 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 
 	// Set up HTTP handlers for /refresh on both servers
 	mux1 := http.NewServeMux()
-	mux1.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
+	mux1.HandleFunc(refresh.Path, func(w http.ResponseWriter, r *http.Request) {
 		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
 		server1.SetRoute(r.Context(), route)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux2 := http.NewServeMux()
-	mux2.HandleFunc(RefreshAPI, func(w http.ResponseWriter, r *http.Request) {
+	mux2.HandleFunc(refresh.Path, func(w http.ResponseWriter, r *http.Request) {
 		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
 		server2.SetRoute(r.Context(), route)
@@ -473,8 +474,8 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 
 	muxTransport := &muxRoundTripper{
 		routes: map[string]string{
-			fmt.Sprintf("%s:%d", peer1IP, SystemPort): hs1.Listener.Addr().String(),
-			fmt.Sprintf("%s:%d", peer2IP, SystemPort): hs2.Listener.Addr().String(),
+			fmt.Sprintf("%s:%d", peer1IP, refresh.DefaultPort): hs1.Listener.Addr().String(),
+			fmt.Sprintf("%s:%d", peer2IP, refresh.DefaultPort): hs2.Listener.Addr().String(),
 		},
 	}
 	origClient := requestPeerClient

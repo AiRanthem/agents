@@ -29,47 +29,28 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
 func TestHealthHandlers(t *testing.T) {
+	routeRegistry := registry.NewRegistry()
 	tests := []struct {
-		name            string
-		path            string
-		method          string
-		readinessErrors []error
-		includeNilCheck bool
-		expectCalls     int
-		expectStatus    int
+		name         string
+		path         string
+		method       string
+		expectStatus int
 	}{
 		{name: "health ready", path: HealthAPI, method: http.MethodGet, expectStatus: http.StatusOK},
 		{name: "health method rejected", path: HealthAPI, method: http.MethodPost, expectStatus: http.StatusMethodNotAllowed},
-		{name: "readiness defaults ready", path: ReadyAPI, method: http.MethodGet, expectStatus: http.StatusOK},
-		{name: "readiness succeeds", path: ReadyAPI, method: http.MethodGet, readinessErrors: []error{nil}, expectCalls: 1, expectStatus: http.StatusOK},
-		{name: "multiple readiness checks succeed", path: ReadyAPI, method: http.MethodGet, readinessErrors: []error{nil, nil}, expectCalls: 2, expectStatus: http.StatusOK},
-		{name: "first readiness check fails fast", path: ReadyAPI, method: http.MethodGet, readinessErrors: []error{errors.New("initializing"), nil}, expectCalls: 1, expectStatus: http.StatusServiceUnavailable},
-		{name: "second readiness check fails", path: ReadyAPI, method: http.MethodGet, readinessErrors: []error{nil, errors.New("initializing")}, expectCalls: 2, expectStatus: http.StatusServiceUnavailable},
-		{name: "nil readiness check is ignored", path: ReadyAPI, method: http.MethodGet, readinessErrors: []error{nil}, includeNilCheck: true, expectCalls: 1, expectStatus: http.StatusOK},
 		{name: "readiness method rejected", path: ReadyAPI, method: http.MethodPost, expectStatus: http.StatusMethodNotAllowed},
 	}
 
+	server := NewServer(nil, routeRegistry, 0)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			calls := 0
-			checks := make([]ReadinessCheck, 0, len(tt.readinessErrors)+1)
-			if tt.includeNilCheck {
-				checks = append(checks, nil)
-			}
-			for _, readinessErr := range tt.readinessErrors {
-				checks = append(checks, func() error {
-					calls++
-					return readinessErr
-				})
-			}
-			server := NewServer(nil, 0, checks...)
 			request := httptest.NewRequest(tt.method, tt.path, nil)
 			response := httptest.NewRecorder()
 			if tt.path == HealthAPI {
@@ -78,13 +59,86 @@ func TestHealthHandlers(t *testing.T) {
 				server.handleReady(response, request)
 			}
 			assert.Equal(t, tt.expectStatus, response.Code)
+		})
+	}
+}
+
+func TestReadiness(t *testing.T) {
+	extraErr := errors.New("initializing")
+	tests := []struct {
+		name               string
+		registryReady      bool
+		readinessErrors    []error
+		includeNilCheck    bool
+		expectCalls        int
+		expectReadinessErr error
+		expectStatus       int
+	}{
+		{
+			name:               "extra check fails before registry check",
+			readinessErrors:    []error{extraErr},
+			expectCalls:        1,
+			expectReadinessErr: extraErr,
+			expectStatus:       http.StatusServiceUnavailable,
+		},
+		{
+			name:               "registry not ready after extra check succeeds",
+			readinessErrors:    []error{nil},
+			expectCalls:        1,
+			expectReadinessErr: registry.ErrNotReady,
+			expectStatus:       http.StatusServiceUnavailable,
+		},
+		{
+			name:            "all checks ready",
+			registryReady:   true,
+			readinessErrors: []error{nil, nil},
+			expectCalls:     2,
+			expectStatus:    http.StatusOK,
+		},
+		{
+			name:            "nil extra check is ignored",
+			registryReady:   true,
+			readinessErrors: []error{nil},
+			includeNilCheck: true,
+			expectCalls:     1,
+			expectStatus:    http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			routeRegistry := registry.NewRegistry()
+			routeRegistry.SetReady(tt.registryReady)
+			calls := 0
+			checks := make([]ReadinessCheck, 0, len(tt.readinessErrors)+1)
+			if tt.includeNilCheck {
+				checks = append(checks, nil)
+			}
+			for _, readinessErr := range tt.readinessErrors {
+				checkErr := readinessErr
+				checks = append(checks, func() error {
+					calls++
+					return checkErr
+				})
+			}
+
+			server := NewServer(nil, routeRegistry, 0, checks...)
+			assert.ErrorIs(t, server.readinessCheck(), tt.expectReadinessErr)
+			calls = 0
+
+			request := httptest.NewRequest(http.MethodGet, ReadyAPI, nil)
+			response := httptest.NewRecorder()
+			server.handleReady(response, request)
+			assert.Equal(t, tt.expectStatus, response.Code)
 			assert.Equal(t, tt.expectCalls, calls)
 		})
 	}
 }
 
 func TestStartRegistersHealthHandlers(t *testing.T) {
-	server := NewServer(nil, 0)
+	routeRegistry := registry.NewRegistry()
+	routeRegistry.SetReady(true)
+	server := NewServer(nil, routeRegistry, 0)
 	mux := server.newServeMux()
 
 	tests := []struct {
@@ -95,7 +149,7 @@ func TestStartRegistersHealthHandlers(t *testing.T) {
 	}{
 		{name: "health route", path: HealthAPI, method: http.MethodGet, expectStatus: http.StatusOK},
 		{name: "readiness route", path: ReadyAPI, method: http.MethodGet, expectStatus: http.StatusOK},
-		{name: "refresh route", path: proxy.RefreshAPI, method: http.MethodGet, expectStatus: http.StatusMethodNotAllowed},
+		{name: "refresh route rejects GET", path: refresh.Path, method: http.MethodGet, expectStatus: http.StatusMethodNotAllowed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -105,6 +159,31 @@ func TestStartRegistersHealthHandlers(t *testing.T) {
 			assert.Equal(t, tt.expectStatus, response.Code)
 		})
 	}
+}
+
+func TestRefreshWritesInjectedRegistry(t *testing.T) {
+	routeRegistry := registry.NewRegistry()
+	server := NewServer(nil, routeRegistry, 0)
+	route := sandboxroute.Route{
+		ID:              "short-a",
+		Namespace:       "ns",
+		Name:            "a",
+		UID:             types.UID("uid-a"),
+		ResourceVersion: "1",
+		State:           v1alpha1.SandboxStatePaused,
+		IP:              "10.0.0.1",
+	}
+	body, err := json.Marshal(route)
+	require.NoError(t, err)
+
+	request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	server.newServeMux().ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	stored, present := routeRegistry.Get(route.ID)
+	require.True(t, present)
+	assert.Equal(t, route, stored)
 }
 
 func TestGetMemberlistBindPort(t *testing.T) {
@@ -136,313 +215,24 @@ func TestNewServer(t *testing.T) {
 		wantBindPort int
 	}{
 		{name: "custom port", port: 9090, wantPort: 9090, wantBindPort: config.DefaultMemberlistBindPort},
-		{name: "zero uses default", wantPort: proxy.SystemPort, wantBindPort: config.DefaultMemberlistBindPort},
-		{name: "negative uses default", port: -1, wantPort: proxy.SystemPort, wantBindPort: config.DefaultMemberlistBindPort},
+		{name: "zero uses default", wantPort: refresh.DefaultPort, wantBindPort: config.DefaultMemberlistBindPort},
+		{name: "negative uses default", port: -1, wantPort: refresh.DefaultPort, wantBindPort: config.DefaultMemberlistBindPort},
 		{name: "custom memberlist port", port: 8080, envPort: "9000", wantPort: 8080, wantBindPort: 9000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv(EnvMemberlistBindPort, tt.envPort)
-			server := NewServer(nil, tt.port)
+			routeRegistry := registry.NewRegistry()
+			server := NewServer(nil, routeRegistry, tt.port)
 			assert.Equal(t, tt.wantPort, server.port)
 			assert.Equal(t, tt.wantBindPort, server.memberlistBindPort)
 			assert.Nil(t, server.client)
-		})
-	}
-}
-
-func TestHandleRefresh(t *testing.T) {
-	tests := []struct {
-		name          string
-		method        string
-		body          string
-		route         *sandboxroute.Route
-		setup         func(*registry.Registry)
-		expectStatus  int
-		expectID      string
-		expectPresent bool
-		expectIP      string
-		expectAuth    bool
-	}{
-		{name: "method not allowed", method: http.MethodGet, expectStatus: http.StatusMethodNotAllowed},
-		{name: "invalid JSON", method: http.MethodPost, body: "not-json", expectStatus: http.StatusBadRequest},
-		{
-			name:   "full running route preserves traffic auth",
-			method: http.MethodPost,
-			route: func() *sandboxroute.Route {
-				route := route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning)
-				route.RequireTrafficAuth = true
-				return route
-			}(),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-			expectAuth:    true,
-		},
-		{
-			name:         "old peer ID-only running route ignored",
-			method:       http.MethodPost,
-			route:        route("ns--a", "", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusNoContent,
-			expectID:     "ns--a",
-		},
-		{
-			name:         "partial ObjectKey rejected",
-			method:       http.MethodPost,
-			route:        route("short-a", "ns", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:         "opaque ID-only route ignored",
-			method:       http.MethodPost,
-			route:        route("short-a", "", "", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusNoContent,
-			expectID:     "short-a",
-		},
-		{
-			name:         "ID-only running route without resource version ignored",
-			method:       http.MethodPost,
-			route:        route("ns--a", "", "", "uid-a", "", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusNoContent,
-			expectID:     "ns--a",
-		},
-		{
-			name:         "missing UID rejected",
-			method:       http.MethodPost,
-			route:        route("short-a", "ns", "a", "", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:         "missing ID rejected",
-			method:       http.MethodPost,
-			route:        route("", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
-		},
-		{
-			name:         "empty object rejected",
-			method:       http.MethodPost,
-			route:        &sandboxroute.Route{},
-			expectStatus: http.StatusBadRequest,
-		},
-		{
-			name:         "missing resource version rejected",
-			method:       http.MethodPost,
-			route:        route("short-a", "ns", "a", "uid-a", "", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:         "malformed resource version rejected",
-			method:       http.MethodPost,
-			route:        route("short-a", "ns", "a", "uid-a", "invalid", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:          "startup before readiness accepts mutation",
-			method:        http.MethodPost,
-			route:         route("short-startup", "ns", "startup", "uid-startup", "1", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-startup",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:   "readiness teardown still accepts mutation",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("existing", "ns", "existing", "uid-existing", "1", v1alpha1.SandboxStateRunning))
-				registry.SetReady(false)
-			},
-			route:         route("short-teardown", "ns", "teardown", "uid-teardown", "1", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-teardown",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:   "stale full update is idempotent",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				current := route("short-a", "ns", "a", "uid-a", "2", v1alpha1.SandboxStateRunning)
-				current.IP = "10.0.0.2"
-				registry.Upsert(*current)
-			},
-			route:         route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.2",
-		},
-		{
-			name:   "full non-running route conditionally deletes",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-			},
-			route:        route("short-a", "ns", "a", "uid-a", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusNoContent,
-			expectID:     "short-a",
-		},
-		{
-			name:   "full delete needs only ObjectKey and resource version",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-			},
-			route:        route("", "ns", "a", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusNoContent,
-			expectID:     "short-a",
-		},
-		{
-			name:   "old peer ID-only delete leaves current short ID unchanged",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-			},
-			route:         route("ns--a", "", "", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:   "old peer ID-only delete without resource version leaves current short ID unchanged",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-			},
-			route:         route("ns--a", "", "", "", "", v1alpha1.SandboxStateDead),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:         "partial delete ObjectKey is rejected",
-			method:       http.MethodPost,
-			route:        route("ns--a", "ns", "", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:         "opaque ID-only delete is ignored",
-			method:       http.MethodPost,
-			route:        route("short-a", "", "", "", "2", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusNoContent,
-			expectID:     "short-a",
-		},
-		{
-			name:         "delete without resource version is rejected",
-			method:       http.MethodPost,
-			route:        route("", "ns", "a", "", "", v1alpha1.SandboxStateDead),
-			expectStatus: http.StatusBadRequest,
-			expectID:     "short-a",
-		},
-		{
-			name:   "stale peer delete is ignored successfully",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "2", v1alpha1.SandboxStateRunning))
-			},
-			route:         route("ns--a", "", "", "uid-a", "1", v1alpha1.SandboxStateDead),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:   "ID-only update cannot alter full route",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("short-a", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-			},
-			route:         route("short-a", "", "", "uid-a", "99", v1alpha1.SandboxStateRunning),
-			expectStatus:  http.StatusNoContent,
-			expectID:      "short-a",
-			expectPresent: true,
-			expectIP:      "10.0.0.1",
-		},
-		{
-			name:   "equal-RV deletion fence returns success without resurrection",
-			method: http.MethodPost,
-			setup: func(registry *registry.Registry) {
-				registry.Upsert(*route("old", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning))
-				registry.Delete(sandboxroute.Route{
-					Namespace:       "ns",
-					Name:            "a",
-					ResourceVersion: "1",
-				})
-			},
-			route:        route("old", "ns", "a", "uid-a", "1", v1alpha1.SandboxStateRunning),
-			expectStatus: http.StatusNoContent,
-			expectID:     "old",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			routeRegistry := newTestRegistry(t)
-			if tt.setup != nil {
-				tt.setup(routeRegistry)
-			}
-			server := &Server{}
-			body := tt.body
-			if tt.route != nil {
-				encoded, err := json.Marshal(tt.route)
-				require.NoError(t, err)
-				body = string(encoded)
-			}
-			request := httptest.NewRequest(tt.method, proxy.RefreshAPI, bytes.NewBufferString(body))
-			response := httptest.NewRecorder()
-
-			server.handleRefresh(response, request)
-
-			assert.Equal(t, tt.expectStatus, response.Code)
-			stored, present := routeRegistry.Get(tt.expectID)
-			assert.Equal(t, tt.expectPresent, present)
-			if tt.expectPresent {
-				assert.Equal(t, tt.expectIP, stored.IP)
-				assert.Equal(t, tt.expectAuth, stored.RequireTrafficAuth)
-			}
+			assert.Same(t, routeRegistry, server.registry)
 		})
 	}
 }
 
 func TestServerStopWithoutStart(t *testing.T) {
-	tests := []struct {
-		name   string
-		server *Server
-	}{
-		{name: "nil runtime fields", server: &Server{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.NoError(t, tt.server.Stop(nil))
-		})
-	}
-}
-
-func newTestRegistry(t *testing.T) *registry.Registry {
-	t.Helper()
-	isolated := registry.NewRegistry()
-	orig := registry.GetRegistry
-	t.Cleanup(func() { registry.GetRegistry = orig })
-	registry.GetRegistry = func() *registry.Registry { return isolated }
-	return isolated
-}
-
-func route(id, namespace, name, uid, resourceVersion, state string) *sandboxroute.Route {
-	return &sandboxroute.Route{
-		ID:              id,
-		Namespace:       namespace,
-		Name:            name,
-		UID:             types.UID(uid),
-		ResourceVersion: resourceVersion,
-		State:           state,
-		IP:              "10.0.0.1",
-	}
+	server := NewServer(nil, registry.NewRegistry(), 0)
+	assert.NoError(t, server.Stop(nil))
 }
