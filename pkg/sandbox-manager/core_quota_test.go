@@ -230,17 +230,8 @@ func TestManagerStopClosesQuotaRedis(t *testing.T) {
 		SystemNamespace:    "sandbox-system",
 		MemberlistBindPort: config.DefaultMemberlistBindPort,
 	})
-	cache, fc, err := cachetest.NewTestCache(t)
-	require.NoError(t, err)
-
-	proxyServer := proxy.NewServer(opts)
 	mgr, err := NewSandboxManagerBuilder(opts).
-		WithCustomInfra(func() (infra.Builder, error) {
-			return sandboxcr.NewInfraBuilder(opts).
-				WithCache(cache).
-				WithAPIReader(fc).
-				WithRouteReader(proxyServer), nil
-		}).
+		WithCustomInfra(withTestInfra(t, opts)).
 		Build()
 	require.NoError(t, err)
 

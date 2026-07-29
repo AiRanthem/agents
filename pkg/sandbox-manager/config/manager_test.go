@@ -24,6 +24,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestInitOptionsQuotaDefaults(t *testing.T) {
+	opts := InitOptions(SandboxManagerOptions{})
+	assert.Equal(t, consts.DefaultQuotaRedisOperationTimeout, opts.Quota.OperationTimeout)
+	assert.Equal(t, consts.DefaultQuotaRedisBreakerN, opts.Quota.BreakerN)
+	assert.Equal(t, consts.DefaultQuotaRedisBreakerD, opts.Quota.BreakerD)
+	assert.Equal(t, consts.DefaultQuotaAntiDriftInterval, opts.Quota.AntiDriftInterval)
+	assert.Equal(t, consts.DefaultQuotaAntiDriftGrace, opts.Quota.AntiDriftGrace)
+}
+
 func TestInitOptions(t *testing.T) {
 	tests := []struct {
 		name                     string

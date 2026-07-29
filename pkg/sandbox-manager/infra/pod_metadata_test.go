@@ -44,10 +44,16 @@ func newPodMetadataSandbox(hasTemplate bool, labels, annotations map[string]stri
 func TestMergePodLabels(t *testing.T) {
 	tests := []struct {
 		name           string
+		noTemplate     bool
 		existingLabels map[string]string
 		inputLabels    map[string]string
 		wantLabels     map[string]string
 	}{
+		{
+			name:        "nil template is a safe no-op",
+			noTemplate:  true,
+			inputLabels: map[string]string{"app": "sandbox", "env": "prod"},
+		},
 		{
 			name:           "nil existing labels - initializes and sets all",
 			existingLabels: nil,
@@ -124,20 +130,16 @@ func TestMergePodLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sbx := newPodMetadataSandbox(true, tt.existingLabels, nil)
-			infra.MergePodLabels(sbx, tt.inputLabels)
+			sbx := newPodMetadataSandbox(!tt.noTemplate, tt.existingLabels, nil)
+			assert.NotPanics(t, func() {
+				infra.MergePodLabels(sbx, tt.inputLabels)
+			})
+			if tt.noTemplate {
+				assert.Nil(t, sbx.Spec.Template)
+			}
 			assert.Equal(t, tt.wantLabels, sbx.GetPodLabels())
 		})
 	}
-}
-
-func TestMergePodLabels_NilTemplate(t *testing.T) {
-	sbx := newPodMetadataSandbox(false, nil, nil)
-	assert.NotPanics(t, func() {
-		infra.MergePodLabels(sbx, map[string]string{"app": "sandbox", "env": "prod"})
-	})
-	assert.Nil(t, sbx.Spec.Template)
-	assert.Nil(t, sbx.GetPodLabels())
 }
 
 func TestMergePodLabels_Idempotent(t *testing.T) {
@@ -155,10 +157,16 @@ func TestMergePodLabels_Idempotent(t *testing.T) {
 func TestMergePodAnnotations(t *testing.T) {
 	tests := []struct {
 		name                string
+		noTemplate          bool
 		existingAnnotations map[string]string
 		inputAnnotations    map[string]string
 		wantAnnotations     map[string]string
 	}{
+		{
+			name:             "nil template is a safe no-op",
+			noTemplate:       true,
+			inputAnnotations: map[string]string{"a": "1", "b": "2"},
+		},
 		{
 			name:                "nil existing annotations - initializes and sets all",
 			existingAnnotations: nil,
@@ -205,18 +213,14 @@ func TestMergePodAnnotations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sbx := newPodMetadataSandbox(true, nil, tt.existingAnnotations)
-			infra.MergePodAnnotations(sbx, tt.inputAnnotations)
+			sbx := newPodMetadataSandbox(!tt.noTemplate, nil, tt.existingAnnotations)
+			assert.NotPanics(t, func() {
+				infra.MergePodAnnotations(sbx, tt.inputAnnotations)
+			})
+			if tt.noTemplate {
+				assert.Nil(t, sbx.Spec.Template)
+			}
 			assert.Equal(t, tt.wantAnnotations, sbx.GetPodAnnotations())
 		})
 	}
-}
-
-func TestMergePodAnnotations_NilTemplate(t *testing.T) {
-	sbx := newPodMetadataSandbox(false, nil, nil)
-	assert.NotPanics(t, func() {
-		infra.MergePodAnnotations(sbx, map[string]string{"a": "1", "b": "2"})
-	})
-	assert.Nil(t, sbx.Spec.Template)
-	assert.Nil(t, sbx.GetPodAnnotations())
 }

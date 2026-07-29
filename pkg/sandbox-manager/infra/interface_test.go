@@ -144,6 +144,51 @@ func TestCalculateResourceFromContainers(t *testing.T) {
 			},
 		},
 		{
+			name: "zero memory limit stays zero",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Resources: corev1.ResourceRequirements{
+							Limits: corev1.ResourceList{
+								corev1.ResourceMemory: *resource.NewQuantity(0, resource.BinarySI),
+							},
+						},
+					}},
+				},
+			},
+			want: SandboxResource{},
+		},
+		{
+			name: "ephemeral storage aggregates into disk size",
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceEphemeralStorage: resource.MustParse("2Gi"),
+								},
+							},
+						},
+						{
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceEphemeralStorage: resource.MustParse("512Mi"),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: SandboxResource{
+				Requests: ResourceList{DiskSizeMB: 1536},
+				Limits:   ResourceList{DiskSizeMB: 2048},
+			},
+		},
+		{
 			name: "no containers",
 			pod: &corev1.Pod{
 				Spec: corev1.PodSpec{

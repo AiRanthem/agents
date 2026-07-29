@@ -187,6 +187,28 @@ func TestProjectSandboxDerivation(t *testing.T) {
 			expectIP:    "",
 		},
 		{
+			name: "paused sandbox projects paused state",
+			sandbox: func() *agentsv1alpha1.Sandbox {
+				sandbox := newSandbox(nil, nil)
+				sandbox.Spec.Paused = true
+				return sandbox
+			}(),
+			expectID:    "ns--name",
+			expectState: agentsv1alpha1.SandboxStatePaused,
+			expectIP:    "10.0.0.1",
+		},
+		{
+			name: "failed sandbox projects dead state",
+			sandbox: func() *agentsv1alpha1.Sandbox {
+				sandbox := newSandbox(nil, nil)
+				sandbox.Status.Phase = agentsv1alpha1.SandboxFailed
+				return sandbox
+			}(),
+			expectID:    "ns--name",
+			expectState: agentsv1alpha1.SandboxStateDead,
+			expectIP:    "10.0.0.1",
+		},
+		{
 			name:        "nil sandbox rejected",
 			expectError: "sandbox is nil",
 		},

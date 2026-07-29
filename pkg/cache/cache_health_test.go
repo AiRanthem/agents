@@ -17,6 +17,7 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -24,7 +25,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	toolscache "k8s.io/client-go/tools/cache"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/pkg/cache/controllers"
 )
@@ -74,7 +77,7 @@ func TestCache_SandboxInformerHealthyAggregatesQuotaAndRouteSubscriptions(t *tes
 func TestSandboxEventRegistrationRemoveIsIdempotent(t *testing.T) {
 	c := &Cache{}
 	handle := &fakeSandboxEventRegistration{synced: true}
-	informer := &idempotentTestInformer{}
+	informer := &testSandboxInformer{}
 	reg := &sandboxEventRegistration{
 		informer: informer,
 		handle:   handle,
@@ -88,14 +91,112 @@ func TestSandboxEventRegistrationRemoveIsIdempotent(t *testing.T) {
 	assert.Empty(t, c.sandboxEventRegistrations)
 }
 
-type idempotentTestInformer struct {
+func TestCache_AddSandboxEventHandlerLifecycle(t *testing.T) {
+	tests := []struct {
+		name        string
+		getErr      error
+		addErr      error
+		expectError string
+	}{
+		{name: "get informer error", getErr: errors.New("no informer"), expectError: "no informer"},
+		{name: "add handler error", addErr: errors.New("add rejected"), expectError: "add rejected"},
+		{name: "registration is tracked and removable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			informer := &testSandboxInformer{addErr: tt.addErr}
+			c := newLifecycleTestCache(informer, tt.getErr)
+
+			reg, err := c.AddSandboxEventHandler(t.Context(), toolscache.ResourceEventHandlerFuncs{})
+			if tt.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+				assert.Nil(t, reg)
+				assert.Empty(t, c.sandboxEventRegistrations)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, reg)
+			assert.True(t, reg.HasSynced())
+			assert.Len(t, c.sandboxEventRegistrations, 1)
+
+			require.NoError(t, reg.Remove())
+			assert.Empty(t, c.sandboxEventRegistrations)
+			assert.Equal(t, 1, informer.removeCalls)
+		})
+	}
+}
+
+func TestCache_SandboxEventRegistrationRemoveFailureStaysTracked(t *testing.T) {
+	informer := &testSandboxInformer{removeErr: errors.New("remove rejected")}
+	c := newLifecycleTestCache(informer, nil)
+	reg, err := c.AddSandboxEventHandler(t.Context(), toolscache.ResourceEventHandlerFuncs{})
+	require.NoError(t, err)
+
+	require.Error(t, reg.Remove())
+	assert.Len(t, c.sandboxEventRegistrations, 1, "a failed removal must keep the registration tracked")
+
+	informer.removeErr = nil
+	require.NoError(t, reg.Remove())
+	assert.Empty(t, c.sandboxEventRegistrations)
+	assert.Equal(t, 2, informer.removeCalls)
+}
+
+func newLifecycleTestCache(informer *testSandboxInformer, getErr error) *Cache {
+	return &Cache{mgr: &lifecycleTestManager{
+		cache: &lifecycleTestCtrlCache{informer: informer, getErr: getErr},
+	}}
+}
+
+type lifecycleTestManager struct {
+	ctrl.Manager
+	cache ctrlcache.Cache
+}
+
+func (m *lifecycleTestManager) GetCache() ctrlcache.Cache {
+	return m.cache
+}
+
+type lifecycleTestCtrlCache struct {
+	ctrlcache.Cache
+	informer ctrlcache.Informer
+	getErr   error
+}
+
+func (c *lifecycleTestCtrlCache) GetInformer(
+	context.Context, ctrlclient.Object, ...ctrlcache.InformerGetOption,
+) (ctrlcache.Informer, error) {
+	if c.getErr != nil {
+		return nil, c.getErr
+	}
+	return c.informer, nil
+}
+
+type testSandboxInformer struct {
 	ctrlcache.Informer
+	addErr      error
+	removeErr   error
 	removeCalls int
 }
 
-func (i *idempotentTestInformer) RemoveEventHandler(toolscache.ResourceEventHandlerRegistration) error {
+func (i *testSandboxInformer) AddEventHandler(
+	toolscache.ResourceEventHandler,
+) (toolscache.ResourceEventHandlerRegistration, error) {
+	if i.addErr != nil {
+		return nil, i.addErr
+	}
+	return syncedTestHandle{}, nil
+}
+
+func (i *testSandboxInformer) RemoveEventHandler(toolscache.ResourceEventHandlerRegistration) error {
 	i.removeCalls++
-	return nil
+	return i.removeErr
+}
+
+type syncedTestHandle struct{}
+
+func (syncedTestHandle) HasSynced() bool {
+	return true
 }
 
 type fakeSandboxEventRegistration struct {

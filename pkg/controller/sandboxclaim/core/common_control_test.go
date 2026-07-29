@@ -852,11 +852,12 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 	timeoutDuration := metav1.Duration{Duration: 3 * time.Minute}
 
 	tests := []struct {
-		name        string
-		claim       *agentsv1alpha1.SandboxClaim
-		sandboxSet  *agentsv1alpha1.SandboxSet
-		initObjs    []client.Object
-		expectError bool
+		name                string
+		claim               *agentsv1alpha1.SandboxClaim
+		sandboxSet          *agentsv1alpha1.SandboxSet
+		initObjs            []client.Object
+		expectError         bool
+		expectErrorContains string
 		// runtimeTLSBundle is the bundle handed to NewCommonControl; nil keeps
 		// the control on the legacy plaintext runtime paths.
 		runtimeTLSBundle *runtimeclient.TLSBundle
@@ -1696,6 +1697,32 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				assert.Nil(t, opts.RuntimeTLSBundle, "RuntimeTLSBundle should stay nil when the control is not configured for runtime TLS")
 			},
 		},
+		{
+			name: "non-empty reserved sandbox ID label is rejected",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "pool",
+					Labels:       map[string]string{agentsv1alpha1.LabelSandboxID: "injected-id"},
+				},
+			},
+			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			expectError:         true,
+			expectErrorContains: "is reserved and cannot be set by SandboxClaim",
+		},
+		{
+			name: "empty reserved sandbox ID label entry is rejected",
+			claim: &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "pool",
+					Labels:       map[string]string{agentsv1alpha1.LabelSandboxID: ""},
+				},
+			},
+			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			expectError:         true,
+			expectErrorContains: "is reserved and cannot be set by SandboxClaim",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1712,47 +1739,13 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				t.Errorf("buildClaimOptions() error = %v, expectError %v", err, tt.expectError)
 				return
 			}
+			if tt.expectErrorContains != "" {
+				assert.Contains(t, err.Error(), tt.expectErrorContains)
+				assert.Nil(t, opts.Modifier)
+			}
 			if !tt.expectError && tt.validate != nil {
 				tt.validate(t, opts)
 			}
-		})
-	}
-}
-
-func TestCommonControl_buildClaimOptionsRejectsReservedSandboxIDLabel(t *testing.T) {
-	tests := []struct {
-		name        string
-		value       string
-		expectError string
-	}{
-		{
-			name:        "non-empty reserved label is rejected",
-			value:       "injected-id",
-			expectError: "is reserved and cannot be set by SandboxClaim",
-		},
-		{
-			name:        "empty reserved label entry is rejected",
-			value:       "",
-			expectError: "is reserved and cannot be set by SandboxClaim",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			control := NewCommonControl(nil, record.NewFakeRecorder(1), nil).(*commonControl)
-			claim := &agentsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
-				Spec: agentsv1alpha1.SandboxClaimSpec{
-					TemplateName: "pool",
-					Labels:       map[string]string{agentsv1alpha1.LabelSandboxID: tt.value},
-				},
-			}
-			sandboxSet := &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}}
-
-			opts, err := control.buildClaimOptions(t.Context(), claim, sandboxSet)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectError)
-			assert.Nil(t, opts.Modifier)
 		})
 	}
 }
