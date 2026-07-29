@@ -22,9 +22,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -35,9 +35,8 @@ import (
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
-
-// ---- healthServer tests ----
 
 func TestHealthServer_Check(t *testing.T) {
 	hs := &healthServer{}
@@ -63,310 +62,49 @@ func TestHealthServer_Watch(t *testing.T) {
 	assert.Equal(t, codes.Unimplemented, st.Code())
 }
 
-// ---- handleRefresh tests ----
-
-func TestHandleRefresh_Success(t *testing.T) {
-	s := newTestServer(nil)
-
-	route := testFullRoute("ns--sb-refresh", "ns", "sb-refresh", v1alpha1.SandboxStateRunning, "1")
-	route.IP = "10.0.0.1"
-	route.Owner = "user1"
+func TestNewServeMuxRefreshWritesStoreAndUpdatesRouteCount(t *testing.T) {
+	server := NewServer(config.SandboxManagerOptions{})
+	routeCount.Set(0)
+	route := sandboxroute.Route{
+		ID:              "short-a",
+		Namespace:       "ns",
+		Name:            "a",
+		UID:             types.UID("uid-a"),
+		ResourceVersion: "1",
+		State:           v1alpha1.SandboxStatePaused,
+		IP:              "10.0.0.1",
+	}
 	body, err := json.Marshal(route)
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
+	request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	server.newServeMux().ServeHTTP(response, request)
 
-	assert.Equal(t, http.StatusNoContent, rr.Code)
-
-	// Verify the route was actually stored
-	got, ok := s.LoadRoute("ns--sb-refresh")
-	require.True(t, ok)
-	assert.Equal(t, "10.0.0.1", got.IP)
-	assert.Equal(t, "ns", got.Namespace)
-	assert.Equal(t, "sb-refresh", got.Name)
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	stored, present := server.LoadRoute(route.ID)
+	require.True(t, present)
+	assert.Equal(t, route, stored)
+	assert.Equal(t, float64(1), testutil.ToFloat64(routeCount))
 }
 
-func TestHandleRefresh_InvalidBody(t *testing.T) {
-	s := newTestServer(nil)
-
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewBufferString("not-json"))
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestHandleRefresh_EmptyBody(t *testing.T) {
-	s := newTestServer(nil)
-
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewBufferString("{}"))
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestHandleRefresh_ContextPropagated(t *testing.T) {
-	s := newTestServer(nil)
-
-	route := testFullRoute("ns--sb-ctx", "ns", "sb-ctx", v1alpha1.SandboxStateRunning, "1")
-	route.IP = "9.9.9.9"
+func TestNewServeMuxInvalidRefreshDoesNotUpdateRouteCount(t *testing.T) {
+	server := NewServer(config.SandboxManagerOptions{})
+	routeCount.Set(7)
+	route := sandboxroute.Route{
+		ID:              "short-a",
+		Namespace:       "ns",
+		UID:             types.UID("uid-a"),
+		ResourceVersion: "1",
+		State:           v1alpha1.SandboxStateRunning,
+	}
 	body, err := json.Marshal(route)
 	require.NoError(t, err)
 
-	ctx := context.WithValue(context.Background(), "test-key", "test-value")
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewReader(body)).WithContext(ctx)
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
+	request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	server.newServeMux().ServeHTTP(response, request)
 
-	assert.Equal(t, http.StatusNoContent, rr.Code)
-	got, ok := s.LoadRoute("ns--sb-ctx")
-	require.True(t, ok)
-	assert.Equal(t, "9.9.9.9", got.IP)
-}
-
-func TestHandleRefresh_OverwritesExistingRoute(t *testing.T) {
-	s := newTestServer(nil)
-	ctx := context.Background()
-
-	// Pre-store an older route
-	old := testFullRoute("ns--sb-over", "ns", "sb-over", v1alpha1.SandboxStateRunning, "1")
-	old.IP = "1.1.1.1"
-	s.SetRoute(ctx, old)
-
-	// Send a newer route via handleRefresh
-	newer := testFullRoute("ns--sb-over", "ns", "sb-over", v1alpha1.SandboxStateRunning, "2")
-	newer.IP = "2.2.2.2"
-	body, _ := json.Marshal(newer)
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewReader(body))
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
-
-	assert.Equal(t, http.StatusNoContent, rr.Code)
-	got, _ := s.LoadRoute("ns--sb-over")
-	assert.Equal(t, "2.2.2.2", got.IP)
-}
-
-func TestServer_handleRefresh(t *testing.T) {
-	tests := []struct {
-		name              string
-		body              string
-		expectedCode      int
-		expectDeleted     bool
-		expectRouteSet    bool
-		expectTrafficAuth bool
-	}{
-		{
-			name:         "invalid json body",
-			body:         "invalid json",
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name: "partial ObjectKey is rejected",
-			body: mustMarshal(sandboxroute.Route{
-				ID:              "partial",
-				Namespace:       "ns",
-				UID:             "uid-partial",
-				ResourceVersion: "1",
-			}),
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name:         "ID-only route is ignored for rolling compatibility",
-			body:         mustMarshal(testIDOnlyRoute("opaque", v1alpha1.SandboxStateRunning, "1")),
-			expectedCode: http.StatusNoContent,
-		},
-		{
-			name:         "malformed resource version is rejected",
-			body:         mustMarshal(testFullRoute("short", "ns", "short", v1alpha1.SandboxStateRunning, "invalid")),
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name: "missing required metadata is rejected",
-			body: mustMarshal(sandboxroute.Route{
-				Namespace:       "ns",
-				Name:            "missing-uid",
-				ResourceVersion: "1",
-			}),
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name:          "full dead state should delete route",
-			body:          mustMarshal(testFullRoute("ns--sandbox-1", "ns", "sandbox-1", v1alpha1.SandboxStateDead, "1")),
-			expectedCode:  http.StatusNoContent,
-			expectDeleted: true,
-		},
-		{
-			name: "full delete needs only ObjectKey and resource version",
-			body: mustMarshal(sandboxroute.Route{
-				Namespace:       "ns",
-				Name:            "sandbox-1",
-				State:           v1alpha1.SandboxStateDead,
-				ResourceVersion: "2",
-			}),
-			expectedCode:  http.StatusNoContent,
-			expectDeleted: true,
-		},
-		{
-			name: "partial delete ObjectKey is rejected",
-			body: mustMarshal(sandboxroute.Route{
-				ID:              "ns--sandbox-1",
-				Namespace:       "ns",
-				State:           v1alpha1.SandboxStateDead,
-				ResourceVersion: "2",
-			}),
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name: "delete without resource version is rejected",
-			body: mustMarshal(sandboxroute.Route{
-				Namespace: "ns",
-				Name:      "sandbox-1",
-				State:     v1alpha1.SandboxStateDead,
-			}),
-			expectedCode: http.StatusBadRequest,
-		},
-		{
-			name: "running state should set route with traffic auth",
-			body: mustMarshal(func() sandboxroute.Route {
-				route := testFullRoute("ns--sandbox-2", "ns", "sandbox-2", v1alpha1.SandboxStateRunning, "1")
-				route.IP = "10.0.0.2"
-				route.RequireTrafficAuth = true
-				return route
-			}()),
-			expectedCode:      http.StatusNoContent,
-			expectRouteSet:    true,
-			expectTrafficAuth: true,
-		},
-		{
-			name: "available state should set route",
-			body: mustMarshal(func() sandboxroute.Route {
-				route := testFullRoute("ns--sandbox-3", "ns", "sandbox-3", v1alpha1.SandboxStateAvailable, "1")
-				route.IP = "10.0.0.3"
-				return route
-			}()),
-			expectedCode:   http.StatusNoContent,
-			expectRouteSet: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create server with empty opts
-			s := NewServer(config.SandboxManagerOptions{})
-
-			// Pre-set a route for delete test
-			if tt.expectDeleted {
-				route := testFullRoute("ns--sandbox-1", "ns", "sandbox-1", v1alpha1.SandboxStateRunning, "1")
-				route.IP = "10.0.0.1"
-				s.SetRoute(t.Context(), route)
-			}
-
-			// Create request
-			req := httptest.NewRequest(http.MethodPost, RefreshAPI, strings.NewReader(tt.body))
-			rr := httptest.NewRecorder()
-
-			// Call handleRefresh
-			s.handleRefresh(rr, req)
-
-			// Verify response
-			assert.Equal(t, tt.expectedCode, rr.Code)
-
-			// Verify route deletion
-			if tt.expectDeleted {
-				_, loaded := s.LoadRoute("ns--sandbox-1")
-				assert.False(t, loaded, "route should be deleted")
-			}
-
-			// Verify route set
-			if tt.expectRouteSet {
-				var routeID string
-				if tt.name == "running state should set route with traffic auth" {
-					routeID = "ns--sandbox-2"
-				} else if tt.name == "available state should set route" {
-					routeID = "ns--sandbox-3"
-				}
-				rawRoute, loaded := s.LoadRoute(routeID)
-				assert.True(t, loaded, "route should be set")
-				if loaded {
-					assert.Equal(t, tt.expectTrafficAuth, rawRoute.RequireTrafficAuth)
-				}
-			}
-		})
-	}
-}
-
-func TestServerHandleRefreshIgnoresIDOnlyPeerPayloads(t *testing.T) {
-	tests := []struct {
-		name            string
-		state           string
-		resourceVersion string
-	}{
-		{name: "running with resource version", state: v1alpha1.SandboxStateRunning, resourceVersion: "99"},
-		{name: "running without resource version", state: v1alpha1.SandboxStateRunning},
-		{name: "delete with resource version", state: v1alpha1.SandboxStateDead, resourceVersion: "99"},
-		{name: "delete without resource version", state: v1alpha1.SandboxStateDead},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := NewServer(config.SandboxManagerOptions{})
-			current := sandboxroute.Route{
-				ID: "short-a", Namespace: "ns", Name: "a", UID: "uid-a",
-				State: v1alpha1.SandboxStateRunning, ResourceVersion: "2",
-			}
-			require.Equal(t, sandboxroute.EventResultApplied, s.SetRoute(t.Context(), current).Result)
-
-			idOnly := sandboxroute.Route{
-				ID: "ns--a", UID: "uid-a", State: tt.state, ResourceVersion: tt.resourceVersion,
-			}
-			req := httptest.NewRequest(http.MethodPost, RefreshAPI, strings.NewReader(mustMarshal(idOnly)))
-			response := httptest.NewRecorder()
-			s.handleRefresh(response, req)
-
-			assert.Equal(t, http.StatusNoContent, response.Code)
-			stored, exists := s.LoadRoute("short-a")
-			require.True(t, exists)
-			assert.Equal(t, current, stored)
-			_, legacyExists := s.LoadRoute("ns--a")
-			assert.False(t, legacyExists)
-		})
-	}
-}
-
-func mustMarshal(v interface{}) string {
-	data, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return string(data)
-}
-
-func testIDOnlyRoute(id, state, resourceVersion string) sandboxroute.Route {
-	return sandboxroute.Route{
-		ID:              id,
-		UID:             types.UID("uid-" + id),
-		State:           state,
-		ResourceVersion: resourceVersion,
-	}
-}
-
-func testFullRoute(id, namespace, name, state, resourceVersion string) sandboxroute.Route {
-	route := testIDOnlyRoute(id, state, resourceVersion)
-	route.Namespace = namespace
-	route.Name = name
-	return route
-}
-
-func TestServer_handleRefresh_EmptyBody(t *testing.T) {
-	s := NewServer(config.SandboxManagerOptions{})
-
-	req := httptest.NewRequest(http.MethodPost, RefreshAPI, bytes.NewReader([]byte{}))
-	rr := httptest.NewRecorder()
-	s.handleRefresh(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-	assert.Contains(t, rr.Body.String(), "failed to unmarshal body")
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Equal(t, float64(7), testutil.ToFloat64(routeCount))
 }

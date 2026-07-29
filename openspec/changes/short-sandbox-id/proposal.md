@@ -298,6 +298,7 @@ flowchart LR
 | sandbox-manager core | Feature flag, modifier protection, Checkpoint orchestration, manager route projection |
 | `pkg/cache` | Label-aware indexed lookup via the shared `sandboxid` resolver |
 | `pkg/sandboxroute` | Neutral Route type and stateless projection, ObjectKey-backed Store, active ID index, RV fencing |
+| `pkg/sandboxroute/refresh` | Shared peer refresh HTTP handler and minimal `RouteMutator` contract |
 | infra | Generic mutation/persistence plus neutral Sandbox informer event adaptation |
 | E2B server | Request validation, including the create-team legacy namespace restriction, and response/error presentation |
 
@@ -353,7 +354,11 @@ remain last-writer-wins with no ambiguity detection.
 
 Manager proxy and sandbox-gateway remain separate processes and therefore keep separate in-memory
 stores. They share the same `pkg/sandboxroute` Route, `ProjectSandbox`, and Store
-implementation.
+implementation. Their peer servers also share the `pkg/sandboxroute/refresh` HTTP handler through
+its minimal `RouteMutator{Upsert,Delete}` interface; this adds no Store method or state predicate.
+The handler passes every mutator result to its optional callback. Manager injects its concrete Store
+and handles that result by updating route count only for Applied or Ignored, while gateway injects
+its explicit Registry and no callback.
 
 Each full Route carries:
 
@@ -368,11 +373,16 @@ explicit key and RV and therefore does not require ID or UID. ID-only and partia
 are invalid and allocate no record, active index, or deletion fence. Client-facing lookup continues
 treating IDs as opaque.
 
-During the disabled rolling-upgrade stage, a new peer endpoint recognizes exactly one compatibility
+During the disabled rolling-upgrade stage, the shared peer endpoint recognizes exactly one compatibility
 shape after JSON decoding and before state or RV checks: both ObjectKey fields are empty and ID is
 non-empty. It logs at debug level, returns `204 No Content`, and does not call the Store or update
 route count. Other malformed shapes continue through normal endpoint and Store validation and
 receive `400 Bad Request`.
+
+Only the exact `dead` state represents peer deletion and requires a non-empty resourceVersion
+before Delete. Running, Available, Paused, Creating, and every other non-Dead state are passed to
+Upsert without an endpoint state whitelist. Running-only traffic admission remains in the manager
+and gateway request paths rather than peer synchronization.
 
 The shared `Route.String()` continues redacting `AccessToken` as `***` in logs.
 
@@ -428,6 +438,8 @@ Peer endpoint behavior is:
 |---|---|
 | Non-empty ID-only payload from an old peer, with any state or RV | `204 No Content` ignored before Store mutation |
 | Malformed or partial Route | `400 Bad Request` |
+| Well-formed Dead Route with non-empty RV | Delete; applied or ignored returns `204 No Content` |
+| Well-formed non-Dead Route | Upsert; applied or ignored returns `204 No Content` |
 | Well-formed older or equal-RV event | `204 No Content` no-op |
 
 #### Delete Semantics
@@ -453,7 +465,9 @@ Finalizer-driven updates provide additional deletion-watermark signals.
 Normal DELETE preserves the object's ObjectKey and RV. Every `DeletedFinalStateUnknown` uses its
 tombstone key and an empty RV; an embedded Sandbox object is not trusted as a final-state
 watermark. Gateway readiness gates production reads only, so initial LIST Add callbacks and peer
-events may populate Registry before the handler reports synchronized.
+events may populate Registry before the handler reports synchronized. The gateway peer server runs
+its caller-provided readiness checks first and then checks the same explicitly injected Registry;
+it returns `503 Service Unavailable` if either stage is not ready.
 
 When an observed object stops matching a selector, the filtering informer emits a normal DELETE
 with the update RV, removing any tracked route and establishing a fence. If the object later
@@ -622,8 +636,8 @@ concurrency harnesses.
 | Recycle | User metadata tracking excludes the key; crafted cleanup metadata cannot delete it |
 | Cache | Label-aware default resolution, legacy-to-short index move, unique opaque lookup, duplicate-ID ambiguity error |
 | Route Store | Atomic ID switch, ID-to-ObjectKey-to-record lookup, strictly newer RV upsert, permanent fences, and record/fence mutual exclusion |
-| Deletes and compatibility | Full-Route-only Store mutation, unified ObjectKey/RV deletion, normal DELETE, object-bearing and key-only `DeletedFinalStateUnknown`, informer-scope transitions, ID-only peer ignore, old/new Route JSON compatibility, HTTP mapping |
-| Readiness and health | Initial-sync writes before ready, read gating, multiple informer registration health, and Remove |
+| Deletes and compatibility | Full-Route-only Store mutation, shared peer handler with Dead-only Delete and all non-Dead Upsert, unified ObjectKey/RV deletion, normal DELETE, object-bearing and key-only `DeletedFinalStateUnknown`, informer-scope transitions, ID-only peer ignore, old/new Route JSON compatibility, HTTP mapping, and result-aware callback handling |
+| Readiness and health | Initial-sync writes before ready, explicit Registry injection, extra-check-before-Registry ordering, read gating, multiple informer registration health, and Remove |
 | Layer boundaries | No ID/Route policy in infra; route maintenance consumes neutral informer events and performs no APIReader query |
 | E2B and Checkpoint | Protected metadata, authorized error context, no disclosure, historical Checkpoint IDs, opaque pagination |
 

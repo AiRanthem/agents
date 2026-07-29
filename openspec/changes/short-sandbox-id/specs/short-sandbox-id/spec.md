@@ -184,7 +184,11 @@ remains on the wire for compatibility and validation but SHALL NOT participate i
 The routing Store MUST require an explicit ObjectKey for every mutation, MUST apply full-Route
 validation to Upsert and ObjectKey/RV validation to Delete, MUST use ObjectKey/RV-fenced deletion,
 and MUST prevent stale updates and deletes from replacing or removing current ownership. It MUST
-NOT reverse-parse a Route ID to recover ObjectKey.
+NOT reverse-parse a Route ID to recover ObjectKey. Manager and gateway peer endpoints SHALL share
+one refresh handler: only the exact `dead` state SHALL dispatch to Delete, every non-Dead state
+SHALL dispatch to Upsert without a state whitelist, and Running-only traffic admission SHALL remain
+in each request path. After every mutator call, the handler SHALL pass its MutationResult to an
+optional post-mutation callback so the caller determines how to handle Applied, Ignored, or Invalid.
 
 #### Scenario: An old peer sends an ID-only Route
 - **WHEN** JSON decoding succeeds and a peer Route has both namespace and name absent with a non-empty ID, for any state or resourceVersion
@@ -196,7 +200,15 @@ NOT reverse-parse a Route ID to recover ObjectKey.
 
 #### Scenario: Peer sends a partial or malformed upsert
 - **WHEN** exactly one ObjectKey field is present, the ID is empty, a full Route lacks UID or resourceVersion, or resourceVersion is not a well-formed positive integer
-- **THEN** the peer endpoint returns `400 Bad Request` without Store mutation
+- **THEN** the peer endpoint returns `400 Bad Request` without changing Store state, passes Invalid to the post-mutation callback, and the manager callback leaves route count unchanged
+
+#### Scenario: Peer sends a non-Dead Route
+- **WHEN** peer refresh receives a well-formed Running, Available, Paused, Creating, or other non-Dead Route
+- **THEN** the shared endpoint passes it to Upsert and returns `204 No Content` for applied or ignored results, while request traffic remains restricted to Running
+
+#### Scenario: Peer sends a Dead Route
+- **WHEN** peer refresh receives a Dead Route with an explicit ObjectKey and valid non-empty resourceVersion
+- **THEN** the shared endpoint passes it to Delete and returns `204 No Content` for applied or ignored results
 
 #### Scenario: Peer sends a minimal explicit-key deletion
 - **WHEN** a deletion Route carries namespace, name, and a valid resourceVersion but omits ID and UID

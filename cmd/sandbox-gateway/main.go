@@ -29,12 +29,12 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/controller"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/filter"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/jwtauth"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	peerserver "github.com/openkruise/agents/pkg/sandbox-gateway/server"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
 func init() {
@@ -80,14 +80,9 @@ func init() {
 
 		peerServer := peerserver.NewServer(
 			client,
-			proxy.SystemPort,
+			routeRegistry,
+			refresh.DefaultPort,
 			jwtAuthManager.Ready,
-			func() error {
-				if routeRegistry.Ready() {
-					return nil
-				}
-				return registry.ErrNotReady
-			},
 		)
 		if err := peerServer.Start(ctx); err != nil {
 			api.LogErrorf("failed to start peer server: %v", err)

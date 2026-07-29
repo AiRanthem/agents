@@ -31,6 +31,7 @@ import (
 
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/utils"
 )
@@ -86,7 +87,7 @@ func (s *Server) SyncRouteWithPeers(route sandboxroute.Route) error {
 			}, func(err error) bool {
 				return !errors.Is(err, errPeerRejected)
 			}, func() error {
-				return requestPeer(http.MethodPost, peerIP, RefreshAPI, body)
+				return requestPeer(http.MethodPost, peerIP, refresh.Path, body)
 			})
 			if requestErr != nil {
 				mu.Lock()

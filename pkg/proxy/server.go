@@ -18,7 +18,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -33,17 +32,11 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 
-	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandboxroute"
-	"github.com/openkruise/agents/pkg/utils"
-)
-
-const (
-	RefreshAPI = "/refresh"
-	SystemPort = 7789
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
 type healthServer struct{}
@@ -108,11 +101,9 @@ func (s *Server) Run() error {
 	defer s.mu.Unlock()
 
 	// HTTP
-	mux := http.NewServeMux()
-	mux.HandleFunc(fmt.Sprintf("%s %s", http.MethodPost, RefreshAPI), s.handleRefresh)
 	s.httpSrv = &http.Server{
-		Addr:              fmt.Sprintf(":%d", SystemPort),
-		Handler:           mux,
+		Addr:              fmt.Sprintf(":%d", refresh.DefaultPort),
+		Handler:           s.newServeMux(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -144,6 +135,20 @@ func (s *Server) Run() error {
 	return nil
 }
 
+func (s *Server) newServeMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle(
+		http.MethodPost+" "+refresh.Path,
+		refresh.NewHandler(s.store, func(result sandboxroute.MutationResult) {
+			switch result.Result {
+			case sandboxroute.EventResultApplied, sandboxroute.EventResultIgnored:
+				s.updateRouteCount()
+			}
+		}),
+	)
+	return mux
+}
+
 func (s *Server) Stop(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,40 +158,6 @@ func (s *Server) Stop(ctx context.Context) {
 	if s.httpSrv != nil {
 		_ = s.httpSrv.Shutdown(ctx)
 	}
-}
-
-func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log := klog.FromContext(ctx)
-	var route sandboxroute.Route
-	if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
-		log.Error(err, "failed to unmarshal refresh request body")
-		http.Error(w, fmt.Sprintf("failed to unmarshal body: %s", err.Error()), http.StatusBadRequest)
-		return
-	}
-	if route.Namespace == "" && route.Name == "" && route.ID != "" {
-		log.V(utils.DebugLogLevel).Info("ignoring legacy ID-only peer route refresh", "id", route.ID)
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	var result sandboxroute.MutationResult
-	if route.State == v1alpha1.SandboxStateDead {
-		if route.ResourceVersion == "" {
-			http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
-			return
-		}
-		result = s.store.Delete(route)
-	} else {
-		result = s.store.Upsert(route)
-	}
-	s.updateRouteCount()
-	log.V(utils.DebugLogLevel+1).Info("route refresh processed", "route", route, "result", result.Result, "reason", result.Reason)
-	if result.Result == sandboxroute.EventResultInvalid {
-		log.Error(errors.New(string(result.Reason)), "rejected invalid route refresh payload")
-		http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) updateRouteCount() {
