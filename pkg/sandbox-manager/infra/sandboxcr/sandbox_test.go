@@ -48,8 +48,6 @@ import (
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/cache/controllers"
-	"github.com/openkruise/agents/pkg/proxy"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/utils"
@@ -353,14 +351,7 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	require.NoError(t, err)
 	mgr.SetWaitHooks(testCache.GetWaitHooks())
 
-	options := config.InitOptions(config.SandboxManagerOptions{})
-	infraInstance := NewInfraBuilder(options).
-		WithCache(testCache).
-		WithAPIReader(fc).
-		WithRouteReader(proxy.NewServer(options)).
-		Build()
-	require.NoError(t, infraInstance.Run(t.Context()))
-	infraImpl := infraInstance.(*Infra)
+	infraImpl := newInfraWithCache(t, testCache, fc)
 
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	current := timeout.Options{ShutdownTime: base.Add(10 * time.Minute)}

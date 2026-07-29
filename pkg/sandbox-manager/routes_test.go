@@ -63,45 +63,33 @@ func newRouteTestManager(t *testing.T) *SandboxManager {
 	}
 }
 
-func TestManagerProjectionAccessTokenCompatibility(t *testing.T) {
+func TestSandboxManagerHandleRouteSandboxEventDiscards(t *testing.T) {
 	tests := []struct {
-		name        string
-		annotations map[string]string
-		expectToken string
+		name  string
+		event func() infra.RouteSandboxEvent
 	}{
 		{
-			name: "runtime token",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationRuntimeAccessToken: "runtime-token",
-			},
-			expectToken: "runtime-token",
+			name:  "empty event is discarded",
+			event: func() infra.RouteSandboxEvent { return infra.RouteSandboxEvent{} },
 		},
 		{
-			name: "legacy envd token fallback",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationEnvdAccessToken: "legacy-token",
+			name: "sandbox failing projection is discarded",
+			event: func() infra.RouteSandboxEvent {
+				invalid := newManagerRouteTestSandbox("team-a", "sandbox")
+				invalid.UID = ""
+				return infra.RouteSandboxEvent{Sandbox: sandboxcr.AsSandbox(invalid, nil)}
 			},
-			expectToken: "legacy-token",
-		},
-		{
-			name: "runtime token wins over legacy envd token",
-			annotations: map[string]string{
-				agentsv1alpha1.AnnotationRuntimeAccessToken: "runtime-token",
-				agentsv1alpha1.AnnotationEnvdAccessToken:    "legacy-token",
-			},
-			expectToken: "runtime-token",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sandbox := newManagerRouteTestSandbox("team-a", "token")
-			sandbox.Annotations = tt.annotations
+			manager := newRouteTestManager(t)
 
-			route, err := sandboxcr.AsSandbox(sandbox, nil).GetRoute()
+			manager.handleRouteSandboxEvent(t.Context(), tt.event())
 
-			require.NoError(t, err)
-			assert.Equal(t, tt.expectToken, route.AccessToken)
+			_, present := manager.proxy.LoadRoute("team-a--sandbox")
+			assert.False(t, present)
 		})
 	}
 }

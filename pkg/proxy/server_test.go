@@ -38,34 +38,33 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
-func TestHealthServer_Check(t *testing.T) {
+func TestHealthServer(t *testing.T) {
 	hs := &healthServer{}
-	resp, err := hs.Check(context.Background(), &grpc_health_v1.HealthCheckRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.Status)
+
+	t.Run("check serving", func(t *testing.T) {
+		resp, err := hs.Check(context.Background(), &grpc_health_v1.HealthCheckRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.Status)
+	})
+
+	t.Run("list contains ext-proc", func(t *testing.T) {
+		resp, err := hs.List(context.Background(), &grpc_health_v1.HealthListRequest{})
+		require.NoError(t, err)
+		require.Contains(t, resp.Statuses, "envoy-ext-proc")
+		assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.Statuses["envoy-ext-proc"].Status)
+	})
+
+	t.Run("watch unimplemented", func(t *testing.T) {
+		err := hs.Watch(&grpc_health_v1.HealthCheckRequest{}, nil)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.Unimplemented, st.Code())
+	})
 }
 
-func TestHealthServer_List(t *testing.T) {
-	hs := &healthServer{}
-	resp, err := hs.List(context.Background(), &grpc_health_v1.HealthListRequest{})
-	require.NoError(t, err)
-	require.Contains(t, resp.Statuses, "envoy-ext-proc")
-	assert.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, resp.Statuses["envoy-ext-proc"].Status)
-}
-
-func TestHealthServer_Watch(t *testing.T) {
-	hs := &healthServer{}
-	err := hs.Watch(&grpc_health_v1.HealthCheckRequest{}, nil)
-	require.Error(t, err)
-	st, ok := status.FromError(err)
-	require.True(t, ok)
-	assert.Equal(t, codes.Unimplemented, st.Code())
-}
-
-func TestNewServeMuxRefreshWritesStoreAndUpdatesRouteCount(t *testing.T) {
-	server := NewServer(config.SandboxManagerOptions{})
-	routeCount.Set(0)
-	route := sandboxroute.Route{
+func TestNewServeMuxRefresh(t *testing.T) {
+	valid := sandboxroute.Route{
 		ID:              "short-a",
 		Namespace:       "ns",
 		Name:            "a",
@@ -74,37 +73,68 @@ func TestNewServeMuxRefreshWritesStoreAndUpdatesRouteCount(t *testing.T) {
 		State:           v1alpha1.SandboxStatePaused,
 		IP:              "10.0.0.1",
 	}
-	body, err := json.Marshal(route)
-	require.NoError(t, err)
+	invalid := valid
+	invalid.Name = ""
 
-	request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
-	response := httptest.NewRecorder()
-	server.newServeMux().ServeHTTP(response, request)
-
-	assert.Equal(t, http.StatusNoContent, response.Code)
-	stored, present := server.LoadRoute(route.ID)
-	require.True(t, present)
-	assert.Equal(t, route, stored)
-	assert.Equal(t, float64(1), testutil.ToFloat64(routeCount))
-}
-
-func TestNewServeMuxInvalidRefreshDoesNotUpdateRouteCount(t *testing.T) {
-	server := NewServer(config.SandboxManagerOptions{})
-	routeCount.Set(7)
-	route := sandboxroute.Route{
-		ID:              "short-a",
-		Namespace:       "ns",
-		UID:             types.UID("uid-a"),
-		ResourceVersion: "1",
-		State:           v1alpha1.SandboxStateRunning,
+	tests := []struct {
+		name         string
+		route        sandboxroute.Route
+		replay       bool
+		presetGauge  float64
+		expectStatus int
+		expectStored bool
+		expectGauge  float64
+	}{
+		{
+			name:         "applied refresh writes store and updates the gauge",
+			route:        valid,
+			expectStatus: http.StatusNoContent,
+			expectStored: true,
+			expectGauge:  1,
+		},
+		{
+			name:         "invalid refresh does not touch the gauge",
+			route:        invalid,
+			presetGauge:  7,
+			expectStatus: http.StatusBadRequest,
+			expectGauge:  7,
+		},
+		{
+			name:         "same RV replay returns 204 and refreshes the gauge",
+			route:        valid,
+			replay:       true,
+			presetGauge:  -1,
+			expectStatus: http.StatusNoContent,
+			expectStored: true,
+			expectGauge:  1,
+		},
 	}
-	body, err := json.Marshal(route)
-	require.NoError(t, err)
 
-	request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
-	response := httptest.NewRecorder()
-	server.newServeMux().ServeHTTP(response, request)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := NewServer(config.SandboxManagerOptions{})
+			mux := server.newServeMux()
+			body, err := json.Marshal(tt.route)
+			require.NoError(t, err)
 
-	assert.Equal(t, http.StatusBadRequest, response.Code)
-	assert.Equal(t, float64(7), testutil.ToFloat64(routeCount))
+			if tt.replay {
+				first := httptest.NewRecorder()
+				mux.ServeHTTP(first, httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body)))
+				require.Equal(t, http.StatusNoContent, first.Code)
+			}
+			routeCount.Set(tt.presetGauge)
+
+			request := httptest.NewRequest(http.MethodPost, refresh.Path, bytes.NewReader(body))
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+
+			assert.Equal(t, tt.expectStatus, response.Code)
+			stored, present := server.LoadRoute(tt.route.ID)
+			assert.Equal(t, tt.expectStored, present)
+			if tt.expectStored {
+				assert.Equal(t, tt.route, stored)
+			}
+			assert.Equal(t, tt.expectGauge, testutil.ToFloat64(routeCount))
+		})
+	}
 }

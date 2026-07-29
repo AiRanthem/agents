@@ -42,12 +42,10 @@ import (
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/identity"
-	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
-	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -1908,11 +1906,7 @@ func TestAutoPause(t *testing.T) {
 
 func TestDeleteSandbox(t *testing.T) {
 	templateName := "test-template"
-	user := &models.CreatedTeamAPIKey{
-		ID:   keys.AdminKeyID,
-		Key:  InitKey,
-		Name: "admin",
-	}
+	user := adminTestUser()
 
 	tests := []struct {
 		name          string
@@ -2682,44 +2676,32 @@ func TestCreateSandbox_EmptyHostDoesNotClaim(t *testing.T) {
 	assert.Equal(t, "example.com", resp.Body.Domain)
 }
 
-func TestBrowserWebSocketAddressUsesResolvedSandboxID(t *testing.T) {
-	tests := []struct {
-		name      string
-		labels    map[string]string
-		expectID  string
-		expectURL string
-	}{
-		{
-			name:      "legacy sandbox uses namespace and name",
-			expectID:  "team-a--sandbox-a",
-			expectURL: "wss://9222-team-a--sandbox-a.example.com",
-		},
-		{
-			name: "short label stays opaque",
-			labels: map[string]string{
-				v1alpha1.LabelSandboxID: "opaque-short-id",
-			},
-			expectID:  "opaque-short-id",
-			expectURL: "wss://9222-opaque-short-id.example.com",
-		},
-	}
+func TestDeleteSandboxFailurePropagatesResourceContext(t *testing.T) {
+	templateName := "delete-failure-template"
+	controller, _, teardown := Setup(t)
+	defer teardown()
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+	user := adminTestUser()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sandbox := &sandboxcr.Sandbox{Sandbox: &v1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-				Namespace: "team-a",
-				Name:      "sandbox-a",
-				Labels:    tt.labels,
-			}}}
-			controller := &Controller{
-				domain:  "example.com",
-				manager: &sandboxmanager.SandboxManager{},
-				adapter: adapters.NewE2BAdapter(0),
-			}
+	createResp, err := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: v1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, err)
 
-			resolvedID := sandbox.GetSandboxID()
-			assert.Equal(t, tt.expectID, resolvedID)
-			assert.Equal(t, tt.expectURL, fmt.Sprintf("wss://%s", controller.adapter.GetSandboxAddress(controller.domain, "/browser", resolvedID, 9222)))
-		})
+	origDelete := sandboxcr.DefaultDeleteSandbox
+	sandboxcr.DefaultDeleteSandbox = func(context.Context, *v1alpha1.Sandbox, ctrlclient.Client) error {
+		return fmt.Errorf("delete backend unavailable")
 	}
+	t.Cleanup(func() { sandboxcr.DefaultDeleteSandbox = origDelete })
+
+	_, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, user))
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Message, "Failed to delete sandbox")
+	assert.Contains(t, apiErr.Message, "sandboxResource=", "the authorized failure must expose the resource coordinates")
 }

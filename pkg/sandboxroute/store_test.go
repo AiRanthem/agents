@@ -35,6 +35,7 @@ func TestStoreUpsertOrdersByResourceVersion(t *testing.T) {
 		expectResult EventResult
 		expectReason Reason
 		expectID     string
+		expectGoneID string
 	}{
 		{
 			name:         "initial route",
@@ -50,6 +51,7 @@ func TestStoreUpsertOrdersByResourceVersion(t *testing.T) {
 			incoming:     fullRoute("new", key.Namespace, key.Name, "uid-b", "2"),
 			expectResult: EventResultApplied,
 			expectID:     "new",
+			expectGoneID: "old",
 		},
 		{
 			name: "equal replay is stale",
@@ -105,6 +107,10 @@ func TestStoreUpsertOrdersByResourceVersion(t *testing.T) {
 			} else {
 				require.Equal(t, 1, store.Len())
 				assert.Equal(t, tt.expectID, mustGetRoute(t, store, tt.expectID).ID)
+			}
+			if tt.expectGoneID != "" {
+				_, exists := store.Get(tt.expectGoneID)
+				assert.False(t, exists)
 			}
 			assertStoreObjectInvariant(t, store, key)
 		})
@@ -302,21 +308,23 @@ func TestStoreRejectsRoutesWithoutFullObjectKeyWithoutAllocatingState(t *testing
 	}
 }
 
-func TestStoreActiveKeyIndexReferencesAuthoritativeRecord(t *testing.T) {
+func TestStoreShortIDCollisionAcrossObjects(t *testing.T) {
 	store := NewStore()
-	key := types.NamespacedName{Namespace: "ns", Name: "one"}
-	legacy := fullRoute("ns--one", key.Namespace, key.Name, "uid-a", "1")
+	keyA := types.NamespacedName{Namespace: "ns", Name: "a"}
+	keyB := types.NamespacedName{Namespace: "ns", Name: "b"}
+	routeA := fullRoute("shared", keyA.Namespace, keyA.Name, "uid-a", "1")
+	routeB := fullRoute("shared", keyB.Namespace, keyB.Name, "uid-b", "1")
 
-	require.Equal(t, EventResultApplied, store.Upsert(legacy).Result)
-	assert.Equal(t, key, store.activeKeyByID[legacy.ID])
-	assert.Equal(t, legacy, store.recordByObject[key])
+	require.Equal(t, EventResultApplied, store.Upsert(routeA).Result)
+	require.Equal(t, EventResultApplied, store.Upsert(routeB).Result)
+	assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
 
-	short := fullRoute("short", key.Namespace, key.Name, "uid-a", "2")
-	require.Equal(t, EventResultApplied, store.Upsert(short).Result)
-	_, legacyPresent := store.Get(legacy.ID)
-	assert.False(t, legacyPresent)
-	assert.Equal(t, short, mustGetRoute(t, store, short.ID))
-	assertStoreObjectInvariant(t, store, key)
+	deletion := Route{Namespace: keyA.Namespace, Name: keyA.Name, ResourceVersion: "2"}
+	require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
+	assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
+	assert.Equal(t, 1, store.Len())
+	assertStoreObjectInvariant(t, store, keyA)
+	assertStoreObjectInvariant(t, store, keyB)
 }
 
 func TestStoreConcurrentReadWrite(t *testing.T) {

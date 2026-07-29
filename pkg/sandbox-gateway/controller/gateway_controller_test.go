@@ -95,10 +95,7 @@ func TestAddJWTAuthManager(t *testing.T) {
 
 func TestRouteEventHandlerObjectLifecycle(t *testing.T) {
 	ctx := context.Background()
-	routeRegistry := newTestRegistry(t)
-	handler := &routeEventHandler{
-		registry: routeRegistry,
-	}
+	handler, routeRegistry := newHandler()
 
 	sandbox := testSandbox("ns", "sandbox", "uid", "10", "")
 	handler.onObject(ctx, sandbox)
@@ -114,116 +111,159 @@ func TestRouteEventHandlerObjectLifecycle(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, "11", route.ResourceVersion)
 	assert.NotEqual(t, string(agentsv1alpha1.SandboxRunning), route.State)
-}
 
-func TestRouteEventHandlerPreservesTrafficAuth(t *testing.T) {
-	ctx := context.Background()
-	routeRegistry := newTestRegistry(t)
-	handler := &routeEventHandler{
-		registry: routeRegistry,
-	}
-	sandbox := testSandbox("ns", "auth", "uid-auth", "1", "short-auth")
-	sandbox.Annotations[identity.AnnotationEnableJwtAuth] = agentsv1alpha1.True
-
-	handler.onObject(ctx, sandbox)
-
-	route, found := routeRegistry.Get("short-auth")
+	authSandbox := testSandbox("ns", "auth", "uid-auth", "1", "short-auth")
+	authSandbox.Annotations[identity.AnnotationEnableJwtAuth] = agentsv1alpha1.True
+	handler.onObject(ctx, authSandbox)
+	route, found = routeRegistry.Get("short-auth")
 	require.True(t, found)
 	assert.True(t, route.RequireTrafficAuth)
 }
 
 func TestRouteEventHandlerDeletionSignals(t *testing.T) {
-	ctx := context.Background()
-	routeRegistry := newTestRegistry(t)
-	handler := &routeEventHandler{
-		registry: routeRegistry,
-	}
-
-	sandbox := testSandbox("ns", "sandbox", "uid", "20", "")
-	handler.onObject(ctx, sandbox)
-	_, found := routeRegistry.Get("ns--sandbox")
-	require.True(t, found)
-
-	terminating := sandbox.DeepCopy()
-	terminating.ResourceVersion = "21"
-	now := metav1.Now()
-	terminating.DeletionTimestamp = &now
-	handler.onObject(ctx, terminating)
-	_, found = routeRegistry.Get("ns--sandbox")
-	assert.False(t, found)
-
-	finalizerUpdate := terminating.DeepCopy()
-	finalizerUpdate.ResourceVersion = "22"
-	handler.onObject(ctx, finalizerUpdate)
-	handler.onDelete(ctx, finalizerUpdate.DeepCopy())
-
-	equal := sandbox.DeepCopy()
-	equal.ResourceVersion = "22"
-	handler.onObject(ctx, equal)
-	_, found = routeRegistry.Get("ns--sandbox")
-	assert.False(t, found)
-
-	handler.onDelete(ctx, toolscache.DeletedFinalStateUnknown{
-		Key: "ns/sandbox",
-	})
-	newer := sandbox.DeepCopy()
-	newer.ResourceVersion = "23"
-	handler.onObject(ctx, newer)
-	_, found = routeRegistry.Get("ns--sandbox")
-	assert.True(t, found)
-}
-
-func TestRouteEventHandlerTombstoneUsesCurrentRecordRV(t *testing.T) {
 	tests := []struct {
-		name       string
-		currentRV  string
-		embeddedRV string
-		newerRV    string
+		name      string
+		currentRV string
+		signal    func(handler *routeEventHandler, ctx context.Context, current *agentsv1alpha1.Sandbox)
+		// replayRV re-observes the object at the expected fence RV and must stay fenced.
+		replayRV string
+		newerRV  string
 	}{
 		{
-			name:      "key only",
-			currentRV: "30",
+			name:      "terminating update fences its resource version",
+			currentRV: "20",
+			signal: func(handler *routeEventHandler, ctx context.Context, current *agentsv1alpha1.Sandbox) {
+				terminating := current.DeepCopy()
+				terminating.ResourceVersion = "21"
+				now := metav1.Now()
+				terminating.DeletionTimestamp = &now
+				handler.onObject(ctx, terminating)
+			},
+			replayRV: "21",
+			newerRV:  "22",
 		},
 		{
-			name:       "stale embedded object",
-			currentRV:  "42",
-			embeddedRV: "41",
-			newerRV:    "43",
+			name:      "typed delete object fences its resource version",
+			currentRV: "20",
+			signal: func(handler *routeEventHandler, ctx context.Context, current *agentsv1alpha1.Sandbox) {
+				deleted := current.DeepCopy()
+				deleted.ResourceVersion = "21"
+				handler.onDelete(ctx, deleted)
+			},
+			replayRV: "21",
+			newerRV:  "22",
+		},
+		{
+			name:      "key-only tombstone fences the current record RV",
+			currentRV: "30",
+			signal: func(handler *routeEventHandler, ctx context.Context, _ *agentsv1alpha1.Sandbox) {
+				handler.onDelete(ctx, toolscache.DeletedFinalStateUnknown{Key: "ns/sandbox"})
+			},
+			replayRV: "30",
+			newerRV:  "31",
+		},
+		{
+			name:      "stale embedded tombstone still fences the current record RV",
+			currentRV: "42",
+			signal: func(handler *routeEventHandler, ctx context.Context, current *agentsv1alpha1.Sandbox) {
+				embedded := current.DeepCopy()
+				embedded.ResourceVersion = "41"
+				handler.onDelete(ctx, toolscache.DeletedFinalStateUnknown{
+					Key: "ns/sandbox",
+					Obj: embedded,
+				})
+			},
+			replayRV: "42",
+			newerRV:  "43",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			routeRegistry := newTestRegistry(t)
-			handler := &routeEventHandler{
-				registry: routeRegistry,
-			}
+			handler, routeRegistry := newHandler()
 			current := testSandbox("ns", "sandbox", "uid", tt.currentRV, "")
 			handler.onObject(ctx, current)
-
-			tombstone := toolscache.DeletedFinalStateUnknown{Key: "ns/sandbox"}
-			if tt.embeddedRV != "" {
-				embedded := current.DeepCopy()
-				embedded.ResourceVersion = tt.embeddedRV
-				tombstone.Obj = embedded
-			}
-			handler.onDelete(ctx, tombstone)
-
 			_, found := routeRegistry.Get("ns--sandbox")
-			assert.False(t, found, "the tombstone must remove the current record")
+			require.True(t, found)
 
-			handler.onObject(ctx, current.DeepCopy())
+			tt.signal(handler, ctx, current)
 			_, found = routeRegistry.Get("ns--sandbox")
-			assert.False(t, found, "the removed record RV becomes the fence")
+			assert.False(t, found, "the deletion signal must remove the current record")
 
-			if tt.newerRV != "" {
-				newer := current.DeepCopy()
-				newer.ResourceVersion = tt.newerRV
-				handler.onObject(ctx, newer)
-				_, found = routeRegistry.Get("ns--sandbox")
-				assert.True(t, found)
-			}
+			replay := current.DeepCopy()
+			replay.ResourceVersion = tt.replayRV
+			handler.onObject(ctx, replay)
+			_, found = routeRegistry.Get("ns--sandbox")
+			assert.False(t, found, "an equal replay must stay fenced")
+
+			newer := current.DeepCopy()
+			newer.ResourceVersion = tt.newerRV
+			handler.onObject(ctx, newer)
+			_, found = routeRegistry.Get("ns--sandbox")
+			assert.True(t, found, "a newer observation must cross the fence")
+		})
+	}
+}
+
+func TestRouteEventHandlerDiscardsInvalidEvents(t *testing.T) {
+	tests := []struct {
+		name  string
+		event func(handler *routeEventHandler, ctx context.Context)
+	}{
+		{
+			name: "onObject discards non-sandbox object",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				handler.onObject(ctx, "not-a-sandbox")
+			},
+		},
+		{
+			name: "onObject discards sandbox that fails projection",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				invalid := testSandbox("ns", "sandbox", "", "11", "")
+				handler.onObject(ctx, invalid)
+			},
+		},
+		{
+			name: "onDelete discards tombstone with malformed key",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				handler.onDelete(ctx, toolscache.DeletedFinalStateUnknown{Key: "ns/sandbox/extra"})
+			},
+		},
+		{
+			name: "onDelete discards tombstone key without namespace",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				handler.onDelete(ctx, toolscache.DeletedFinalStateUnknown{Key: "sandbox"})
+			},
+		},
+		{
+			name: "onDelete discards unknown object type",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				handler.onDelete(ctx, "not-a-sandbox")
+			},
+		},
+		{
+			name: "terminating sandbox with malformed resource version is rejected",
+			event: func(handler *routeEventHandler, ctx context.Context) {
+				terminating := testSandbox("ns", "sandbox", "uid", "not-a-number", "")
+				now := metav1.Now()
+				terminating.DeletionTimestamp = &now
+				handler.onObject(ctx, terminating)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			handler, routeRegistry := newHandler()
+			handler.onObject(ctx, testSandbox("ns", "sandbox", "uid", "10", ""))
+
+			tt.event(handler, ctx)
+
+			route, found := routeRegistry.Get("ns--sandbox")
+			require.True(t, found, "an invalid event must not remove the current record")
+			assert.Equal(t, "10", route.ResourceVersion)
 		})
 	}
 }
@@ -281,7 +321,7 @@ func TestBuildGatewayCacheOptions(t *testing.T) {
 func TestStartManagerDependencyValidation(t *testing.T) {
 	require.Error(t, StartManager(context.Background(), ManagerOptions{}))
 
-	routeRegistry := newTestRegistry(t)
+	routeRegistry := registry.NewRegistry()
 	err := StartManager(context.Background(), ManagerOptions{
 		Registry:      routeRegistry,
 		LabelSelector: "bad in (",
@@ -290,9 +330,9 @@ func TestStartManagerDependencyValidation(t *testing.T) {
 	assert.False(t, routeRegistry.Ready())
 }
 
-func newTestRegistry(t *testing.T) *registry.Registry {
-	t.Helper()
-	return registry.NewRegistry()
+func newHandler() (*routeEventHandler, *registry.Registry) {
+	routeRegistry := registry.NewRegistry()
+	return &routeEventHandler{registry: routeRegistry}, routeRegistry
 }
 
 func testSandbox(namespace, name, uid, resourceVersion, id string) *agentsv1alpha1.Sandbox {

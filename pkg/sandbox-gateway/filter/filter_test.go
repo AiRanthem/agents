@@ -244,12 +244,34 @@ func defaultTestAdapter() *adapters.E2BAdapter {
 	})
 }
 
+// putRunningTestRoute registers a Running route with the given IP; use
+// putTestRoute directly when the test needs a non-Running state.
+func putRunningTestRoute(t *testing.T, routeRegistry *registry.Registry, id, ip string) {
+	t.Helper()
+	putTestRoute(t, routeRegistry, id, sandboxroute.Route{
+		IP:              ip,
+		State:           agentsv1alpha1.SandboxStateRunning,
+		ResourceVersion: "1",
+	})
+}
+
+// newTestFilterWithDeps builds a sandboxFilter with explicit adapter and JWT
+// manager dependencies alongside its mock callbacks.
+func newTestFilterWithDeps(cfg *Config, adapter *adapters.E2BAdapter, jwtManager JWTAuthManager) (*sandboxFilter, *mockFilterCallbackHandler) {
+	callbacks := newMockFilterCallbackHandler()
+	return &sandboxFilter{
+		callbacks:      callbacks,
+		config:         cfg,
+		adapter:        adapter,
+		jwtAuthManager: jwtManager,
+	}, callbacks
+}
+
 // newTestFilter builds a sandboxFilter from cfg with the default path-based
 // adapter and returns it alongside its mock callbacks, covering the common
 // per-test setup.
 func newTestFilter(cfg *Config) (*sandboxFilter, *mockFilterCallbackHandler) {
-	callbacks := newMockFilterCallbackHandler()
-	return &sandboxFilter{callbacks: callbacks, config: cfg, adapter: defaultTestAdapter()}, callbacks
+	return newTestFilterWithDeps(cfg, defaultTestAdapter(), nil)
 }
 
 // newSandboxHeader returns a request header map carrying the sandbox ID header.
@@ -257,6 +279,23 @@ func newSandboxHeader(sandboxID string) *mockRequestHeaderMap {
 	header := newMockRequestHeaderMap()
 	header.Set(DefaultSandboxHeaderName, sandboxID)
 	return header
+}
+
+// newHostHeader returns a request header map whose Host is the given value.
+func newHostHeader(host string) *mockRequestHeaderMapWithHost {
+	return &mockRequestHeaderMapWithHost{
+		mockRequestHeaderMap: *newMockRequestHeaderMap(),
+		hostValue:            host,
+	}
+}
+
+// newKruisePathHeader returns a request header map whose :path uses the kruise
+// custom protocol.
+func newKruisePathHeader(path string) *mockRequestHeaderMapCustom {
+	return &mockRequestHeaderMapCustom{
+		mockRequestHeaderMap: *newMockRequestHeaderMap(),
+		pathValue:            path,
+	}
 }
 
 // mockDynamicMetadata implements api.DynamicMetadata for testing
@@ -374,263 +413,258 @@ func (m *mockFilterCallbackHandler) EncoderFilterCallbacks() api.EncoderFilterCa
 	return nil
 }
 
-// TestDecodeHeadersSandboxHeaderPriority tests that sandbox header takes priority over host header
-func TestDecodeHeadersSandboxHeaderPriority(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--sandbox-header", sandboxroute.Route{
-		IP:              "10.0.0.1",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-	putTestRoute(t, r, "default--host-header", sandboxroute.Route{
-		IP:              "10.0.0.2",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header with both sandbox header and host header
-	// Sandbox header should take priority
-	header := &mockRequestHeaderMapWithHost{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		hostValue:            "8080-default--host-header.example.com",
-	}
-	header.Set(DefaultSandboxHeaderName, "default--sandbox-header")
-	header.Set(DefaultSandboxPortHeader, "9090")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should use sandbox header, not host header
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly with sandbox header info
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.1:9090", metadata["host"])
-}
-
-// TestDecodeHeadersFallbackToHostHeader tests fallback to host header when sandbox header is missing
-func TestDecodeHeadersFallbackToHostHeader(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--host-sandbox", sandboxroute.Route{
-		IP:              "10.0.0.2",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header with only host header (no sandbox header)
-	header := &mockRequestHeaderMapWithHost{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		hostValue:            "8080-default--host-sandbox.example.com",
-	}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should use host header
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly with host header info
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.2:8080", metadata["host"])
-}
-
-// TestDecodeHeadersNoHeaders tests the case when both sandbox and host headers are missing
-func TestDecodeHeadersNoHeaders(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--app1", sandboxroute.Route{IP: "10.0.0.1", ResourceVersion: "1"})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header without sandbox-id or valid host
-	header := newMockRequestHeaderMap()
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should continue without any side effects
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-}
-
-// TestDecodeHeadersSandboxNotFound tests the case when sandbox is not found in registry
-func TestDecodeHeadersSandboxNotFound(t *testing.T) {
-	r := useTestRegistry(t)
-	activateTestRegistry(r)
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with sandbox-id that doesn't exist
-	header := newSandboxHeader("nonexistent-sandbox")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should return LocalReply with 502
-	assert.Equal(t, api.LocalReply, status)
-	assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-	assert.Contains(t, mockCallbacks.decoderCallbacks.replyBody, "nonexistent-sandbox")
-	assert.Equal(t, "sandbox_not_found", mockCallbacks.decoderCallbacks.replyDetails)
-}
-
-// TestDecodeHeadersSandboxNotFoundHostFallback tests sandbox not found via host header
-func TestDecodeHeadersSandboxNotFoundHostFallback(t *testing.T) {
-	r := useTestRegistry(t)
-	activateTestRegistry(r)
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with host in format: port-namespace--name.domain
-	header := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-nonexistent--sandbox.example.com"}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should return LocalReply with 502
-	assert.Equal(t, api.LocalReply, status)
-	assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-	assert.Contains(t, mockCallbacks.decoderCallbacks.replyBody, "nonexistent--sandbox")
-	assert.Equal(t, "sandbox_not_found", mockCallbacks.decoderCallbacks.replyDetails)
-}
-
-func TestDecodeHeadersRegistryLifecycleReadiness(t *testing.T) {
+// TestDecodeHeadersExtractionVectors covers every routable ID/port extraction
+// vector: the matrix of parsing itself is authoritative in the adapters package.
+func TestDecodeHeadersExtractionVectors(t *testing.T) {
 	tests := []struct {
-		name     string
-		activate bool
-		teardown bool
+		name      string
+		routes    map[string]string // route ID -> upstream IP
+		request   func() api.RequestHeaderMap
+		endStream bool
+		wantHost  string
+		wantPath  string
 	}{
-		{name: "startup before repair handoff returns unavailable"},
-		{name: "teardown after repair handoff returns unavailable", activate: true, teardown: true},
+		{
+			name: "sandbox header beats host header",
+			routes: map[string]string{
+				"default--sandbox-header": "10.0.0.1",
+				"default--host-header":    "10.0.0.2",
+			},
+			request: func() api.RequestHeaderMap {
+				header := newHostHeader("8080-default--host-header.example.com")
+				header.Set(DefaultSandboxHeaderName, "default--sandbox-header")
+				header.Set(DefaultSandboxPortHeader, "9090")
+				return header
+			},
+			endStream: true,
+			wantHost:  "10.0.0.1:9090",
+		},
+		{
+			name:   "host header fallback carries the port",
+			routes: map[string]string{"default--host-sandbox": "10.0.0.2"},
+			request: func() api.RequestHeaderMap {
+				return newHostHeader("8080-default--host-sandbox.example.com")
+			},
+			endStream: true,
+			wantHost:  "10.0.0.2:8080",
+		},
+		{
+			name:   "sandbox header uses the default port",
+			routes: map[string]string{"default--running-sandbox": "10.0.0.5"},
+			request: func() api.RequestHeaderMap {
+				return newSandboxHeader("default--running-sandbox")
+			},
+			endStream: true,
+			wantHost:  "10.0.0.5:49983",
+		},
+		{
+			name:   "port header overrides the default port",
+			routes: map[string]string{"default--port-sandbox": "10.0.0.6"},
+			request: func() api.RequestHeaderMap {
+				header := newSandboxHeader("default--port-sandbox")
+				header.Set(DefaultSandboxPortHeader, "8080")
+				return header
+			},
+			endStream: true,
+			wantHost:  "10.0.0.6:8080",
+		},
+		{
+			name:   "IPv6 upstream via sandbox header",
+			routes: map[string]string{"default--ipv6-sandbox": "2001:db8::1"},
+			request: func() api.RequestHeaderMap {
+				return newSandboxHeader("default--ipv6-sandbox")
+			},
+			endStream: true,
+			wantHost:  "2001:db8::1:49983",
+		},
+		{
+			name:   "IPv6 upstream via host header",
+			routes: map[string]string{"default--ipv6-sandbox": "2001:db8::1"},
+			request: func() api.RequestHeaderMap {
+				return newHostHeader("8080-default--ipv6-sandbox.example.com")
+			},
+			endStream: true,
+			wantHost:  "2001:db8::1:8080",
+		},
+		{
+			name:   "kruise custom protocol rewrites the path",
+			routes: map[string]string{"ns--mysandbox": "10.0.0.10"},
+			request: func() api.RequestHeaderMap {
+				return newKruisePathHeader("/kruise/ns--mysandbox/3000/api/v1/data")
+			},
+			endStream: true,
+			wantHost:  "10.0.0.10:3000",
+			wantPath:  "/api/v1/data",
+		},
+		{
+			name:   "endStream false behaves identically",
+			routes: map[string]string{"default--running-sandbox": "10.0.0.5"},
+			request: func() api.RequestHeaderMap {
+				return newSandboxHeader("default--running-sandbox")
+			},
+			wantHost: "10.0.0.5:49983",
+		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			routeRegistry := useTestRegistry(t)
-			if tt.activate {
-				putTestRoute(t, routeRegistry, "opaque-id", sandboxroute.Route{
-					IP:              "10.0.0.1",
-					State:           agentsv1alpha1.SandboxStateRunning,
-					ResourceVersion: "1",
-				})
+			r := useTestRegistry(t)
+			for id, ip := range tt.routes {
+				putRunningTestRoute(t, r, id, ip)
 			}
-			if tt.teardown {
-				routeRegistry.SetReady(false)
-			}
-
 			filter, callbacks := newTestFilter(DefaultConfig())
-			header := newSandboxHeader("opaque-id")
+			header := tt.request()
+
+			status := filter.DecodeHeaders(header, tt.endStream)
+
+			assert.Equal(t, api.Continue, status)
+			assert.False(t, callbacks.decoderCallbacks.sendLocalReplyCalled)
+			metadata := callbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
+			require.NotNil(t, metadata)
+			assert.Equal(t, tt.wantHost, metadata["host"])
+			if tt.wantPath != "" {
+				path, ok := header.Get(":path")
+				assert.True(t, ok)
+				assert.Equal(t, tt.wantPath, path)
+			}
+		})
+	}
+}
+
+// TestDecodeHeadersLocalReplies covers every local-reply branch: missing route,
+// non-running states, and registry readiness gating.
+func TestDecodeHeadersLocalReplies(t *testing.T) {
+	tests := []struct {
+		name         string
+		arrange      func(t *testing.T, r *registry.Registry)
+		sandboxID    string
+		wantCode     int
+		wantDetails  string
+		wantBodyPart string
+	}{
+		{
+			name: "missing sandbox",
+			arrange: func(t *testing.T, r *registry.Registry) {
+				activateTestRegistry(r)
+			},
+			sandboxID:    "nonexistent-sandbox",
+			wantCode:     502,
+			wantDetails:  "sandbox_not_found",
+			wantBodyPart: "nonexistent-sandbox",
+		},
+		{
+			name: "creating sandbox is not routable",
+			arrange: func(t *testing.T, r *registry.Registry) {
+				putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
+					IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1",
+				})
+			},
+			sandboxID:    "default--test-sandbox",
+			wantCode:     502,
+			wantDetails:  "sandbox_not_running",
+			wantBodyPart: "healthy sandbox not found",
+		},
+		{
+			name: "available sandbox is not routable",
+			arrange: func(t *testing.T, r *registry.Registry) {
+				putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
+					IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateAvailable, ResourceVersion: "1",
+				})
+			},
+			sandboxID:    "default--test-sandbox",
+			wantCode:     502,
+			wantDetails:  "sandbox_not_running",
+			wantBodyPart: "healthy sandbox not found",
+		},
+		{
+			name: "empty state is not routable",
+			arrange: func(t *testing.T, r *registry.Registry) {
+				putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
+					IP: "10.0.0.1", ResourceVersion: "1",
+				})
+			},
+			sandboxID:    "default--test-sandbox",
+			wantCode:     502,
+			wantDetails:  "sandbox_not_running",
+			wantBodyPart: "healthy sandbox not found",
+		},
+		{
+			name:        "registry not ready at startup",
+			sandboxID:   "opaque-id",
+			wantCode:    503,
+			wantDetails: "gateway_not_ready",
+		},
+		{
+			name: "registry torn down after readiness",
+			arrange: func(t *testing.T, r *registry.Registry) {
+				putRunningTestRoute(t, r, "opaque-id", "10.0.0.1")
+				r.SetReady(false)
+			},
+			sandboxID:   "opaque-id",
+			wantCode:    503,
+			wantDetails: "gateway_not_ready",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := useTestRegistry(t)
+			if tt.arrange != nil {
+				tt.arrange(t, r)
+			}
+			filter, callbacks := newTestFilter(DefaultConfig())
+			header := newSandboxHeader(tt.sandboxID)
 
 			status := filter.DecodeHeaders(header, true)
 
 			assert.Equal(t, api.LocalReply, status)
 			assert.True(t, callbacks.decoderCallbacks.sendLocalReplyCalled)
-			assert.Equal(t, 503, callbacks.decoderCallbacks.replyStatusCode)
-			assert.Equal(t, "gateway_not_ready", callbacks.decoderCallbacks.replyDetails)
+			assert.Equal(t, tt.wantCode, callbacks.decoderCallbacks.replyStatusCode)
+			assert.Equal(t, tt.wantDetails, callbacks.decoderCallbacks.replyDetails)
+			if tt.wantBodyPart != "" {
+				assert.Contains(t, callbacks.decoderCallbacks.replyBody, tt.wantBodyPart)
+			}
 		})
 	}
 }
 
-// TestDecodeHeadersSandboxNotRunning tests the case when sandbox exists but is not in running state
-func TestDecodeHeadersSandboxNotRunning(t *testing.T) {
+// TestDecodeHeadersPassthrough covers the adapter-map-error branch: requests
+// with no extractable sandbox identity continue to normal routing.
+func TestDecodeHeadersPassthrough(t *testing.T) {
 	tests := []struct {
-		name  string
-		state string
+		name    string
+		request func() api.RequestHeaderMap
 	}{
-		{"creating state", agentsv1alpha1.SandboxStateCreating},
-		{"available state", agentsv1alpha1.SandboxStateAvailable},
-		{"empty state", ""},
+		{
+			name:    "no extractable headers",
+			request: func() api.RequestHeaderMap { return newMockRequestHeaderMap() },
+		},
+		{
+			name:    "empty sandbox ID header",
+			request: func() api.RequestHeaderMap { return newSandboxHeader("") },
+		},
+		{
+			name:    "invalid host format",
+			request: func() api.RequestHeaderMap { return newHostHeader("invalid-host-format.example.com") },
+		},
+		{
+			name:    "invalid kruise path without port segment",
+			request: func() api.RequestHeaderMap { return newKruisePathHeader("/kruise/sandbox1234") },
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := useTestRegistry(t)
-			putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
-				IP:              "10.0.0.1",
-				State:           tt.state,
-				ResourceVersion: "1",
-			})
+			putRunningTestRoute(t, r, "default--app1", "10.0.0.1")
+			filter, callbacks := newTestFilter(DefaultConfig())
 
-			filter, mockCallbacks := newTestFilter(DefaultConfig())
+			status := filter.DecodeHeaders(tt.request(), true)
 
-			// Create header map with sandbox-id
-			header := newSandboxHeader("default--test-sandbox")
-
-			status := filter.DecodeHeaders(header, true)
-
-			// Verify - should return LocalReply with 502
-			assert.Equal(t, api.LocalReply, status)
-			assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-			assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-			assert.Contains(t, mockCallbacks.decoderCallbacks.replyBody, "healthy sandbox not found")
-			assert.Equal(t, "sandbox_not_running", mockCallbacks.decoderCallbacks.replyDetails)
+			assert.Equal(t, api.Continue, status)
+			assert.False(t, callbacks.decoderCallbacks.sendLocalReplyCalled)
 		})
 	}
-}
-
-// TestDecodeHeadersSandboxNotRunningHostFallback tests non-running sandbox via host header
-func TestDecodeHeadersSandboxNotRunningHostFallback(t *testing.T) {
-	tests := []struct {
-		name  string
-		state string
-	}{
-		{"creating state", agentsv1alpha1.SandboxStateCreating},
-		{"available state", agentsv1alpha1.SandboxStateAvailable},
-		{"empty state", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := useTestRegistry(t)
-			putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
-				IP:              "10.0.0.1",
-				State:           tt.state,
-				ResourceVersion: "1",
-			})
-
-			filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-			// Create header map with host in format: port-namespace--name.domain
-			header := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-default--test-sandbox.example.com"}
-
-			status := filter.DecodeHeaders(header, true)
-
-			// Verify - should return LocalReply with 502
-			assert.Equal(t, api.LocalReply, status)
-			assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-			assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-			assert.Contains(t, mockCallbacks.decoderCallbacks.replyBody, "healthy sandbox not found")
-			assert.Equal(t, "sandbox_not_running", mockCallbacks.decoderCallbacks.replyDetails)
-		})
-	}
-}
-
-// TestDecodeHeadersSandboxRunning tests the successful case when sandbox is running
-func TestDecodeHeadersSandboxRunning(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--running-sandbox", sandboxroute.Route{
-		IP:              "10.0.0.5",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with sandbox-id
-	header := newSandboxHeader("default--running-sandbox")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should continue and set upstream host
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.5:49983", metadata["host"])
 }
 
 func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
@@ -678,10 +712,7 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 			name:    "enabled hostname runtime port",
 			enabled: true,
 			request: func() api.RequestHeaderMap {
-				return &mockRequestHeaderMapWithHost{
-					mockRequestHeaderMap: *newMockRequestHeaderMap(),
-					hostValue:            "49983-default--runtime-mtls.example.com",
-				}
+				return newHostHeader("49983-default--runtime-mtls.example.com")
 			},
 			wantMTLS: true,
 			wantHost: "10.0.0.9:49983",
@@ -690,10 +721,7 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 			name:    "enabled customized path runtime port",
 			enabled: true,
 			request: func() api.RequestHeaderMap {
-				return &mockRequestHeaderMapCustom{
-					mockRequestHeaderMap: *newMockRequestHeaderMap(),
-					pathValue:            "/kruise/default--runtime-mtls/49983/health",
-				}
+				return newKruisePathHeader("/kruise/default--runtime-mtls/49983/health")
 			},
 			wantMTLS: true,
 			wantHost: "10.0.0.9:49983",
@@ -715,16 +743,11 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := useTestRegistry(t)
-			putTestRoute(t, r, "default--runtime-mtls", sandboxroute.Route{
-				IP:              "10.0.0.9",
-				State:           agentsv1alpha1.SandboxStateRunning,
-				ResourceVersion: "1",
-			})
+			putRunningTestRoute(t, r, "default--runtime-mtls", "10.0.0.9")
 
 			cfg := DefaultConfig()
 			cfg.EnableRuntimeMTLS = tt.enabled
-			callbacks := newMockFilterCallbackHandler()
-			gatewayFilter := &sandboxFilter{callbacks: callbacks, config: cfg, adapter: NewFilterConfig(cfg).Adapter}
+			gatewayFilter, callbacks := newTestFilterWithDeps(cfg, NewFilterConfig(cfg).Adapter, nil)
 			header := tt.request()
 
 			status := gatewayFilter.DecodeHeaders(header, true)
@@ -748,162 +771,6 @@ func TestDecodeHeadersRuntimeMTLSRouting(t *testing.T) {
 	}
 }
 
-// TestDecodeHeadersSandboxRunningHostFallback tests successful case via host header
-func TestDecodeHeadersSandboxRunningHostFallback(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--running-sandbox", sandboxroute.Route{
-		IP:              "10.0.0.5",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with host in format: port-namespace--name.domain
-	header := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-default--running-sandbox.example.com"}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should continue and set upstream host
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly with port from host
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.5:8080", metadata["host"])
-}
-
-// TestDecodeHeadersWithCustomPort tests the case when a custom port is specified via sandbox header
-func TestDecodeHeadersWithCustomPort(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--port-sandbox", sandboxroute.Route{
-		IP:              "10.0.0.6",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with sandbox-id and custom port
-	header := newSandboxHeader("default--port-sandbox")
-	header.Set(DefaultSandboxPortHeader, "8080")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should continue and set upstream host with custom port
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly with custom port
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.6:8080", metadata["host"])
-}
-
-// TestDecodeHeadersWithIPv6 tests the case when sandbox has IPv6 address
-func TestDecodeHeadersWithIPv6(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--ipv6-sandbox", sandboxroute.Route{
-		IP:              "2001:db8::1",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with sandbox-id
-	header := newSandboxHeader("default--ipv6-sandbox")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "2001:db8::1:49983", metadata["host"])
-}
-
-// TestDecodeHeadersWithIPv6HostFallback tests IPv6 via host header
-func TestDecodeHeadersWithIPv6HostFallback(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--ipv6-sandbox", sandboxroute.Route{
-		IP:              "2001:db8::1",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with host in format: port-namespace--name.domain
-	header := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-default--ipv6-sandbox.example.com"}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set correctly
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "2001:db8::1:8080", metadata["host"])
-}
-
-// TestDecodeHeadersEmptySandboxID tests the case when sandbox-id header is empty string
-func TestDecodeHeadersEmptySandboxID(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--app1", sandboxroute.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with empty sandbox-id
-	header := newSandboxHeader("")
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should continue without any side effects (empty string is treated as missing)
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-}
-
-// TestDecodeHeadersInvalidHostFormat tests the case when host header has invalid format
-func TestDecodeHeadersInvalidHostFormat(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--app1", sandboxroute.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header map with invalid host format (no port prefix)
-	header := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "invalid-host-format.example.com"}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - when parsing fails, continue to allow normal routing (pass-through)
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-}
-
-// TestDecodeHeadersRegistryInteraction tests the registry Get behavior
-func TestDecodeHeadersRegistryInteraction(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--app1", sandboxroute.Route{IP: "10.0.0.1", ResourceVersion: "1"})
-
-	route, ok := r.Get("default--app1")
-	if !ok || route.IP != "10.0.0.1" {
-		t.Fatalf("expected 10.0.0.1, got %q", route.IP)
-	}
-
-	// Missing key returns not found
-	_, ok = r.Get("default--nonexistent")
-	if ok {
-		t.Fatal("expected not found for missing sandbox")
-	}
-}
-
 // TestFilterFactory tests the FilterFactory function
 func TestFilterFactory(t *testing.T) {
 	cfg := NewFilterConfig(DefaultConfig())
@@ -917,174 +784,12 @@ func TestFilterFactory(t *testing.T) {
 	assert.NotNil(t, sf.adapter)
 }
 
-// TestDecodeHeadersMultipleRequests tests handling multiple sequential requests
-func TestDecodeHeadersMultipleRequests(t *testing.T) {
-	r := useTestRegistry(t)
-
-	// Setup multiple sandboxes
-	putTestRoute(t, r, "ns1--sandbox1", sandboxroute.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-	putTestRoute(t, r, "ns2--sandbox2", sandboxroute.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
-
-	cfg := DefaultConfig()
-
-	// First request - running sandbox via sandbox header
-	filter1, mockCallbacks1 := newTestFilter(cfg)
-	header1 := newSandboxHeader("ns1--sandbox1")
-
-	status1 := filter1.DecodeHeaders(header1, true)
-	assert.Equal(t, api.Continue, status1)
-	assert.False(t, mockCallbacks1.decoderCallbacks.sendLocalReplyCalled)
-
-	// Second request - non-running sandbox via sandbox header
-	filter2, mockCallbacks2 := newTestFilter(cfg)
-	header2 := newSandboxHeader("ns2--sandbox2")
-
-	status2 := filter2.DecodeHeaders(header2, true)
-	assert.Equal(t, api.LocalReply, status2)
-	assert.True(t, mockCallbacks2.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks2.decoderCallbacks.replyStatusCode)
-
-	// Third request - non-existent sandbox via sandbox header
-	filter3, mockCallbacks3 := newTestFilter(cfg)
-	header3 := newSandboxHeader("ns3--nonexistent")
-
-	status3 := filter3.DecodeHeaders(header3, true)
-	assert.Equal(t, api.LocalReply, status3)
-	assert.True(t, mockCallbacks3.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks3.decoderCallbacks.replyStatusCode)
-}
-
-// TestDecodeHeadersMultipleRequestsHostFallback tests multiple requests via host header
-func TestDecodeHeadersMultipleRequestsHostFallback(t *testing.T) {
-	r := useTestRegistry(t)
-
-	// Setup multiple sandboxes
-	putTestRoute(t, r, "ns1--sandbox1", sandboxroute.Route{IP: "10.0.0.1", State: agentsv1alpha1.SandboxStateRunning, ResourceVersion: "1"})
-	putTestRoute(t, r, "ns2--sandbox2", sandboxroute.Route{IP: "10.0.0.2", State: agentsv1alpha1.SandboxStateCreating, ResourceVersion: "1"})
-
-	cfg := DefaultConfig()
-
-	// First request - running sandbox via host header
-	filter1, mockCallbacks1 := newTestFilter(cfg)
-	header1 := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-ns1--sandbox1.example.com"}
-
-	status1 := filter1.DecodeHeaders(header1, true)
-	assert.Equal(t, api.Continue, status1)
-	assert.False(t, mockCallbacks1.decoderCallbacks.sendLocalReplyCalled)
-
-	// Second request - non-running sandbox via host header
-	filter2, mockCallbacks2 := newTestFilter(cfg)
-	header2 := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-ns2--sandbox2.example.com"}
-
-	status2 := filter2.DecodeHeaders(header2, true)
-	assert.Equal(t, api.LocalReply, status2)
-	assert.True(t, mockCallbacks2.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks2.decoderCallbacks.replyStatusCode)
-
-	// Third request - non-existent sandbox via host header
-	filter3, mockCallbacks3 := newTestFilter(cfg)
-	header3 := &mockRequestHeaderMapWithHost{mockRequestHeaderMap: *newMockRequestHeaderMap(), hostValue: "8080-ns3--nonexistent.example.com"}
-
-	status3 := filter3.DecodeHeaders(header3, true)
-	assert.Equal(t, api.LocalReply, status3)
-	assert.True(t, mockCallbacks3.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks3.decoderCallbacks.replyStatusCode)
-}
-
-// TestDecodeHeadersEndStreamFalse tests that endStream parameter doesn't affect the logic
-func TestDecodeHeadersEndStreamFalse(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--test-sandbox", sandboxroute.Route{
-		IP:              "10.0.0.1",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-	header := newSandboxHeader("default--test-sandbox")
-
-	// Execute with endStream=false
-	status := filter.DecodeHeaders(header, false)
-
-	// Should still work correctly
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-}
-
-// TestDecodeHeadersKruiseCustomProtocol tests kruise custom protocol routing via path-based adapter
-func TestDecodeHeadersKruiseCustomProtocol(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "ns--mysandbox", sandboxroute.Route{
-		IP:              "10.0.0.10",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-	})
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Create header with kruise custom protocol path
-	header := &mockRequestHeaderMapCustom{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		pathValue:            "/kruise/ns--mysandbox/3000/api/v1/data",
-	}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Verify - should route to sandbox with :path rewritten
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify dynamic metadata was set with correct port
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.10:3000", metadata["host"])
-
-	// Verify :path was rewritten by the adapter
-	assert.Equal(t, "/api/v1/data", header.headers[":path"])
-}
-
-// TestDecodeHeadersKruiseCustomProtocolNotFound tests kruise routing when sandbox not in registry
-func TestDecodeHeadersKruiseCustomProtocolNotFound(t *testing.T) {
-	r := useTestRegistry(t)
-	activateTestRegistry(r)
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	header := &mockRequestHeaderMapCustom{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		pathValue:            "/kruise/nonexistent--sandbox/3000/api/data",
-	}
-
-	status := filter.DecodeHeaders(header, true)
-
-	assert.Equal(t, api.LocalReply, status)
-	assert.True(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 502, mockCallbacks.decoderCallbacks.replyStatusCode)
-}
-
-// TestDecodeHeadersKruiseCustomProtocolInvalidPath tests kruise routing with invalid path
-func TestDecodeHeadersKruiseCustomProtocolInvalidPath(t *testing.T) {
-	useTestRegistry(t)
-
-	filter, mockCallbacks := newTestFilter(DefaultConfig())
-
-	// Invalid kruise path (missing port segment)
-	header := &mockRequestHeaderMapCustom{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		pathValue:            "/kruise/sandbox1234",
-	}
-
-	status := filter.DecodeHeaders(header, true)
-
-	// Should pass through since adapter returns error
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-}
-
 // TestDecodeHeadersAccessTokenAuth tests access token authentication logic
 func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 	tests := []struct {
 		name                string
+		disableAuth         bool
+		useKruisePath       bool
 		routeAccessToken    string
 		requestToken        string
 		setTokenHeader      bool
@@ -1137,6 +842,33 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 			expectedStatus:   api.Continue,
 			expectLocalReply: false,
 		},
+		{
+			name:             "auth disabled skips validation despite route token",
+			disableAuth:      true,
+			routeAccessToken: "secret-token-123",
+			expectedStatus:   api.Continue,
+			expectLocalReply: false,
+		},
+		{
+			name:             "valid token via kruise path",
+			useKruisePath:    true,
+			routeAccessToken: "kruise-secret",
+			requestToken:     "kruise-secret",
+			setTokenHeader:   true,
+			expectedStatus:   api.Continue,
+			expectLocalReply: false,
+		},
+		{
+			name:                "invalid token via kruise path",
+			useKruisePath:       true,
+			routeAccessToken:    "kruise-secret",
+			requestToken:        "wrong-token",
+			setTokenHeader:      true,
+			expectedStatus:      api.LocalReply,
+			expectLocalReply:    true,
+			expectedStatusCode:  401,
+			expectedReplyDetail: "unauthorized",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1150,10 +882,15 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 			})
 
 			cfg := DefaultConfig()
-			cfg.EnableAuth = true
+			cfg.EnableAuth = !tt.disableAuth
 			filter, mockCallbacks := newTestFilter(cfg)
 
-			header := newSandboxHeader("default--auth-sandbox")
+			var header api.RequestHeaderMap
+			if tt.useKruisePath {
+				header = newKruisePathHeader("/kruise/default--auth-sandbox/49983/api/v1/data")
+			} else {
+				header = newSandboxHeader("default--auth-sandbox")
+			}
 			if tt.setTokenHeader {
 				header.Set("x-access-token", tt.requestToken)
 			}
@@ -1171,77 +908,9 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 				metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
 				assert.NotNil(t, metadata)
 				assert.Equal(t, "10.0.0.1:49983", metadata["host"])
-
 			}
 		})
 	}
-}
-
-// TestDecodeHeadersAccessTokenAuthKruiseProtocol tests access token auth with kruise custom protocol
-func TestDecodeHeadersAccessTokenAuthKruiseProtocol(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "ns--mysandbox", sandboxroute.Route{
-		IP:              "10.0.0.10",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-		AccessToken:     "kruise-secret",
-	})
-
-	cfg := DefaultConfig()
-	cfg.EnableAuth = true
-
-	// Valid token via kruise protocol
-	filter, mockCallbacks := newTestFilter(cfg)
-	header := &mockRequestHeaderMapCustom{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		pathValue:            "/kruise/ns--mysandbox/3000/api/v1/data",
-	}
-	header.Set("x-access-token", "kruise-secret")
-
-	status := filter.DecodeHeaders(header, true)
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Invalid token via kruise protocol
-	filter2, mockCallbacks2 := newTestFilter(cfg)
-	header2 := &mockRequestHeaderMapCustom{
-		mockRequestHeaderMap: *newMockRequestHeaderMap(),
-		pathValue:            "/kruise/ns--mysandbox/3000/api/v1/data",
-	}
-	header2.Set("x-access-token", "wrong-token")
-
-	status2 := filter2.DecodeHeaders(header2, true)
-	assert.Equal(t, api.LocalReply, status2)
-	assert.True(t, mockCallbacks2.decoderCallbacks.sendLocalReplyCalled)
-	assert.Equal(t, 401, mockCallbacks2.decoderCallbacks.replyStatusCode)
-}
-
-// TestDecodeHeadersAuthDisabled verifies that when EnableAuth is false,
-// token validation is skipped even if the route has a token configured.
-func TestDecodeHeadersAuthDisabled(t *testing.T) {
-	r := useTestRegistry(t)
-	putTestRoute(t, r, "default--auth-disabled", sandboxroute.Route{
-		IP:              "10.0.0.5",
-		State:           agentsv1alpha1.SandboxStateRunning,
-		ResourceVersion: "1",
-		AccessToken:     "secret-token",
-	})
-
-	cfg := DefaultConfig()
-	// EnableAuth is false by default
-	filter, mockCallbacks := newTestFilter(cfg)
-
-	header := newSandboxHeader("default--auth-disabled")
-	// No token header set — should still pass because auth is disabled
-
-	status := filter.DecodeHeaders(header, true)
-	assert.Equal(t, api.Continue, status)
-	assert.False(t, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
-
-	// Verify upstream was set
-	metadata := mockCallbacks.streamInfo.dynamicMetadata.data["envoy.lb.original_dst"]
-	assert.NotNil(t, metadata)
-	assert.Equal(t, "10.0.0.5:49983", metadata["host"])
 }
 
 func TestDecodeHeadersJWTAuthentication(t *testing.T) {
@@ -1369,7 +1038,6 @@ func TestDecodeHeadersJWTAuthentication(t *testing.T) {
 			cfg.EnableAuth = true
 			cfg.EnableJWTAuth = true
 			cfg.TrafficAccessTokenHeader = headerName
-			callbacks := newMockFilterCallbackHandler()
 			var manager JWTAuthManager
 			var verifier *fakeJWTVerifier
 			switch tt.managerState {
@@ -1379,9 +1047,7 @@ func TestDecodeHeadersJWTAuthentication(t *testing.T) {
 			case "initializing":
 				manager = &fakeJWTAuthManager{}
 			}
-			filter := &sandboxFilter{
-				callbacks: callbacks, config: cfg, adapter: defaultTestAdapter(), jwtAuthManager: manager,
-			}
+			filter, callbacks := newTestFilterWithDeps(cfg, defaultTestAdapter(), manager)
 			header := newSandboxHeader(sandboxID)
 			header.Set(accessTokenHeader, "runtime-token")
 			if tt.requestJWT != "" {

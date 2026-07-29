@@ -18,22 +18,54 @@ package errors
 
 import (
 	stderrors "errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestError(t *testing.T) {
-	newError := NewError(ErrorInternal, "foo")
-	code := GetErrCode(newError)
-	assert.Equal(t, ErrorInternal, code)
-	assert.Equal(t, "Internal: foo", newError.Error())
-	assert.Equal(t, ErrorUnknown, GetErrCode(nil))
-}
+	tests := []struct {
+		name          string
+		err           error
+		expectCode    ErrorCode
+		expectMessage string
+	}{
+		{
+			name:          "internal error",
+			err:           NewError(ErrorInternal, "foo"),
+			expectCode:    ErrorInternal,
+			expectMessage: "Internal: foo",
+		},
+		{
+			name:       "quota exceeded",
+			err:        NewError(ErrorQuotaExceeded, "quota exceeded"),
+			expectCode: ErrorQuotaExceeded,
+		},
+		{
+			name:       "wrapped typed error keeps its code",
+			err:        fmt.Errorf("outer: %w", NewError(ErrorNotFound, "missing")),
+			expectCode: ErrorNotFound,
+		},
+		{
+			name:       "nil error is unknown",
+			expectCode: ErrorUnknown,
+		},
+		{
+			name:       "untyped error is unknown",
+			err:        stderrors.New("plain"),
+			expectCode: ErrorUnknown,
+		},
+	}
 
-func TestGetErrCode_QuotaExceeded(t *testing.T) {
-	newError := NewError(ErrorQuotaExceeded, "quota exceeded")
-	assert.Equal(t, ErrorQuotaExceeded, GetErrCode(newError))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expectCode, GetErrCode(tt.err))
+			if tt.expectMessage != "" {
+				assert.Equal(t, tt.expectMessage, tt.err.Error())
+			}
+		})
+	}
 }
 
 func TestWrapError(t *testing.T) {

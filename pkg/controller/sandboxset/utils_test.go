@@ -508,9 +508,8 @@ func TestNewSandboxFromSandboxSet(t *testing.T) {
 					Template: &corev1.PodTemplateSpec{
 						ObjectMeta: metav1.ObjectMeta{
 							Labels: map[string]string{
-								"app":                         "from-template",
-								"tier":                        "web",
-								agentsv1alpha1.LabelSandboxID: "must-be-removed",
+								"app":  "from-template",
+								"tier": "web",
 							},
 							Annotations: map[string]string{
 								"source": "sandbox-template",

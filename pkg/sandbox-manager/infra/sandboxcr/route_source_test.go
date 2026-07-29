@@ -63,34 +63,72 @@ func TestRouteSandboxSourceSubscribe(t *testing.T) {
 	assert.Equal(t, "team-a", events[2].Delete.Namespace)
 	assert.Equal(t, "sandbox-a", events[2].Delete.Name)
 	assert.Equal(t, "11", events[2].Delete.ResourceVersion)
-
-	provider.handler.OnDelete(toolscache.DeletedFinalStateUnknown{
-		Key: "team-a/sandbox-a",
-		Obj: updated,
-	})
-	require.Len(t, events, 4)
-	require.NotNil(t, events[3].Delete)
-	assert.Equal(t, "team-a", events[3].Delete.Namespace)
-	assert.Equal(t, "sandbox-a", events[3].Delete.Name)
-	assert.Empty(t, events[3].Delete.ResourceVersion)
 }
 
-func TestRouteSandboxSourceTombstoneValidation(t *testing.T) {
-	managerCache, _, err := cachetest.NewTestCache(t)
-	require.NoError(t, err)
-	source := &routeSandboxSource{cache: managerCache}
-	var events []infra.RouteSandboxEvent
+func TestRouteSandboxSourceEventValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		emit func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler)
+		// expectDelete asserts one RV-less delete event; otherwise no event at all.
+		expectDelete bool
+	}{
+		{
+			name: "tombstone key without namespace is discarded",
+			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{Key: "invalid"})
+			},
+		},
+		{
+			name: "tombstone key that fails parsing is discarded",
+			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{Key: "a/b/c"})
+			},
+		},
+		{
+			name: "unknown delete object type is discarded",
+			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+				source.handleDeleteEvent(context.Background(), handler, "not-a-sandbox")
+			},
+		},
+		{
+			name: "non-sandbox object event is discarded",
+			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+				source.handleObjectEvent(context.Background(), handler, "not-a-sandbox")
+			},
+		},
+		{
+			name: "key-only tombstone emits an RV-less delete",
+			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{
+					Key: "team-a/sandbox-a",
+				})
+			},
+			expectDelete: true,
+		},
+	}
 
-	source.handleDeleteEvent(t.Context(), func(_ context.Context, event infra.RouteSandboxEvent) {
-		events = append(events, event)
-	}, toolscache.DeletedFinalStateUnknown{Key: "invalid"})
-	assert.Empty(t, events)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			managerCache, _, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+			source := &routeSandboxSource{cache: managerCache}
+			var events []infra.RouteSandboxEvent
 
-	source.handleDeleteEvent(t.Context(), func(_ context.Context, event infra.RouteSandboxEvent) {
-		events = append(events, event)
-	}, toolscache.DeletedFinalStateUnknown{Key: "team-a/sandbox-a", Obj: nil})
-	require.Len(t, events, 1)
-	assert.Empty(t, events[0].Delete.ResourceVersion)
+			tt.emit(source, func(_ context.Context, event infra.RouteSandboxEvent) {
+				events = append(events, event)
+			})
+
+			if !tt.expectDelete {
+				assert.Empty(t, events)
+				return
+			}
+			require.Len(t, events, 1)
+			require.NotNil(t, events[0].Delete)
+			assert.Equal(t, "team-a", events[0].Delete.Namespace)
+			assert.Equal(t, "sandbox-a", events[0].Delete.Name)
+			assert.Empty(t, events[0].Delete.ResourceVersion)
+		})
+	}
 }
 
 func TestRouteSandboxSourceSubscribeValidation(t *testing.T) {

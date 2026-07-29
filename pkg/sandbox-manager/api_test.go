@@ -19,6 +19,7 @@ package sandbox_manager
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -35,10 +36,12 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
+	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
@@ -67,8 +70,8 @@ func GetSbsOwnerReference() []metav1.OwnerReference {
 	return []metav1.OwnerReference{*metav1.NewControllerRef(sbs, agentsv1alpha1.SandboxSetControllerKind)}
 }
 
-func getSandboxForApiTest(name string) *agentsv1alpha1.Sandbox {
-	return &agentsv1alpha1.Sandbox{
+func getSandboxForApiTest(name string, mutators ...func(*agentsv1alpha1.Sandbox)) *agentsv1alpha1.Sandbox {
+	sbx := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("test-sandbox-%s", name),
 			Namespace: "default",
@@ -87,6 +90,10 @@ func getSandboxForApiTest(name string) *agentsv1alpha1.Sandbox {
 			},
 		},
 	}
+	for _, mutate := range mutators {
+		mutate(sbx)
+	}
+	return sbx
 }
 
 func setupTestManager(t *testing.T, opts ...config.SandboxManagerOptions) (*SandboxManager, ctrlclient.Client) {
@@ -2285,46 +2292,47 @@ func (f *fakeManagerQuota) Cleanup(_ context.Context, _ string) error {
 	return nil
 }
 
-func TestSandboxManagerBuildsQuotaAdmission(t *testing.T) {
-	quotaMgr := &fakeManagerQuota{}
-	manager, _ := setupTestManager(t)
-	manager.quota = quotaMgr
+func TestSandboxManagerQuotaAdmission(t *testing.T) {
+	limitedSpec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 1}}}
+	tests := []struct {
+		name        string
+		withoutMgr  bool
+		spec        *quotaspec.QuotaSpec
+		expectAdmit bool
+	}{
+		{name: "admission wires acquire and release", spec: limitedSpec, expectAdmit: true},
+		{name: "nil spec yields no admission"},
+		{name: "unlimited spec yields no admission", spec: &quotaspec.QuotaSpec{}},
+		{name: "missing enforcer yields no admission", withoutMgr: true, spec: limitedSpec},
+	}
 
-	user := "user-1"
-	spec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 1}}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quotaMgr := &fakeManagerQuota{}
+			manager, _ := setupTestManager(t)
+			if !tt.withoutMgr {
+				manager.quota = quotaMgr
+			}
 
-	// Verify the manager's quotaAdmission builds a non-nil admission that calls Acquire.
-	admission := manager.quotaAdmission(user, spec)
-	require.NotNil(t, admission)
+			admission := manager.quotaAdmission("user-1", tt.spec)
+			if !tt.expectAdmit {
+				assert.Nil(t, admission)
+				return
+			}
+			require.NotNil(t, admission)
 
-	// The admission's Acquire should call quota.Acquire with the correct user.
-	err := admission.Acquire(t.Context(), "lock-1", infra.SandboxResource{})
-	require.NoError(t, err)
-	assert.Equal(t, user, quotaMgr.lastAcquire.User)
-	assert.Equal(t, "lock-1", quotaMgr.lastAcquire.LockString)
-	assert.Equal(t, []quotaspec.QuotaScope{quotaspec.ScopeRunning}, quotaMgr.lastAcquire.Scopes)
+			// The admission's Acquire should call quota.Acquire with the correct user.
+			require.NoError(t, admission.Acquire(t.Context(), "lock-1", infra.SandboxResource{}))
+			assert.Equal(t, "user-1", quotaMgr.lastAcquire.User)
+			assert.Equal(t, "lock-1", quotaMgr.lastAcquire.LockString)
+			assert.Equal(t, []quotaspec.QuotaScope{quotaspec.ScopeRunning}, quotaMgr.lastAcquire.Scopes)
 
-	// The admission's Release should call quota.Release with the correct user.
-	err = admission.Release(t.Context(), "lock-1")
-	require.NoError(t, err)
-	assert.Equal(t, user, quotaMgr.lastRelease.User)
-	assert.Equal(t, "lock-1", quotaMgr.lastRelease.LockString)
-}
-
-func TestSandboxManagerQuotaAdmissionNilWhenNoQuota(t *testing.T) {
-	manager, _ := setupTestManager(t)
-	admission := manager.quotaAdmission("user-1", nil)
-	assert.Nil(t, admission)
-
-	admission = manager.quotaAdmission("user-1", &quotaspec.QuotaSpec{})
-	assert.Nil(t, admission)
-}
-
-func TestSandboxManagerQuotaAdmissionNilWhenNoEnforcer(t *testing.T) {
-	manager, _ := setupTestManager(t)
-	spec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 5}}}
-	admission := manager.quotaAdmission("user-1", spec)
-	assert.Nil(t, admission)
+			// The admission's Release should call quota.Release with the correct user.
+			require.NoError(t, admission.Release(t.Context(), "lock-1"))
+			assert.Equal(t, "user-1", quotaMgr.lastRelease.User)
+			assert.Equal(t, "lock-1", quotaMgr.lastRelease.LockString)
+		})
+	}
 }
 
 func TestSandboxManagerReleaseQuotaAfterDelete(t *testing.T) {
@@ -2360,4 +2368,157 @@ func TestSandboxManagerReleaseQuotaAfterDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testUser, quotaMgr.lastRelease.User)
 	assert.Equal(t, "lock-123", quotaMgr.lastRelease.LockString)
+}
+
+func TestSandboxManagerReleaseQuotaAfterDeleteGuards(t *testing.T) {
+	limitedSpec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 5}}}
+	tests := []struct {
+		name          string
+		owner         string
+		lockString    string
+		releaseErr    error
+		expectRelease bool
+	}{
+		{name: "owner mismatch skips release", owner: "someone-else", lockString: "lock-1"},
+		{name: "missing lock string skips release", owner: testUser},
+		{name: "release error is logged and swallowed", owner: testUser, lockString: "lock-1", releaseErr: assert.AnError, expectRelease: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quotaMgr := &fakeManagerQuota{releaseErr: tt.releaseErr}
+			manager := &SandboxManager{quota: quotaMgr}
+			sandbox := getSandboxForApiTest("release-guard", func(sbx *agentsv1alpha1.Sandbox) {
+				sbx.Annotations[agentsv1alpha1.AnnotationOwner] = tt.owner
+				if tt.lockString != "" {
+					sbx.Annotations[agentsv1alpha1.AnnotationLock] = tt.lockString
+				}
+			})
+
+			manager.releaseQuotaAfterDelete(t.Context(), DeleteSandboxOptions{
+				Sandbox: sandboxcr.AsSandbox(sandbox, nil),
+				User:    testUser,
+				Quota:   limitedSpec,
+			})
+
+			if tt.expectRelease {
+				assert.Equal(t, testUser, quotaMgr.lastRelease.User)
+				assert.Equal(t, tt.lockString, quotaMgr.lastRelease.LockString)
+			} else {
+				assert.Empty(t, quotaMgr.lastRelease.User)
+			}
+		})
+	}
+}
+
+// clientOverrideCache substitutes the client returned by a cache Provider.
+type clientOverrideCache struct {
+	infracache.Provider
+	client ctrlclient.Client
+}
+
+func (c *clientOverrideCache) GetClient() ctrlclient.Client {
+	return c.client
+}
+
+func TestSandboxManager_DeleteSandboxRecycle(t *testing.T) {
+	limitedSpec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 5}}}
+	tests := []struct {
+		name       string
+		patchFails bool
+	}{
+		{name: "recycle success skips kill and releases quota"},
+		{name: "recycle failure falls back to kill", patchFails: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			quotaMgr := &fakeManagerQuota{}
+			manager, client := setupTestManager(t)
+			manager.quota = quotaMgr
+
+			sandbox := getSandboxForApiTest("recycle", func(sbx *agentsv1alpha1.Sandbox) {
+				sbx.Annotations[agentsv1alpha1.AnnotationCleanupEnabled] = agentsv1alpha1.True
+				sbx.Annotations[agentsv1alpha1.AnnotationLock] = "lock-recycle"
+			})
+			CreateSandboxWithStatus(t, client, sandbox)
+
+			provider := infracache.Provider(manager.GetInfra().GetCache())
+			if tt.patchFails {
+				failing := interceptor.NewClient(client.(ctrlclient.WithWatch), interceptor.Funcs{
+					Patch: func(context.Context, ctrlclient.WithWatch, ctrlclient.Object, ctrlclient.Patch, ...ctrlclient.PatchOption) error {
+						return assert.AnError
+					},
+				})
+				provider = &clientOverrideCache{Provider: provider, client: failing}
+			}
+			sbx := sandboxcr.AsSandbox(sandbox, provider)
+
+			route, err := sbx.GetRoute()
+			require.NoError(t, err)
+			manager.proxy.SetRoute(t.Context(), route)
+
+			err = manager.DeleteSandbox(t.Context(), DeleteSandboxOptions{
+				Sandbox: sbx,
+				User:    testUser,
+				Quota:   limitedSpec,
+			})
+			require.NoError(t, err)
+
+			stored := &agentsv1alpha1.Sandbox{}
+			getErr := client.Get(t.Context(), ctrlclient.ObjectKeyFromObject(sandbox), stored)
+			if tt.patchFails {
+				assert.True(t, apierrors.IsNotFound(getErr), "fallback kill must delete the sandbox")
+			} else {
+				require.NoError(t, getErr)
+				assert.Equal(t, agentsv1alpha1.True, stored.Annotations[agentsv1alpha1.AnnotationCleanup])
+			}
+			assert.Equal(t, testUser, quotaMgr.lastRelease.User)
+			assert.Equal(t, "lock-recycle", quotaMgr.lastRelease.LockString)
+			_, present := manager.proxy.LoadRoute(route.ID)
+			assert.False(t, present, "the local route must be removed on accepted delete")
+		})
+	}
+}
+
+// staticPeers is a fixed-membership peers stub for peer-sync failure tests.
+type staticPeers struct {
+	members []peers.Peer
+}
+
+func (s *staticPeers) Start(context.Context, int) error        { return nil }
+func (s *staticPeers) Stop() error                             { return nil }
+func (s *staticPeers) GetPeers() []peers.Peer                  { return s.members }
+func (s *staticPeers) GetAllMembers() []peers.Peer             { return s.members }
+func (s *staticPeers) WaitForPeers(context.Context, int) error { return nil }
+func (s *staticPeers) LocalAddr() net.IP                       { return nil }
+func (s *staticPeers) LocalPort() int                          { return 0 }
+
+func TestSandboxManagerSyncRouteErrors(t *testing.T) {
+	t.Run("projection error is returned", func(t *testing.T) {
+		manager, _ := setupTestManager(t)
+		invalid := getSandboxForApiTest("sync-invalid")
+
+		err := manager.syncRoute(t.Context(), sandboxcr.AsSandbox(invalid, nil), false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "UID must not be empty")
+	})
+
+	t.Run("peer sync failure is returned after the local route is set", func(t *testing.T) {
+		manager, _ := setupTestManager(t)
+		// The invalid peer address fails request construction without touching the network.
+		manager.proxy.SetPeersManager(&staticPeers{members: []peers.Peer{{IP: "bad host", Name: "node-1"}}})
+		sandbox := getSandboxForApiTest("sync-peer", func(sbx *agentsv1alpha1.Sandbox) {
+			sbx.UID = "uid-sync-peer"
+			sbx.ResourceVersion = "1"
+		})
+		sbx := sandboxcr.AsSandbox(sandbox, nil)
+
+		err := manager.syncRoute(t.Context(), sbx, false)
+
+		require.Error(t, err)
+		_, present := manager.proxy.LoadRoute(sandboxid.Legacy(sandbox.Namespace, sandbox.Name))
+		assert.True(t, present, "the local route must be set before the peer sync fails")
+	})
 }

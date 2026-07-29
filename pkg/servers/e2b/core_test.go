@@ -64,6 +64,16 @@ var TestServerPort = 9999
 var Namespace = models.AdminTeamName
 var InitKey = "admin-987654321"
 
+// adminTestUser returns the canonical admin API key used across handler tests.
+// Tests needing Team or other fields keep constructing their own literal.
+func adminTestUser() *models.CreatedTeamAPIKey {
+	return &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+	}
+}
+
 func CreateSandboxWithStatus(t *testing.T, c ctrlclient.Client, sbx *agentsv1alpha1.Sandbox) {
 	t.Helper()
 	ctx := t.Context()

@@ -18,6 +18,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -35,29 +36,28 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 )
 
-func TestHealthHandlers(t *testing.T) {
-	routeRegistry := registry.NewRegistry()
+func TestServeMuxRoutes(t *testing.T) {
+	server, routeRegistry := newTestGatewayServer()
+	routeRegistry.SetReady(true)
+	mux := server.newServeMux()
+
 	tests := []struct {
 		name         string
 		path         string
 		method       string
 		expectStatus int
 	}{
-		{name: "health ready", path: HealthAPI, method: http.MethodGet, expectStatus: http.StatusOK},
+		{name: "health route", path: HealthAPI, method: http.MethodGet, expectStatus: http.StatusOK},
 		{name: "health method rejected", path: HealthAPI, method: http.MethodPost, expectStatus: http.StatusMethodNotAllowed},
+		{name: "readiness route", path: ReadyAPI, method: http.MethodGet, expectStatus: http.StatusOK},
 		{name: "readiness method rejected", path: ReadyAPI, method: http.MethodPost, expectStatus: http.StatusMethodNotAllowed},
+		{name: "refresh route rejects GET", path: refresh.Path, method: http.MethodGet, expectStatus: http.StatusMethodNotAllowed},
 	}
-
-	server := NewServer(nil, routeRegistry, 0)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			request := httptest.NewRequest(tt.method, tt.path, nil)
 			response := httptest.NewRecorder()
-			if tt.path == HealthAPI {
-				server.handleHealth(response, request)
-			} else {
-				server.handleReady(response, request)
-			}
+			mux.ServeHTTP(response, request)
 			assert.Equal(t, tt.expectStatus, response.Code)
 		})
 	}
@@ -135,35 +135,8 @@ func TestReadiness(t *testing.T) {
 	}
 }
 
-func TestStartRegistersHealthHandlers(t *testing.T) {
-	routeRegistry := registry.NewRegistry()
-	routeRegistry.SetReady(true)
-	server := NewServer(nil, routeRegistry, 0)
-	mux := server.newServeMux()
-
-	tests := []struct {
-		name         string
-		path         string
-		method       string
-		expectStatus int
-	}{
-		{name: "health route", path: HealthAPI, method: http.MethodGet, expectStatus: http.StatusOK},
-		{name: "readiness route", path: ReadyAPI, method: http.MethodGet, expectStatus: http.StatusOK},
-		{name: "refresh route rejects GET", path: refresh.Path, method: http.MethodGet, expectStatus: http.StatusMethodNotAllowed},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := httptest.NewRequest(tt.method, tt.path, nil)
-			response := httptest.NewRecorder()
-			mux.ServeHTTP(response, request)
-			assert.Equal(t, tt.expectStatus, response.Code)
-		})
-	}
-}
-
 func TestRefreshWritesInjectedRegistry(t *testing.T) {
-	routeRegistry := registry.NewRegistry()
-	server := NewServer(nil, routeRegistry, 0)
+	server, routeRegistry := newTestGatewayServer()
 	route := sandboxroute.Route{
 		ID:              "short-a",
 		Namespace:       "ns",
@@ -233,6 +206,23 @@ func TestNewServer(t *testing.T) {
 }
 
 func TestServerStopWithoutStart(t *testing.T) {
-	server := NewServer(nil, registry.NewRegistry(), 0)
+	server, _ := newTestGatewayServer()
 	assert.NoError(t, server.Stop(nil))
+}
+
+func TestStartWithoutNodeNameFailsAndStopCleansUp(t *testing.T) {
+	t.Setenv("HOSTNAME", "")
+	t.Setenv("POD_NAME", "")
+	server, _ := newTestGatewayServer()
+
+	err := server.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HOSTNAME or POD_NAME")
+	require.NotNil(t, server.httpServer, "Start must prepare the HTTP server before env validation")
+	assert.NoError(t, server.Stop(context.Background()))
+}
+
+func newTestGatewayServer(checks ...ReadinessCheck) (*Server, *registry.Registry) {
+	routeRegistry := registry.NewRegistry()
+	return NewServer(nil, routeRegistry, 0, checks...), routeRegistry
 }

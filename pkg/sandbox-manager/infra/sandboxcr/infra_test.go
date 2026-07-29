@@ -94,7 +94,7 @@ func NewTestInfra(t *testing.T, opts ...config.SandboxManagerOptions) (*Infra, c
 		WithRouteReader(stubRouteReader{}).
 		Build()
 	if err := infraInstance.Run(t.Context()); err != nil {
-		return nil, nil
+		t.Fatalf("failed to run test infra: %v", err)
 	}
 	return infraInstance.(*Infra), fc
 }
