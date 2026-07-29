@@ -67,7 +67,7 @@ func (sc *Controller) setSandboxTimeout(r *http.Request) *web.ApiError {
 		log.Info("cannot set sandbox timeout for sandbox not running", "name", sbx.GetName(), "state", state, "reason", reason)
 		return withSandboxResource(&web.ApiError{
 			Code:    http.StatusConflict,
-			Message: fmt.Sprintf("sandbox %s is not running", sbx.GetName()),
+			Message: fmt.Sprintf("sandbox %s is not running", sbx.GetSandboxID()),
 		}, sbx)
 	}
 

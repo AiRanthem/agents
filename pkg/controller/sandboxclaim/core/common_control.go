@@ -269,6 +269,9 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 	if _, exists := claim.Spec.Labels[agentsv1alpha1.LabelSandboxID]; exists {
 		return infra.ClaimSandboxOptions{}, fmt.Errorf("label %q is reserved and cannot be set by SandboxClaim", agentsv1alpha1.LabelSandboxID)
 	}
+	if _, exists := claim.Spec.Annotations[agentsv1alpha1.AnnotationSandboxID]; exists {
+		return infra.ClaimSandboxOptions{}, fmt.Errorf("annotation %q is reserved and cannot be set by SandboxClaim", agentsv1alpha1.AnnotationSandboxID)
+	}
 	logger := logf.FromContext(ctx).WithValues("SandboxClaim", klog.KObj(claim))
 	var reserveFailedSandboxFor *time.Duration
 	if claim.Spec.ReserveFailedSandbox {

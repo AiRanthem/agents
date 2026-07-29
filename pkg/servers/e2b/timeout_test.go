@@ -152,6 +152,7 @@ func TestSetTimeout(t *testing.T) {
 		initialAnnotation             string
 		removeAnnotationBeforeRequest bool
 		expectStatus                  int
+		expectSandboxResource         bool
 		checker                       func(t *testing.T, sbx *v1alpha1.Sandbox, timeout time.Duration)
 	}{
 		{
@@ -224,10 +225,11 @@ func TestSetTimeout(t *testing.T) {
 			},
 		},
 		{
-			name:         "not running",
-			phase:        v1alpha1.SandboxPaused,
-			timeout:      30,
-			expectStatus: http.StatusInternalServerError,
+			name:                  "not running",
+			phase:                 v1alpha1.SandboxPaused,
+			timeout:               30,
+			expectStatus:          http.StatusInternalServerError,
+			expectSandboxResource: true,
 		},
 	}
 
@@ -276,6 +278,10 @@ func TestSetTimeout(t *testing.T) {
 				assert.NotNil(t, apiError)
 				if apiError != nil {
 					assert.Equal(t, tt.expectStatus, apiError.Code)
+					if tt.expectSandboxResource {
+						assert.Contains(t, apiError.Message, createResp.Body.SandboxID)
+						assert.Contains(t, apiError.Message, "sandboxResource=")
+					}
 				}
 			} else {
 				assert.Nil(t, apiError)

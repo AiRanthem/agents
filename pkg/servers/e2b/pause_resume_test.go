@@ -261,6 +261,7 @@ func TestPauseSandboxManualRetention(t *testing.T) {
 				require.NotNil(t, apiErr)
 				assert.Equal(t, tt.expectStatus, apiErr.Code)
 				assert.Contains(t, apiErr.Message, tt.expectMessage)
+				assert.Contains(t, apiErr.Message, "sandboxResource=")
 				return
 			}
 			require.Nil(t, apiErr)

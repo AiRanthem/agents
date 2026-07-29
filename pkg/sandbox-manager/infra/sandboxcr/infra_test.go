@@ -534,6 +534,14 @@ func TestInfra_GetClaimedSandbox_StaleCacheFallback_APIReaderRequiresClaimedLabe
 			labels:      map[string]string{v1alpha1.LabelSandboxIsClaimed: v1alpha1.False},
 			expectError: infracache.ErrSandboxNotFound.Error(),
 		},
+		{
+			name: "resolved ID no longer matches request",
+			labels: map[string]string{
+				v1alpha1.LabelSandboxIsClaimed: v1alpha1.True,
+				v1alpha1.LabelSandboxID:        "short-id-after-assignment",
+			},
+			expectError: infracache.ErrSandboxNotFound.Error(),
+		},
 	}
 
 	for _, tt := range tests {
