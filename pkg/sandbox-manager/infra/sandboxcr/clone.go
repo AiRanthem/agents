@@ -510,8 +510,22 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 		log.Error(err, "failed to refresh checkpoint after wait")
 		return "", fmt.Errorf("failed to refresh checkpoint: %w", err)
 	}
-	log.Info("checkpoint ready")
-	return fresh.Status.CheckpointId, nil
+	checkpointID := fresh.Status.CheckpointId
+	// Mirror the status-only ID into metadata so operators can find the
+	// Checkpoint with a kubectl label selector. Best-effort: the checkpoint is
+	// already usable, so a label failure must not fail the whole operation.
+	base := fresh.DeepCopy()
+	if fresh.Labels == nil {
+		fresh.Labels = make(map[string]string)
+	}
+	fresh.Labels[v1alpha1.CheckpointLabelID] = checkpointID
+	if err = retry.OnError(retry.DefaultBackoff, utils.RetryIfContextNotCanceled(ctx), func() error {
+		return cache.GetClient().Patch(ctx, fresh, client.MergeFrom(base))
+	}); err != nil {
+		log.Error(err, "failed to patch checkpoint ID label, continuing", "checkpointID", checkpointID)
+	}
+	log.Info("checkpoint ready", "checkpointID", checkpointID)
+	return checkpointID, nil
 }
 
 func AsCheckpointInfo(cp *v1alpha1.Checkpoint) infra.CheckpointInfo {

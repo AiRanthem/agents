@@ -1804,6 +1804,7 @@ func TestCreateCheckPoint(t *testing.T) {
 				assert.Equal(t, "tmpl-1", cp.Name)
 				assert.Equal(t, "test-sandbox-1", *cp.Spec.PodName)
 				assert.Empty(t, cp.OwnerReferences, "checkpoint should have no owner references")
+				assert.Equal(t, "cp-id-123", cp.Labels[v1alpha1.CheckpointLabelID])
 				var tmpl v1alpha1.SandboxTemplate
 				require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "tmpl-1"}, &tmpl))
 				require.Len(t, tmpl.OwnerReferences, 1)
