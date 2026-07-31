@@ -19,6 +19,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -35,6 +37,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
+	runtimeclient "github.com/openkruise/agents/pkg/utils/runtime"
 	"github.com/openkruise/agents/pkg/utils/sidecarutils"
 )
 
@@ -54,6 +57,14 @@ type CreatePodArgs struct {
 	NewStatus        *agentsv1alpha1.SandboxStatus
 	PodTemplateDelta *runtime.RawExtension
 	CheckpointID     string
+	// AdvertiseRuntimeTLS opts this pod creation into the runtime HTTPS
+	// capability stamp (see stampRuntimeTLSAnnotation). Call sites that create
+	// a pod from the current template (first creation, recreate upgrade) set
+	// it. The resume-from-pause path leaves it false: a resumed sandbox was
+	// already stamped at first creation (the stamp is write-once), and the
+	// checkpoint delta applied on top of the template may override the sidecar
+	// configuration, so the current template is not authoritative there.
+	AdvertiseRuntimeTLS bool
 }
 
 // PodControl manages Pod creation for sandbox controllers.
@@ -124,6 +135,16 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 		}
 	}
 
+	// Stamp the runtime HTTPS capability onto the sandbox before the pod is
+	// created: if the stamp fails the pod is not created and the whole creation
+	// is retried, so a live pod always implies a sandbox that already
+	// advertises its capabilities.
+	if args.AdvertiseRuntimeTLS && enableAgentRuntimeTLS {
+		if err := c.stampRuntimeTLSAnnotation(ctx, box); err != nil {
+			return nil, err
+		}
+	}
+
 	ScaleExpectation.ExpectScale(GetControllerKey(box), expectations.Create, box.Name)
 	err = c.Create(ctx, pod)
 	if err != nil {
@@ -151,6 +172,63 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 	}
 	klog.InfoS("Create pod success", kvs...)
 	return pod, nil
+}
+
+// enableAgentRuntimeTLSEnv is the cluster-level opt-in switch that makes the
+// sandbox controller stamp AnnotationRuntimeTLSPort onto a sandbox right
+// before its pod is created, on the call sites that opt in via
+// CreatePodArgs.AdvertiseRuntimeTLS and only for sandboxes that declare the
+// agent-runtime runtime. Operationally it must be enabled in lockstep with
+// the agent-runtime sidecar TLS arguments (-enable-tls and certificate
+// mounts) in the injection ConfigMap, otherwise the annotation would
+// advertise a capability the pod does not have. An absent or non-"true"
+// value keeps sandboxes on plain HTTP.
+const enableAgentRuntimeTLSEnv = "ENABLE_AGENTRUNTIME_TLS"
+
+// enableAgentRuntimeTLS caches the parsed enableAgentRuntimeTLSEnv switch. It
+// is a package variable rather than an inline os.Getenv so tests can toggle
+// the behavior without mutating the process environment.
+var enableAgentRuntimeTLS = os.Getenv(enableAgentRuntimeTLSEnv) == "true"
+
+// stampRuntimeTLSAnnotation advertises the runtime HTTPS capability by
+// persisting AnnotationRuntimeTLSPort on the sandbox with a meta patch.
+// Because it runs before the pod Create call, the annotation is durable
+// strictly earlier than any pod-derived status transition: an observer that
+// sees the sandbox Ready is guaranteed to also see the capability annotation,
+// without any pod->sandbox resync. The stamp is write-once and add-only: an
+// already present annotation is never updated and never removed, so turning
+// the switch off does not resync existing sandboxes — the cluster-wide
+// fallback is the client-side switch (removing the runtime TLS material) or a
+// forward fix.
+func (c *PodControl) stampRuntimeTLSAnnotation(ctx context.Context, box *agentsv1alpha1.Sandbox) error {
+	// Only advertise the capability for sandboxes that actually get the
+	// agent-runtime sidecar injected: the stamp is add-only, so advertising
+	// HTTPS for a pod without the runtime sidecar would send TLS-capable
+	// clients to a port nobody listens on, with no self-healing path.
+	if !sidecarutils.IsRuntimeEnabled(box, agentsv1alpha1.RuntimeConfigForInjectAgentRuntime) {
+		return nil
+	}
+	if _, ok := box.Annotations[agentsv1alpha1.AnnotationRuntimeTLSPort]; ok {
+		// Write-once: never overwrite an already stamped capability.
+		return nil
+	}
+	// Stamp box directly against a pre-mutation snapshot: a successful patch
+	// leaves the in-memory sandbox already in sync for the rest of the
+	// reconcile, and on failure the returned error aborts pod creation, so the
+	// locally mutated object is discarded with the reconcile.
+	patch := client.MergeFrom(box.DeepCopy())
+	if box.Annotations == nil {
+		box.Annotations = map[string]string{}
+	}
+	box.Annotations[agentsv1alpha1.AnnotationRuntimeTLSPort] = strconv.Itoa(runtimeclient.RuntimeTLSPort)
+	if err := c.Patch(ctx, box, patch); err != nil {
+		klog.ErrorS(err, "failed to stamp runtime TLS annotation on sandbox", "sandbox", klog.KObj(box))
+		c.recorder.Event(box, corev1.EventTypeWarning, "RuntimeTLSStampFailed",
+			fmt.Sprintf("Failed to stamp runtime TLS annotation: %v", err))
+		return fmt.Errorf("failed to stamp runtime TLS annotation: %w", err)
+	}
+	klog.InfoS("stamped runtime TLS annotation on sandbox", "sandbox", klog.KObj(box))
+	return nil
 }
 
 // shouldInjectCABundles is the cluster-level kill switch for the CA bundle

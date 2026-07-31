@@ -181,7 +181,7 @@ func TestInitialize(t *testing.T) {
 			},
 			useRuntimeSvr:   true,
 			storageRegistry: storages.NewStorageProvider(),
-			expectError:     "not 2xx",
+			expectError:     "returned status 500",
 		},
 		{
 			name: "claimed sandbox with invalid init runtime annotation JSON",
