@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -1366,8 +1367,8 @@ func TestCloneSandbox(t *testing.T) {
 				CSIMount: &config.CSIMountOptions{
 					MountOptionList: []config.MountConfig{
 						{
-							Driver:     "test-driver",
-							RequestRaw: "test-request",
+							Driver:         "test-driver",
+							PublishRequest: &csi.NodePublishVolumeRequest{VolumeId: "test-volume", TargetPath: "/mnt/data"},
 						},
 					},
 				},
@@ -1396,8 +1397,8 @@ func TestCloneSandbox(t *testing.T) {
 				CSIMount: &config.CSIMountOptions{
 					MountOptionList: []config.MountConfig{
 						{
-							Driver:     "test-driver",
-							RequestRaw: "test-request",
+							Driver:         "test-driver",
+							PublishRequest: &csi.NodePublishVolumeRequest{VolumeId: "test-volume", TargetPath: "/mnt/data"},
 						},
 					},
 				},

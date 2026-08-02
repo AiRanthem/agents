@@ -109,9 +109,10 @@ func (r CreateMountRequest) MarshalJSON() ([]byte, error) {
 // round-trip the exact payload that is put on the wire. An absent or null
 // publishRequest leaves PublishRequest nil rather than failing to decode.
 //
-// Decoding is deliberately strict: an unknown field is reported instead of
-// discarded, so a misspelled or dropped attribute surfaces here rather than as a
-// mount that silently lost its secrets or sub-path.
+// Only the CSI message is decoded strictly: protojson rejects an unknown field,
+// so a misspelled attribute surfaces here instead of as a mount that silently
+// lost its secrets or sub-path. The envelope itself stays lenient, so an unknown
+// sibling of "driver"/"publishRequest" is discarded.
 func (r *CreateMountRequest) UnmarshalJSON(data []byte) error {
 	var wire createMountRequestWire
 	if err := json.Unmarshal(data, &wire); err != nil {

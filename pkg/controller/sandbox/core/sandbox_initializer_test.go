@@ -59,6 +59,7 @@ func TestInitialize(t *testing.T) {
 		newStatus       *agentsv1alpha1.SandboxStatus
 		setupClients    func() (client.Client, client.Reader)
 		storageRegistry storages.VolumeMountProviderRegistry
+		tlsBundle       *utilruntime.TLSBundle
 		expectError     string
 		useRuntimeSvr   bool
 		serverOpts      testutils.TestRuntimeServerOptions
@@ -400,6 +401,69 @@ func TestInitialize(t *testing.T) {
 			},
 			expectError: "failed to perform ReCSIMount after resume",
 		},
+		{
+			// The transport is resolved only for the CSI re-mount, so a
+			// TLS-capable sandbox without mounts must initialize even when this
+			// controller holds no TLS material.
+			name: "tls-capable sandbox without csi mounts and no tls bundle - success",
+			box: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox-tls-no-csi",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentsv1alpha1.LabelSandboxClaimName: "my-claim",
+					},
+					Annotations: map[string]string{
+						agentsv1alpha1.AnnotationRuntimeTLSPort: "49984",
+					},
+				},
+			},
+			newStatus:       &agentsv1alpha1.SandboxStatus{},
+			useRuntimeSvr:   false,
+			storageRegistry: storages.NewStorageProvider(),
+		},
+		{
+			// A broken capability annotation must not block a sandbox that never
+			// reaches the TLS path either.
+			name: "invalid tls port annotation without csi mounts - success",
+			box: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox-bad-tls-port",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentsv1alpha1.LabelSandboxClaimName: "my-claim",
+					},
+					Annotations: map[string]string{
+						agentsv1alpha1.AnnotationRuntimeTLSPort: "not-a-port",
+					},
+				},
+			},
+			newStatus:       &agentsv1alpha1.SandboxStatus{},
+			useRuntimeSvr:   false,
+			storageRegistry: storages.NewStorageProvider(),
+		},
+		{
+			// With CSI mounts the misconfiguration must surface: falling back to
+			// the plaintext CLI mount would silently downgrade the sandbox.
+			name: "tls-capable sandbox with csi mounts but no tls bundle - transport error",
+			box: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox-tls-csi-no-bundle",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentsv1alpha1.LabelSandboxClaimName: "my-claim",
+					},
+					Annotations: map[string]string{
+						agentsv1alpha1.AnnotationRuntimeTLSPort:          "49984",
+						models.ExtensionKeyClaimWithCSIMount_MountConfig: `[{"pvName":"test-pv-tls","mountPath":"/data"}]`,
+					},
+				},
+			},
+			newStatus:       &agentsv1alpha1.SandboxStatus{},
+			useRuntimeSvr:   false,
+			storageRegistry: storages.NewStorageProvider(),
+			expectError:     "advertises runtime TLS port",
+		},
 	}
 
 	for _, tt := range tests {
@@ -423,7 +487,7 @@ func TestInitialize(t *testing.T) {
 				tt.box.Annotations[agentsv1alpha1.AnnotationRuntimeAccessToken] = utilruntime.AccessToken
 			}
 
-			err := Initialize(t.Context(), tt.box, tt.newStatus, c, r, tt.storageRegistry)
+			err := Initialize(t.Context(), tt.box, tt.newStatus, c, r, tt.storageRegistry, tt.tlsBundle)
 
 			if tt.expectError != "" {
 				require.Error(t, err)
@@ -474,6 +538,27 @@ func TestDefaultSandboxInitializer(t *testing.T) {
 			expectError:         "failed to unmarshal init runtime request",
 			expectInitCondition: metav1.ConditionFalse,
 			expectInitReason:    agentsv1alpha1.SandboxConditionRuntimeInitReasonFailed,
+		},
+		{
+			// The initializer holds no TLS bundle here, mirroring a controller
+			// started without --runtime-client-cert-dir. A sandbox stamped by an
+			// earlier configuration still initializes as long as it carries no
+			// CSI mounts.
+			name: "tls-capable sandbox without csi mounts and no tls bundle - RuntimeInitialized=True",
+			box: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sandbox-tls-no-bundle",
+					Namespace: "default",
+					Labels: map[string]string{
+						agentsv1alpha1.LabelSandboxClaimName: "my-claim",
+					},
+					Annotations: map[string]string{
+						agentsv1alpha1.AnnotationRuntimeTLSPort: "49984",
+					},
+				},
+			},
+			expectInitCondition: metav1.ConditionTrue,
+			expectInitReason:    agentsv1alpha1.SandboxConditionRuntimeInitReasonSucceeded,
 		},
 	}
 

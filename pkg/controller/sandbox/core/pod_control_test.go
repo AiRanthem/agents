@@ -272,13 +272,14 @@ func TestCreatePodCheckpointAnnotation(t *testing.T) {
 }
 
 // TestCreatePodStampsRuntimeTLSAnnotation verifies the write-once runtime TLS
-// stamp performed by CreatePod: when the cluster-level env switch is on, the
-// call site opts in via AdvertiseRuntimeTLS and the sandbox declares the
-// agent-runtime runtime, the canonical TLS port is persisted onto the sandbox
-// before the pod is created; an already stamped value is never overwritten;
-// an opted-out call site (resume path), a disabled switch or a sandbox
-// without the agent-runtime runtime leaves the sandbox untouched; and a
-// stamp failure aborts pod creation.
+// stamp performed by CreatePod: when the controller is configured with runtime
+// client TLS material, the call site opts in via AdvertiseRuntimeTLS and the
+// sandbox declares the agent-runtime runtime, the canonical TLS port is
+// persisted onto the sandbox before the pod is created; an already stamped
+// value is never overwritten; an opted-out call site (resume path), a
+// controller without TLS material or a sandbox without the agent-runtime
+// runtime leaves the sandbox untouched; and a stamp failure aborts pod
+// creation.
 func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -286,7 +287,7 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		envEnabled     bool // ENABLE_AGENTRUNTIME_TLS switch
+		tlsConfigured  bool // controller holds runtime client TLS material
 		advertise      bool // CreatePodArgs.AdvertiseRuntimeTLS
 		withoutRuntime bool // sandbox does not declare the agent-runtime runtime
 		boxAnnotations map[string]string
@@ -296,15 +297,15 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 		wantPodCreated bool
 	}{
 		{
-			name:           "switch on and call site opted in, sandbox gets stamped before create",
-			envEnabled:     true,
+			name:           "tls configured and call site opted in, sandbox gets stamped before create",
+			tlsConfigured:  true,
 			advertise:      true,
 			wantValue:      "49984",
 			wantPodCreated: true,
 		},
 		{
 			name:           "already stamped value is kept (write-once)",
-			envEnabled:     true,
+			tlsConfigured:  true,
 			advertise:      true,
 			boxAnnotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "50000"},
 			wantValue:      "50000",
@@ -312,21 +313,21 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 		},
 		{
 			name:           "call site not opted in (resume path) leaves sandbox untouched",
-			envEnabled:     true,
+			tlsConfigured:  true,
 			advertise:      false,
 			wantValue:      "",
 			wantPodCreated: true,
 		},
 		{
-			name:           "switch off leaves sandbox untouched",
-			envEnabled:     false,
+			name:           "controller without runtime client TLS material leaves sandbox untouched",
+			tlsConfigured:  false,
 			advertise:      true,
 			wantValue:      "",
 			wantPodCreated: true,
 		},
 		{
 			name:           "sandbox without agent-runtime runtime is not stamped",
-			envEnabled:     true,
+			tlsConfigured:  true,
 			advertise:      true,
 			withoutRuntime: true,
 			wantValue:      "",
@@ -334,7 +335,7 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 		},
 		{
 			name:           "stamp failure aborts pod creation",
-			envEnabled:     true,
+			tlsConfigured:  true,
 			advertise:      true,
 			patchErr:       fmt.Errorf("patch denied"),
 			expectError:    "failed to stamp runtime TLS annotation",
@@ -345,10 +346,6 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			origEnabled := enableAgentRuntimeTLS
-			enableAgentRuntimeTLS = tt.envEnabled
-			defer func() { enableAgentRuntimeTLS = origEnabled }()
-
 			box := &agentsv1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "stamp-sbx",
@@ -372,6 +369,7 @@ func TestCreatePodStampsRuntimeTLSAnnotation(t *testing.T) {
 			fc := builder.Build()
 
 			podControl := NewPodControl(fc, record.NewFakeRecorder(10), simplePodGenFunc)
+			podControl.SetAdvertiseRuntimeTLS(tt.tlsConfigured)
 
 			pod, err := podControl.CreatePod(context.TODO(), CreatePodArgs{
 				Box:                 box,

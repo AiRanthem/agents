@@ -41,10 +41,16 @@ type defaultSandboxInitializer struct {
 	apiReader       client.Reader
 	storageRegistry storages.VolumeMountProviderRegistry
 	recorder        record.EventRecorder
+	// tlsBundle is the client TLS bundle for TLS-capable sandboxes, loaded once
+	// at startup. Nil means the controller is not configured for runtime TLS,
+	// which also keeps it from advertising the capability on new sandboxes (see
+	// PodControl.SetAdvertiseRuntimeTLS).
+	tlsBundle *utilruntime.TLSBundle
 }
 
 func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
-	if err := Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry); err != nil {
+	err := Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry, d.tlsBundle)
+	if err != nil {
 		klog.ErrorS(err, "post-resume/upgrade initialization failed", "sandbox", klog.KObj(box))
 		d.recorder.Event(box, corev1.EventTypeWarning, string(agentsv1alpha1.RuntimeInitialized),
 			fmt.Sprintf("Failed to perform initialization: %v", err))
@@ -76,8 +82,19 @@ func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv
 //
 // This is the unified initialization logic for all sandboxes after resume or recreate upgrade.
 // Both E2B and SandboxClaim paths rely on this to re-initialize runtime and CSI mounts.
+//
+// tlsBundle carries the client TLS material for TLS-capable sandboxes. Only the
+// CSI re-mount below speaks HTTPS in this phase, so the transport is resolved
+// inside that branch: a sandbox with no CSI mounts must not fail initialization
+// just because it advertises a capability this controller cannot consume. The
+// /init handshake and the token propagation intentionally stay on their
+// existing transport for now.
+//
+// TODO: resolve the transport once for every runtime request in this flow
+// (/init, token propagation, mounts) as soon as those paths are TLS-enabled.
 func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus,
-	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry) error {
+	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry,
+	tlsBundle *utilruntime.TLSBundle) error {
 	if client == nil || apiReader == nil {
 		return nil
 	}
@@ -112,25 +129,34 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 
 	if len(csiMountConfigRequests) != 0 {
 		logger.Info("will re-mount csi storage after resume or upgrade", "count", len(csiMountConfigRequests))
+		// A sandbox advertising the runtime TLS capability while this controller
+		// lacks a TLS bundle (or carrying a broken annotation) is a hard failure
+		// by design: silently downgrading a TLS-capable sandbox to the plaintext
+		// CLI mount path would be a security regression, so the misconfiguration
+		// must surface instead.
+		rtOpts, optsErr := utilruntime.TransportOptionsFor(box, tlsBundle)
+		if optsErr != nil {
+			return fmt.Errorf("failed to resolve runtime transport: %w", optsErr)
+		}
 		csiMountHandler := csimountutils.NewCSIMountHandler(client, apiReader, storageRegistry, utils.DefaultSandboxDeployNamespace)
 
-		// Resolve all CSIMountConfig annotations into MountConfig (driver + requestRaw)
+		// Resolve all CSIMountConfig annotations into MountConfig (driver + publish request)
 		var mountOptionList []config.MountConfig
 		for _, req := range csiMountConfigRequests {
-			driverName, csiReqConfigRaw, genErr := csiMountHandler.CSIMountOptionsConfig(ctx, req)
+			driverName, publishRequest, genErr := csiMountHandler.GenerateNodePublishVolumeRequest(ctx, req)
 			if genErr != nil {
 				return fmt.Errorf("failed to generate csi mount options config for sandbox, err: %v", genErr)
 			}
 			mountOptionList = append(mountOptionList, config.MountConfig{
-				Driver:     driverName,
-				RequestRaw: csiReqConfigRaw,
+				Driver:         driverName,
+				PublishRequest: publishRequest,
 			})
 		}
 
 		// Cleanup ProcessCSIMounts for concurrent mount execution
 		duration, mountErr := utilruntime.ProcessCSIMounts(ctx, sbxForInit, config.CSIMountOptions{
 			MountOptionList: mountOptionList,
-		})
+		}, rtOpts...)
 		if mountErr != nil {
 			return fmt.Errorf("failed to perform ReCSIMount after resume: %w", mountErr)
 		}

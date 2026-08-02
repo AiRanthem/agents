@@ -40,8 +40,8 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/utils/runtime/config"
 	"github.com/openkruise/agents/proto/envd/process"
 )
 

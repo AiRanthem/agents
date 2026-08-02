@@ -19,7 +19,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"os"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -73,6 +72,9 @@ type PodControl struct {
 	recorder                  record.EventRecorder
 	generatePod               PodGenerateFunc
 	checkpointIDAnnotationKey string
+	// advertiseRuntimeTLS is the cluster-level switch for the runtime HTTPS
+	// capability stamp (see SetAdvertiseRuntimeTLS).
+	advertiseRuntimeTLS bool
 }
 
 // NewPodControl creates a new PodControl.
@@ -92,6 +94,24 @@ func (c *PodControl) SetCheckpointIDAnnotationKey(key string) {
 	if key != "" {
 		c.checkpointIDAnnotationKey = key
 	}
+}
+
+// SetAdvertiseRuntimeTLS enables the runtime HTTPS capability stamp
+// (AnnotationRuntimeTLSPort, see stampRuntimeTLSAnnotation) for the call sites
+// that opt in via CreatePodArgs.AdvertiseRuntimeTLS. It is derived from the
+// controller's own runtime client TLS material (--runtime-client-cert-dir):
+// advertising a capability the controller itself cannot consume would only
+// create sandboxes nobody can serve, so the client material is the single
+// switch for both directions.
+//
+// Because the pod-side HTTPS server is configured out-of-band (the
+// agent-runtime sidecar -enable-tls arguments and certificate mounts in the
+// injection ConfigMap), enabling it remains an operator assertion: the
+// injection ConfigMap must serve HTTPS *before* the controller is given its
+// client certificates. The reverse order would stamp sandboxes whose pod
+// listens on no HTTPS port, and the stamp is write-once with no self-healing.
+func (c *PodControl) SetAdvertiseRuntimeTLS(enabled bool) {
+	c.advertiseRuntimeTLS = enabled
 }
 
 // CreatePod generates and creates a Pod for the given sandbox.
@@ -139,7 +159,7 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 	// created: if the stamp fails the pod is not created and the whole creation
 	// is retried, so a live pod always implies a sandbox that already
 	// advertises its capabilities.
-	if args.AdvertiseRuntimeTLS && enableAgentRuntimeTLS {
+	if args.AdvertiseRuntimeTLS && c.advertiseRuntimeTLS {
 		if err := c.stampRuntimeTLSAnnotation(ctx, box); err != nil {
 			return nil, err
 		}
@@ -174,22 +194,6 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 	return pod, nil
 }
 
-// enableAgentRuntimeTLSEnv is the cluster-level opt-in switch that makes the
-// sandbox controller stamp AnnotationRuntimeTLSPort onto a sandbox right
-// before its pod is created, on the call sites that opt in via
-// CreatePodArgs.AdvertiseRuntimeTLS and only for sandboxes that declare the
-// agent-runtime runtime. Operationally it must be enabled in lockstep with
-// the agent-runtime sidecar TLS arguments (-enable-tls and certificate
-// mounts) in the injection ConfigMap, otherwise the annotation would
-// advertise a capability the pod does not have. An absent or non-"true"
-// value keeps sandboxes on plain HTTP.
-const enableAgentRuntimeTLSEnv = "ENABLE_AGENTRUNTIME_TLS"
-
-// enableAgentRuntimeTLS caches the parsed enableAgentRuntimeTLSEnv switch. It
-// is a package variable rather than an inline os.Getenv so tests can toggle
-// the behavior without mutating the process environment.
-var enableAgentRuntimeTLS = os.Getenv(enableAgentRuntimeTLSEnv) == "true"
-
 // stampRuntimeTLSAnnotation advertises the runtime HTTPS capability by
 // persisting AnnotationRuntimeTLSPort on the sandbox with a meta patch.
 // Because it runs before the pod Create call, the annotation is durable
@@ -197,9 +201,9 @@ var enableAgentRuntimeTLS = os.Getenv(enableAgentRuntimeTLSEnv) == "true"
 // sees the sandbox Ready is guaranteed to also see the capability annotation,
 // without any pod->sandbox resync. The stamp is write-once and add-only: an
 // already present annotation is never updated and never removed, so turning
-// the switch off does not resync existing sandboxes — the cluster-wide
-// fallback is the client-side switch (removing the runtime TLS material) or a
-// forward fix.
+// the switch off does not resync existing sandboxes — an already stamped
+// sandbox keeps advertising HTTPS and the only remedies are a forward fix or
+// clearing the annotation.
 func (c *PodControl) stampRuntimeTLSAnnotation(ctx context.Context, box *agentsv1alpha1.Sandbox) error {
 	// Only advertise the capability for sandboxes that actually get the
 	// agent-runtime sidecar injected: the stamp is add-only, so advertising
