@@ -201,7 +201,7 @@ func TestInitializeInvokesSecurityTokenReinit(t *testing.T) {
 			}
 			c := fakeclient.NewClientBuilder().WithScheme(sch).WithObjects(box.DeepCopy()).Build()
 
-			err := Initialize(context.Background(), box, &agentsv1alpha1.SandboxStatus{}, c, c, storages.NewStorageProvider(), nil)
+			err := Initialize(context.Background(), box, &agentsv1alpha1.SandboxStatus{}, c, c, storages.NewStorageProvider())
 
 			assert.Equal(t, tt.expectIssue, fp.issueCalls, "expected Initialize to trigger security-token reissue")
 			if tt.expectError != "" {

@@ -122,8 +122,8 @@ type SandboxControlArgs struct {
 	// agent-runtimes (sandboxes advertising AnnotationRuntimeTLSPort). Nil means
 	// this controller is not configured for runtime TLS: it neither advertises
 	// the capability on new sandboxes nor speaks HTTPS, so legacy sandboxes keep
-	// the plaintext paths. An already stamped sandbox that carries CSI mounts
-	// then fails its re-mount instead of being downgraded silently.
+	// the plaintext paths. An already stamped sandbox then fails its
+	// initialization instead of being downgraded silently.
 	RuntimeTLSBundle *runtimeclient.TLSBundle
 }
 

@@ -49,7 +49,7 @@ type defaultSandboxInitializer struct {
 }
 
 func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
-	err := Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry, d.tlsBundle)
+	err := d.doInitialize(ctx, box, newStatus)
 	if err != nil {
 		klog.ErrorS(err, "post-resume/upgrade initialization failed", "sandbox", klog.KObj(box))
 		d.recorder.Event(box, corev1.EventTypeWarning, string(agentsv1alpha1.RuntimeInitialized),
@@ -75,6 +75,21 @@ func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv
 	return nil
 }
 
+// doInitialize resolves the per-sandbox runtime transport once and delegates to
+// the package-level Initialize. A sandbox advertising the runtime TLS capability
+// while this controller holds no TLS bundle (or carrying a broken annotation) is
+// a hard failure by design: now that the /init handshake and the CSI re-mount
+// both ride the resolved transport, silently downgrading a TLS-capable sandbox
+// to the plaintext paths would be a security regression, so the
+// misconfiguration must surface instead.
+func (d *defaultSandboxInitializer) doInitialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
+	rtOpts, err := utilruntime.TransportOptionsFor(box, d.tlsBundle)
+	if err != nil {
+		return fmt.Errorf("failed to resolve runtime transport: %w", err)
+	}
+	return Initialize(ctx, box, newStatus, d.client, d.apiReader, d.storageRegistry, rtOpts...)
+}
+
 // Initialize performs post-recreation initialization for a sandbox.
 // It sequentially executes:
 //  1. Re-init runtime (if initRuntimeRequest annotation is set)
@@ -83,18 +98,18 @@ func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv
 // This is the unified initialization logic for all sandboxes after resume or recreate upgrade.
 // Both E2B and SandboxClaim paths rely on this to re-initialize runtime and CSI mounts.
 //
-// tlsBundle carries the client TLS material for TLS-capable sandboxes. Only the
-// CSI re-mount below speaks HTTPS in this phase, so the transport is resolved
-// inside that branch: a sandbox with no CSI mounts must not fail initialization
-// just because it advertises a capability this controller cannot consume. The
-// /init handshake and the token propagation intentionally stay on their
-// existing transport for now.
+// rtOpts selects the runtime transport for this sandbox, applied to both the
+// /init handshake (see InitRuntime) and the CSI re-mount (see ProcessCSIMounts):
+// non-empty (typically the TLS options resolved by TransportOptionsFor) routes
+// them over HTTPS to the agent-runtime sidecar, which also relays /init to the
+// in-container runtime; empty keeps the legacy plaintext paths untouched. The
+// token propagation intentionally stays on its existing transport for now.
 //
-// TODO: resolve the transport once for every runtime request in this flow
-// (/init, token propagation, mounts) as soon as those paths are TLS-enabled.
+// TODO: carry rtOpts into the token propagation as soon as that path is
+// TLS-enabled.
 func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus,
 	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry,
-	tlsBundle *utilruntime.TLSBundle) error {
+	rtOpts ...utilruntime.Option) error {
 	if client == nil || apiReader == nil {
 		return nil
 	}
@@ -108,7 +123,7 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 
 	// Re-init runtime
 	// TODO: check whether agent-runtime is available in sandbox, if not, we should just return and skip the initialization
-	if err := reinitRuntime(ctx, logger, box, sbxForInit); err != nil {
+	if err := reinitRuntime(ctx, logger, box, sbxForInit, rtOpts...); err != nil {
 		return err
 	}
 
@@ -129,15 +144,6 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 
 	if len(csiMountConfigRequests) != 0 {
 		logger.Info("will re-mount csi storage after resume or upgrade", "count", len(csiMountConfigRequests))
-		// A sandbox advertising the runtime TLS capability while this controller
-		// lacks a TLS bundle (or carrying a broken annotation) is a hard failure
-		// by design: silently downgrading a TLS-capable sandbox to the plaintext
-		// CLI mount path would be a security regression, so the misconfiguration
-		// must surface instead.
-		rtOpts, optsErr := utilruntime.TransportOptionsFor(box, tlsBundle)
-		if optsErr != nil {
-			return fmt.Errorf("failed to resolve runtime transport: %w", optsErr)
-		}
 		csiMountHandler := csimountutils.NewCSIMountHandler(client, apiReader, storageRegistry, utils.DefaultSandboxDeployNamespace)
 
 		// Resolve all CSIMountConfig annotations into MountConfig (driver + publish request)
@@ -167,7 +173,10 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 
 // reinitRuntime performs runtime re-initialization after pod recreation.
 // This is the common runtime re-initialization logic used by Initialize.
-func reinitRuntime(ctx context.Context, logger klog.Logger, box *agentsv1alpha1.Sandbox, sbxForInit *agentsv1alpha1.Sandbox) error {
+// rtOpts is forwarded to InitRuntime so a TLS-capable sandbox performs the
+// /init handshake against the agent-runtime HTTPS endpoint; empty rtOpts keeps
+// the legacy plaintext transport.
+func reinitRuntime(ctx context.Context, logger klog.Logger, box *agentsv1alpha1.Sandbox, sbxForInit *agentsv1alpha1.Sandbox, rtOpts ...utilruntime.Option) error {
 	logger.Info("start to decode init runtime request...")
 	initRuntimeOpts, err := utilruntime.GetInitRuntimeRequest(box)
 	if err != nil {
@@ -177,7 +186,7 @@ func reinitRuntime(ctx context.Context, logger klog.Logger, box *agentsv1alpha1.
 	if initRuntimeOpts != nil {
 		initRuntimeOpts.SkipRefresh = true
 		logger.Info("will re-init runtime after resume")
-		if _, err = utilruntime.InitRuntime(ctx, sbxForInit, *initRuntimeOpts, nil); err != nil {
+		if _, err = utilruntime.InitRuntime(ctx, sbxForInit, *initRuntimeOpts, nil, rtOpts...); err != nil {
 			logger.Error(err, "failed to perform ReInit after resume")
 			return err
 		}
