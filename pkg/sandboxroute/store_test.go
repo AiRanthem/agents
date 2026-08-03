@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -254,10 +255,73 @@ func TestStoreDelete(t *testing.T) {
 			assert.Equal(t, tt.expectReason, result.Reason)
 			_, hasRoute := store.Get("id")
 			assert.Equal(t, tt.expectRoute, hasRoute)
-			assert.Equal(t, tt.expectFence, store.deletionByObject[key])
+			assert.Equal(t, tt.expectFence, store.deletionByObject[key].resourceVersion)
 			assertStoreObjectInvariant(t, store, key)
 		})
 	}
+}
+
+func TestStoreDeletionFenceRetentionAndCleanup(t *testing.T) {
+	store := NewStore()
+	key := types.NamespacedName{Namespace: "ns", Name: "one"}
+	deletion := Route{Namespace: key.Namespace, Name: key.Name, ResourceVersion: "3"}
+
+	earliestExpiry := time.Now().Add(deletionFenceRetention)
+	require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
+	latestExpiry := time.Now().Add(deletionFenceRetention)
+	fence := store.deletionByObject[key]
+	assert.False(t, fence.expiresAt.Before(earliestExpiry))
+	assert.False(t, fence.expiresAt.After(latestExpiry))
+
+	oldExpiry := time.Now().Add(time.Hour)
+	store.deletionByObject[key] = deletionFence{resourceVersion: "3", expiresAt: oldExpiry}
+	assert.Equal(t, EventResultIgnored, store.Delete(Route{
+		Namespace: key.Namespace, Name: key.Name, ResourceVersion: "2",
+	}).Result)
+	assert.Equal(t, EventResultApplied, store.Delete(Route{
+		Namespace: key.Namespace, Name: key.Name,
+	}).Result)
+	assert.Equal(t, oldExpiry, store.deletionByObject[key].expiresAt)
+
+	// Equal or newer fence-only deletes may advance RV but never refresh expiry.
+	require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
+	assert.Equal(t, oldExpiry, store.deletionByObject[key].expiresAt)
+	assert.Equal(t, "3", store.deletionByObject[key].resourceVersion)
+	require.Equal(t, EventResultApplied, store.Delete(Route{
+		Namespace: key.Namespace, Name: key.Name, ResourceVersion: "4",
+	}).Result)
+	assert.Equal(t, oldExpiry, store.deletionByObject[key].expiresAt)
+	assert.Equal(t, "4", store.deletionByObject[key].resourceVersion)
+
+	now := time.Unix(100, 0)
+	equalKey := types.NamespacedName{Namespace: "ns", Name: "equal"}
+	expiredKey := types.NamespacedName{Namespace: "ns", Name: "expired"}
+	futureKey := types.NamespacedName{Namespace: "ns", Name: "future"}
+	store.deletionByObject[equalKey] = deletionFence{resourceVersion: "1", expiresAt: now}
+	store.deletionByObject[expiredKey] = deletionFence{resourceVersion: "2", expiresAt: now.Add(-time.Nanosecond)}
+	store.deletionByObject[futureKey] = deletionFence{resourceVersion: "3", expiresAt: now.Add(time.Second)}
+	store.nextDeletionFenceCleanup = now.Add(time.Second)
+	store.mu.Lock()
+	store.cleanupDeletionFencesLocked(now)
+	store.mu.Unlock()
+	assert.Contains(t, store.deletionByObject, expiredKey)
+
+	store.nextDeletionFenceCleanup = time.Time{}
+	store.mu.Lock()
+	store.cleanupDeletionFencesLocked(now)
+	store.mu.Unlock()
+	assert.Contains(t, store.deletionByObject, equalKey)
+	assert.NotContains(t, store.deletionByObject, expiredKey)
+	assert.Contains(t, store.deletionByObject, futureKey)
+	assert.Equal(t, now.Add(deletionFenceCleanupInterval), store.nextDeletionFenceCleanup)
+
+	// An expired, cleaned fence no longer rejects an older observation.
+	assert.Equal(t, EventResultApplied, store.Upsert(Route{
+		Namespace: expiredKey.Namespace, Name: expiredKey.Name,
+		ID: "id-expired", UID: "uid-expired", ResourceVersion: "1",
+	}).Result)
+	_, hasRoute := store.Get("id-expired")
+	assert.True(t, hasRoute)
 }
 
 func TestStoreRejectsRoutesWithoutFullObjectKeyWithoutAllocatingState(t *testing.T) {

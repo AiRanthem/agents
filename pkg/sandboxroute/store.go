@@ -18,6 +18,7 @@ package sandboxroute
 
 import (
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/resourceversion"
@@ -50,20 +51,31 @@ type MutationResult struct {
 	Reason Reason
 }
 
+const (
+	deletionFenceRetention       = 10 * time.Minute
+	deletionFenceCleanupInterval = time.Minute
+)
+
+type deletionFence struct {
+	resourceVersion string
+	expiresAt       time.Time
+}
+
 // Store owns source records, deletion fences, and an active ID-to-ObjectKey index.
 // A record and a deletion fence for the same ObjectKey never coexist.
 type Store struct {
-	mu               sync.RWMutex
-	recordByObject   map[types.NamespacedName]Route
-	deletionByObject map[types.NamespacedName]string
-	activeKeyByID    map[string]types.NamespacedName
+	mu                       sync.RWMutex
+	recordByObject           map[types.NamespacedName]Route
+	deletionByObject         map[types.NamespacedName]deletionFence
+	activeKeyByID            map[string]types.NamespacedName
+	nextDeletionFenceCleanup time.Time
 }
 
 // NewStore creates an empty Store.
 func NewStore() *Store {
 	return &Store{
 		recordByObject:   make(map[types.NamespacedName]Route),
-		deletionByObject: make(map[types.NamespacedName]string),
+		deletionByObject: make(map[types.NamespacedName]deletionFence),
 		activeKeyByID:    make(map[string]types.NamespacedName),
 	}
 }
@@ -77,13 +89,14 @@ func (s *Store) Upsert(route Route) MutationResult {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cleanupDeletionFencesLocked(time.Now())
 
 	key := types.NamespacedName{Namespace: route.Namespace, Name: route.Name}
 	currentResourceVersion := ""
 	if current, exists := s.recordByObject[key]; exists {
 		currentResourceVersion = current.ResourceVersion
 	} else {
-		currentResourceVersion = s.deletionByObject[key]
+		currentResourceVersion = s.deletionByObject[key].resourceVersion
 	}
 	if currentResourceVersion != "" {
 		comparison, err := resourceversion.CompareResourceVersion(route.ResourceVersion, currentResourceVersion)
@@ -118,13 +131,15 @@ func (s *Store) Delete(route Route) MutationResult {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	s.cleanupDeletionFencesLocked(now)
 
 	current, hasCurrent := s.recordByObject[key]
-	fenceResourceVersion := s.deletionByObject[key]
+	fenceResourceVersion := s.deletionByObject[key].resourceVersion
 
 	if route.ResourceVersion == "" {
 		if hasCurrent {
-			s.deleteRecordLocked(key, current, current.ResourceVersion)
+			s.deleteRecordLocked(key, current, current.ResourceVersion, now)
 		}
 		return MutationResult{Result: EventResultApplied}
 	}
@@ -147,9 +162,16 @@ func (s *Store) Delete(route Route) MutationResult {
 	}
 
 	if hasCurrent {
-		s.deleteRecordLocked(key, current, route.ResourceVersion)
+		s.deleteRecordLocked(key, current, route.ResourceVersion, now)
+	} else if fence, ok := s.deletionByObject[key]; ok {
+		// Keep the original retention deadline; only advance the watermark RV.
+		fence.resourceVersion = route.ResourceVersion
+		s.deletionByObject[key] = fence
 	} else {
-		s.deletionByObject[key] = route.ResourceVersion
+		s.deletionByObject[key] = deletionFence{
+			resourceVersion: route.ResourceVersion,
+			expiresAt:       now.Add(deletionFenceRetention),
+		}
 	}
 	return MutationResult{Result: EventResultApplied}
 }
@@ -193,10 +215,28 @@ func (s *Store) deleteRecordLocked(
 	key types.NamespacedName,
 	current Route,
 	fenceResourceVersion string,
+	now time.Time,
 ) {
 	s.deactivateRouteLocked(key, current.ID)
 	delete(s.recordByObject, key)
-	s.deletionByObject[key] = fenceResourceVersion
+	s.deletionByObject[key] = deletionFence{
+		resourceVersion: fenceResourceVersion,
+		expiresAt:       now.Add(deletionFenceRetention),
+	}
+}
+
+func (s *Store) cleanupDeletionFencesLocked(now time.Time) {
+	if now.Before(s.nextDeletionFenceCleanup) {
+		return
+	}
+	// mutation-driven cleanup avoids a Store lifecycle;
+	// add one only if idle-time eviction becomes an observable requirement.
+	for key, fence := range s.deletionByObject {
+		if now.After(fence.expiresAt) {
+			delete(s.deletionByObject, key)
+		}
+	}
+	s.nextDeletionFenceCleanup = now.Add(deletionFenceCleanupInterval)
 }
 
 func (s *Store) deactivateRouteLocked(key types.NamespacedName, id string) {
