@@ -244,7 +244,8 @@ Sandbox ID:
   new ID within each physical store;
 - an older or equal resource version cannot replace current state;
 - deletion is also ObjectKey- and resourceVersion-ordered;
-- a deletion watermark is retained so a delayed update cannot resurrect a removed route;
+- a deletion watermark is retained for a bounded window so a delayed update cannot
+  resurrect a removed route while the watermark is still held;
 - a recreated object with the same namespace/name crosses the old deletion watermark with its
   newer cluster resource version.
 
@@ -277,9 +278,15 @@ the common stale-event path but cannot prove the final deletion version if a new
 arrived in between. The residual risk is accepted rather than adding API-server reads or a route
 repair loop.
 
-Deletion watermarks are retained for the process lifetime. This trades bounded per-object memory
-for protection against arbitrarily delayed events; memory therefore grows with the cumulative
-number of ObjectKeys observed by a process.
+Deletion watermarks are retained for at least ten minutes from first establishment. Later deletes
+on an existing watermark may advance its resource version but do not refresh the deadline, so
+tombstone replays cannot extend retention indefinitely. Upsert and delete mutations check for
+expired watermarks at one-minute intervals and remove them before evaluating the current mutation.
+An idle Store may retain expired watermarks until its next mutation, but cannot keep growing while
+idle. At 10,000 unique deletions per minute this bounds the normal watermark set to about 100,000
+entries and the pre-cleanup peak to about 110,000 entries per process. This avoids a separate
+cleanup lifecycle while accepting that observations delayed past the retention window are no
+longer fenced.
 
 ## User-Visible Behavior
 
