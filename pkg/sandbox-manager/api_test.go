@@ -727,6 +727,7 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 		expectedState     string
 		expectMessage     string
 		absentMessage     string
+		expectCause       error
 	}{
 		{
 			name:              "Get running pod",
@@ -771,6 +772,7 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 			expectedErrorCode: errors.ErrorNotFound,
 			expectedState:     "",
 			expectMessage:     "duplicate reserved sandbox-id labels are unsupported",
+			expectCause:       infracache.ErrSandboxIDAmbiguous,
 		},
 	}
 
@@ -794,6 +796,9 @@ func TestSandboxManager_GetSandbox(t *testing.T) {
 					}
 					if tt.absentMessage != "" {
 						assert.NotContains(t, err.Error(), tt.absentMessage)
+					}
+					if tt.expectCause != nil {
+						assert.ErrorIs(t, err, tt.expectCause)
 					}
 				}
 			} else {

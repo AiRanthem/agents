@@ -18,6 +18,7 @@ package sandbox_manager
 
 import (
 	"context"
+	"errors"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
@@ -63,6 +64,18 @@ func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infr
 }
 
 func (m *SandboxManager) logRouteMutation(ctx context.Context, operation string, key types.NamespacedName, result sandboxroute.MutationResult) {
+	// proxy.SetRoute already logs invalid mutations at Error level.
+	if result.Result == sandboxroute.EventResultApplied && result.Reason == sandboxroute.ReasonIDTakeover {
+		klog.FromContext(ctx).Error(
+			errors.New(string(result.Reason)),
+			"manager route mutation ID takeover",
+			"operation", operation,
+			"reason", result.Reason,
+			"namespace", key.Namespace,
+			"name", key.Name,
+		)
+		return
+	}
 	klog.FromContext(ctx).V(utils.DebugLogLevel).Info(
 		"manager route mutation completed",
 		"operation", operation,

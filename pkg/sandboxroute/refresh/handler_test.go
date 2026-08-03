@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,11 @@ func TestHandler(t *testing.T) {
 			name:         "invalid JSON is rejected",
 			rawBody:      "not-json",
 			expectStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "oversized body is rejected",
+			rawBody:      `{"id":"` + strings.Repeat("a", maxRefreshBodyBytes) + `"}`,
+			expectStatus: http.StatusRequestEntityTooLarge,
 		},
 		{
 			name: "legacy ID-only route is ignored",

@@ -26,7 +26,9 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/controller"
@@ -38,6 +40,8 @@ import (
 )
 
 func init() {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(false)))
+
 	jwtAuthManager := jwtauth.NewManager()
 
 	envoyhttp.RegisterHttpFilterFactoryAndConfigParser(

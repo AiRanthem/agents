@@ -54,8 +54,6 @@ type ClaimSandboxOptions struct {
 	// Lock string used in optimistic lock
 	LockString string            `json:"lockString"`
 	Admission  *SandboxAdmission `json:"-"`
-	// PreCheck checks the sandbox before modifying it
-	PreCheck func(sandbox Sandbox) error `json:"-"`
 	// Set Modifier to modify the Sandbox before it is updated. Returning an error aborts persistence.
 	Modifier func(sandbox Sandbox) error `json:"-"`
 	// PostModifier performs a final metadata-only mutation after all built-in post-processing succeeds.

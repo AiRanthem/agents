@@ -21,12 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 	"sync"
-	"time"
 
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/pkg/peers"
@@ -43,7 +39,7 @@ func (s *Server) SetRoute(ctx context.Context, route sandboxroute.Route) sandbox
 	case sandboxroute.EventResultInvalid:
 		log.Error(errors.New(string(result.Reason)), "rejected invalid route mutation", "route", route)
 	case sandboxroute.EventResultApplied:
-		log.Info("route applied", "route", route)
+		log.Info("route applied", "reason", result.Reason, "route", route)
 	default:
 		log.V(utils.DebugLogLevel).Info("route mutation ignored", "result", result.Result, "reason", result.Reason, "route", route)
 	}
@@ -51,7 +47,7 @@ func (s *Server) SetRoute(ctx context.Context, route sandboxroute.Route) sandbox
 	return result
 }
 
-func (s *Server) SyncRouteWithPeers(route sandboxroute.Route) error {
+func (s *Server) SyncRouteWithPeers(ctx context.Context, route sandboxroute.Route) error {
 	body, err := json.Marshal(route)
 	if err != nil {
 		return err
@@ -70,38 +66,25 @@ func (s *Server) SyncRouteWithPeers(route sandboxroute.Route) error {
 	}
 
 	var (
-		wg         sync.WaitGroup
-		mu         sync.Mutex
-		errStrings []string
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		peerErrs []error
 	)
 
 	for _, peer := range peerList {
 		wg.Add(1)
 		go func(peerIP string) {
 			defer wg.Done()
-			requestErr := retry.OnError(wait.Backoff{
-				Steps:    10,
-				Duration: 10 * time.Millisecond,
-				Factor:   1.0,
-				Jitter:   1.2,
-			}, func(err error) bool {
-				return !errors.Is(err, errPeerRejected)
-			}, func() error {
-				return requestPeer(http.MethodPost, peerIP, refresh.Path, body)
-			})
-			if requestErr != nil {
+			if requestErr := requestPeerWithRetry(ctx, http.MethodPost, peerIP, refresh.Path, body); requestErr != nil {
 				mu.Lock()
-				errStrings = append(errStrings, requestErr.Error())
+				peerErrs = append(peerErrs, requestErr)
 				mu.Unlock()
 			}
 		}(peer.IP)
 	}
 	wg.Wait()
 
-	if len(errStrings) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(errStrings, ";"))
+	return errors.Join(peerErrs...)
 }
 
 func (s *Server) LoadRoute(id string) (sandboxroute.Route, bool) {

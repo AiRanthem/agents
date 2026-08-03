@@ -18,6 +18,7 @@ package e2b
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,7 +31,9 @@ func withSandboxResource(apiErr *web.ApiError, sandbox metav1.Object) *web.ApiEr
 		return apiErr
 	}
 	resource := fmt.Sprintf("sandboxResource=%s/%s", sandbox.GetNamespace(), sandbox.GetName())
-	if strings.Contains(apiErr.Message, resource) {
+	// Match whole "; "-delimited segments so a longer resource name cannot
+	// look like it already contains a shorter one.
+	if slices.Contains(strings.Split(apiErr.Message, "; "), resource) {
 		return apiErr
 	}
 	if apiErr.Message == "" {

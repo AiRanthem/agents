@@ -309,7 +309,7 @@ func TestSyncRouteWithPeers_NoDelivery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestServer(tt.manager)
-			assert.NoError(t, s.SyncRouteWithPeers(testProxyRoute("sb-1", "1.2.3.4", "1")))
+			assert.NoError(t, s.SyncRouteWithPeers(t.Context(), testProxyRoute("sb-1", "1.2.3.4", "1")))
 		})
 	}
 }
@@ -333,7 +333,7 @@ func TestSyncRouteWithPeers_TwoNodes_Success(t *testing.T) {
 	s := newTestServer(pm)
 
 	route := testProxyRoute("sb-test", "10.0.0.5", "1")
-	err := s.SyncRouteWithPeers(route)
+	err := s.SyncRouteWithPeers(t.Context(), route)
 	require.NoError(t, err)
 
 	// Both peers should have received the route
@@ -362,7 +362,7 @@ func TestSyncRouteWithPeers_TwoNodes_OneFails(t *testing.T) {
 	s := newTestServer(pm)
 
 	route := testProxyRoute("sb-fail", "1.2.3.4", "1")
-	err := s.SyncRouteWithPeers(route)
+	err := s.SyncRouteWithPeers(t.Context(), route)
 	assert.Error(t, err, "should return error when one peer fails")
 
 	// peer1 should still have received the route
@@ -386,7 +386,7 @@ func TestSyncRouteWithPeers_RejectedNotRetried(t *testing.T) {
 	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
 	s := newTestServer(pm)
 
-	err := s.SyncRouteWithPeers(testProxyRoute("sb-reject", "1.2.3.4", "1"))
+	err := s.SyncRouteWithPeers(t.Context(), testProxyRoute("sb-reject", "1.2.3.4", "1"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status code: 400")
 	assert.Equal(t, int64(1), requestCount.Load(), "a 4xx peer response must not be retried")
@@ -410,9 +410,33 @@ func TestSyncRouteWithPeers_5xxRetried(t *testing.T) {
 	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
 	s := newTestServer(pm)
 
-	err := s.SyncRouteWithPeers(testProxyRoute("sb-5xx", "1.2.3.4", "1"))
+	err := s.SyncRouteWithPeers(t.Context(), testProxyRoute("sb-5xx", "1.2.3.4", "1"))
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), requestCount.Load(), "5xx peer responses must be retried until success")
+}
+
+func TestSyncRouteWithPeers_CancelledContextStopsRetries(t *testing.T) {
+	var requestCount atomic.Int64
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		http.Error(w, "transient failure", http.StatusInternalServerError)
+	}))
+	defer failing.Close()
+
+	overridePeerTransport(t, map[string]string{
+		peerAddr("127.0.0.1"): failing.URL[7:],
+	}, 5*time.Second)
+
+	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
+	s := newTestServer(pm)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := s.SyncRouteWithPeers(ctx, testProxyRoute("sb-cancel", "1.2.3.4", "1"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int64(0), requestCount.Load(), "a cancelled ctx must not send peer requests")
 }
 
 // muxRoundTripper routes requests to different backends based on request host
@@ -497,7 +521,7 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	server1.peersManager = ml1.peer
 
 	route := testProxyRoute("sb-ml", "192.168.1.100", "1")
-	err := server1.SyncRouteWithPeers(route)
+	err := server1.SyncRouteWithPeers(t.Context(), route)
 	require.NoError(t, err)
 
 	// server2 should have received and stored the route

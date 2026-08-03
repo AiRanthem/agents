@@ -168,6 +168,7 @@ func TestSandboxManagerBuilderValidatesShortIDPrefixBeforeInfra(t *testing.T) {
 		expectError string
 	}{
 		{name: "invalid characters are rejected", prefix: "INVALID_", expectError: "short sandbox id prefix"},
+		{name: "legacy separator is rejected", prefix: "prod--x", expectError: "legacy ID separator"},
 		{name: "37-character prefix passes length validation", prefix: strings.Repeat("a", 37), expectError: "infra builder is not configured"},
 		{name: "38-character prefix is rejected", prefix: strings.Repeat("a", 38), expectError: "too long"},
 	}

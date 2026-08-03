@@ -62,13 +62,22 @@ func GenerateShort(uid types.UID) (string, error) {
 	return strings.ToLower(shortEncoding.EncodeToString(parsed[:])), nil
 }
 
-// ValidatePrefix checks that prefix uses only [a-z0-9-] and, when non-empty,
-// starts with [a-z0-9]. Callers own broader prefix and ID correctness policy.
+// ValidatePrefix checks that prefix uses only [a-z0-9-], starts with [a-z0-9]
+// when non-empty, and never contains the legacy separator so a prefixed short
+// ID cannot collide with the legacy ID space. Callers own broader prefix and
+// ID correctness policy.
 func ValidatePrefix(prefix string) error {
 	if prefix != "" && !isLowerAlphanumeric(prefix[0]) {
 		return fmt.Errorf(
 			"short sandbox ID prefix %q is invalid: it must start with a lowercase letter or digit",
 			prefix,
+		)
+	}
+	if strings.Contains(prefix, LegacySeparator) {
+		return fmt.Errorf(
+			"short sandbox ID prefix %q is invalid: it must not contain the legacy ID separator %q",
+			prefix,
+			LegacySeparator,
 		)
 	}
 	for i := 1; i < len(prefix); i++ {

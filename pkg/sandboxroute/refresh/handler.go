@@ -31,6 +31,9 @@ import (
 const (
 	Path        = "/refresh"
 	DefaultPort = 7789
+	// maxRefreshBodyBytes bounds a peer refresh payload; a serialized Route is
+	// far below this limit.
+	maxRefreshBodyBytes = 1 << 20
 )
 
 // RouteMutator applies peer route updates and authoritative deletions.
@@ -48,8 +51,15 @@ func NewHandler(
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log := klog.FromContext(r.Context())
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxRefreshBodyBytes)
 		var route sandboxroute.Route
 		if err := json.NewDecoder(r.Body).Decode(&route); err != nil {
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				log.Error(err, "route refresh payload exceeds the size limit")
+				http.Error(w, "route refresh payload too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error(err, "failed to decode route refresh payload")
 			http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
 			return
