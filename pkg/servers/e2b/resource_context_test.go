@@ -37,6 +37,8 @@ func TestWithSandboxResource(t *testing.T) {
 		{name: "nil sandbox does not disclose context", apiErr: &web.ApiError{Message: "failed"}, expectError: "failed"},
 		{name: "authorized resource is appended", apiErr: &web.ApiError{Code: 500, Message: "failed"}, sandbox: &metav1.ObjectMeta{Namespace: "team-a", Name: "sandbox-a"}, expectError: "failed; sandboxResource=team-a/sandbox-a"},
 		{name: "existing context is not duplicated", apiErr: &web.ApiError{Message: "failed; sandboxResource=team-a/sandbox-a"}, sandbox: &metav1.ObjectMeta{Namespace: "team-a", Name: "sandbox-a"}, expectError: "failed; sandboxResource=team-a/sandbox-a"},
+		{name: "prefix-overlapping resource is still appended", apiErr: &web.ApiError{Message: "failed; sandboxResource=team-a/sandbox-a-2"}, sandbox: &metav1.ObjectMeta{Namespace: "team-a", Name: "sandbox-a"}, expectError: "failed; sandboxResource=team-a/sandbox-a-2; sandboxResource=team-a/sandbox-a"},
+		{name: "empty message gets the resource", apiErr: &web.ApiError{}, sandbox: &metav1.ObjectMeta{Namespace: "team-a", Name: "sandbox-a"}, expectError: "sandboxResource=team-a/sandbox-a"},
 	}
 
 	for _, tt := range tests {

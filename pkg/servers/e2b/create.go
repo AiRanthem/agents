@@ -537,10 +537,10 @@ func createNetworkPolicyForSandbox(ctx context.Context, sbx infra.Sandbox, reque
 		log.Error(netErr, "failed to create network policy, sandbox creation failed",
 			"sandboxID", sbx.GetSandboxID())
 		killed := killSandboxAfterFailure(ctx, sbx, log)
-		return &web.ApiError{
+		return withSandboxResource(&web.ApiError{
 			Code:    http.StatusInternalServerError,
 			Message: fmt.Sprintf("failed to create network policy: %v; clean up sandbox: %v", netErr, killed),
-		}
+		}, sbx)
 	}
 	return nil
 }

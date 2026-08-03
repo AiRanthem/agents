@@ -224,7 +224,7 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	sbx, err := m.infra.GetSandbox(ctx, opts)
 	if err != nil {
 		log.Error(err, "failed to get sandbox from cache")
-		return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found: %v", opts.SandboxID, err)
+		return nil, managererrors.WrapError(managererrors.ErrorNotFound, err, "sandbox %s not found: %v", opts.SandboxID, err)
 	}
 
 	state, reason := sbx.GetState()
@@ -304,9 +304,11 @@ func (m *SandboxManager) GetOwnerOfVolume(ctx context.Context, namespace, volume
 	return pvcList.Items[0].GetAnnotations()[v1alpha1.AnnotationOwner], true
 }
 
-// syncRoute syncs the sandbox route with peers
-// If refresh is true, it will refresh the sandbox state before syncing
-// Returns error if route sync fails, but refresh failures are logged and ignored
+// syncRoute syncs the sandbox route with peers.
+// If refresh is true, it will refresh the sandbox state before syncing.
+// Peer fanout ignores client cancellation because bounded retries and Sandbox
+// informers make it a short, best-effort operation. Returns error if route sync
+// fails, but refresh failures are logged and ignored.
 func (m *SandboxManager) syncRoute(ctx context.Context, sbx infra.Sandbox, refresh bool) (err error) {
 	ctx, span := tracing.StartManagerSpan(ctx, tracing.SpanProxySyncRoute)
 	// Keep the closure: a direct defer tracing.EndSpan(ctx, span, err) would
@@ -328,7 +330,7 @@ func (m *SandboxManager) syncRoute(ctx context.Context, sbx infra.Sandbox, refre
 	span.SetAttributes(attribute.String(tracing.AttrRouteID, route.ID))
 	result := m.proxy.SetRoute(ctx, route)
 	m.logRouteMutation(ctx, "upsert", types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, result)
-	err = m.proxy.SyncRouteWithPeers(route)
+	err = m.proxy.SyncRouteWithPeers(context.WithoutCancel(ctx), route)
 	duration := time.Since(start).Seconds()
 	span.SetAttributes(attribute.Bool(tracing.AttrPeersSynced, err == nil))
 	if err != nil {
@@ -414,7 +416,9 @@ func (m *SandboxManager) deleteRouteAndSync(ctx context.Context, sbx infra.Sandb
 		return
 	}
 	route.State = v1alpha1.SandboxStateDead
-	if err := m.proxy.SyncRouteWithPeers(route); err != nil {
+	// Peer fanout is detached from the request ctx so client cancellation does
+	// not abort this bounded, best-effort dead-route push.
+	if err := m.proxy.SyncRouteWithPeers(context.WithoutCancel(ctx), route); err != nil {
 		log.Error(err, "failed to sync route with peers")
 	}
 }

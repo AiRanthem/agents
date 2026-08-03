@@ -38,6 +38,10 @@ type Reason string
 const (
 	ReasonInvalidRoute         Reason = "invalid_route"
 	ReasonStaleResourceVersion Reason = "stale_resource_version"
+	// ReasonIDTakeover marks an applied upsert whose ID was previously active
+	// for a different object. Duplicate IDs across objects are unsupported;
+	// the reason makes the silent last-write-wins takeover observable.
+	ReasonIDTakeover Reason = "id_takeover"
 )
 
 // MutationResult describes the outcome of one Store mutation request.
@@ -91,8 +95,11 @@ func (s *Store) Upsert(route Route) MutationResult {
 		}
 	}
 
-	s.installRouteLocked(key, route)
-	return MutationResult{Result: EventResultApplied}
+	result := MutationResult{Result: EventResultApplied}
+	if s.installRouteLocked(key, route) {
+		result.Reason = ReasonIDTakeover
+	}
+	return result
 }
 
 // Delete removes one ObjectKey. A non-empty resource version may establish a
@@ -169,13 +176,17 @@ func (s *Store) Len() int {
 	return len(s.activeKeyByID)
 }
 
-func (s *Store) installRouteLocked(key types.NamespacedName, route Route) {
+func (s *Store) installRouteLocked(key types.NamespacedName, route Route) (idTakenOver bool) {
 	if current, exists := s.recordByObject[key]; exists && current.ID != route.ID {
 		s.deactivateRouteLocked(key, current.ID)
+	}
+	if previousKey, exists := s.activeKeyByID[route.ID]; exists && previousKey != key {
+		idTakenOver = true
 	}
 	delete(s.deletionByObject, key)
 	s.recordByObject[key] = route
 	s.activeKeyByID[route.ID] = key
+	return idTakenOver
 }
 
 func (s *Store) deleteRecordLocked(

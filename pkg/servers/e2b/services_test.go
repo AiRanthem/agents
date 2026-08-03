@@ -46,6 +46,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
+	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -2396,6 +2397,38 @@ func TestDescribeSandboxReservedFailedSandboxReturnsNotFound(t *testing.T) {
 	assert.Nil(t, resp.Body)
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusNotFound, apiErr.Code)
+}
+
+func TestDescribeSandboxByShortID(t *testing.T) {
+	controller, fc, teardown := Setup(t)
+	defer teardown()
+
+	user := &models.CreatedTeamAPIKey{
+		ID:   keys.AdminKeyID,
+		Key:  InitKey,
+		Name: "admin",
+		Team: models.AdminTeam(),
+	}
+	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "short-id-describe", "test-template", user.ID.String(), nil)
+	shortID, err := sandboxid.GenerateShort(sandbox.UID)
+	require.NoError(t, err)
+	sandbox.Labels[v1alpha1.LabelSandboxID] = shortID
+	require.NoError(t, fc.Update(t.Context(), sandbox))
+
+	var describeResp web.ApiResponse[*models.Sandbox]
+	require.Eventually(t, func() bool {
+		var apiErr *web.ApiError
+		describeResp, apiErr = controller.DescribeSandbox(NewRequest(t, nil, nil, map[string]string{
+			"sandboxID": shortID,
+		}, user))
+		return apiErr == nil && describeResp.Body != nil
+	}, 5*time.Second, 50*time.Millisecond, "cache should resolve the short sandbox ID")
+
+	assert.Equal(t, shortID, describeResp.Body.SandboxID)
+	assert.Equal(t,
+		fmt.Sprintf("%s/%s", sandbox.Namespace, sandbox.Name),
+		describeResp.Body.Metadata[models.MetadataKeySandboxResource],
+	)
 }
 
 func TestConnectSandboxDeadClaimedSandbox(t *testing.T) {

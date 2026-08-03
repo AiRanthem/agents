@@ -66,10 +66,11 @@ func TestLegacy(t *testing.T) {
 		{name: "empty name preserves encoding", namespace: "team-a", sandbox: "", expected: "team-a--"},
 	}
 
+	assert.Equal(t, agentsv1alpha1.LabelSandboxID, LabelKey)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.expected, Legacy(tt.namespace, tt.sandbox))
-			assert.Equal(t, agentsv1alpha1.LabelSandboxID, LabelKey)
 		})
 	}
 }
@@ -117,6 +118,7 @@ func TestValidatePrefix(t *testing.T) {
 		{name: "uppercase is rejected", prefix: "Prod-", expectError: "invalid"},
 		{name: "underscore is rejected", prefix: "prod_", expectError: "invalid"},
 		{name: "leading hyphen is rejected", prefix: "-prod", expectError: "invalid"},
+		{name: "legacy separator is rejected", prefix: "prod--x", expectError: "legacy ID separator"},
 	}
 
 	for _, tt := range tests {

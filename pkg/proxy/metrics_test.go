@@ -87,7 +87,7 @@ func TestPeersTotal_SetOnSyncRouteWithPeers(t *testing.T) {
 	s := newTestServer(pm)
 
 	// SyncRouteWithPeers fails on the HTTP calls, but peerCount must still be set.
-	_ = s.SyncRouteWithPeers(testProxyRoute("metrics-peers", "1.2.3.4", "1"))
+	_ = s.SyncRouteWithPeers(t.Context(), testProxyRoute("metrics-peers", "1.2.3.4", "1"))
 
 	assert.Equal(t, float64(3), testutil.ToFloat64(peerCount))
 }

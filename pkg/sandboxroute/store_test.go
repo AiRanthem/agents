@@ -315,8 +315,12 @@ func TestStoreShortIDCollisionAcrossObjects(t *testing.T) {
 	routeA := fullRoute("shared", keyA.Namespace, keyA.Name, "uid-a", "1")
 	routeB := fullRoute("shared", keyB.Namespace, keyB.Name, "uid-b", "1")
 
-	require.Equal(t, EventResultApplied, store.Upsert(routeA).Result)
-	require.Equal(t, EventResultApplied, store.Upsert(routeB).Result)
+	firstResult := store.Upsert(routeA)
+	require.Equal(t, EventResultApplied, firstResult.Result)
+	assert.Empty(t, firstResult.Reason)
+	takeoverResult := store.Upsert(routeB)
+	require.Equal(t, EventResultApplied, takeoverResult.Result)
+	assert.Equal(t, ReasonIDTakeover, takeoverResult.Reason)
 	assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
 
 	deletion := Route{Namespace: keyA.Namespace, Name: keyA.Name, ResourceVersion: "2"}

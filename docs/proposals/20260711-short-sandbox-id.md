@@ -131,6 +131,8 @@ metadata:
 This label is owned by sandbox-manager. Public inputs and internal extension callbacks cannot add,
 change, or delete it. Pool and template materialization must not copy it into a new Sandbox, while
 recycle and metadata cleanup must preserve a label already assigned to the existing Sandbox CR.
+E2B-compatible requests reject any user-supplied label under the internal `agents.kruise.io/`
+prefix space, not only the sandbox-id key, so no request can forge system-owned metadata.
 
 The same qualified string is also used as a Checkpoint annotation. The two metadata kinds remain
 strictly separate:
@@ -171,6 +173,7 @@ A non-empty prefix:
 
 - starts with a lowercase letter or digit;
 - otherwise contains only lowercase letters, digits, and hyphens;
+- does not contain the legacy ID separator `--`, keeping short and legacy ID spaces disjoint;
 - is at most 37 characters, keeping the complete ID within the 63-character Kubernetes label-value
   limit.
 

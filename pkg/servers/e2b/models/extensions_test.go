@@ -986,11 +986,11 @@ func TestParseExtensionLabels(t *testing.T) {
 			expectError: "is reserved",
 		},
 		{
-			name: "unrelated internal label remains accepted",
+			name: "internal prefix label is rejected",
 			metadata: map[string]string{
 				E2BLabelPrefix + v1alpha1.InternalPrefix + "custom": "value",
 			},
-			expectedLabels: map[string]string{v1alpha1.InternalPrefix + "custom": "value"},
+			expectError: "is reserved",
 		},
 	}
 

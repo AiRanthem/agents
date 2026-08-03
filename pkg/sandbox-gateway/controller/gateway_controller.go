@@ -29,7 +29,6 @@ import (
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -129,6 +128,17 @@ func (h *routeEventHandler) logMutation(
 		)
 		return
 	}
+	if result.Result == sandboxroute.EventResultApplied && result.Reason == sandboxroute.ReasonIDTakeover {
+		logger.Error(
+			errors.New(string(result.Reason)),
+			"gateway route mutation ID takeover",
+			"operation", operation,
+			"reason", result.Reason,
+			"namespace", key.Namespace,
+			"name", key.Name,
+		)
+		return
+	}
 	logger.V(utils.DebugLogLevel).Info(
 		"gateway route mutation completed",
 		"operation", operation,
@@ -141,8 +151,6 @@ func (h *routeEventHandler) logMutation(
 
 // StartManager starts the gateway Sandbox informer route feed.
 func StartManager(ctx context.Context, options ManagerOptions) error {
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
-
 	if options.Registry == nil {
 		return errors.New("gateway manager route dependencies must not be nil")
 	}
