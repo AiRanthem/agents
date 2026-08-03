@@ -36,6 +36,22 @@ import (
 
 var AccessToken = "access-token"
 
+// runtimeGRPCHTTPClient is the package-level HTTP client shared by the connect
+// (gRPC) callers of the runtime: the Process service here and the Filesystem
+// service in filesystem.go. It deliberately does not use http.DefaultClient so
+// tests can substitute their own transport without monkey-patching the global,
+// mirroring runtimeFilesHTTPClient which backs the multipart /files path.
+//
+// The two capabilities speak the same connect-over-gRPC protocol against the
+// same runtime endpoint, so they must not diverge on transport. Keeping a
+// single variable makes any future transport tuning (for example the pending
+// migration to the pinned TLS transport) apply to both at once.
+//
+// Intentionally no http.Client.Timeout is set: every caller wraps the context
+// with context.WithTimeout, which stays the single source of truth for the RPC
+// deadline (mirrors runtimeFilesHTTPClient).
+var runtimeGRPCHTTPClient = &http.Client{}
+
 type RunCommandResult struct {
 	PID      uint32
 	Stdout   []string
@@ -64,7 +80,7 @@ func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs) (RunCommand
 		return RunCommandResult{}, fmt.Errorf("runtime url not found on sandbox")
 	}
 	client := processconnect.NewProcessClient(
-		http.DefaultClient,
+		runtimeGRPCHTTPClient,
 		url,
 		connect.WithGRPC(),
 	)
