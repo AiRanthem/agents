@@ -25,6 +25,10 @@ import (
 	"strconv"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
 
@@ -46,9 +50,10 @@ const (
 	// pinnedDialTimeout bounds a single TCP dial to the sandbox Pod IP.
 	pinnedDialTimeout = 5 * time.Second
 
-	// Well-known file names inside a runtime client certificate directory, as
-	// laid out by the client certificate Secret mounted into control-plane
-	// components (see NewTLSBundle).
+	// Well-known names of the runtime client certificate material. They are
+	// both the file names inside a mounted certificate directory (see
+	// NewTLSBundle) and the data keys of the certificate Secret itself (see
+	// NewTLSBundleFromSecret).
 	clientCAFile   = "ca.crt"
 	clientCertFile = "client.crt"
 	clientKeyFile  = "client.key"
@@ -71,15 +76,29 @@ type TLSBundle struct {
 	ClientCertPEM []byte
 	// ClientKeyPEM is the optional PEM-encoded client private key for mutual TLS.
 	ClientKeyPEM []byte
+
+	// parsed caches the decoded form of the PEM blocks above. It is populated by
+	// the loaders (NewTLSBundle, NewTLSBundleFromSecret), which must decode the
+	// material anyway to fail fast on a broken bundle, so every runtime client
+	// then only assembles a tls.Config around it instead of re-parsing the PEM.
+	// A zero-valued TLSBundle (built directly by a caller) leaves it nil and is
+	// decoded on demand.
+	parsed *parsedTLSBundle
 }
 
-// buildClientTLSConfig assembles the *tls.Config used by the runtime client.
-//
-// serverName pins the SNI and certificate-verification hostname (typically
-// RuntimeServerSNI) so verification succeeds against the wildcard SAN even
-// though the underlying connection dials a bare Pod IP. A client certificate is
-// attached only when both PEM blocks are supplied.
-func buildClientTLSConfig(m TLSBundle, serverName string) (*tls.Config, error) {
+// parsedTLSBundle holds the decoded, authority-independent part of a TLSBundle.
+// Only tls.Config.ServerName varies between clients (see WithAuthority), so the
+// trust anchors and the client certificate can be decoded once and shared; both
+// are read-only afterwards and safe for concurrent use.
+type parsedTLSBundle struct {
+	rootCAs *x509.CertPool
+	// clientCert is nil unless the bundle carries a client certificate/key pair.
+	clientCert *tls.Certificate
+}
+
+// parseTLSBundle decodes the PEM blocks of m, rejecting a bundle that cannot
+// produce a usable TLS configuration.
+func parseTLSBundle(m TLSBundle) (*parsedTLSBundle, error) {
 	if len(m.CABundle) == 0 {
 		return nil, fmt.Errorf("runtime TLS CA bundle is required")
 	}
@@ -87,18 +106,40 @@ func buildClientTLSConfig(m TLSBundle, serverName string) (*tls.Config, error) {
 	if !pool.AppendCertsFromPEM(m.CABundle) {
 		return nil, fmt.Errorf("failed to parse runtime TLS CA bundle")
 	}
-	cfg := &tls.Config{
-		RootCAs:    pool,
-		ServerName: serverName,
-		MinVersion: tls.VersionTLS12,
-	}
+	parsed := &parsedTLSBundle{rootCAs: pool}
 	// Client certificate is optional (server uses VerifyClientCertIfGiven).
 	if len(m.ClientCertPEM) > 0 || len(m.ClientKeyPEM) > 0 {
 		cert, err := tls.X509KeyPair(m.ClientCertPEM, m.ClientKeyPEM)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load runtime client certificate/key pair: %w", err)
 		}
-		cfg.Certificates = []tls.Certificate{cert}
+		parsed.clientCert = &cert
+	}
+	return parsed, nil
+}
+
+// buildClientTLSConfig assembles the *tls.Config used by the runtime client.
+//
+// serverName pins the SNI and certificate-verification hostname (typically
+// RuntimeServerSNI) so verification succeeds against the wildcard SAN even
+// though the underlying connection dials a bare Pod IP. The decoded material is
+// reused from m when a loader already cached it, and decoded on demand
+// otherwise; only serverName differs per client, so nothing else is rebuilt.
+func buildClientTLSConfig(m TLSBundle, serverName string) (*tls.Config, error) {
+	parsed := m.parsed
+	if parsed == nil {
+		var err error
+		if parsed, err = parseTLSBundle(m); err != nil {
+			return nil, err
+		}
+	}
+	cfg := &tls.Config{
+		RootCAs:    parsed.rootCAs,
+		ServerName: serverName,
+		MinVersion: tls.VersionTLS12,
+	}
+	if parsed.clientCert != nil {
+		cfg.Certificates = []tls.Certificate{*parsed.clientCert}
 	}
 	return cfg, nil
 }
@@ -145,11 +186,62 @@ func NewTLSBundle(dir string) (*TLSBundle, error) {
 	}
 
 	m := &TLSBundle{CABundle: caBundle, ClientCertPEM: certPEM, ClientKeyPEM: keyPEM}
-	// Validate the bundle eagerly so a broken mount fails fast at startup
-	// instead of on the first runtime call.
-	if _, err := buildClientTLSConfig(*m, RuntimeServerSNI); err != nil {
+	// Decode eagerly so a broken mount fails fast at startup instead of on the
+	// first runtime call, and keep the result so runtime clients reuse it.
+	parsed, err := parseTLSBundle(*m)
+	if err != nil {
 		return nil, fmt.Errorf("invalid runtime client TLS bundle in %s: %w", dir, err)
 	}
+	m.parsed = parsed
+	return m, nil
+}
+
+// NewTLSBundleFromSecret loads the client TLS bundle from the Kubernetes Secret
+// namespace/name through reader. It is the Secret-backed counterpart of
+// NewTLSBundle for components that cannot volume-mount the certificate Secret —
+// e.g. the sandbox-manager, whose certificate Secret lives in a namespace it
+// does not mount — and reads the very same ca.crt / client.crt / client.key
+// keys.
+//
+// Semantics mirror NewTLSBundle: an empty name means TLS is not configured and
+// yields (nil, nil), while a non-empty name declares the intent to speak TLS,
+// so any problem (missing Secret, missing ca.crt, unparsable material, an
+// unpaired client certificate) is an error the caller should surface at startup
+// instead of silently degrading to plain HTTP.
+//
+// The returned bundle is likewise a snapshot: the caller reads it once during
+// startup and holds the value, so replacing the certificate material requires
+// restarting the process.
+func NewTLSBundleFromSecret(ctx context.Context, reader ctrlclient.Reader, namespace, name string) (*TLSBundle, error) {
+	if name == "" {
+		return nil, nil
+	}
+	secret := &corev1.Secret{}
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
+		return nil, fmt.Errorf("failed to get runtime client certificate secret %s/%s: %w", namespace, name, err)
+	}
+
+	caBundle := secret.Data[clientCAFile]
+	if len(caBundle) == 0 {
+		return nil, fmt.Errorf("runtime client certificate secret %s/%s is missing the %q data key", namespace, name, clientCAFile)
+	}
+	// Unlike the directory layout, a Secret cannot distinguish "absent" from
+	// "empty", so an unpaired client certificate is rejected explicitly rather
+	// than silently downgraded to server-authenticated TLS.
+	certPEM, keyPEM := secret.Data[clientCertFile], secret.Data[clientKeyFile]
+	if (len(certPEM) == 0) != (len(keyPEM) == 0) {
+		return nil, fmt.Errorf("runtime client certificate secret %s/%s carries an unpaired %q/%q data key (set both or neither)",
+			namespace, name, clientCertFile, clientKeyFile)
+	}
+
+	m := &TLSBundle{CABundle: caBundle, ClientCertPEM: certPEM, ClientKeyPEM: keyPEM}
+	// Decode eagerly so a broken Secret fails fast at startup instead of on the
+	// first runtime call, and keep the result so runtime clients reuse it.
+	parsed, err := parseTLSBundle(*m)
+	if err != nil {
+		return nil, fmt.Errorf("invalid runtime client TLS bundle in secret %s/%s: %w", namespace, name, err)
+	}
+	m.parsed = parsed
 	return m, nil
 }
 

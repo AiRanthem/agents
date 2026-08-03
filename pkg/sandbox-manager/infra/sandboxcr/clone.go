@@ -156,8 +156,21 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 		return
 	}
 
+	// Resolve the per-sandbox runtime transport once for the runtime calls below
+	// (re-init handshake and CSI mounts). This runs after the wait-ready gate so
+	// the cloned sandbox already advertises the capabilities of the pod that
+	// actually runs it. A resolution failure means the sandbox declares the TLS
+	// capability while this manager cannot honor it, which is a configuration
+	// error: surface it instead of silently downgrading to plaintext.
+	rtOpts, rtErr := runtime.TransportOptionsFor(sbx.Sandbox, opts.RuntimeTLSBundle)
+	if rtErr != nil {
+		log.Error(rtErr, "failed to resolve runtime transport")
+		err = rtErr
+		return
+	}
+
 	// Step 5: re-init runtime
-	if metrics, err = cloneReInitRuntime(ctx, sbx, opts, initRuntimeOpts, metrics); err != nil {
+	if metrics, err = cloneReInitRuntime(ctx, sbx, opts, initRuntimeOpts, metrics, rtOpts...); err != nil {
 		if !wait.Interrupted(err) {
 			err = retriableError{Message: fmt.Sprintf("failed to init runtime: %s", err)}
 		}
@@ -190,7 +203,7 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	}
 	if opts.CSIMount != nil {
 		log.Info("starting to perform csi mount")
-		metrics.CSIMount, err = runtime.ProcessCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount)
+		metrics.CSIMount, err = runtime.ProcessCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount, rtOpts...)
 		metrics.Total += metrics.CSIMount
 		if err != nil {
 			log.Error(err, "failed to perform csi mount")
@@ -341,8 +354,10 @@ func cloneWaitSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.CloneSa
 	return metrics, nil
 }
 
-// cloneReInitRuntime re-initializes the runtime if needed
-func cloneReInitRuntime(ctx context.Context, sbx *Sandbox, opts infra.CloneSandboxOptions, initRuntimeOpts *config.InitRuntimeOptions, metrics infra.CloneMetrics) (infra.CloneMetrics, error) {
+// cloneReInitRuntime re-initializes the runtime if needed. rtOpts is forwarded
+// to InitRuntime so a TLS-capable sandbox performs the re-init handshake against
+// the agent-runtime HTTPS endpoint; empty rtOpts keeps the plaintext transport.
+func cloneReInitRuntime(ctx context.Context, sbx *Sandbox, opts infra.CloneSandboxOptions, initRuntimeOpts *config.InitRuntimeOptions, metrics infra.CloneMetrics, rtOpts ...runtime.Option) (infra.CloneMetrics, error) {
 	log := klog.FromContext(ctx).WithValues("checkpointID", opts.CheckPointID, "step", "5.reInitRuntime")
 	if initRuntimeOpts == nil {
 		return metrics, nil
@@ -350,7 +365,7 @@ func cloneReInitRuntime(ctx context.Context, sbx *Sandbox, opts infra.CloneSandb
 	initRuntimeOpts.ReInit = true
 	log.Info("re-init runtime")
 	var err error
-	metrics.InitRuntime, err = runtime.InitRuntime(ctx, sbx.Sandbox, *initRuntimeOpts, sbx.refreshFunc())
+	metrics.InitRuntime, err = runtime.InitRuntime(ctx, sbx.Sandbox, *initRuntimeOpts, sbx.refreshFunc(), rtOpts...)
 	metrics.Total += metrics.InitRuntime
 	if err != nil {
 		log.Error(err, "failed to init runtime")

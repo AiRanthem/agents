@@ -34,8 +34,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
@@ -166,6 +169,14 @@ func TestBuildClientTLSConfig(t *testing.T) {
 	t.Cleanup(server.Close)
 	validCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
 
+	// preParsed mimics a bundle returned by a loader: the PEM is already decoded
+	// and cached, so buildClientTLSConfig must reuse it and still apply the
+	// caller's serverName.
+	preParsed := TLSBundle{CABundle: validCA}
+	cached, err := parseTLSBundle(preParsed)
+	require.NoError(t, err)
+	preParsed.parsed = cached
+
 	tests := []struct {
 		name    string
 		bundle  TLSBundle
@@ -175,6 +186,7 @@ func TestBuildClientTLSConfig(t *testing.T) {
 		{name: "invalid CA", bundle: TLSBundle{CABundle: []byte("garbage")}, wantErr: true},
 		{name: "valid CA only", bundle: TLSBundle{CABundle: validCA}, wantErr: false},
 		{name: "invalid client cert", bundle: TLSBundle{CABundle: validCA, ClientCertPEM: []byte("x"), ClientKeyPEM: []byte("y")}, wantErr: true},
+		{name: "cached parse is reused", bundle: preParsed, wantErr: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -338,6 +350,104 @@ func TestNewTLSBundle(t *testing.T) {
 			}
 			require.NotNil(t, m)
 			assert.NotEmpty(t, m.CABundle)
+			// The loader has to decode the bundle to fail fast, so the result
+			// must be cached rather than thrown away.
+			assert.NotNil(t, m.parsed)
+			if tt.wantClient {
+				assert.NotEmpty(t, m.ClientCertPEM)
+				assert.NotEmpty(t, m.ClientKeyPEM)
+			} else {
+				assert.Empty(t, m.ClientCertPEM)
+				assert.Empty(t, m.ClientKeyPEM)
+			}
+		})
+	}
+}
+
+// TestNewTLSBundleFromSecret covers the Secret-backed loader, whose semantics
+// mirror TestNewTLSBundle: an empty name disables TLS, while a named Secret must
+// yield a fully valid bundle read from the same ca.crt/client.crt/client.key
+// keys.
+func TestNewTLSBundleFromSecret(t *testing.T) {
+	caPEM, _ := genSelfSignedPEM(t)
+	clientCert, clientKey := genSelfSignedPEM(t)
+
+	// readerWith returns a client serving a single secret with the given data.
+	readerWith := func(data map[string][]byte) ctrlclient.Reader {
+		return fake.NewClientBuilder().WithObjects(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "runtime-client-cert", Namespace: "certs"},
+			Data:       data,
+		}).Build()
+	}
+
+	tests := []struct {
+		name       string
+		reader     ctrlclient.Reader
+		secretName string
+		wantNil    bool
+		wantErr    bool
+		wantClient bool
+	}{
+		{
+			name:       "empty name disables TLS",
+			reader:     fake.NewClientBuilder().Build(),
+			secretName: "",
+			wantNil:    true,
+		},
+		{
+			name:       "missing secret is an error",
+			reader:     fake.NewClientBuilder().Build(),
+			secretName: "runtime-client-cert",
+			wantErr:    true,
+		},
+		{
+			name:       "ca only yields server-authenticated bundle",
+			reader:     readerWith(map[string][]byte{"ca.crt": caPEM}),
+			secretName: "runtime-client-cert",
+		},
+		{
+			name:       "full set yields mutual TLS bundle",
+			reader:     readerWith(map[string][]byte{"ca.crt": caPEM, "client.crt": clientCert, "client.key": clientKey}),
+			secretName: "runtime-client-cert",
+			wantClient: true,
+		},
+		{
+			name:       "client cert without key is an error",
+			reader:     readerWith(map[string][]byte{"ca.crt": caPEM, "client.crt": clientCert}),
+			secretName: "runtime-client-cert",
+			wantErr:    true,
+		},
+		{
+			name:       "missing ca key is an error",
+			reader:     readerWith(map[string][]byte{"client.crt": clientCert, "client.key": clientKey}),
+			secretName: "runtime-client-cert",
+			wantErr:    true,
+		},
+		{
+			name:       "unparsable ca is an error",
+			reader:     readerWith(map[string][]byte{"ca.crt": []byte("not a pem")}),
+			secretName: "runtime-client-cert",
+			wantErr:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := NewTLSBundleFromSecret(context.Background(), tt.reader, "certs", tt.secretName)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, m)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, m)
+				return
+			}
+			require.NotNil(t, m)
+			assert.NotEmpty(t, m.CABundle)
+			// The loader has to decode the bundle to fail fast, so the result
+			// must be cached rather than thrown away.
+			assert.NotNil(t, m.parsed)
 			if tt.wantClient {
 				assert.NotEmpty(t, m.ClientCertPEM)
 				assert.NotEmpty(t, m.ClientKeyPEM)
