@@ -499,10 +499,11 @@ func TestPrepareSandboxFromCheckpoint_JWTAuthMerge(t *testing.T) {
 			}
 			opts := infra.CloneSandboxOptions{User: "test-user", CheckPointID: "cp-jwt"}
 			if tt.requestSetting != nil {
-				opts.Modifier = func(sbx infra.Sandbox) {
+				opts.Modifier = func(sbx infra.Sandbox) error {
 					annotations := sbx.GetAnnotations()
 					annotations[identity.AnnotationEnableJwtAuth] = *tt.requestSetting
 					sbx.SetAnnotations(annotations)
+					return nil
 				}
 			}
 
@@ -858,67 +859,6 @@ func TestInfraCloneSandbox_ModifierErrorStopsBeforeCreate(t *testing.T) {
 	assert.Zero(t, metrics.Retries)
 }
 
-func TestInfraCloneSandbox_PostModifierErrorUsesCleanup(t *testing.T) {
-	const expectError = "post modifier rejected clone"
-	testInfra, fc := NewTestInfra(t, config.SandboxManagerOptions{})
-	const (
-		checkpointID = "post-modifier-error-clone"
-		sandboxName  = "failed-post-modifier-clone"
-	)
-	createCloneTestCheckpoint(t, fc, testInfra.Cache, checkpointID)
-
-	origCreateSandbox := DefaultCreateSandbox
-	createCalls := 0
-	DefaultCreateSandbox = func(ctx context.Context, sbx *v1alpha1.Sandbox, c client.Client) (*v1alpha1.Sandbox, error) {
-		createCalls++
-		sbx.Name = sandboxName
-		created, err := origCreateSandbox(ctx, sbx, c)
-		if err != nil {
-			return nil, err
-		}
-		created.Status = v1alpha1.SandboxStatus{
-			Phase: v1alpha1.SandboxRunning,
-			Conditions: []metav1.Condition{{
-				Type:   string(v1alpha1.SandboxConditionReady),
-				Status: metav1.ConditionTrue,
-				Reason: v1alpha1.SandboxReadyReasonPodReady,
-			}},
-			PodInfo: v1alpha1.PodInfo{PodIP: "1.2.3.4"},
-		}
-		if err := c.Status().Update(ctx, created); err != nil {
-			return nil, err
-		}
-		return created, nil
-	}
-	t.Cleanup(func() { DefaultCreateSandbox = origCreateSandbox })
-
-	modifierErr := NoAvailableError(checkpointID, expectError)
-	modifierCalls := 0
-	cloned, metrics, err := testInfra.CloneSandbox(t.Context(), infra.CloneSandboxOptions{
-		User:                    "test-user",
-		CheckPointID:            checkpointID,
-		WaitReadyTimeout:        time.Second,
-		CloneTimeout:            2 * time.Second,
-		ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
-		PostModifier: func(obj metav1.Object) (bool, error) {
-			modifierCalls++
-			assert.Equal(t, sandboxName, obj.GetName())
-			return false, modifierErr
-		},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), expectError)
-	assert.ErrorIs(t, err, modifierErr)
-	assert.Nil(t, cloned)
-	assert.Equal(t, 1, createCalls)
-	assert.Equal(t, 1, modifierCalls)
-	assert.Zero(t, metrics.Retries)
-
-	persisted := &v1alpha1.Sandbox{}
-	err = fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: sandboxName}, persisted)
-	assert.True(t, apierrors.IsNotFound(err))
-}
-
 func TestCloneSandbox_ReleasesQuotaAfterKilledFailedCloneAllowsRetryWithFreshLockString(t *testing.T) {
 	setFastCreateRetryForTest(t)
 
@@ -1123,7 +1063,6 @@ func TestCloneSandbox_CleansFailedCreatedSandbox(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			postModifierCalls := 0
 			cache, fc, err := cachetest.NewTestCache(t)
 			require.NoError(t, err)
 			require.NoError(t, cache.Run(t.Context()))
@@ -1144,16 +1083,11 @@ func TestCloneSandbox_CleansFailedCreatedSandbox(t *testing.T) {
 				WaitReadyTimeout:        20 * time.Millisecond,
 				CloneTimeout:            200 * time.Millisecond,
 				ReserveFailedSandboxFor: ptr.To(tt.reserveFor),
-				PostModifier: func(metav1.Object) (bool, error) {
-					postModifierCalls++
-					return true, nil
-				},
 			}
 			sbx, _, err := CloneSandbox(t.Context(), opts, cache)
 			require.Error(t, err)
 			assert.Nil(t, sbx)
 			assert.Contains(t, err.Error(), "failed to wait for sandbox ready")
-			assert.Zero(t, postModifierCalls, "PostModifier must run only after readiness succeeds")
 
 			got := &v1alpha1.Sandbox{}
 			err = fc.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: sandboxName}, got)
@@ -1344,32 +1278,6 @@ func TestCloneSandbox(t *testing.T) {
 			},
 		},
 		{
-			name: "clone with post modifier",
-			opts: infra.CloneSandboxOptions{
-				User:             user,
-				CheckPointID:     checkpointID,
-				WaitReadyTimeout: 30 * time.Second,
-				PostModifier: func(sbx metav1.Object) (bool, error) {
-					labels := sbx.GetLabels()
-					labels["test.example/post-modifier"] = "applied"
-					sbx.SetLabels(labels)
-					return true, nil
-				},
-			},
-			serverOpts: testutils.TestRuntimeServerOptions{
-				RunCommandResult: runtime.RunCommandResult{
-					PID:    1,
-					Exited: true,
-				},
-				RunCommandImmediately: true,
-			},
-			sbxOverride: sbxOverride{Name: "test-sandbox-clone-post-modifier"},
-			postCheck: func(t *testing.T, sbx infra.Sandbox, _ infra.CloneMetrics) {
-				assert.Equal(t, "applied", sbx.GetLabels()["test.example/post-modifier"])
-				assert.Equal(t, user, sbx.GetAnnotations()[v1alpha1.AnnotationOwner])
-			},
-		},
-		{
 			name: "re-init runtime success",
 			opts: infra.CloneSandboxOptions{
 				User:             user,
@@ -1556,12 +1464,6 @@ func TestCloneSandbox(t *testing.T) {
 						},
 					},
 				},
-				PostModifier: func(sandbox metav1.Object) (bool, error) {
-					annotations := sandbox.GetAnnotations()
-					annotations[v1alpha1.AnnotationRuntimeURL] = "://post-modifier-ran-after-runtime-and-csi"
-					sandbox.SetAnnotations(annotations)
-					return true, nil
-				},
 			},
 			initRuntime: &config.InitRuntimeOptions{},
 			serverOpts: testutils.TestRuntimeServerOptions{
@@ -1577,9 +1479,7 @@ func TestCloneSandbox(t *testing.T) {
 				assert.NotNil(t, sbx)
 				assert.Greater(t, metrics.InitRuntime, time.Duration(0), "InitRuntime metric should be greater than 0")
 				assert.Greater(t, metrics.CSIMount, time.Duration(0), "CSIMount metric should be greater than 0")
-				assert.Greater(t, metrics.PostModifier, time.Duration(0), "PostModifier metric should be greater than 0")
 				assert.GreaterOrEqual(t, metrics.Total, metrics.CSIMount, "Total should include CSIMount time")
-				assert.Equal(t, "://post-modifier-ran-after-runtime-and-csi", sbx.GetAnnotations()[v1alpha1.AnnotationRuntimeURL])
 			},
 		},
 		{
@@ -2466,7 +2366,6 @@ func TestCloneSandbox_SecurityToken(t *testing.T) {
 		name         string
 		mockProvider *mockIdentityProvider
 		addAgentName bool
-		postModifier func(metav1.Object) (bool, error)
 		expectError  string
 		postCheck    func(t *testing.T, sbx infra.Sandbox, metrics infra.CloneMetrics)
 	}{
@@ -2481,12 +2380,6 @@ func TestCloneSandbox_SecurityToken(t *testing.T) {
 				},
 			},
 			addAgentName: true,
-			postModifier: func(sandbox metav1.Object) (bool, error) {
-				if sandbox.GetAnnotations()[identity.AgentKeyTokenRefreshStatus] == "" {
-					return false, errors.New("post modifier ran before security token processing")
-				}
-				return false, nil
-			},
 			postCheck: func(t *testing.T, sbx infra.Sandbox, metrics infra.CloneMetrics) {
 				annotations := sbx.GetAnnotations()
 				// SecurityToken metrics should be recorded
@@ -2645,7 +2538,6 @@ func TestCloneSandbox_SecurityToken(t *testing.T) {
 				CheckPointID:     checkpointID,
 				WaitReadyTimeout: 30 * time.Second,
 				CloneTimeout:     500 * time.Millisecond,
-				PostModifier:     tt.postModifier,
 			}
 
 			ctx, cancel := context.WithTimeout(t.Context(), opts.CloneTimeout)

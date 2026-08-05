@@ -330,7 +330,7 @@ func TestCreateSelectNetworkPolicy_RoundTrip(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var err error
 				sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-					SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+					SandboxID: sandboxid.Resolve(sbx),
 					Namespace: sbx.Namespace,
 				})
 				return err == nil
@@ -362,7 +362,7 @@ func TestUpdateSelectNetworkPolicy_RoundTrip(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var err error
 		sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-			SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+			SandboxID: sandboxid.Resolve(sbx),
 			Namespace: sbx.Namespace,
 		})
 		return err == nil
@@ -460,7 +460,7 @@ func TestUpdateNetworkPolicy_CreateWhenNoExisting(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var err error
 				sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-					SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+					SandboxID: sandboxid.Resolve(sbx),
 					Namespace: sbx.Namespace,
 				})
 				return err == nil
@@ -494,7 +494,7 @@ func TestUpdateNetworkPolicy_PreservesExternalAnnotations(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var err error
 		sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-			SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+			SandboxID: sandboxid.Resolve(sbx),
 			Namespace: sbx.Namespace,
 		})
 		return err == nil
@@ -506,7 +506,7 @@ func TestUpdateNetworkPolicy_PreservesExternalAnnotations(t *testing.T) {
 	}))
 
 	// Step 2: Simulate an external controller/webhook adding annotations.
-	sandboxID := sandboxid.Legacy(sbx.Namespace, sbx.Name)
+	sandboxID := sandboxid.Resolve(sbx)
 	tpList := &agentsv1alpha1.TrafficPolicyList{}
 	require.NoError(t, fc.List(t.Context(), tpList,
 		ctrlclient.InNamespace(sbx.Namespace),

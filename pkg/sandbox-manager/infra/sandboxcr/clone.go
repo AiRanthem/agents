@@ -246,22 +246,6 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 		log.Info("csi mount completed", "cost", metrics.CSIMount)
 	}
 
-	// Step 8: perform the optional final metadata mutation only after all
-	// built-in post-processing has succeeded.
-	if opts.PostModifier != nil {
-		start := time.Now()
-		postCtx := klog.NewContext(ctx, log.WithValues("stage", "post modifier"))
-		_, err = sbx.retryUpdate(postCtx, func(cr *v1alpha1.Sandbox) (bool, error) {
-			return opts.PostModifier(cr)
-		})
-		metrics.PostModifier = time.Since(start)
-		metrics.Total += metrics.PostModifier
-		if err != nil {
-			err = terminalMutationError{stage: "post modifier", err: err}
-			return
-		}
-	}
-
 	cloned = sbx
 	return
 }

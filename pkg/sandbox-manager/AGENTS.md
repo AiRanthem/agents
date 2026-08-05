@@ -4,17 +4,16 @@ This directory implements the Manager layer defined by the repository guide.
 
 ## Sandbox Identity
 
-- Manager owns the one-way assignment of a missing Sandbox ID, and assignment
-  configuration affects only future assignments.
-- Keep rollout, format, and assignment policy here. Shared identity primitives
-  and Infra remain policy-neutral.
+- A Sandbox ID identifies one user delivery rather than the reusable Sandbox
+  CR. When short-ID assignment is enabled, each Claim or Clone delivery gets a
+  new ID, including a Claim that reuses a recycled Sandbox. Keep assignment
+  policy in Manager while shared primitives and Infra remain policy-neutral.
 
 ## Route Orchestration
 
-- Manager composes neutral backend observations into the shared route model; it
-  must not maintain a Manager-specific projection or route state machine.
-- Preserve the backend observation scope during route ingestion. Apply
-  lifecycle and authorization policy only when admitting a request.
+- Compose neutral backend observations into the shared route model without a
+  Manager-specific projection or state machine. Preserve observation scope
+  during ingestion; apply lifecycle and authorization policy only at admission.
 
 ## Quota Orchestration
 

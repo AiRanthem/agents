@@ -25,21 +25,23 @@ This file contains repository-wide rules.
 
 - The Manager layer is `pkg/sandbox-manager/**`, excluding its `infra/**`
   subtree.
-- It owns protocol-independent and implementation-independent business rules
-  and use-case orchestration, including lifecycle orchestration, quota
-  coordination, and admission and release policy.
-- It may access underlying capabilities only through neutral Infra interfaces.
-  It must not depend on `pkg/servers` or directly implement Kubernetes CRD
-  reads and writes.
+- It owns protocol- and backend-independent business rules and use-case
+  orchestration, including lifecycle, quota, admission, and release policy.
+- It accesses Sandbox backends only through neutral Infra interfaces and must
+  not depend on `pkg/servers` or directly read or write backend-state resources.
+- Classify Kubernetes-backed capabilities by ownership, not technology:
+  sandbox-manager process coordination, discovery, publication, and identity
+  allocation stay in Manager when they are not Sandbox backend capabilities.
 
 ### Infra Layer — sandbox-manager
 
-- The Infra layer is `pkg/sandbox-manager/infra/**`; concrete Kubernetes
-  implementations belong in subpackages such as `infra/sandboxcr`.
-- On the sandbox-manager path, concrete Kubernetes clients, caches, CRD queries,
-  and CRD mutations must be contained by this layer.
-- It exposes protocol-neutral capabilities and data upward. It must not depend
-  on API models, HTTP status codes, authentication semantics, or Manager
+- The Infra layer is `pkg/sandbox-manager/infra/**`. It owns Sandbox backend
+  infrastructure, not every Kubernetes operation used by sandbox-manager.
+- Concrete Kubernetes implementations of Sandbox infrastructure capabilities
+  and their clients, caches, reads, and writes belong in implementation
+  subpackages such as `infra/sandboxcr`.
+- It exposes protocol-neutral Sandbox capabilities and data upward. It must not
+  depend on API models, HTTP status codes, authentication semantics, or Manager
   business policy.
 
 ### Agent Sandbox Controller
@@ -79,13 +81,6 @@ This file contains repository-wide rules.
   task requires a wider violation, propose a layering refactor first.
 - Shared packages must stay policy-neutral and must not import domain-specific
   packages merely to make reuse convenient.
-
-## Sandbox Identity
-
-- A persisted system-owned Sandbox ID is immutable. Operations on the same
-  Sandbox preserve it; operations creating a new Sandbox do not inherit it;
-  callers and templates cannot set it. Only Manager assignment policy may
-  initialize a missing ID.
 
 ## Development
 

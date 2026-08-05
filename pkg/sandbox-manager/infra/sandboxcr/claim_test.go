@@ -309,8 +309,6 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 	defer server.Close()
 	existTemplate := "test-template"
 	user := "test-user"
-	postModifierErr := NoAvailableError(existTemplate, "post modifier rejected sandbox")
-	postModifierCalls := 0
 
 	tmpl := v1alpha1.EmbeddedSandboxTemplate{
 		Template: &corev1.PodTemplateSpec{
@@ -411,46 +409,6 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 			},
 		},
 		{
-			name:      "claim with post modifier",
-			available: 1,
-			options: infra.ClaimSandboxOptions{
-				User:     user,
-				Template: existTemplate,
-				PostModifier: func(sbx metav1.Object) (bool, error) {
-					labels := sbx.GetLabels()
-					labels["test.example/post-modifier"] = "applied"
-					sbx.SetLabels(labels)
-					return true, nil
-				},
-			},
-			postCheck: func(t *testing.T, sbx infra.Sandbox) {
-				assert.Equal(t, "applied", sbx.GetLabels()["test.example/post-modifier"])
-				assert.Equal(t, user, sbx.GetAnnotations()[v1alpha1.AnnotationOwner])
-			},
-		},
-		{
-			name:      "post modifier error is terminal and cleans locked sandbox",
-			available: 1,
-			options: infra.ClaimSandboxOptions{
-				User:                    user,
-				Template:                existTemplate,
-				ReserveFailedSandboxFor: ptr.To(consts.ReserveFailedSandboxNever),
-				PostModifier: func(metav1.Object) (bool, error) {
-					postModifierCalls++
-					return false, postModifierErr
-				},
-			},
-			expectError:   postModifierErr.Error(),
-			expectCause:   postModifierErr,
-			expectRetries: ptr.To(0),
-			errorCheck: func(t *testing.T, c client.Client) {
-				assert.Equal(t, 1, postModifierCalls)
-				list := &v1alpha1.SandboxList{}
-				require.NoError(t, c.List(t.Context(), list))
-				assert.Empty(t, list.Items)
-			},
-		},
-		{
 			name:      "all locked",
 			available: 10,
 			options: infra.ClaimSandboxOptions{
@@ -529,12 +487,6 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 						},
 					},
 				},
-				PostModifier: func(sandbox metav1.Object) (bool, error) {
-					annotations := sandbox.GetAnnotations()
-					annotations[v1alpha1.AnnotationRuntimeURL] = "://post-modifier-ran-after-runtime-and-csi"
-					sandbox.SetAnnotations(annotations)
-					return true, nil
-				},
 			},
 			preModifier: func(sbx *v1alpha1.Sandbox, infra *Infra) {
 				sbx.Annotations[v1alpha1.AnnotationRuntimeURL] = server.URL
@@ -544,8 +496,7 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 				metrics := GetMetricsFromSandbox(t, sbx)
 				assert.Greater(t, metrics.InitRuntime, time.Duration(0))
 				assert.Greater(t, metrics.CSIMount, time.Duration(0))
-				assert.Greater(t, metrics.PostModifier, time.Duration(0))
-				assert.Equal(t, "://post-modifier-ran-after-runtime-and-csi", sbx.GetAnnotations()[v1alpha1.AnnotationRuntimeURL])
+				assert.Equal(t, server.URL, sbx.GetAnnotations()[v1alpha1.AnnotationRuntimeURL])
 			},
 		},
 		{
@@ -1233,7 +1184,7 @@ func TestCheckSandboxInplaceUpdate(t *testing.T) {
 			CreateSandboxWithStatus(t, fc, sbx)
 
 			gotSbx, err := testInfra.Cache.GetClaimedSandbox(t.Context(), infracache.GetClaimedSandboxOptions{
-				SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+				SandboxID: sandboxid.Resolve(sbx),
 			})
 			assert.NoError(t, err)
 			if err != nil {
@@ -4209,12 +4160,6 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 				Template: existTemplate,
 				InitRuntime: &config.InitRuntimeOptions{
 					AccessToken: "original-uuid-token",
-				},
-				PostModifier: func(sandbox metav1.Object) (bool, error) {
-					if sandbox.GetAnnotations()[identity.AgentKeyTokenRefreshStatus] == "" {
-						return false, errors.New("post modifier ran before security token processing")
-					}
-					return false, nil
 				},
 			},
 			mockProvider: &mockIdentityProvider{

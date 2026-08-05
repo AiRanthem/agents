@@ -170,7 +170,6 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 		metrics.SecurityToken += tryMetrics.SecurityToken
 		metrics.TrafficToken += tryMetrics.TrafficToken
 		metrics.CSIMount += tryMetrics.CSIMount
-		metrics.PostModifier += tryMetrics.PostModifier
 		metrics.LockType = tryMetrics.LockType
 		metrics.MergePickSandboxFailures(tryMetrics.PickSandboxFailures)
 		if tryMetrics.LastError != nil {

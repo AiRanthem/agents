@@ -46,7 +46,6 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
-	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -2410,8 +2409,7 @@ func TestDescribeSandboxByShortID(t *testing.T) {
 		Team: models.AdminTeam(),
 	}
 	sandbox := CreateClaimedSandboxCR(t, controller, Namespace, "short-id-describe", "test-template", user.ID.String(), nil)
-	shortID, err := sandboxid.GenerateShort(sandbox.UID)
-	require.NoError(t, err)
+	shortID := "aaaaaaaaaaaac"
 	sandbox.Labels[v1alpha1.LabelSandboxID] = shortID
 	require.NoError(t, fc.Update(t.Context(), sandbox))
 
