@@ -34,6 +34,7 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	agentsclient "github.com/openkruise/agents/client"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
@@ -270,6 +271,13 @@ func main() {
 			klog.Errorf("Failed to shutdown tracing: %v", err)
 		}
 	}()
+
+	// Initialize the generic client registry so CRD discovery
+	// (discovery.DiscoverGVK) works; the shared cache uses it to skip
+	// optional CRD-dependent setup when a CRD is not installed.
+	if err := agentsclient.NewRegistry(clientConfig); err != nil {
+		klog.Fatalf("Failed to initialize generic client registry: %v", err)
+	}
 
 	// Load the runtime client TLS bundle. The certificate Secret is fetched once
 	// at startup (fail fast on a broken reference) and held for the lifetime of
