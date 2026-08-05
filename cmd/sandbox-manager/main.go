@@ -40,6 +40,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
@@ -143,6 +144,11 @@ func main() {
 	pflag.DurationVar(&quotaAntiDriftGrace, "quota-anti-drift-grace", consts.DefaultQuotaAntiDriftGrace, "Grace period before periodic quota anti-drift releases suspected leaked entries.")
 	pflag.StringVar(&runtimeClientCertSecret, "runtime-client-cert-secret", "",
 		"namespace/name of the Secret holding the agent-runtime client TLS bundle. Leave it empty to disable the runtime mTLS.")
+
+	// Tracing flags (definitions shared with agent-sandbox-controller via
+	// tracing.Config.BindFlags; pulled into pflag by AddGoFlagSet below)
+	var tracingCfg tracing.Config
+	tracingCfg.BindFlags(flag.CommandLine)
 
 	opts := zap.Options{
 		Development: false,
@@ -252,6 +258,18 @@ func main() {
 	if err != nil {
 		klog.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
+
+	// Initialize tracing
+	tracingCfg.ServiceName = "sandbox-manager"
+	tracingShutdown, err := tracing.InitTracerProvider(context.Background(), tracingCfg)
+	if err != nil {
+		klog.Fatalf("Failed to initialize tracing: %v", err)
+	}
+	defer func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			klog.Errorf("Failed to shutdown tracing: %v", err)
+		}
+	}()
 
 	// Load the runtime client TLS bundle. The certificate Secret is fetched once
 	// at startup (fail fast on a broken reference) and held for the lifetime of

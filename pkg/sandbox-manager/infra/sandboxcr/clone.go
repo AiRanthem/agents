@@ -37,8 +37,11 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
+	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/runtime"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var (
@@ -77,6 +80,12 @@ func ValidateAndInitCheckpointOptions(opts infra.CreateCheckpointOptions) infra.
 }
 
 func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache infracache.Provider) (cloned infra.Sandbox, metrics infra.CloneMetrics, err error) {
+	ctx, span := tracing.StartManagerSpan(ctx, tracing.SpanInfraCloneSandbox,
+		attribute.String(tracing.AttrCloneCheckpointID, opts.CheckPointID),
+	)
+	// Keep the closure: a direct defer tracing.EndSpan(ctx, span, err) would
+	// evaluate err while still nil and record every failure as success.
+	defer func() { tracing.EndSpan(ctx, span, err) }()
 	log := klog.FromContext(ctx).WithValues("checkpointID", opts.CheckPointID)
 	opts.LockString = chooseLockString(opts.Admission, opts.LockString)
 	admitted := false
@@ -157,9 +166,13 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	}
 
 	// Resolve the per-sandbox runtime transport once for the runtime calls below
-	// (re-init handshake and CSI mounts). This runs after the wait-ready gate so
-	// the cloned sandbox already advertises the capabilities of the pod that
-	// actually runs it. A resolution failure means the sandbox declares the TLS
+	// (re-init handshake and CSI mounts). This MUST run after the wait-ready gate
+	// so the cloned sandbox already advertises the capabilities of the pod that
+	// actually runs it: a checkpoint does not carry the runtime TLS port
+	// annotation, so the clone only gets it when the controller stamps it while
+	// creating the pod, and cloneWaitSandboxReady refreshes this object. Resolving
+	// any earlier reads a pre-stamp snapshot and silently selects plaintext for a
+	// TLS-only runtime. A resolution failure means the sandbox declares the TLS
 	// capability while this manager cannot honor it, which is a configuration
 	// error: surface it instead of silently downgrading to plaintext.
 	rtOpts, rtErr := runtime.TransportOptionsFor(sbx.Sandbox, opts.RuntimeTLSBundle)
@@ -203,7 +216,7 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	}
 	if opts.CSIMount != nil {
 		log.Info("starting to perform csi mount")
-		metrics.CSIMount, err = runtime.ProcessCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount, rtOpts...)
+		metrics.CSIMount, err = traceCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount, rtOpts...)
 		metrics.Total += metrics.CSIMount
 		if err != nil {
 			log.Error(err, "failed to perform csi mount")
@@ -354,9 +367,7 @@ func cloneWaitSandboxReady(ctx context.Context, sbx *Sandbox, opts infra.CloneSa
 	return metrics, nil
 }
 
-// cloneReInitRuntime re-initializes the runtime if needed. rtOpts is forwarded
-// to InitRuntime so a TLS-capable sandbox performs the re-init handshake against
-// the agent-runtime HTTPS endpoint; empty rtOpts keeps the plaintext transport.
+// cloneReInitRuntime re-initializes the runtime if needed
 func cloneReInitRuntime(ctx context.Context, sbx *Sandbox, opts infra.CloneSandboxOptions, initRuntimeOpts *config.InitRuntimeOptions, metrics infra.CloneMetrics, rtOpts ...runtime.Option) (infra.CloneMetrics, error) {
 	log := klog.FromContext(ctx).WithValues("checkpointID", opts.CheckPointID, "step", "5.reInitRuntime")
 	if initRuntimeOpts == nil {
@@ -430,6 +441,9 @@ func createSandboxTemplate(ctx context.Context, c client.Client, tmpl *v1alpha1.
 }
 
 func createCheckpoint(ctx context.Context, c client.Client, cp *v1alpha1.Checkpoint) (*v1alpha1.Checkpoint, error) {
+	// Inject trace context into annotations so the checkpoint-controller
+	// can establish parent-child span relationship.
+	cp.Annotations = tracing.InjectTraceContext(ctx, cp.Annotations)
 	if err := c.Create(ctx, cp); err != nil {
 		return nil, err
 	}
@@ -522,7 +536,14 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 
 	// Step 3: Wait for the Checkpoint to reach Succeeded.
 	// In the future, we can delete the failed Checkpoint and retry like ClaimSandbox
-	if err = cache.NewCheckpointTask(ctx, cp).Wait(opts.WaitSuccessTimeout); err != nil {
+	// Trace the wait phase as a dedicated span so it only covers the time spent
+	// waiting for the Checkpoint to succeed and records whether the wait failed.
+	waitCtx, waitSpan := tracing.StartManagerSpan(ctx, tracing.SpanManagerWaitForCheckpoint,
+		attribute.String(tracing.AttrCheckpointName, cp.Name),
+	)
+	err = cache.NewCheckpointTask(waitCtx, cp).Wait(opts.WaitSuccessTimeout)
+	tracing.EndSpan(waitCtx, waitSpan, err)
+	if err != nil {
 		log.Error(err, "failed to wait checkpoint ready")
 		return "", fmt.Errorf("failed to wait checkpoint ready: %w", err)
 	}

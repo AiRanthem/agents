@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"net/http"         // Added for pprof server
@@ -50,6 +51,7 @@ import (
 	sandboxctrl "github.com/openkruise/agents/pkg/controller/sandbox"
 	"github.com/openkruise/agents/pkg/controller/sandboxmetricsgc"
 	"github.com/openkruise/agents/pkg/features"
+	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	"github.com/openkruise/agents/pkg/utils/fieldindex"
@@ -137,6 +139,11 @@ func main() {
 	flag.IntVar(&metricsAsyncQueueCap, "metrics-async-queue-cap", 50000,
 		"Buffer size for the sandbox metric GC controller event channel. "+
 			"Sends that would block are counted under sandbox_metrics_gc_dropped_total{reason=\"channel_full\"}.")
+
+	// Tracing flags (definitions shared with sandbox-manager via
+	// tracing.Config.BindFlags)
+	var tracingCfg tracing.Config
+	tracingCfg.BindFlags(flag.CommandLine)
 
 	opts := zap.Options{
 		Development: true,
@@ -256,6 +263,20 @@ func main() {
 	config.QPS = float32(clientQPS)
 	config.Burst = clientBurst
 	setupLog.Info("setup client", "qps", clientQPS, "burst", clientBurst)
+
+	// Initialize tracing
+	tracingCfg.ServiceName = "sandbox-controller"
+	tracingShutdown, err := tracing.InitTracerProvider(context.Background(), tracingCfg)
+	if err != nil {
+		setupLog.Error(err, "unable to initialize tracing")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			setupLog.Error(err, "failed to shutdown tracing")
+		}
+	}()
+
 	err = client.NewRegistry(config)
 	if err != nil {
 		setupLog.Error(err, "unable to set up client")

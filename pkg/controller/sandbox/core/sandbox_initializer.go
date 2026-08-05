@@ -51,7 +51,7 @@ type defaultSandboxInitializer struct {
 func (d *defaultSandboxInitializer) Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus) error {
 	err := d.doInitialize(ctx, box, newStatus)
 	if err != nil {
-		klog.ErrorS(err, "post-resume/upgrade initialization failed", "sandbox", klog.KObj(box))
+		klog.FromContext(ctx).Error(err, "post-resume/upgrade initialization failed", "sandbox", klog.KObj(box))
 		d.recorder.Event(box, corev1.EventTypeWarning, string(agentsv1alpha1.RuntimeInitialized),
 			fmt.Sprintf("Failed to perform initialization: %v", err))
 		utils.SetSandboxCondition(newStatus, metav1.Condition{

@@ -43,11 +43,14 @@ import (
 	"github.com/openkruise/agents/pkg/discovery"
 	"github.com/openkruise/agents/pkg/features"
 	"github.com/openkruise/agents/pkg/pausedretention"
+	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	runtimeclient "github.com/openkruise/agents/pkg/utils/runtime"
 	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func init() {
@@ -123,19 +126,24 @@ func Add(mgr manager.Manager, metricsCleanup Enqueuer, runtimeTLSBundle *runtime
 
 	rateLimiter := core.NewRateLimiter()
 	recorder := mgr.GetEventRecorderFor("sandbox")
-	checkpointControl := core.NewCheckpointControl(mgr.GetClient(), recorder)
-	podControl := core.NewPodControl(mgr.GetClient(), recorder, core.GeneratePodFromSandbox)
+	// Wrap the client so any Kubernetes write performed anywhere in this
+	// controller's call tree marks the Reconcile iteration as real work,
+	// keeping it from being dropped as no-op by the FilteringSpanProcessor.
+	// With tracing disabled this returns the manager's client unwrapped.
+	cli := tracing.NewWriteTrackingClient(mgr.GetClient())
+	checkpointControl := core.NewCheckpointControl(cli, recorder)
+	podControl := core.NewPodControl(cli, recorder, core.GeneratePodFromSandbox)
 	podControl.SetCheckpointIDAnnotationKey(checkpointIDAnnotationKey)
 	// The runtime client TLS material is the single switch for runtime HTTPS:
 	// it both enables the client side (below) and lets new pods advertise the
 	// capability, so a stamped sandbox is always one this controller can reach.
 	podControl.SetAdvertiseRuntimeTLS(runtimeTLSBundle != nil)
 	err := (&SandboxReconciler{
-		Client:            mgr.GetClient(),
+		Client:            cli,
 		Scheme:            mgr.GetScheme(),
 		checkpointControl: checkpointControl,
 		controls: core.NewSandboxControl(core.SandboxControlArgs{
-			Client:            mgr.GetClient(),
+			Client:            cli,
 			APIReader:         mgr.GetAPIReader(),
 			Recorder:          recorder,
 			RateLimiter:       rateLimiter,
@@ -217,30 +225,30 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 			args := core.EnsureFuncArgs{Pod: pod, Box: box, NewStatus: newStatus}
 			return r.handleTerminating(ctx, args)
 		}
-		klog.InfoS("sandbox template is nil, and ignore", "sandbox", klog.KObj(box))
+		klog.FromContext(ctx).Info("sandbox template is nil, and ignore", "sandbox", klog.KObj(box))
 		return reconcile.Result{}, nil
 	}
 
-	klog.InfoS("Began to process Sandbox for reconcile", "sandbox", klog.KObj(box))
+	klog.FromContext(ctx).Info("Began to process Sandbox for reconcile", "sandbox", klog.KObj(box))
 	if pod != nil {
 		core.ScaleExpectation.ObserveScale(utils.GetControllerKey(box), expectations.Create, pod.Name)
 	}
 	if isSatisfied, unsatisfiedDuration, _ := core.ScaleExpectation.SatisfiedExpectations(utils.GetControllerKey(box)); !isSatisfied {
 		if unsatisfiedDuration < expectations.ExpectationTimeout {
-			klog.InfoS("Not satisfied ScaleExpectation for Sandbox, wait for cache event", "sandbox", klog.KObj(box))
+			klog.FromContext(ctx).Info("Not satisfied ScaleExpectation for Sandbox, wait for cache event", "sandbox", klog.KObj(box))
 			return reconcile.Result{RequeueAfter: expectations.ExpectationTimeout - unsatisfiedDuration}, nil
 		}
-		klog.InfoS("ScaleExpectation unsatisfied overtime for Sandbox, wait for cache event timeout", "timeout", unsatisfiedDuration)
+		klog.FromContext(ctx).Info("ScaleExpectation unsatisfied overtime for Sandbox, wait for cache event timeout", "timeout", unsatisfiedDuration)
 		core.ScaleExpectation.DeleteExpectations(utils.GetControllerKey(box))
 	}
 	// If resourceVersion expectations have not satisfied yet, just skip this reconcile
 	core.ResourceVersionExpectations.Observe(box)
 	if isSatisfied, unsatisfiedDuration := core.ResourceVersionExpectations.IsSatisfied(box); !isSatisfied {
 		if unsatisfiedDuration < expectations.ExpectationTimeout {
-			klog.InfoS("Not satisfied resourceVersion for Sandbox, wait for cache event", "sandbox", klog.KObj(box))
+			klog.FromContext(ctx).Info("Not satisfied resourceVersion for Sandbox, wait for cache event", "sandbox", klog.KObj(box))
 			return reconcile.Result{RequeueAfter: expectations.ExpectationTimeout - unsatisfiedDuration}, nil
 		}
-		klog.InfoS("ResourceVersionExpectations unsatisfied overtime for Sandbox, wait for cache event timeout", "timeout", unsatisfiedDuration)
+		klog.FromContext(ctx).Info("ResourceVersionExpectations unsatisfied overtime for Sandbox, wait for cache event timeout", "timeout", unsatisfiedDuration)
 		core.ResourceVersionExpectations.Delete(box)
 	}
 
@@ -262,9 +270,26 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 		box.Annotations = map[string]string{}
 	}
 
+	// Create the Reconcile span before the first operation that may write
+	// resources or fail (PVC ensure, hash annotation, timers, status update),
+	// so those operations are covered by the trace. Iterations that turn out
+	// to be pure reads are dropped by FilteringSpanProcessor, so starting the
+	// span this early does not produce noise.
+	ctx, reconcileSpan := tracing.StartReconcileSpan(ctx, box)
+	reconcileSpan.SetAttributes(attribute.String(tracing.AttrSandboxPhase, string(box.Status.Phase)))
+	if traceID := tracing.TraceIDFromContext(ctx); traceID != "" {
+		ctx = klog.NewContext(ctx, klog.FromContext(ctx).WithValues("traceID", traceID))
+	}
+	// End the Reconcile span with the final Reconcile error via defer: a
+	// failing iteration is marked failed and always retained even when the
+	// error path is not wrapped in its own child span. Keep the closure: a
+	// direct defer tracing.EndSpan(ctx, reconcileSpan, err) would evaluate err
+	// while still nil and record every failed Reconcile as successful.
+	defer func() { tracing.EndSpan(ctx, reconcileSpan, err) }()
+
 	// Process VolumeClaimTemplates for persistent data recovery during sleep/wake operations
 	if err := r.ensureVolumeClaimTemplates(ctx, box); err != nil {
-		klog.ErrorS(err, "failed to ensure volume claim templates", "sandbox", klog.KObj(box))
+		klog.FromContext(ctx).Error(err, "failed to ensure volume claim templates", "sandbox", klog.KObj(box))
 		return reconcile.Result{}, err
 	}
 
@@ -273,11 +298,11 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	// ensure sandbox terminating
 	if !box.DeletionTimestamp.IsZero() {
 		if box.Status.Phase != agentsv1alpha1.SandboxFailed && box.Status.Phase != agentsv1alpha1.SandboxSucceeded {
-			klog.InfoS("Sandbox Delete started", "sandbox", klog.KObj(box), "previousPhase", string(box.Status.Phase))
+			klog.FromContext(ctx).Info("Sandbox Delete started", "sandbox", klog.KObj(box), "previousPhase", string(box.Status.Phase))
 		}
 		result, termErr := r.handleTerminating(ctx, args)
 		if termErr == nil {
-			klog.InfoS("Sandbox Delete finished", "sandbox", klog.KObj(box))
+			klog.FromContext(ctx).Info("Sandbox Delete finished", "sandbox", klog.KObj(box))
 		}
 		return result, termErr
 	}
@@ -307,35 +332,52 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	}
 
 	if box.Status.Phase != newStatus.Phase {
-		klog.InfoS("Sandbox phase started", "sandbox", klog.KObj(box), "phase", string(newStatus.Phase), "previousPhase", string(box.Status.Phase))
+		klog.FromContext(ctx).Info("Sandbox phase started", "sandbox", klog.KObj(box), "phase", string(newStatus.Phase), "previousPhase", string(box.Status.Phase))
 	}
 
+	// Refresh the phase attribute now that calculateStatus determined the
+	// phase this iteration actually handles.
+	reconcileSpan.SetAttributes(attribute.String(tracing.AttrSandboxPhase, string(newStatus.Phase)))
+
 	phaseBefore := newStatus.Phase
+
 	switch newStatus.Phase {
 	case agentsv1alpha1.SandboxPending:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxRunning)
 		requeueAfter, err = r.getControl(args.Pod).EnsureSandboxRunning(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	case agentsv1alpha1.SandboxRunning:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxUpdated)
 		err = r.getControl(args.Pod).EnsureSandboxUpdated(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	case agentsv1alpha1.SandboxPaused:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxPaused)
 		err = r.EnsureSandboxPaused(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	case agentsv1alpha1.SandboxResuming:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxResumed)
 		err = r.getControl(args.Pod).EnsureSandboxResumed(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	case agentsv1alpha1.SandboxUpgrading:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxUpgraded)
 		err = r.getControl(args.Pod).EnsureSandboxUpgraded(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	case agentsv1alpha1.SandboxRecycling:
+		ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerEnsureSandboxRecycled)
 		requeueAfter, err = r.getControl(args.Pod).EnsureSandboxRecycled(ctx, args)
+		tracing.EndSpan(ctx, span, err)
 	default:
-		klog.InfoS("sandbox status phase is invalid", "sandbox", klog.KObj(box), "phase", box.Status.Phase)
+		klog.FromContext(ctx).Info("sandbox status phase is invalid", "sandbox", klog.KObj(box), "phase", box.Status.Phase)
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	if err != nil {
 		if retErr := r.updateSandboxStatus(ctx, *newStatus, box); retErr != nil {
-			klog.ErrorS(retErr, "failed to persist upgrade status on error", "sandbox", klog.KObj(box))
+			klog.FromContext(ctx).Error(retErr, "failed to persist upgrade status on error", "sandbox", klog.KObj(box))
 		}
 		return reconcile.Result{}, err
 	}
 	if newStatus.Phase != phaseBefore {
-		klog.InfoS("Sandbox phase finished", "sandbox", klog.KObj(box), "phase", string(phaseBefore), "nextPhase", string(newStatus.Phase))
+		klog.FromContext(ctx).Info("Sandbox phase finished", "sandbox", klog.KObj(box), "phase", string(phaseBefore), "nextPhase", string(newStatus.Phase))
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, r.updateSandboxStatus(ctx, *newStatus, box)
 }
@@ -376,11 +418,14 @@ func (r *SandboxReconciler) addSandboxHashAnnotation(ctx context.Context, box *a
 	}
 	_, hashImmutablePart := core.HashSandbox(box)
 	originObj.Annotations[agentsv1alpha1.SandboxHashImmutablePart] = hashImmutablePart
-	if err := client.IgnoreNotFound(r.Patch(ctx, originObj, patch)); err != nil {
-		klog.ErrorS(err, "failed to patch sandbox hash annotation", "sandbox", klog.KObj(box))
+	patchCtx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerPatchSandbox)
+	err := client.IgnoreNotFound(r.Patch(patchCtx, originObj, patch))
+	tracing.EndSpan(patchCtx, span, err)
+	if err != nil {
+		klog.FromContext(ctx).Error(err, "failed to patch sandbox hash annotation", "sandbox", klog.KObj(box))
 		return nil, fmt.Errorf("failed to patch hash annotation: %w", err)
 	}
-	klog.InfoS("patch sandbox hash annotation success", "sandbox", klog.KObj(box))
+	klog.FromContext(ctx).Info("patch sandbox hash annotation success", "sandbox", klog.KObj(box))
 	return originObj, nil
 }
 
@@ -390,16 +435,25 @@ func (r *SandboxReconciler) updateSandboxStatus(ctx context.Context, newStatus a
 	}
 	oldPhase := box.Status.Phase
 
+	// phase.after records the phase this status patch writes. It has
+	// independent value on the shouldRequeue early-return path, where the
+	// Reconcile span's phase attribute has not been refreshed; the full
+	// before->after transition is recorded in logs and K8s Events.
+	ctx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerUpdateStatus,
+		attribute.String(tracing.AttrPhaseAfter, string(newStatus.Phase)),
+	)
+
 	by, _ := json.Marshal(newStatus)
 	patchStatus := fmt.Sprintf(`{"status":%s}`, string(by))
 	rcvObject := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Namespace: box.Namespace, Name: box.Name}}
 	err := client.IgnoreNotFound(r.Status().Patch(ctx, rcvObject, client.RawPatch(types.MergePatchType, []byte(patchStatus))))
+	tracing.EndSpan(ctx, span, err)
 	if err != nil {
-		klog.ErrorS(err, "update sandbox status failed", "sandbox", klog.KObj(box), "patchStatus", patchStatus)
+		klog.FromContext(ctx).Error(err, "update sandbox status failed", "sandbox", klog.KObj(box), "patchStatus", patchStatus)
 		return err
 	}
 	core.ResourceVersionExpectations.Expect(rcvObject)
-	klog.InfoS("update sandbox status success", "sandbox", klog.KObj(box), "status", utils.DumpJson(newStatus))
+	klog.FromContext(ctx).Info("update sandbox status success", "sandbox", klog.KObj(box), "status", utils.DumpJson(newStatus))
 	box.Status = newStatus
 	r.recordSandboxPhaseEvent(box, oldPhase, newStatus)
 	// Update metrics after status change (pod=nil: container metrics already recorded in Reconcile)
@@ -480,9 +534,9 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 		// claim metadata when the Pod dies between claim-release and the next reconcile.
 		if isRecycleTriggered(box) {
 			if hasPVCVolumes(box) {
-				r.rejectRecycle(box, newStatus, "recycle is not supported for sandboxes with persistent volume claims")
+				r.rejectRecycle(ctx, box, newStatus, "recycle is not supported for sandboxes with persistent volume claims")
 			} else {
-				klog.InfoS("Detected recycle trigger", "sandbox", klog.KObj(box))
+				klog.FromContext(ctx).Info("Detected recycle trigger", "sandbox", klog.KObj(box))
 				newStatus.Phase = agentsv1alpha1.SandboxRecycling
 				utils.RemoveSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionRecycling))
 				break
@@ -509,7 +563,7 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 		// upgrading from Paused (which requires a resume-then-upgrade detour).
 		if newStatus.UpdateRevision != box.Status.UpdateRevision &&
 			core.RequiresPodReplacementUpgrade(box) {
-			klog.InfoS("Detected upgrade trigger", "sandbox", klog.KObj(box),
+			klog.FromContext(ctx).Info("Detected upgrade trigger", "sandbox", klog.KObj(box),
 				"oldRevision", box.Status.UpdateRevision,
 				"newRevision", newStatus.UpdateRevision)
 			newStatus.Phase = agentsv1alpha1.SandboxUpgrading
@@ -525,7 +579,7 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 	case agentsv1alpha1.SandboxPaused:
 		// Paused state does not support recycle; reject immediately.
 		if isRecycleTriggered(box) {
-			r.rejectRecycle(box, newStatus, "recycle is not supported in Paused state")
+			r.rejectRecycle(ctx, box, newStatus, "recycle is not supported in Paused state")
 		}
 
 		cond := utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused))
@@ -537,7 +591,7 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 			// the template change via the revision hash instead of pod labels.
 			if newStatus.UpdateRevision != box.Status.UpdateRevision &&
 				core.RequiresPodReplacementUpgrade(box) {
-				klog.InfoS("Detected upgrade trigger", "sandbox", klog.KObj(box),
+				klog.FromContext(ctx).Info("Detected upgrade trigger", "sandbox", klog.KObj(box),
 					"oldRevision", box.Status.UpdateRevision,
 					"newRevision", newStatus.UpdateRevision)
 				newStatus.Phase = agentsv1alpha1.SandboxUpgrading
@@ -565,7 +619,7 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 			// revision comparison would see no change — silently skipping
 			// the upgrade.
 			newStatus.UpdateRevision = box.Status.UpdateRevision
-			klog.InfoS("sandbox pause not completed yet", "sandbox", klog.KObj(box))
+			klog.FromContext(ctx).Info("sandbox pause not completed yet", "sandbox", klog.KObj(box))
 		}
 
 	case agentsv1alpha1.SandboxRecycling:
@@ -579,7 +633,7 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 			upgradeCond := utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionUpgrading))
 			if upgradeCond != nil {
 				resumeReason := determineUpgradeResumeReason(pod, newStatus, upgradeCond)
-				klog.InfoS("podTemplate changed during upgrade, resetting condition Upgrading reason",
+				klog.FromContext(ctx).Info("podTemplate changed during upgrade, resetting condition Upgrading reason",
 					"sandbox", klog.KObj(box),
 					"previousReason", upgradeCond.Reason,
 					"oldRevision", box.Status.UpdateRevision,
@@ -620,7 +674,7 @@ func hasPVCVolumes(box *agentsv1alpha1.Sandbox) bool {
 // rejectRecycle sets a Recycling condition with reason RecycleRejected and records a
 // Warning event. The sandbox stays in its current phase (Running or Paused).
 // The msg parameter provides the specific rejection reason.
-func (r *SandboxReconciler) rejectRecycle(box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus, msg string) {
+func (r *SandboxReconciler) rejectRecycle(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus, msg string) {
 	// Avoid duplicate events if the condition is already set to RecycleRejected
 	// with the same message.
 	if existing := utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionRecycling)); existing != nil &&
@@ -640,7 +694,7 @@ func (r *SandboxReconciler) rejectRecycle(box *agentsv1alpha1.Sandbox, newStatus
 		r.recorder.Event(box, corev1.EventTypeWarning, agentsv1alpha1.SandboxRecyclingReasonRejected, msg)
 	}
 
-	klog.InfoS("Recycling rejected", "sandbox", klog.KObj(box), "reason", msg)
+	klog.FromContext(ctx).Info("Recycling rejected", "sandbox", klog.KObj(box), "reason", msg)
 }
 
 func determineUpgradeResumeReason(
@@ -704,7 +758,7 @@ func (r *SandboxReconciler) ensureVolumeClaimTemplates(ctx context.Context, box 
 		// Generate PVC name based on template name and sandbox name
 		pvcName, err := core.GeneratePVCName(template.Name, box.Name)
 		if err != nil {
-			klog.ErrorS(err, "failed to generate PVC name", "sandbox", klog.KObj(box), "template", template.Name)
+			klog.FromContext(ctx).Error(err, "failed to generate PVC name", "sandbox", klog.KObj(box), "template", template.Name)
 			return err
 		}
 
@@ -719,7 +773,7 @@ func (r *SandboxReconciler) ensureVolumeClaimTemplates(ctx context.Context, box 
 
 		// Set the sandbox as the owner of the PVC to align their lifecycles
 		if err = ctrl.SetControllerReference(box, pvc, r.Scheme); err != nil {
-			klog.ErrorS(err, "failed to set sandbox as owner of PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
+			klog.FromContext(ctx).Error(err, "failed to set sandbox as owner of PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
 			return err
 		}
 
@@ -728,25 +782,28 @@ func (r *SandboxReconciler) ensureVolumeClaimTemplates(ctx context.Context, box 
 		err = r.Get(ctx, client.ObjectKey{Namespace: box.Namespace, Name: pvcName}, existingPVC)
 
 		if err == nil {
-			klog.InfoS("PVC already exists for persistent data recovery", "sandbox", klog.KObj(box), "pvc", pvcName)
+			klog.FromContext(ctx).Info("PVC already exists for persistent data recovery", "sandbox", klog.KObj(box), "pvc", pvcName)
 			continue
 		}
 
 		if !errors.IsNotFound(err) {
-			klog.ErrorS(err, "failed to get PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
+			klog.FromContext(ctx).Error(err, "failed to get PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
 			return err
 		}
 
-		if err = r.Create(ctx, pvc); err == nil {
-			klog.InfoS("created PVC for persistent data recovery", "sandbox", klog.KObj(box), "pvc", pvcName)
+		pvcCtx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerCreatePVC)
+		err = r.Create(pvcCtx, pvc)
+		tracing.EndSpan(pvcCtx, span, client.IgnoreAlreadyExists(err))
+		if err == nil {
+			klog.FromContext(ctx).Info("created PVC for persistent data recovery", "sandbox", klog.KObj(box), "pvc", pvcName)
 			continue
 		}
 
 		if !errors.IsAlreadyExists(err) {
-			klog.ErrorS(err, "failed to create PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
+			klog.FromContext(ctx).Error(err, "failed to create PVC", "sandbox", klog.KObj(box), "pvc", pvcName)
 			return err
 		}
-		klog.InfoS("PVC already exists after create attempt", "sandbox", klog.KObj(box), "pvc", pvcName)
+		klog.FromContext(ctx).Info("PVC already exists after create attempt", "sandbox", klog.KObj(box), "pvc", pvcName)
 	}
 
 	return nil
@@ -786,7 +843,7 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 		return ctrl.Result{}, false, nil
 	}
 
-	klog.InfoS("sandbox pause time reached", "sandbox", klog.KObj(box))
+	klog.FromContext(ctx).Info("sandbox pause time reached", "sandbox", klog.KObj(box))
 	modified := box.DeepCopy()
 	// Optimistic-lock so concurrent writers surface as 409 instead of
 	// silently winning a last-writer race.
@@ -795,7 +852,7 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 
 	// If the sandbox has a paused-retention policy, extend ShutdownTime so the
 	// sandbox is preserved for the configured duration after being paused.
-	if retention, managed := r.resolveRetentionAnnotationOrDefault(box); managed {
+	if retention, managed := r.resolveRetentionAnnotationOrDefault(ctx, box); managed {
 		if box.Spec.ShutdownTime != nil {
 			newShutdown := metav1.NewTime(pausedretention.PausedShutdownTime(now.Time, retention))
 			modified.Spec.ShutdownTime = &newShutdown
@@ -804,7 +861,10 @@ func (r *SandboxReconciler) handlePauseTimeout(ctx context.Context, box *agentsv
 		}
 	}
 
-	if err := r.Patch(ctx, modified, patch); err != nil {
+	patchCtx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerPatchSandbox)
+	err := r.Patch(patchCtx, modified, patch)
+	tracing.EndSpan(patchCtx, span, err)
+	if err != nil {
 		if errors.IsConflict(err) {
 			return ctrl.Result{Requeue: true}, true, nil
 		}
@@ -837,8 +897,11 @@ func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agen
 		return false, nil
 	}
 
-	klog.InfoS("sandbox shutdown time reached, deleting", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
-	return true, r.Delete(ctx, box)
+	klog.FromContext(ctx).Info("sandbox shutdown time reached, deleting", "sandbox", klog.KObj(box), "shutdownTime", box.Spec.ShutdownTime)
+	delCtx, span := tracing.StartControllerSpan(ctx, tracing.SpanControllerDeleteSandbox)
+	err := r.Delete(delCtx, box)
+	tracing.EndSpan(delCtx, span, err)
+	return true, err
 }
 
 // calcTimeoutRequeue returns the nearest requeue duration based on pending
@@ -861,14 +924,14 @@ func (r *SandboxReconciler) calcTimeoutRequeue(box *agentsv1alpha1.Sandbox, now 
 // resolveRetentionAnnotationOrDefault parses the paused-retention annotation value.
 // On parse failure, it logs a warning and returns the default retention duration
 // without mutating the annotation.
-func (r *SandboxReconciler) resolveRetentionAnnotationOrDefault(box *agentsv1alpha1.Sandbox) (time.Duration, bool) {
+func (r *SandboxReconciler) resolveRetentionAnnotationOrDefault(ctx context.Context, box *agentsv1alpha1.Sandbox) (time.Duration, bool) {
 	retention, managed, err := pausedretention.ResolveReservePausedSandboxDurationAnnotation(box.Annotations)
 	if err == nil {
 		return retention, managed
 	}
 	raw := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]
 
-	klog.ErrorS(err, "invalid reserve paused sandbox annotation, using default",
+	klog.FromContext(ctx).Error(err, "invalid reserve paused sandbox annotation, using default",
 		"sandbox", klog.KObj(box),
 		"annotation", agentsv1alpha1.AnnotationReservePausedSandboxDuration,
 		"value", raw)

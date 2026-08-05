@@ -2336,7 +2336,7 @@ func TestCommonControl_EnsureSandboxUpdated_InplaceNotDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureSandboxUpdated() unexpected error: %v", err)
 	}
-	// handleInplaceUpdateSandbox with hash mismatch returns (true, nil), so status gets synced
+	// handleInplaceUpdateSandbox with hash mismatch returns (done=true, nil), so status gets synced
 	if newStatus.SandboxIp != "10.0.0.2" {
 		t.Errorf("Expected SandboxIp '10.0.0.2', got %s", newStatus.SandboxIp)
 	}
@@ -3335,7 +3335,7 @@ func Test_isContainersConsistent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isContainersConsistent(tt.pod, box)
+			result := isContainersConsistent(context.Background(), tt.pod, box)
 			if result != tt.expected {
 				t.Errorf("isContainersConsistent() = %v, expected %v", result, tt.expected)
 			}
