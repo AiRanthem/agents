@@ -379,6 +379,7 @@ const (
 	SandboxInplaceUpdateReasonFailed          = "Failed"
 
 	// SandboxConditionUpgrading Reason
+	SandboxUpgradingReasonResuming          = "Resuming"
 	SandboxUpgradingReasonPreUpgrade        = "PreUpgrade"
 	SandboxUpgradingReasonUpgradePod        = "UpgradePod"
 	SandboxUpgradingReasonPostUpgrade       = "PostUpgrade"
