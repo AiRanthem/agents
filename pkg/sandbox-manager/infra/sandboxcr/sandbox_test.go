@@ -175,7 +175,7 @@ func TestSandbox_SaveTimeoutWithPolicy(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var err error
 				sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-					SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+					SandboxID: sandboxid.Resolve(sbx),
 					Namespace: sbx.Namespace,
 				})
 				return err == nil
@@ -282,7 +282,7 @@ func TestSandbox_SaveTimeoutWithPolicyExtraAnnotations(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var err error
 				sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
-					SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+					SandboxID: sandboxid.Resolve(sbx),
 					Namespace: sbx.Namespace,
 				})
 				return err == nil
@@ -366,14 +366,14 @@ func TestSandbox_SaveTimeoutWithPolicy_OnConflict(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var getErr error
 		sandboxA, getErr = infraImpl.GetSandbox(t.Context(), infra.GetSandboxOptions{
-			SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+			SandboxID: sandboxid.Resolve(sbx),
 			Namespace: sbx.Namespace,
 		})
 		if getErr != nil {
 			return false
 		}
 		sandboxB, getErr = infraImpl.GetSandbox(t.Context(), infra.GetSandboxOptions{
-			SandboxID: sandboxid.Legacy(sbx.Namespace, sbx.Name),
+			SandboxID: sandboxid.Resolve(sbx),
 			Namespace: sbx.Namespace,
 		})
 		return getErr == nil
@@ -447,7 +447,7 @@ type retryUpdateTestProvider struct {
 }
 
 func (p *retryUpdateTestProvider) GetClaimedSandbox(_ context.Context, options infracache.GetClaimedSandboxOptions) (*v1alpha1.Sandbox, error) {
-	expectedID := sandboxid.Legacy(p.claimedSandbox.Namespace, p.claimedSandbox.Name)
+	expectedID := sandboxid.Resolve(p.claimedSandbox)
 	if options.SandboxID != expectedID {
 		return nil, errors.New("unexpected sandbox ID")
 	}

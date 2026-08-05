@@ -125,8 +125,8 @@ func main() {
 		"Prefix prepended verbatim to newly assigned short Sandbox IDs when --enable-short-sandbox-id is set; "+
 			"must start with a lowercase letter or digit and otherwise contain only lowercase letters, digits, or hyphens; "+
 			"must not contain the legacy ID separator --; "+
-			"at most 37 characters (validated at startup: prefix plus the 26-character short ID must fit a 63-character Kubernetes label value); "+
-			"with Native E2B dynamic domains (<port>-<sandbox-id>.<domain>) keep the prefix at 31 characters or fewer so the DNS label stays valid; the customized path is not subject to this DNS limit; "+
+			"at most 50 characters (validated at startup: prefix plus the 13-character short ID must fit a 63-character Kubernetes label value); "+
+			"with Native E2B dynamic domains (<port>-<sandbox-id>.<domain>) keep the prefix at 44 characters or fewer so the DNS label stays valid; during mixed-version rollout keep it at 37 characters or fewer; the customized path is not subject to this DNS limit; "+
 			"use the same value on every sandbox-manager replica")
 	pflag.IntVar(&e2bMinResumeTimeout, "e2b-min-resume-timeout", models.DefaultMinResumeTimeoutSeconds,
 		"Minimum value (seconds) for the timeout parameter carried by the E2B connect API; "+

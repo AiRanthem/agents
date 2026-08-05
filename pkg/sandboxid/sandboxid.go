@@ -18,12 +18,13 @@ package sandboxid
 
 import (
 	"encoding/base32"
+	"encoding/binary"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/google/uuid"
+	"github.com/sony/sonyflake/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
@@ -33,12 +34,55 @@ const (
 	LabelKey = agentsv1alpha1.LabelSandboxID
 	// LegacySeparator separates namespace and name in a legacy Sandbox ID.
 	LegacySeparator = "--"
-	// ShortIDLength is the fixed length of an encoded short ID: 16 UID bytes
-	// as unpadded Base32. Length policy on top of it is owned by callers.
-	ShortIDLength = 26
+	// ShortIDLength is the fixed length of an encoded 63-bit Sonyflake ID in an
+	// eight-byte big-endian buffer as unpadded Base32. Length policy on top of it
+	// is owned by callers.
+	ShortIDLength = 13
+	workerIDBits  = 20
+	sequenceBits  = 2
 )
 
 var shortEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
+
+var sonyflakeEpoch = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// NewGenerator creates a generator with a 41-bit millisecond timestamp, a
+// 20-bit worker ID, and a 2-bit sequence number.
+func NewGenerator(workerID uint32) (func() (string, error), error) {
+	flake, err := sonyflake.New(sonyflake.Settings{
+		BitsSequence:  sequenceBits,
+		BitsMachineID: workerIDBits,
+		TimeUnit:      time.Millisecond,
+		StartTime:     sonyflakeEpoch,
+		MachineID: func() (int, error) {
+			return int(workerID), nil
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create sandbox ID generator for worker %d: %w", workerID, err)
+	}
+	return func() (string, error) {
+		// known-limit: Sonyflake holds its generator mutex while sleeping after
+		// sequence exhaustion. The wait cannot observe request cancellation and can
+		// last until CLOCK_REALTIME catches up after a backward step. Deployments must
+		// prevent backward wall-clock steps while this process runs; replace NextID
+		// with a context-aware scheduler if that invariant changes.
+		id, err := flake.NextID()
+		if err != nil {
+			return "", fmt.Errorf("generate sandbox ID: %w", err)
+		}
+		if id <= 0 {
+			return "", fmt.Errorf("generate sandbox ID: non-positive value %d", id)
+		}
+		return encodeShortID(id), nil
+	}, nil
+}
+
+func encodeShortID(id int64) string {
+	var raw [8]byte
+	binary.BigEndian.PutUint64(raw[:], uint64(id))
+	return strings.ToLower(shortEncoding.EncodeToString(raw[:]))
+}
 
 // Resolve returns the authoritative label value or the legacy ID when no value is set.
 func Resolve(sandbox metav1.Object) string {
@@ -51,15 +95,6 @@ func Resolve(sandbox metav1.Object) string {
 // Legacy returns the legacy namespace-and-name Sandbox ID.
 func Legacy(namespace, name string) string {
 	return namespace + LegacySeparator + name
-}
-
-// GenerateShort encodes all 128 bits of a Kubernetes UID as lowercase unpadded Base32.
-func GenerateShort(uid types.UID) (string, error) {
-	parsed, err := uuid.Parse(string(uid))
-	if err != nil {
-		return "", fmt.Errorf("invalid sandbox UID %q: %w", uid, err)
-	}
-	return strings.ToLower(shortEncoding.EncodeToString(parsed[:])), nil
 }
 
 // ValidatePrefix checks that prefix uses only [a-z0-9-], starts with [a-z0-9]
@@ -98,24 +133,4 @@ func ValidatePrefix(prefix string) error {
 
 func isLowerAlphanumeric(char byte) bool {
 	return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
-}
-
-// AssignShort assigns a prefixed short ID only when the authoritative label value is empty.
-// The caller must validate prefix before calling.
-func AssignShort(sandbox metav1.Object, prefix string) (bool, error) {
-	labels := sandbox.GetLabels()
-	if labels[LabelKey] != "" {
-		return false, nil
-	}
-
-	sandboxID, err := GenerateShort(sandbox.GetUID())
-	if err != nil {
-		return false, err
-	}
-	if labels == nil {
-		labels = make(map[string]string, 1)
-	}
-	labels[LabelKey] = prefix + sandboxID
-	sandbox.SetLabels(labels)
-	return true, nil
 }

@@ -80,6 +80,7 @@ func NewSandboxManagerBuilder(opts config.SandboxManagerOptions) *SandboxManager
 		instance: &SandboxManager{
 			proxy:              proxy.NewServer(opts),
 			memberlistBindPort: opts.MemberlistBindPort,
+			systemNamespace:    opts.SystemNamespace,
 			enableShortID:      opts.EnableShortSandboxID,
 			shortIDPrefix:      opts.ShortSandboxIDPrefix,
 			primary:            &primaryState{},
@@ -225,8 +226,10 @@ type SandboxManager struct {
 
 	routeSource infra.RouteSandboxSource
 
-	enableShortID bool
-	shortIDPrefix string
+	systemNamespace   string
+	enableShortID     bool
+	shortIDPrefix     string
+	generateSandboxID func() (string, error)
 
 	primary *primaryState
 	elector *primaryElector
@@ -323,14 +326,6 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 		m.primary.set(true)
 	}
 
-	go func() {
-		klog.InfoS("starting proxy")
-		err := m.proxy.Run()
-		if err != nil {
-			klog.Error(err, "proxy stopped")
-		}
-	}()
-
 	// Start peers (optional - only if configured)
 	if m.peersManager != nil {
 		if err := m.peersManager.Start(ctx, m.memberlistBindPort); err != nil {
@@ -344,9 +339,36 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 	if err := m.infra.Run(ctx); err != nil {
 		return err
 	}
+	if m.enableShortID {
+		if err := m.initializeSandboxIDGenerator(ctx); err != nil {
+			return err
+		}
+	}
+
+	go func() {
+		klog.InfoS("starting proxy")
+		err := m.proxy.Run()
+		if err != nil {
+			klog.Error(err, "proxy stopped")
+		}
+	}()
 	if m.quotaAntiDrift != nil {
 		m.quotaAntiDrift.Run(ctx)
 	}
+	return nil
+}
+
+func (m *SandboxManager) initializeSandboxIDGenerator(ctx context.Context) error {
+	workerID, err := m.allocateWorkerID(ctx, m.shortIDPrefix)
+	if err != nil {
+		return fmt.Errorf("allocate sandbox ID worker for prefix %q: %w", m.shortIDPrefix, err)
+	}
+	generator, err := sandboxid.NewGenerator(workerID)
+	if err != nil {
+		return err
+	}
+	m.generateSandboxID = generator
+	klog.FromContext(ctx).Info("sandbox ID generator initialized", "workerID", workerID, "prefix", m.shortIDPrefix)
 	return nil
 }
 

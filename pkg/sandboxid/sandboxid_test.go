@@ -17,14 +17,13 @@ limitations under the License.
 package sandboxid
 
 import (
-	"maps"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
@@ -75,34 +74,53 @@ func TestLegacy(t *testing.T) {
 	}
 }
 
-func TestGenerateShort(t *testing.T) {
-	tests := []struct {
-		name        string
-		uid         types.UID
-		expected    string
-		expectError string
-	}{
-		{name: "zero UUID encodes all bits deterministically", uid: types.UID("00000000-0000-0000-0000-000000000000"), expected: strings.Repeat("a", 26)},
-		{name: "different UUID changes the encoded value", uid: types.UID("00000000-0000-0000-0000-000000000001"), expected: strings.Repeat("a", 25) + "e"},
-		{name: "invalid UUID is rejected", uid: types.UID("not-a-uuid"), expectError: "invalid sandbox UID"},
-		{name: "empty UUID is rejected", uid: types.UID(""), expectError: "invalid sandbox UID"},
-	}
+func TestEncodeShortID(t *testing.T) {
+	assert.Equal(t, "aaaaaaaaaaaac", encodeShortID(1))
+	assert.Len(t, encodeShortID(1<<62), ShortIDLength)
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			actual, err := GenerateShort(tt.uid)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				assert.Empty(t, actual)
+func TestGenerator(t *testing.T) {
+	generator, err := NewGenerator(7)
+	require.NoError(t, err)
+
+	const count = 1000
+	ids := make(chan string, count)
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for range count {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id, err := generator()
+			if err != nil {
+				errs <- err
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.expected, actual)
-			assert.Len(t, actual, ShortIDLength)
-			assert.Regexp(t, `^[a-z2-7]{26}$`, actual)
-		})
+			ids <- id
+		}()
 	}
+	wg.Wait()
+	close(ids)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	seen := make(map[string]struct{}, count)
+	for id := range ids {
+		assert.Len(t, id, ShortIDLength)
+		assert.Regexp(t, `^[a-z2-7]{13}$`, id)
+		if _, found := seen[id]; found {
+			t.Fatalf("duplicate generated ID %q", id)
+		}
+		seen[id] = struct{}{}
+	}
+	assert.Len(t, seen, count)
+}
+
+func TestNewGeneratorRejectsWorkerIDOutside20Bits(t *testing.T) {
+	_, err := NewGenerator(1 << workerIDBits)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid machine id")
 }
 
 func TestValidatePrefix(t *testing.T) {
@@ -130,56 +148,6 @@ func TestValidatePrefix(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectError)
-		})
-	}
-}
-
-func TestAssignShort(t *testing.T) {
-	tests := []struct {
-		name          string
-		uid           types.UID
-		labels        map[string]string
-		prefix        string
-		expectChanged bool
-		expectedID    string
-		expectError   string
-	}{
-		{name: "missing label is assigned", uid: types.UID("00000000-0000-0000-0000-000000000000"), expectChanged: true, expectedID: strings.Repeat("a", 26)},
-		{name: "prefix is prepended and other labels are preserved", uid: types.UID("00000000-0000-0000-0000-000000000001"), labels: map[string]string{LabelKey: "", "app": "sandbox"}, prefix: "prod-", expectChanged: true, expectedID: "prod-" + strings.Repeat("a", 25) + "e"},
-		{name: "non-empty label is preserved without UID or prefix validation", uid: types.UID("not-a-uuid"), labels: map[string]string{LabelKey: "operator-assigned-value"}, prefix: "INVALID_", expectedID: "operator-assigned-value"},
-		{name: "assignment trusts caller prefix", uid: types.UID("00000000-0000-0000-0000-000000000001"), labels: map[string]string{"app": "sandbox"}, prefix: "INVALID_", expectChanged: true, expectedID: "INVALID_" + strings.Repeat("a", 25) + "e"},
-		{name: "invalid UID leaves labels unchanged", uid: types.UID("not-a-uuid"), labels: map[string]string{"app": "sandbox"}, expectError: "invalid sandbox UID"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			initialLabels := maps.Clone(tt.labels)
-			sandbox := &agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{
-				Namespace: "team-a",
-				Name:      "sandbox-a",
-				UID:       tt.uid,
-				Labels:    maps.Clone(tt.labels),
-			}}
-
-			changed, err := AssignShort(sandbox, tt.prefix)
-			if tt.expectError != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectError)
-				assert.False(t, changed)
-				assert.Equal(t, initialLabels, sandbox.Labels)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.expectChanged, changed)
-			assert.Equal(t, tt.expectedID, Resolve(sandbox))
-			if initialLabels["app"] != "" {
-				assert.Equal(t, initialLabels["app"], sandbox.Labels["app"])
-			}
-
-			changed, err = AssignShort(sandbox, tt.prefix)
-			require.NoError(t, err)
-			assert.False(t, changed)
 		})
 	}
 }

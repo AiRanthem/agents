@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
@@ -56,8 +55,6 @@ type ClaimSandboxOptions struct {
 	Admission  *SandboxAdmission `json:"-"`
 	// Set Modifier to modify the Sandbox before it is updated. Returning an error aborts persistence.
 	Modifier func(sandbox Sandbox) error `json:"-"`
-	// PostModifier performs a final metadata-only mutation after all built-in post-processing succeeds.
-	PostModifier func(sandbox metav1.Object) (changed bool, err error) `json:"-"`
 	// ReserveFailedSandboxFor controls how long failed sandboxes are kept for debugging.
 	//   nil                          — backend default (DefaultReserveFailedSandboxFor)
 	//   ReserveFailedSandboxNever    — delete immediately
@@ -106,18 +103,17 @@ type ClaimSandboxOptions struct {
 }
 
 type CloneSandboxOptions struct {
-	Namespace          string                                                `json:"namespace,omitempty"`
-	User               string                                                `json:"user"`
-	CheckPointID       string                                                `json:"checkPointID"`
-	LockString         string                                                `json:"lockString"`
-	Admission          *SandboxAdmission                                     `json:"-"`
-	WaitReadyTimeout   time.Duration                                         `json:"waitReadyTimeout"`
-	CloneTimeout       time.Duration                                         `json:"cloneTimeout"`
-	CSIMount           *config.CSIMountOptions                               `json:"CSIMount"`
-	Modifier           func(sbx Sandbox) error                               `json:"-"`
-	PostModifier       func(sandbox metav1.Object) (changed bool, err error) `json:"-"`
-	CreateLimiter      *rate.Limiter                                         `json:"-"`
-	SkipWaitCheckpoint bool                                                  `json:"skipWaitCheckpoint"`
+	Namespace          string                  `json:"namespace,omitempty"`
+	User               string                  `json:"user"`
+	CheckPointID       string                  `json:"checkPointID"`
+	LockString         string                  `json:"lockString"`
+	Admission          *SandboxAdmission       `json:"-"`
+	WaitReadyTimeout   time.Duration           `json:"waitReadyTimeout"`
+	CloneTimeout       time.Duration           `json:"cloneTimeout"`
+	CSIMount           *config.CSIMountOptions `json:"CSIMount"`
+	Modifier           func(sbx Sandbox) error `json:"-"`
+	CreateLimiter      *rate.Limiter           `json:"-"`
+	SkipWaitCheckpoint bool                    `json:"skipWaitCheckpoint"`
 	// See ReserveFailedSandboxFor on ClaimSandboxOptions.
 	ReserveFailedSandboxFor *time.Duration `json:"reserveFailedSandboxFor"`
 	// Name sets ObjectMeta.Name on the cloned sandbox (exact name).
@@ -152,7 +148,6 @@ type ClaimMetrics struct {
 	CSIMount            time.Duration
 	SecurityToken       time.Duration
 	TrafficToken        time.Duration
-	PostModifier        time.Duration
 	LockType            LockType
 	LastError           error
 	PickSandboxFailures []PickSandboxFailure
@@ -179,8 +174,8 @@ func (m *ClaimMetrics) String() string {
 		// Replace newlines and control characters to ensure single-line output
 		lastErrStr = sanitizeErrorMessage(m.LastError)
 	}
-	return fmt.Sprintf("ClaimMetrics{Retries: %d, Total: %v, Wait: %v, RetryCost: %v, PickAndLock: %v, LockType: %v, WaitReady: %v, InitRuntime: %v, CSIMount: %v, SecurityToken: %v, TrafficToken: %v, PostModifier: %v, LastError: %v}",
-		m.Retries, m.Total, m.Wait, m.RetryCost, m.PickAndLock, m.LockType, m.WaitReady, m.InitRuntime, m.CSIMount, m.SecurityToken, m.TrafficToken, m.PostModifier, lastErrStr)
+	return fmt.Sprintf("ClaimMetrics{Retries: %d, Total: %v, Wait: %v, RetryCost: %v, PickAndLock: %v, LockType: %v, WaitReady: %v, InitRuntime: %v, CSIMount: %v, SecurityToken: %v, TrafficToken: %v, LastError: %v}",
+		m.Retries, m.Total, m.Wait, m.RetryCost, m.PickAndLock, m.LockType, m.WaitReady, m.InitRuntime, m.CSIMount, m.SecurityToken, m.TrafficToken, lastErrStr)
 }
 
 // RecordPickSandboxFailure records one failed claim attempt and aggregates repeated key/reason pairs.
@@ -233,7 +228,6 @@ type CloneMetrics struct {
 	SecurityToken time.Duration
 	TrafficToken  time.Duration
 	CSIMount      time.Duration
-	PostModifier  time.Duration
 	Total         time.Duration
 	LastError     error
 }
@@ -243,8 +237,8 @@ func (m *CloneMetrics) String() string {
 	if m.LastError != nil {
 		lastErrStr = sanitizeErrorMessage(m.LastError)
 	}
-	return fmt.Sprintf("CloneMetrics{Retries: %d, Wait: %v, GetTemplate: %v, CreateSandbox: %v, WaitReady: %v, InitRuntime: %v, SecurityToken: %v, TrafficToken: %v, CSIMount: %v, PostModifier: %v, Total: %v, LastError: %v}",
-		m.Retries, m.Wait, m.GetTemplate, m.CreateSandbox, m.WaitReady, m.InitRuntime, m.SecurityToken, m.TrafficToken, m.CSIMount, m.PostModifier, m.Total, lastErrStr)
+	return fmt.Sprintf("CloneMetrics{Retries: %d, Wait: %v, GetTemplate: %v, CreateSandbox: %v, WaitReady: %v, InitRuntime: %v, SecurityToken: %v, TrafficToken: %v, CSIMount: %v, Total: %v, LastError: %v}",
+		m.Retries, m.Wait, m.GetTemplate, m.CreateSandbox, m.WaitReady, m.InitRuntime, m.SecurityToken, m.TrafficToken, m.CSIMount, m.Total, lastErrStr)
 }
 
 // Merge accumulates per-attempt durations from src into m. Retries and
@@ -259,6 +253,5 @@ func (m *CloneMetrics) Merge(src CloneMetrics) {
 	m.SecurityToken += src.SecurityToken
 	m.TrafficToken += src.TrafficToken
 	m.CSIMount += src.CSIMount
-	m.PostModifier += src.PostModifier
 	m.Total += src.Total
 }

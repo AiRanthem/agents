@@ -289,7 +289,7 @@ func TestInfra_GetClaimedSandboxWithOptions_NamespaceScoped(t *testing.T) {
 		},
 	}
 	CreateSandboxWithStatus(t, fc, sbx)
-	sandboxID := sandboxid.Legacy(sbx.Namespace, sbx.Name)
+	sandboxID := sandboxid.Resolve(sbx)
 
 	got, err := infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
 		Namespace: "team-a",
@@ -328,7 +328,7 @@ func TestInfra_GetClaimedSandbox_CacheMiss_WaitsUntilCacheHit(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			apiSbx := makeClaimedSandbox("team-a", "sbx-cache-hit", "10.0.0.10")
 			apiSbx.ResourceVersion = "20"
-			id := sandboxid.Legacy(apiSbx.Namespace, apiSbx.Name)
+			id := sandboxid.Resolve(apiSbx)
 
 			stub := &stubAPIReader{objs: map[client.ObjectKey]*v1alpha1.Sandbox{
 				{Namespace: apiSbx.Namespace, Name: apiSbx.Name}: apiSbx,
@@ -385,7 +385,7 @@ func TestInfra_GetClaimedSandbox_SharedContextError_RetriesWhileContextLive(t *t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			apiSbx := makeClaimedSandbox("team-a", "sbx-shared-context-error", "10.0.0.10")
-			id := sandboxid.Legacy(apiSbx.Namespace, apiSbx.Name)
+			id := sandboxid.Resolve(apiSbx)
 			stub := &stubAPIReader{objs: map[client.ObjectKey]*v1alpha1.Sandbox{
 				{Namespace: apiSbx.Namespace, Name: apiSbx.Name}: apiSbx,
 			}}
@@ -475,7 +475,7 @@ func TestInfra_GetClaimedSandbox_RouteRVNewerThanCache_FallsBackToAPIReader(t *t
 	CreateSandboxWithStatus(t, fc, cacheSbx)
 	time.Sleep(100 * time.Millisecond)
 
-	id := sandboxid.Legacy(apiSbx.Namespace, apiSbx.Name)
+	id := sandboxid.Resolve(apiSbx)
 	setRouteResourceVersion(infraInstance, id, "777")
 
 	got, err := infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
@@ -504,7 +504,7 @@ func TestInfra_GetClaimedSandbox_CacheRVEqualsRouteRV_NoFallback(t *testing.T) {
 	rv := stored.GetResourceVersion()
 	require.NotEmpty(t, rv)
 
-	id := sandboxid.Legacy(apiSbx.Namespace, apiSbx.Name)
+	id := sandboxid.Resolve(apiSbx)
 	setRouteResourceVersion(infraInstance, id, rv)
 
 	got, err := infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
@@ -556,6 +556,8 @@ func TestInfra_GetClaimedSandbox_StaleCacheFallback_APIReaderRequiresClaimedLabe
 			CreateSandboxWithStatus(t, fc, cacheSbx)
 			time.Sleep(100 * time.Millisecond)
 
+			// Deliberately request by legacy ID: one sub-case assigns a short-ID
+			// label and expects the resolved-ID mismatch to reject the lookup.
 			id := sandboxid.Legacy(apiSbx.Namespace, apiSbx.Name)
 			setRouteResourceVersion(infraInstance, id, "10")
 
@@ -581,7 +583,7 @@ func TestInfra_GetClaimedSandbox_StaleCacheFallback_APIReaderNotFound_WrapsCache
 	CreateSandboxWithStatus(t, fc, cacheSbx)
 	time.Sleep(100 * time.Millisecond)
 
-	id := sandboxid.Legacy(cacheSbx.Namespace, cacheSbx.Name)
+	id := sandboxid.Resolve(cacheSbx)
 	setRouteResourceVersion(infraInstance, id, "999")
 
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
@@ -984,7 +986,7 @@ func TestInfra_CloneSandboxDoesNotRetryCreateFailure(t *testing.T) {
 
 func assertCloneMetricsTotalConsistent(t *testing.T, metrics infra.CloneMetrics) {
 	t.Helper()
-	expectedTotal := metrics.Wait + metrics.GetTemplate + metrics.CreateSandbox + metrics.WaitReady + metrics.InitRuntime + metrics.SecurityToken + metrics.TrafficToken + metrics.CSIMount + metrics.PostModifier
+	expectedTotal := metrics.Wait + metrics.GetTemplate + metrics.CreateSandbox + metrics.WaitReady + metrics.InitRuntime + metrics.SecurityToken + metrics.TrafficToken + metrics.CSIMount
 	assert.Equal(t, expectedTotal, metrics.Total)
 }
 

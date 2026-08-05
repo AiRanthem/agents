@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-07-11
-last-updated: 2026-07-29
+last-updated: 2026-08-05
 status: implemented
 ---
 
@@ -25,23 +25,27 @@ produce an address that exceeds DNS limits.
 This proposal introduces an optional short Sandbox ID:
 
 ```text
-<operator-prefix><26-character UID encoding>
+<operator-prefix><13-character Snowflake encoding>
 ```
 
-The suffix encodes the Sandbox's complete 128-bit Kubernetes UID. Once assigned, the ID is stored
-in the Sandbox label `agents.kruise.io/sandbox-id` and becomes that Sandbox CR's authoritative
-identity.
+The suffix encodes a 63-bit Sonyflake value. Sandbox-manager obtains a non-reused 20-bit worker
+incarnation from a prefix-scoped Kubernetes Lease during startup, then stores generated IDs in the
+Sandbox label `agents.kruise.io/sandbox-id`. A non-empty label becomes that Sandbox CR's
+authoritative identity for its current user delivery.
 
 The change is deliberately incremental:
 
 - an unlabeled Sandbox continues to use its legacy ID;
-- enabling the feature assigns short IDs only at the end of successful claim and clone operations;
-- an existing non-empty label is always honored, even if assignment is later disabled;
+- enabling the feature assigns a new ID in each claim lock Update/Create or clone Create, before
+  admission and heavyweight post-processing;
+- claiming a recycled Sandbox replaces its prior delivery ID, while other operations within one
+  delivery preserve the current non-empty label;
 - one Sandbox has one active ID at a time; legacy and short IDs are not simultaneous aliases;
 - client-provided IDs remain opaque and are never decoded to recover a Kubernetes object.
 
-The persisted identity, one-way migration, and version-ordered routing behavior are the core of
-this design. The encoding itself is intentionally simple.
+This trades a startup-time Lease allocation protocol for atomic delivery identity persistence and
+a shorter ID. Delivery-scoped stability and version-ordered routing behavior remain the core of the
+design.
 
 ## Motivation
 
@@ -58,13 +62,16 @@ short-ID design therefore needs to answer four broader questions:
 
 - Keep Sandbox IDs short enough for normal E2B dynamic hostnames.
 - Preserve legacy behavior for unlabeled Sandboxes without a background migration.
-- Make the selected ID stable across recycle and later claims of the same Sandbox CR.
+- Make the selected ID stable within one delivery and replace it when a recycled Sandbox is
+  delivered again.
 - Keep assignment policy in sandbox-manager and infrastructure concerns policy-neutral.
 - Ensure cache and route transitions never expose both IDs in one current view.
 - Fail closed when cache lookup observes duplicate IDs.
 - Support a staged manager/gateway rollout before short-ID assignment is activated.
 - Let operators locate a labeled Sandbox directly with `kubectl`.
 - Restore namespace/name diagnostics only after authorization succeeds.
+- Allocate manager worker incarnations without reusing a worker ID within one prefix domain.
+- Provide an explicit prefix-switch recovery procedure for worker exhaustion and etcd restore.
 
 ### Non-Goals
 
@@ -72,11 +79,14 @@ short-ID design therefore needs to answer four broader questions:
 - Migrating all existing Sandboxes in the background.
 - Rewriting IDs already stored on Checkpoints.
 - Making short IDs reversible to namespace and name.
-- Treating a Sandbox ID as proof of its current owner or claim session.
+- Treating a Sandbox ID alone as proof of the current owner without the normal authorization path.
 - Removing the `--` namespace restriction while legacy IDs remain supported.
 - Repairing or normalizing a non-empty persisted label during reads.
 - Supporting administrator-written, copied, or otherwise forged reserved labels and Routes.
 - Rolling back to label-unaware binaries after short-ID assignment has begun.
+- Reusing or resetting a prefix's worker counter after stopping old processes.
+- Eliminating the duplicate-ID risk after restoring the cluster to an older etcd snapshot while
+  continuing with the same prefix.
 
 ## Identity Model
 
@@ -89,34 +99,32 @@ Sandbox ID resolution has exactly two branches:
 | `agents.kruise.io/sandbox-id` is non-empty | Return the label unchanged |
 | The label is absent or empty | Return `<namespace>--<name>` |
 
-A non-empty label is a persisted fact. Readers do not revalidate its format, length, relationship
-to the UID, or origin. Revalidating on every read could make different binaries disagree about an
-identity that has already been stored.
+A non-empty label is the persisted identity of the current delivery. Readers do not revalidate its
+format, length, relationship to the UID, or origin. Revalidating on every read could make different
+binaries disagree about an identity that has already been stored.
 
-The assignment flag controls only the creation of new labels. It never changes how existing
-Sandboxes are read:
+The assignment flag controls the identity written for a new delivery. It never changes how an
+active Sandbox is read between delivery operations:
 
-| Assignment | Unlabeled Sandbox | Labeled Sandbox |
+| Assignment | Unlabeled pooled Sandbox | Previously labeled pooled Sandbox |
 |---|---|---|
-| Disabled | Remains legacy | Existing label remains authoritative |
-| Enabled | Receives a short ID after successful claim or clone | Existing label is preserved |
+| Disabled | Uses its legacy ID | Prior label is retired and the new delivery uses its legacy ID |
+| Enabled | Receives a new short ID | Prior label is replaced with a new short ID |
 
-### One-way transition
+### Delivery transition
 
 The normal state transition is:
 
 ```text
-unlabeled / legacy  ->  labeled / short
-labeled / short     ->  labeled / short
+pooled / unlabeled  ->  claimed / new short ID
+claimed / short ID  ->  recycled / unlabeled
 ```
 
-An unlabeled Sandbox may be claimed with a legacy ID, recycled, and assigned a short ID during a
-later enabled claim. A labeled Sandbox keeps its short ID through recycle, later claims, and flag
-changes.
-
-The ID identifies the Sandbox CR, not an individual claim or tenant session. Reusing a Sandbox for
-another owner does not create a new ID, so authorization and external systems must never infer
-current ownership from the ID alone.
+The ID identifies one user delivery, not the reusable Sandbox CR. Pause, resume, update, and
+Checkpoint operations within that delivery preserve it. Successful recycle retires the ID before
+the Sandbox returns to the pool, and a later Claim assigns the next delivery independently.
+Authorization and external systems must still verify the current owner instead of treating ID
+knowledge as authorization.
 
 ### Reserved metadata
 
@@ -125,12 +133,12 @@ The selected ID is stored as:
 ```yaml
 metadata:
   labels:
-    agents.kruise.io/sandbox-id: n6lyz2y2m5g3fbbq4rq6r5kpte
+    agents.kruise.io/sandbox-id: aae57hpxaaqac
 ```
 
 This label is owned by sandbox-manager. Public inputs and internal extension callbacks cannot add,
 change, or delete it. Pool and template materialization must not copy it into a new Sandbox, while
-recycle and metadata cleanup must preserve a label already assigned to the existing Sandbox CR.
+recycle clears it when the current delivery ends.
 E2B-compatible requests reject any user-supplied label under the internal `agents.kruise.io/`
 prefix space, not only the sandbox-id key, so no request can forge system-owned metadata.
 
@@ -150,18 +158,60 @@ that supported IDs were generated by the system and are unique within the cluste
 
 ### Encoding
 
-The short suffix is produced by encoding all 16 bytes of the Kubernetes UID with unpadded,
-lowercase RFC 4648 Base32. The result is always 26 characters from `[a-z2-7]`; no UID bits are
-discarded.
+The short suffix is produced by `github.com/sony/sonyflake/v2` with this fixed bit layout:
+
+| Field | Bits | Contract |
+|---|---:|---|
+| Time | 41 | Milliseconds since `2025-01-01 00:00:00 UTC` |
+| Worker incarnation | 20 | Allocated once at manager startup within the prefix domain |
+| Sequence | 2 | Up to four IDs per millisecond before the generator waits |
+
+The two-bit sequence field limits each manager generator to four ID assignments per millisecond,
+or approximately 4,000 assignments per second under sustained load. After consuming all four
+sequence values in one millisecond, the generator waits for the next millisecond instead of
+rejecting or rate-limiting the request. This is a per-manager Sandbox ID assignment throughput
+limit, not an aggregate API QPS limit: only operations that create a new ID consume this capacity,
+and managers use independent worker incarnations and generators.
+
+The positive 63-bit value is placed in an eight-byte big-endian buffer and encoded with unpadded,
+lowercase RFC 4648 Base32. The result is always 13 characters from `[a-z2-7]`.
 
 For example:
 
 ```text
-n6lyz2y2m5g3fbbq4rq6r5kpte
+aae57hpxaaqac
 ```
 
-Using the full UID avoids adding a collision budget and collision-allocation protocol. Generation
-fails if the UID cannot be decoded as a 16-byte UUID.
+The generator guarantees uniqueness only while its worker incarnation is not reused. It does not
+read Kubernetes or choose replica identity; cross-process uniqueness comes from the startup Lease
+protocol below.
+
+### Prefix-scoped worker allocation
+
+The prefix is the worker allocation domain. Sandbox-manager derives one Lease name per prefix:
+
+```text
+sandbox-manager-sandbox-id-worker-<first 24 hexadecimal characters of sha256(prefix)>
+```
+
+The Lease lives in sandbox-manager's system namespace. The first process creates it with
+`leaseTransitions=0`. Later processes use its `resourceVersion` as a CAS, replace
+`holderIdentity`, and increment `leaseTransitions`. The holder is a full process-generated UUID and
+remains stable for that allocation attempt. The counter value is the 20-bit Sonyflake worker ID.
+
+The allocator uses live API-server `Get` operations because informer staleness cannot safely
+confirm a CAS result. It retries `Conflict` and `AlreadyExists` after re-reading the Lease. A
+timeout or other ambiguous Create/Update result is also re-read:
+
+- if the holder is this process, the Lease counter is accepted;
+- if another holder is present, the possibly consumed value is not reused and allocation advances
+  from the latest counter;
+- if confirmation fails or the parent context is cancelled, startup fails.
+
+A missing holder, missing counter, negative counter, or counter at or above `2^20` fails closed.
+The Lease is never renewed, released, reset, or deleted. These fields are used as a persistent CAS
+record, following the [Kubernetes Lease API](https://kubernetes.io/docs/reference/kubernetes-api/coordination-resources/lease-v1/),
+not as liveness evidence.
 
 ### Optional prefix
 
@@ -174,26 +224,39 @@ A non-empty prefix:
 - starts with a lowercase letter or digit;
 - otherwise contains only lowercase letters, digits, and hyphens;
 - does not contain the legacy ID separator `--`, keeping short and legacy ID spaces disjoint;
-- is at most 37 characters, keeping the complete ID within the 63-character Kubernetes label-value
+- is at most 50 characters, keeping the complete ID within the 63-character Kubernetes label-value
   limit.
 
 For Native E2B dynamic domains of the form `<port>-<sandbox-id>.<domain>`, operators should keep
-the prefix at 31 characters or fewer so a five-digit port, separator, and ID fit in one DNS label.
+the prefix at 44 characters or fewer so a five-digit port, separator, and ID fit in one DNS label.
+During a mixed-version disabled rollout it must remain at 37 characters or fewer so older managers
+still accept the configuration.
 
 The prefix is validated when sandbox-manager starts, even when assignment is disabled, and must be
-consistent across replicas. Prefix changes affect only future assignments; existing labels are
-never regenerated.
+consistent across replicas. Prefix changes affect the allocator domain and only future
+deliveries; active delivery labels are not regenerated. Fixed 13-character suffixes make full ID
+spaces for two distinct prefixes disjoint: unequal prefix lengths produce unequal total lengths,
+while equal lengths differ within the prefix bytes.
 
 ### Assignment boundary
 
-Short-ID assignment is disabled by default. With `--enable-short-sandbox-id=true`, an unlabeled
-Sandbox receives its ID only at the final successful stage of claim or clone. The value is
-persisted before the success response returns it. A clone uses its own UID and never inherits the
-source Sandbox's identity.
+Short-ID assignment is disabled by default. With `--enable-short-sandbox-id=true`, every Claim or
+Clone delivery receives its ID through the Manager-decorated ordinary Modifier. The caller
+Modifier runs first, but any reserved-label mutation it makes is discarded. The Manager generator
+then assigns `<prefix><13-character-suffix>`, replacing any ID from a previous delivery. When
+assignment is disabled, Claim retires any previous label and uses the legacy ID.
 
-If generation or final persistence fails, the overall claim or clone fails through its existing
-cleanup path. The system does not return a successful Sandbox whose client-visible identity has not
-been persisted.
+The generator runs whenever the Manager-decorated Modifier runs. Each Infra retry that reaches the
+Modifier therefore consumes a new candidate ID, and failed attempts may leave gaps in the generated
+sequence. Only the value persisted by the successful lock Update/Create becomes the delivery's
+authoritative identity; there is no request-level memoization.
+
+Claim merges the label into its existing optimistic lock Update/Create. Clone adds it to the first
+Sandbox Create. Generation therefore happens before admission, lock/Create, readiness, runtime
+initialization, token issuance, and CSI work. A generation failure performs no Sandbox write, and
+there is no identity-specific trailing Update or retry loop. All later token, Checkpoint, route, and
+response processing observes the same persisted ID. A clone creates a new ID and never inherits the
+source Sandbox or Checkpoint identity.
 
 The design intentionally keeps no legacy alias during cache propagation. Internal observers may
 briefly converge at different times, but each observed version of a Sandbox resolves to exactly
@@ -206,14 +269,17 @@ The identity decision crosses several components, but each layer keeps one kind 
 | Boundary | Responsibility |
 |---|---|
 | API and controllers | Reject reserved metadata at public inputs and present protocol-specific responses |
-| Sandbox-manager | Own ID format, assignment, one-way migration, and orchestration policy |
-| Infrastructure | Persist generic metadata changes and expose neutral Kubernetes observations |
+| Sandbox-manager | Own per-delivery assignment, prefix policy, prefix-scoped Lease worker allocation, generator initialization, and Modifier decoration |
+| Infrastructure | Persist generic Sandbox changes and expose neutral backend observations |
+| `pkg/sandboxid` | Implement the fixed bit layout and opaque encoding for a caller-supplied worker incarnation |
 | Shared routing | Apply protocol-neutral projection, ordering, replacement, and deletion semantics |
 | E2B compatibility | Enforce legacy namespace constraints and present authorized diagnostics |
 
-Infrastructure does not choose or mutate Sandbox ID format. E2B does not generate or migrate IDs.
-Controller code may protect the reserved key but does not depend on sandbox-manager identity
-policy.
+Sandbox-manager owns worker allocation because the Lease coordinates manager process identity,
+not Sandbox backend state. Infrastructure neither chooses the ID format nor owns assignment
+enablement. `pkg/sandboxid` does not read Kubernetes, allocate workers, or own replica
+configuration. E2B does not generate or migrate IDs. Controller code clears the current ID when
+recycle ends a delivery but does not generate the next ID or depend on its format.
 
 Manager and gateway keep separate in-memory route stores because they are separate processes. They
 nevertheless use the same routing semantics so an identity transition cannot behave differently
@@ -311,9 +377,9 @@ kubectl get sbx -A -l agents.kruise.io/sandbox-id=<sandbox-id>
 
 ### Checkpoints and pagination
 
-A Checkpoint records the resolved source Sandbox ID at creation time. If that Sandbox later moves
-from legacy to short, existing Checkpoints keep the legacy value and later Checkpoints record the
-short value. No historical rewrite is performed.
+A Checkpoint records the resolved source Sandbox ID at creation time. If that Sandbox is later
+recycled and delivered again, existing Checkpoints keep the prior delivery ID and later
+Checkpoints record the new delivery ID. No historical rewrite is performed.
 
 Pagination uses the resolved ID only as an opaque uniqueness component. An identity transition may
 change that component between list requests, like other mutable list state; the system does not
@@ -325,9 +391,12 @@ The rollout protocol is a correctness precondition:
 
 1. Deploy label-aware manager and gateway binaries with short-ID assignment disabled.
 2. The two components may be rolled out in either order while assignment remains disabled.
-3. Drain old replicas and their in-flight or retry peer traffic.
-4. Verify every relevant informer handler is synchronized.
-5. Enable assignment on sandbox-manager.
+3. Keep the prefix at 37 characters or fewer while old managers remain in the rollout.
+4. Drain old replicas and their in-flight or retry peer traffic.
+5. Verify every relevant informer handler is synchronized.
+6. Enable assignment on sandbox-manager. Each new manager first completes synchronous setup,
+   peer startup, and cache startup; it then allocates one worker and initializes its generator
+   before the proxy and E2B HTTP server can accept traffic.
 
 During the initial disabled rollout, new receivers ignore old ID-only peer route messages and rely
 on their own informer for convergence. A brief missing or stale route is acceptable during this
@@ -337,15 +406,41 @@ supported after assignment begins.
 Once any short label has been persisted, rolling back to a binary that ignores the label is unsafe.
 Such a binary would reconstruct the legacy ID and disagree with persisted identity.
 
-Turning `--enable-short-sandbox-id` off remains safe as a way to stop new assignments, but it is not
-a data rollback:
+Turning `--enable-short-sandbox-id` off remains safe as a way to stop new short assignments, but it
+is not a data rollback:
 
-- existing labels remain authoritative;
-- labeled Sandboxes remain short;
-- unlabeled Sandboxes remain legacy.
+- active labeled Sandboxes remain short until their delivery ends;
+- recycle clears their labels before returning them to the pool;
+- later disabled Claims use the legacy ID.
+
+Because a legacy ID is derived from the reusable namespace/name, disabled mode does not provide a
+distinct ID for each reuse of the same Sandbox CR. Per-delivery uniqueness therefore requires
+short-ID assignment to remain enabled after activation.
 
 Removing legacy compatibility is a separate future change after operators confirm that no
 supported unlabeled Sandboxes remain.
+
+### Worker exhaustion and disaster recovery
+
+One prefix supports 1,048,576 manager process incarnations. CrashLoop restarts consume worker IDs,
+although allocating only after earlier startup prerequisites succeed avoids consumption by those
+failures. Exhaustion recovery is deliberately a domain change rather than a counter reset:
+
+1. Scale sandbox-manager to zero and confirm all old processes have exited.
+2. Choose a prefix never used in this cluster's history.
+3. Update configuration and scale sandbox-manager back up. The new prefix maps to a new Lease and
+   starts at worker 0.
+4. Retain the old Lease and every active Sandbox and Checkpoint ID. Do not reset or delete them;
+   normal recycle will retire active Sandbox IDs when those deliveries end.
+
+If the Lease derived from the candidate prefix already exists, choose another prefix. Stopping old
+processes and resetting the old counter is unsupported because historical Sandbox/Checkpoint IDs
+and clock rollback can still reproduce a complete ID.
+
+An etcd snapshot restore rolls Kubernetes API objects back together, so it may also roll back the
+allocator Lease. Continuing with the same prefix after restore is an accepted duplicate-ID risk.
+The strict recovery procedure is the same: keep managers stopped and switch to a never-used prefix
+before serving traffic. See the [Kubernetes etcd operations documentation](https://kubernetes.io/docs/tasks/administer-cluster/configure-upgrade-etcd/).
 
 ## Operational Decisions and Trade-offs
 
@@ -354,8 +449,17 @@ supported unlabeled Sandboxes remain.
   structured route diagnostics remain the observability surface.
 - Persisted identity is preferred over a global response-format switch because a global switch
   could make one Sandbox alternate IDs during rollout or configuration changes.
-- Full UID encoding is preferred over truncation or a random allocation because it is deterministic
-  and avoids a separate collision protocol.
+- A startup Lease allocation protocol is accepted in exchange for a 13-character suffix and
+  atomic persistence in the original claim/clone write.
+- Late worker allocation reduces, but cannot eliminate, CrashLoop consumption. Prefix switching is
+  the recovery boundary for the fixed 20-bit worker field.
+- Ambiguous CAS writes are confirmed by a live re-read so process restarts do not blindly consume
+  an additional incarnation.
+- Prefix-scoped Leases keep recovery domains disjoint without deleting historical allocation state.
+- Deployments must prevent `CLOCK_REALTIME` from stepping backward while sandbox-manager runs.
+  Sonyflake's sequence-exhaustion wait cannot observe request cancellation, and a backward step can
+  extend that wait until the wall clock catches up. If this invariant cannot be guaranteed, replace
+  the generator with a context-aware scheduler.
 - A single active ID is preferred over permanent aliases because aliases complicate authorization,
   cache uniqueness, route deletion, and eventual removal of the legacy format.
 - Existing labels are trusted on read because read-time validation could split component behavior

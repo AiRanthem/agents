@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
@@ -68,6 +69,28 @@ type failingRouteSandboxSource struct {
 	err error
 }
 
+type workerAllocationFailureInfra struct {
+	infra.Infrastructure
+	cache infracache.Provider
+}
+
+func (workerAllocationFailureInfra) Run(context.Context) error {
+	return nil
+}
+
+func (i workerAllocationFailureInfra) GetCache() infracache.Provider {
+	return i.cache
+}
+
+type workerAllocationFailureCache struct {
+	infracache.Provider
+	reader ctrlclient.Reader
+}
+
+func (c workerAllocationFailureCache) GetAPIReader() ctrlclient.Reader {
+	return c.reader
+}
+
 func (s failingRouteSandboxSource) Subscribe(
 	context.Context,
 	infra.RouteSandboxEventHandler,
@@ -103,6 +126,33 @@ func withTestInfra(t *testing.T, opts config.SandboxManagerOptions) func() (infr
 			WithAPIReader(fc).
 			WithRouteReader(proxyServer), nil
 	}
+}
+
+func TestSandboxManagerRunFailsWhenWorkerAllocationFails(t *testing.T) {
+	cache, fc, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+	watchClient, ok := fc.(ctrlclient.WithWatch)
+	require.True(t, ok)
+	failingReader := interceptor.NewClient(watchClient, interceptor.Funcs{
+		Get: func(context.Context, ctrlclient.WithWatch, ctrlclient.ObjectKey, ctrlclient.Object, ...ctrlclient.GetOption) error {
+			return assert.AnError
+		},
+	})
+	manager := &SandboxManager{
+		infra: workerAllocationFailureInfra{cache: workerAllocationFailureCache{
+			Provider: cache,
+			reader:   failingReader,
+		}},
+		systemNamespace: "sandbox-system",
+		enableShortID:   true,
+		shortIDPrefix:   "prod-",
+		primary:         &primaryState{},
+	}
+
+	err = manager.Run(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, manager.generateSandboxID)
 }
 
 func TestNewSandboxManagerBuilder(t *testing.T) {
@@ -152,6 +202,7 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 			assert.NotNil(t, builder.instance, "instance should not be nil")
 			assert.NotNil(t, builder.instance.proxy, "proxy should not be nil")
 			assert.Equal(t, tt.expectSystemNamespace, builder.opts.SystemNamespace)
+			assert.Equal(t, tt.expectSystemNamespace, builder.instance.systemNamespace)
 			assert.Equal(t, tt.expectMaxClaimWorkers, builder.opts.MaxClaimWorkers)
 			assert.Equal(t, tt.expectExtProcConcurrency, builder.opts.ExtProcMaxConcurrency)
 			assert.Equal(t, tt.expectMaxCreateQPS, builder.opts.MaxCreateQPS)
@@ -169,8 +220,8 @@ func TestSandboxManagerBuilderValidatesShortIDPrefixBeforeInfra(t *testing.T) {
 	}{
 		{name: "invalid characters are rejected", prefix: "INVALID_", expectError: "short sandbox id prefix"},
 		{name: "legacy separator is rejected", prefix: "prod--x", expectError: "legacy ID separator"},
-		{name: "37-character prefix passes length validation", prefix: strings.Repeat("a", 37), expectError: "infra builder is not configured"},
-		{name: "38-character prefix is rejected", prefix: strings.Repeat("a", 38), expectError: "too long"},
+		{name: "50-character prefix passes length validation", prefix: strings.Repeat("a", 50), expectError: "infra builder is not configured"},
+		{name: "51-character prefix is rejected", prefix: strings.Repeat("a", 51), expectError: "too long"},
 	}
 
 	for _, tt := range tests {

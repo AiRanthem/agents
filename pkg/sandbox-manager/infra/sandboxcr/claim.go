@@ -412,19 +412,6 @@ func runClaimPostProcesses(ctx context.Context, sbx *Sandbox, lockType infra.Loc
 		log.Info("csi mount completed", "cost", metrics.CSIMount)
 	}
 
-	if opts.PostModifier != nil {
-		start := time.Now()
-		postCtx := logs.Extend(ctx, "stage", "post modifier")
-		_, err := sbx.retryUpdate(postCtx, func(cr *v1alpha1.Sandbox) (bool, error) {
-			return opts.PostModifier(cr)
-		})
-		metrics.PostModifier = time.Since(start)
-		metrics.Total += metrics.PostModifier
-		if err != nil {
-			return terminalMutationError{stage: "post modifier", err: err}
-		}
-	}
-
 	return nil
 }
 
