@@ -529,7 +529,7 @@ func TestServer_Process(t *testing.T) {
 				if route.Name == "" {
 					route.Name = route.ID
 				}
-				server.SetRoute(t.Context(), route)
+				server.SetRoute(route)
 			}
 
 			// Create mock processing server

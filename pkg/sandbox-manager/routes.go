@@ -18,25 +18,23 @@ package sandbox_manager
 
 import (
 	"context"
-	"errors"
 
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandboxroute"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infra.RouteSandboxEvent) {
+	log := klog.FromContext(ctx)
 	if event.Delete != nil {
 		result := m.proxy.Delete(*event.Delete)
-		key, _ := event.Delete.ObjectKey()
-		m.logRouteMutation(ctx, "delete", key, result)
+		sandboxroute.LogMutation(log, "delete", *event.Delete, result)
 		return
 	}
 	if event.Sandbox == nil {
-		klog.FromContext(ctx).Error(nil, "discarding empty manager route event")
+		log.Error(nil, "discarding empty manager route event")
 		return
 	}
 
@@ -51,37 +49,14 @@ func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infr
 	}
 	if event.Sandbox.GetDeletionTimestamp() != nil {
 		result := m.proxy.Delete(deletion)
-		m.logRouteMutation(ctx, "delete", key, result)
+		sandboxroute.LogMutation(log, "delete", deletion, result)
 		return
 	}
 	route, err := event.Sandbox.GetRoute()
 	if err != nil {
-		klog.FromContext(ctx).Error(err, "failed to project manager route", "namespace", key.Namespace, "name", key.Name)
+		log.Error(err, "failed to project manager route", "namespace", key.Namespace, "name", key.Name)
 		return
 	}
-	result := m.proxy.SetRoute(ctx, route)
-	m.logRouteMutation(ctx, "upsert", key, result)
-}
-
-func (m *SandboxManager) logRouteMutation(ctx context.Context, operation string, key types.NamespacedName, result sandboxroute.MutationResult) {
-	// proxy.SetRoute already logs invalid mutations at Error level.
-	if result.Result == sandboxroute.EventResultApplied && result.Reason == sandboxroute.ReasonIDTakeover {
-		klog.FromContext(ctx).Error(
-			errors.New(string(result.Reason)),
-			"manager route mutation ID takeover",
-			"operation", operation,
-			"reason", result.Reason,
-			"namespace", key.Namespace,
-			"name", key.Name,
-		)
-		return
-	}
-	klog.FromContext(ctx).V(utils.DebugLogLevel).Info(
-		"manager route mutation completed",
-		"operation", operation,
-		"reason", result.Reason,
-		"result", result.Result,
-		"namespace", key.Namespace,
-		"name", key.Name,
-	)
+	result := m.proxy.SetRoute(route)
+	sandboxroute.LogMutation(log, "upsert", route, result)
 }

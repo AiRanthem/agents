@@ -1108,7 +1108,7 @@ func TestSandboxManager_ResumeSandbox(t *testing.T) {
 			// Set initial route in proxy
 			initialRoute, err := sbx.GetRoute()
 			require.NoError(t, err)
-			manager.proxy.SetRoute(t.Context(), initialRoute)
+			manager.proxy.SetRoute(initialRoute)
 
 			// Resume sandbox
 			if !tt.expectError {
@@ -1450,7 +1450,7 @@ func TestSandboxManager_GetOwnerOfSandbox(t *testing.T) {
 					},
 				}
 				CreateSandboxWithStatus(t, client, sandbox)
-				manager.proxy.SetRoute(t.Context(), sandboxroute.Route{
+				manager.proxy.SetRoute(sandboxroute.Route{
 					ID:              tt.sandboxID,
 					IP:              "10.0.0.1",
 					Namespace:       sandbox.GetNamespace(),
@@ -1633,7 +1633,7 @@ func TestSandboxManager_DeleteSandbox(t *testing.T) {
 			// Set initial route
 			initialRoute, err := sbx.GetRoute()
 			require.NoError(t, err)
-			manager.proxy.SetRoute(t.Context(), initialRoute)
+			manager.proxy.SetRoute(initialRoute)
 
 			// Decorator: DefaultDeleteSandbox - control delete result (set after getting sandbox)
 			if tt.mockDeleteErr != nil {
@@ -2114,7 +2114,7 @@ func TestSandboxManager_deleteRouteAndSync(t *testing.T) {
 			if tt.setRouteInProxy {
 				initialRoute, err := sbx.GetRoute()
 				require.NoError(t, err)
-				manager.proxy.SetRoute(t.Context(), initialRoute)
+				manager.proxy.SetRoute(initialRoute)
 				_, ok := manager.proxy.LoadRoute(sbx.GetSandboxID())
 				require.True(t, ok, "route should exist before deleteRouteAndSync")
 			}
@@ -2369,7 +2369,7 @@ func TestSandboxManagerReleaseQuotaAfterDelete(t *testing.T) {
 
 	initialRoute, err := sbx.GetRoute()
 	require.NoError(t, err)
-	manager.proxy.SetRoute(t.Context(), initialRoute)
+	manager.proxy.SetRoute(initialRoute)
 
 	quotaSpec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 5}}}
 	err = manager.DeleteSandbox(t.Context(), DeleteSandboxOptions{
@@ -2468,7 +2468,7 @@ func TestSandboxManager_DeleteSandboxRecycle(t *testing.T) {
 
 			route, err := sbx.GetRoute()
 			require.NoError(t, err)
-			manager.proxy.SetRoute(t.Context(), route)
+			manager.proxy.SetRoute(route)
 
 			err = manager.DeleteSandbox(t.Context(), DeleteSandboxOptions{
 				Sandbox: sbx,

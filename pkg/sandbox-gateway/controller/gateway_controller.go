@@ -36,7 +36,6 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-gateway/jwtauth"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
 	"github.com/openkruise/agents/pkg/sandboxroute"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
 // ManagerOptions supplies gateway composition dependencies.
@@ -52,9 +51,10 @@ type routeEventHandler struct {
 }
 
 func (h *routeEventHandler) onObject(ctx context.Context, obj any) {
+	logger := log.FromContext(ctx)
 	sandbox, ok := obj.(*agentsv1alpha1.Sandbox)
 	if !ok {
-		log.FromContext(ctx).Error(
+		logger.Error(
 			nil,
 			"discarding unexpected gateway route informer object",
 			"type", fmt.Sprintf("%T", obj),
@@ -69,18 +69,19 @@ func (h *routeEventHandler) onObject(ctx context.Context, obj any) {
 		ResourceVersion: sandbox.ResourceVersion,
 	}
 	if sandbox.DeletionTimestamp != nil {
-		h.logMutation(ctx, "delete", key, h.registry.Delete(deletion))
+		sandboxroute.LogMutation(logger, "delete", deletion, h.registry.Delete(deletion))
 		return
 	}
 	route, err := sandboxroute.ProjectSandbox(sandbox)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "failed to project gateway route", "namespace", key.Namespace, "name", key.Name)
+		logger.Error(err, "failed to project gateway route", "namespace", key.Namespace, "name", key.Name)
 		return
 	}
-	h.logMutation(ctx, "upsert", key, h.registry.Upsert(route))
+	sandboxroute.LogMutation(logger, "upsert", route, h.registry.Upsert(route))
 }
 
 func (h *routeEventHandler) onDelete(ctx context.Context, obj any) {
+	logger := log.FromContext(ctx)
 	var deletion sandboxroute.Route
 	switch value := obj.(type) {
 	case *agentsv1alpha1.Sandbox:
@@ -94,59 +95,20 @@ func (h *routeEventHandler) onDelete(ctx context.Context, obj any) {
 		// Empty resource version is reserved for an untrusted tombstone.
 		namespace, name, err := toolscache.SplitMetaNamespaceKey(value.Key)
 		if err != nil || namespace == "" || name == "" {
-			log.FromContext(ctx).Error(err, "discarding invalid gateway route tombstone", "key", value.Key)
+			logger.Error(err, "discarding invalid gateway route tombstone", "key", value.Key)
 			return
 		}
 		deletion.Namespace = namespace
 		deletion.Name = name
 	default:
-		log.FromContext(ctx).Error(
+		logger.Error(
 			nil,
 			"discarding unexpected gateway route delete object",
 			"type", fmt.Sprintf("%T", obj),
 		)
 		return
 	}
-	key, _ := deletion.ObjectKey()
-	h.logMutation(ctx, "delete", key, h.registry.Delete(deletion))
-}
-
-func (h *routeEventHandler) logMutation(
-	ctx context.Context,
-	operation string,
-	key types.NamespacedName,
-	result sandboxroute.MutationResult,
-) {
-	logger := log.FromContext(ctx)
-	if result.Result == sandboxroute.EventResultInvalid {
-		logger.Error(
-			errors.New(string(result.Reason)),
-			"gateway route mutation rejected",
-			"operation", operation,
-			"namespace", key.Namespace,
-			"name", key.Name,
-		)
-		return
-	}
-	if result.Result == sandboxroute.EventResultApplied && result.Reason == sandboxroute.ReasonIDTakeover {
-		logger.Error(
-			errors.New(string(result.Reason)),
-			"gateway route mutation ID takeover",
-			"operation", operation,
-			"reason", result.Reason,
-			"namespace", key.Namespace,
-			"name", key.Name,
-		)
-		return
-	}
-	logger.V(utils.DebugLogLevel).Info(
-		"gateway route mutation completed",
-		"operation", operation,
-		"namespace", key.Namespace,
-		"name", key.Name,
-		"result", result.Result,
-		"reason", result.Reason,
-	)
+	sandboxroute.LogMutation(logger, "delete", deletion, h.registry.Delete(deletion))
 }
 
 // StartManager starts the gateway Sandbox informer route feed.

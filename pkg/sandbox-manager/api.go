@@ -328,8 +328,8 @@ func (m *SandboxManager) syncRoute(ctx context.Context, sbx infra.Sandbox, refre
 		return err
 	}
 	span.SetAttributes(attribute.String(tracing.AttrRouteID, route.ID))
-	result := m.proxy.SetRoute(ctx, route)
-	m.logRouteMutation(ctx, "upsert", types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}, result)
+	result := m.proxy.SetRoute(route)
+	sandboxroute.LogMutation(log, "upsert", route, result)
 	err = m.proxy.SyncRouteWithPeers(context.WithoutCancel(ctx), route)
 	duration := time.Since(start).Seconds()
 	span.SetAttributes(attribute.Bool(tracing.AttrPeersSynced, err == nil))
@@ -404,12 +404,13 @@ func (m *SandboxManager) ResumeSandbox(ctx context.Context, sbx infra.Sandbox, o
 func (m *SandboxManager) deleteRouteAndSync(ctx context.Context, sbx infra.Sandbox) {
 	log := klog.FromContext(ctx)
 	key := types.NamespacedName{Namespace: sbx.GetNamespace(), Name: sbx.GetName()}
-	result := m.proxy.Delete(sandboxroute.Route{
+	deletion := sandboxroute.Route{
 		Namespace:       key.Namespace,
 		Name:            key.Name,
 		ResourceVersion: sbx.GetResourceVersion(),
-	})
-	m.logRouteMutation(ctx, "delete", key, result)
+	}
+	result := m.proxy.Delete(deletion)
+	sandboxroute.LogMutation(log, "delete", deletion, result)
 	route, err := sbx.GetRoute()
 	if err != nil {
 		log.Error(err, "failed to project deleted sandbox route")

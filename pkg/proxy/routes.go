@@ -23,26 +23,14 @@ import (
 	"net/http"
 	"sync"
 
-	"k8s.io/klog/v2"
-
 	"github.com/openkruise/agents/pkg/peers"
 	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
-	"github.com/openkruise/agents/pkg/utils"
 )
 
-func (s *Server) SetRoute(ctx context.Context, route sandboxroute.Route) sandboxroute.MutationResult {
-	log := klog.FromContext(ctx)
+func (s *Server) SetRoute(route sandboxroute.Route) sandboxroute.MutationResult {
 	result := s.store.Upsert(route)
-	switch result.Result {
-	case sandboxroute.EventResultInvalid:
-		log.Error(errors.New(string(result.Reason)), "rejected invalid route mutation", "route", route)
-	case sandboxroute.EventResultApplied:
-		log.Info("route applied", "reason", result.Reason, "route", route)
-	default:
-		log.V(utils.DebugLogLevel).Info("route mutation ignored", "result", result.Result, "reason", result.Reason, "route", route)
-	}
 	s.updateRouteCount()
 	return result
 }
