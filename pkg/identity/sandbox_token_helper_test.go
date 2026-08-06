@@ -123,7 +123,8 @@ var _ IdentityProvider = (*kindCapturingProvider)(nil)
 // distinct "failed to issue access token" prefix while preserving the cause via
 // errors.Is. Like its twin, it must forward the sandbox pointer unchanged, call
 // the provider exactly once, return the response as-is on success, and return a
-// nil response on error so callers never persist a zero-value token.
+// nil response on provider or contract-validation errors so callers never
+// persist a zero-value token.
 func TestIssueSandboxAccessToken(t *testing.T) {
 	wantResp := &TokenResponse{
 		RequestID:             "req-access",
@@ -151,6 +152,26 @@ func TestIssueSandboxAccessToken(t *testing.T) {
 			expectError: "failed to issue access token",
 			wantCause:   rootErr,
 		},
+		{
+			name:        "nil response is rejected",
+			fake:        &kindCapturingProvider{},
+			expectError: "empty access token response",
+		},
+		{
+			name: "empty token is rejected",
+			fake: &kindCapturingProvider{resp: &TokenResponse{
+				AccessTokenExpiration: "2099-01-01T00:00:00Z",
+			}},
+			expectError: "empty access token",
+		},
+		{
+			name: "invalid expiration is rejected",
+			fake: &kindCapturingProvider{resp: &TokenResponse{
+				AccessToken:           "access-tok",
+				AccessTokenExpiration: "not-a-time",
+			}},
+			expectError: "invalid access token expiration",
+		},
 	}
 
 	for _, tt := range tests {
@@ -174,8 +195,10 @@ func TestIssueSandboxAccessToken(t *testing.T) {
 				assert.Nil(t, gotResp, "response must be nil on error to prevent persisting a zero-value token")
 				assert.Contains(t, err.Error(), tt.expectError,
 					"wrap message must remain stable for downstream phase classification")
-				assert.True(t, errors.Is(err, tt.wantCause),
-					"wrapped error must preserve the original cause via errors.Is")
+				if tt.wantCause != nil {
+					assert.True(t, errors.Is(err, tt.wantCause),
+						"wrapped error must preserve the original cause via errors.Is")
+				}
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, gotResp)

@@ -58,8 +58,8 @@ type Sandbox struct {
 	Cache           cache.Provider
 	storageRegistry storages.VolumeMountProviderRegistry
 	// trafficToken holds the access token response minted for accessing this
-	// sandbox through the sandbox gateway. It is transient and per-claim: set in
-	// memory during runClaimPostProcesses and never persisted to the CR, so
+	// sandbox through the sandbox gateway. It is transient and per-operation: set
+	// in memory during claim or clone and never persisted to the CR, so
 	// InplaceRefresh / retryUpdate reassigning s.Sandbox do not clear it.
 	trafficToken *identity.TokenResponse
 }
@@ -233,7 +233,7 @@ func (s *Sandbox) GetSandboxID() string {
 	return utils.GetSandboxID(s.Sandbox)
 }
 
-// GetTrafficAccessToken returns the transient access token minted during claim
+// GetTrafficAccessToken returns the transient access token minted during claim or clone
 // for accessing this sandbox through the sandbox gateway. It is empty unless
 // the sandbox opted in via AnnotationEnableJwtAuth.
 func (s *Sandbox) GetTrafficAccessToken() string {
@@ -244,7 +244,7 @@ func (s *Sandbox) GetTrafficAccessToken() string {
 }
 
 // GetTrafficAccessTokenExpiration returns the expiration time (RFC3339) of the
-// transient traffic token minted during claim. It is empty unless the sandbox
+// transient traffic token minted during claim or clone. It is empty unless the sandbox
 // opted in via AnnotationEnableJwtAuth.
 func (s *Sandbox) GetTrafficAccessTokenExpiration() string {
 	if s.trafficToken == nil {

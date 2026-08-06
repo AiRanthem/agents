@@ -4146,11 +4146,15 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 
 // mockIdentityProvider is a configurable mock for testing TryClaimSandbox security token flows.
 type mockIdentityProvider struct {
-	issueTokenFunc func(ctx context.Context, sbx *v1alpha1.Sandbox) (*identity.TokenResponse, error)
-	propagateFunc  func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error
+	issueTokenFunc         func(ctx context.Context, sbx *v1alpha1.Sandbox) (*identity.TokenResponse, error)
+	issueTokenWithKindFunc func(ctx context.Context, sbx *v1alpha1.Sandbox, kind identity.TokenKind) (*identity.TokenResponse, error)
+	propagateFunc          func(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error
 }
 
-func (m *mockIdentityProvider) IssueToken(ctx context.Context, sbx *v1alpha1.Sandbox, _ identity.TokenKind) (*identity.TokenResponse, error) {
+func (m *mockIdentityProvider) IssueToken(ctx context.Context, sbx *v1alpha1.Sandbox, kind identity.TokenKind) (*identity.TokenResponse, error) {
+	if m.issueTokenWithKindFunc != nil {
+		return m.issueTokenWithKindFunc(ctx, sbx, kind)
+	}
 	if m.issueTokenFunc != nil {
 		return m.issueTokenFunc(ctx, sbx)
 	}

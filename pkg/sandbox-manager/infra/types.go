@@ -228,6 +228,7 @@ type CloneMetrics struct {
 	WaitReady     time.Duration
 	InitRuntime   time.Duration
 	SecurityToken time.Duration
+	TrafficToken  time.Duration
 	CSIMount      time.Duration
 	Total         time.Duration
 	LastError     error
@@ -238,8 +239,8 @@ func (m *CloneMetrics) String() string {
 	if m.LastError != nil {
 		lastErrStr = sanitizeErrorMessage(m.LastError)
 	}
-	return fmt.Sprintf("CloneMetrics{Retries: %d, Wait: %v, GetTemplate: %v, CreateSandbox: %v, WaitReady: %v, InitRuntime: %v, SecurityToken: %v, CSIMount: %v, Total: %v, LastError: %v}",
-		m.Retries, m.Wait, m.GetTemplate, m.CreateSandbox, m.WaitReady, m.InitRuntime, m.SecurityToken, m.CSIMount, m.Total, lastErrStr)
+	return fmt.Sprintf("CloneMetrics{Retries: %d, Wait: %v, GetTemplate: %v, CreateSandbox: %v, WaitReady: %v, InitRuntime: %v, SecurityToken: %v, TrafficToken: %v, CSIMount: %v, Total: %v, LastError: %v}",
+		m.Retries, m.Wait, m.GetTemplate, m.CreateSandbox, m.WaitReady, m.InitRuntime, m.SecurityToken, m.TrafficToken, m.CSIMount, m.Total, lastErrStr)
 }
 
 // Merge accumulates per-attempt durations from src into m. Retries and
@@ -252,6 +253,7 @@ func (m *CloneMetrics) Merge(src CloneMetrics) {
 	m.WaitReady += src.WaitReady
 	m.InitRuntime += src.InitRuntime
 	m.SecurityToken += src.SecurityToken
+	m.TrafficToken += src.TrafficToken
 	m.CSIMount += src.CSIMount
 	m.Total += src.Total
 }

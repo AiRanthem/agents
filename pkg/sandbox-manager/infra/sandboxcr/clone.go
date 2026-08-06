@@ -192,7 +192,7 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 
 	// Step 6: process security token
 	// Issue and propagate the identity-provider security token before performing
-	// CSI mounts, mirroring the claim flow ordering.
+	// access-token issuance and CSI mounts, mirroring the claim flow ordering.
 	if identity.IsIDTokenRequested(sbx.Sandbox) {
 		metrics.SecurityToken, err = identity.ProcessSandboxToken(ctx, cache.GetClient(), sbx.Sandbox)
 		if err != nil {
@@ -204,7 +204,26 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 		metrics.Total += metrics.SecurityToken
 	}
 
-	// Step 7: csi mount
+	// Step 7: issue traffic access token
+	// Mint a new traffic access token for the cloned sandbox. The token is bound
+	// to the clone's identity and stays only on the transient wrapper returned to
+	// the API layer; it is never persisted to the Sandbox or Checkpoint.
+	if identity.IsAccessTokenRequested(sbx.Sandbox) {
+		start := time.Now()
+		accessResp, issueErr := identity.IssueSandboxAccessToken(ctx, sbx.Sandbox)
+		metrics.TrafficToken = time.Since(start)
+		metrics.Total += metrics.TrafficToken
+		if issueErr != nil {
+			err = issueErr
+			if !wait.Interrupted(err) {
+				err = retriableError{Message: issueErr.Error()}
+			}
+			return
+		}
+		sbx.trafficToken = accessResp
+	}
+
+	// Step 8: csi mount
 	// If opts.CSIMount is not provided from request, try to resolve mount options from sandbox annotation.
 	if opts.CSIMount == nil {
 		var resolveErr error
@@ -321,8 +340,12 @@ func prepareSandboxFromCheckpoint(ctx context.Context, opts infra.CloneSandboxOp
 		sbx.Annotations[v1alpha1.AnnotationRuntimeAccessToken] = initRuntimeOpts.AccessToken
 		sbx.Annotations[v1alpha1.AnnotationInitRuntimeRequest] = cp.Annotations[v1alpha1.AnnotationInitRuntimeRequest]
 	}
-	// e.g., copy csi mount config from checkpoint to sandbox obj
+	requestJWTAuth, requestJWTAuthProvided := sbx.Annotations[identity.AnnotationEnableJwtAuth]
 	RestoreAnnotationsFromCheckpoint(cp, sbx.Sandbox)
+	// Explicit clone settings take precedence over values restored from the checkpoint.
+	if requestJWTAuthProvided {
+		sbx.Annotations[identity.AnnotationEnableJwtAuth] = requestJWTAuth
+	}
 	// When the clone request explicitly provides CSI mount configs, they take
 	// precedence over the csi-volume-config restored from the checkpoint. This
 	// keeps the persisted annotation consistent with the mount performed in the

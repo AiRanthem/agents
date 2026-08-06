@@ -148,8 +148,25 @@ func IssueSandboxAccessToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox) (
 		log.Error(err, "failed to issue sandbox access token", "cost", cost)
 		return nil, fmt.Errorf("failed to issue access token: %w", err)
 	}
+	if err = validateAccessTokenResponse(accessResp); err != nil {
+		log.Error(err, "identity provider returned an invalid sandbox access token", "cost", cost)
+		return nil, fmt.Errorf("invalid access token response: %w", err)
+	}
 	log.Info("sandbox access token issued", "cost", cost)
 	return accessResp, nil
+}
+
+func validateAccessTokenResponse(resp *TokenResponse) error {
+	if resp == nil {
+		return fmt.Errorf("identity provider returned an empty access token response")
+	}
+	if resp.AccessToken == "" {
+		return fmt.Errorf("identity provider returned an empty access token")
+	}
+	if _, err := time.Parse(time.RFC3339, resp.AccessTokenExpiration); err != nil {
+		return fmt.Errorf("identity provider returned an invalid access token expiration: %w", err)
+	}
+	return nil
 }
 
 // PropagateSandboxToken propagates the freshly issued security token to the

@@ -1248,7 +1248,7 @@ func TestInfra_CloneSandboxDoesNotRetryCreateFailure(t *testing.T) {
 
 func assertCloneMetricsTotalConsistent(t *testing.T, metrics infra.CloneMetrics) {
 	t.Helper()
-	expectedTotal := metrics.Wait + metrics.GetTemplate + metrics.CreateSandbox + metrics.WaitReady + metrics.InitRuntime + metrics.SecurityToken + metrics.CSIMount
+	expectedTotal := metrics.Wait + metrics.GetTemplate + metrics.CreateSandbox + metrics.WaitReady + metrics.InitRuntime + metrics.SecurityToken + metrics.TrafficToken + metrics.CSIMount
 	assert.Equal(t, expectedTotal, metrics.Total)
 }
 

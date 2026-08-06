@@ -41,6 +41,7 @@ import (
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
+	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
@@ -1251,11 +1252,12 @@ func TestCloneSandbox(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		request     models.NewSandboxRequest
-		expectError *web.ApiError
-		postCheck   func(t *testing.T, resp *models.Sandbox, controller *Controller)
-		setup       func(t *testing.T, controller *Controller, fc ctrlclient.Client)
+		name                  string
+		request               models.NewSandboxRequest
+		checkpointAnnotations map[string]string
+		expectError           *web.ApiError
+		postCheck             func(t *testing.T, resp *models.Sandbox, controller *Controller)
+		setup                 func(t *testing.T, controller *Controller, fc ctrlclient.Client)
 	}{
 		{
 			name: "clone success",
@@ -1284,6 +1286,54 @@ func TestCloneSandbox(t *testing.T) {
 			request: models.NewSandboxRequest{
 				TemplateID: checkpointID,
 				Timeout:    1200,
+			},
+		},
+		{
+			name: "clone inherits JWT auth and returns transient traffic token",
+			request: models.NewSandboxRequest{
+				TemplateID: checkpointID,
+				Timeout:    300,
+			},
+			checkpointAnnotations: map[string]string{
+				identity.AnnotationEnableJwtAuth: v1alpha1.True,
+			},
+			setup: func(t *testing.T, _ *Controller, _ ctrlclient.Client) {
+				identity.RegisterProvider(identity.NewDefaultIdentityProvider())
+				t.Cleanup(func() { identity.RegisterProvider(identity.NewDefaultIdentityProvider()) })
+			},
+			postCheck: func(t *testing.T, resp *models.Sandbox, controller *Controller) {
+				require.NotEmpty(t, resp.TrafficAccessToken)
+				require.NotEmpty(t, resp.TrafficAccessTokenExpiration)
+				_, err := time.Parse(time.RFC3339, resp.TrafficAccessTokenExpiration)
+				require.NoError(t, err)
+
+				persisted, err := controller.manager.GetSandbox(t.Context(), keys.AdminKeyID.String(), []string{v1alpha1.SandboxStateRunning}, infra.GetSandboxOptions{
+					SandboxID: resp.SandboxID,
+				})
+				require.NoError(t, err)
+				assert.Empty(t, persisted.GetTrafficAccessToken())
+				assert.Empty(t, persisted.GetTrafficAccessTokenExpiration())
+				for _, value := range persisted.GetAnnotations() {
+					assert.NotEqual(t, resp.TrafficAccessToken, value)
+					assert.NotEqual(t, resp.TrafficAccessTokenExpiration, value)
+				}
+			},
+		},
+		{
+			name: "clone request disables inherited JWT auth",
+			request: models.NewSandboxRequest{
+				TemplateID: checkpointID,
+				Timeout:    300,
+				Metadata: map[string]string{
+					identity.AnnotationEnableJwtAuth: v1alpha1.False,
+				},
+			},
+			checkpointAnnotations: map[string]string{
+				identity.AnnotationEnableJwtAuth: v1alpha1.True,
+			},
+			postCheck: func(t *testing.T, resp *models.Sandbox, _ *Controller) {
+				assert.Empty(t, resp.TrafficAccessToken)
+				assert.Empty(t, resp.TrafficAccessTokenExpiration)
 			},
 		},
 		{
@@ -1449,7 +1499,12 @@ func TestCloneSandbox(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t, controller, fc)
 			}
-			cleanup := CreateCheckpointAndTemplate(t, controller, checkpointID)
+			var cleanup func()
+			if tt.checkpointAnnotations != nil {
+				cleanup = CreateCheckpointAndTemplateWithAnnotations(t, controller, checkpointID, tt.checkpointAnnotations)
+			} else {
+				cleanup = CreateCheckpointAndTemplate(t, controller, checkpointID)
+			}
 			defer cleanup()
 
 			now := time.Now()
