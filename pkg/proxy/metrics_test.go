@@ -35,18 +35,18 @@ func TestRoutesTotal(t *testing.T) {
 	}{
 		{
 			name:        "increment on new route",
-			op:          func(t *testing.T, s *Server) { s.SetRoute(t.Context(), testProxyRoute("metrics-1", "1.2.3.4", "1")) },
+			op:          func(_ *testing.T, s *Server) { s.SetRoute(testProxyRoute("metrics-1", "1.2.3.4", "1")) },
 			expectDelta: 1,
 		},
 		{
 			name:        "no increment on update",
-			arrange:     func(t *testing.T, s *Server) { s.SetRoute(t.Context(), testProxyRoute("metrics-2", "1.2.3.4", "1")) },
-			op:          func(t *testing.T, s *Server) { s.SetRoute(t.Context(), testProxyRoute("metrics-2", "5.6.7.8", "2")) },
+			arrange:     func(_ *testing.T, s *Server) { s.SetRoute(testProxyRoute("metrics-2", "1.2.3.4", "1")) },
+			op:          func(_ *testing.T, s *Server) { s.SetRoute(testProxyRoute("metrics-2", "5.6.7.8", "2")) },
 			expectDelta: 0,
 		},
 		{
 			name:        "decrement on delete",
-			arrange:     func(t *testing.T, s *Server) { s.SetRoute(t.Context(), testProxyRoute("metrics-3", "1.2.3.4", "1")) },
+			arrange:     func(_ *testing.T, s *Server) { s.SetRoute(testProxyRoute("metrics-3", "1.2.3.4", "1")) },
 			op:          func(t *testing.T, s *Server) { s.Delete(testProxyRoute("metrics-3", "", "2")) },
 			expectDelta: -1,
 		},

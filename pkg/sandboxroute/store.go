@@ -39,9 +39,8 @@ type Reason string
 const (
 	ReasonInvalidRoute         Reason = "invalid_route"
 	ReasonStaleResourceVersion Reason = "stale_resource_version"
-	// ReasonIDTakeover marks an applied upsert whose ID was previously active
-	// for a different object. Duplicate IDs across objects are unsupported;
-	// the reason makes the silent last-write-wins takeover observable.
+	// ReasonIDTakeover marks an applied upsert whose ID was active for another
+	// ObjectKey; the incoming route becomes the active lookup result.
 	ReasonIDTakeover Reason = "id_takeover"
 )
 
@@ -63,6 +62,9 @@ type deletionFence struct {
 
 // Store owns source records, deletion fences, and an active ID-to-ObjectKey index.
 // A record and a deletion fence for the same ObjectKey never coexist.
+// Supported producers must supply IDs that are unique across ObjectKeys.
+// Duplicate IDs violate the upstream identity contract; Store reports a
+// takeover defensively but does not define collision-recovery semantics.
 type Store struct {
 	mu                       sync.RWMutex
 	recordByObject           map[types.NamespacedName]Route

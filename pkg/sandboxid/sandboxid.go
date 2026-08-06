@@ -20,6 +20,7 @@ import (
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,6 +46,8 @@ const (
 var shortEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 var sonyflakeEpoch = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+var validPrefixPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // NewGenerator creates a generator with a 41-bit millisecond timestamp, a
 // 20-bit worker ID, and a 2-bit sequence number.
@@ -102,12 +105,6 @@ func Legacy(namespace, name string) string {
 // ID cannot collide with the legacy ID space. Callers own broader prefix and
 // ID correctness policy.
 func ValidatePrefix(prefix string) error {
-	if prefix != "" && !isLowerAlphanumeric(prefix[0]) {
-		return fmt.Errorf(
-			"short sandbox ID prefix %q is invalid: it must start with a lowercase letter or digit",
-			prefix,
-		)
-	}
 	if strings.Contains(prefix, LegacySeparator) {
 		return fmt.Errorf(
 			"short sandbox ID prefix %q is invalid: it must not contain the legacy ID separator %q",
@@ -115,22 +112,14 @@ func ValidatePrefix(prefix string) error {
 			LegacySeparator,
 		)
 	}
-	for i := 1; i < len(prefix); i++ {
-		char := prefix[i]
-		if isLowerAlphanumeric(char) || char == '-' {
-			continue
-		}
+	// The rejected value and complete accepted pattern provide sufficient startup
+	// diagnosis; the flag help documents the same rule in plain language.
+	if prefix != "" && !validPrefixPattern.MatchString(prefix) {
 		return fmt.Errorf(
-			"short sandbox ID prefix %q is invalid: character %q at position %d is not "+
-				"a lowercase letter, digit, or hyphen",
+			"short sandbox ID prefix %q is invalid: it must match %q",
 			prefix,
-			char,
-			i,
+			validPrefixPattern,
 		)
 	}
 	return nil
-}
-
-func isLowerAlphanumeric(char byte) bool {
-	return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9')
 }

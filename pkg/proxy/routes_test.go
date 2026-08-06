@@ -150,10 +150,10 @@ func TestSetRoute(t *testing.T) {
 			s := newTestServer(nil)
 			routeCount.Set(-1)
 			for _, route := range tt.arrange {
-				s.SetRoute(t.Context(), route)
+				s.SetRoute(route)
 			}
 
-			result := s.SetRoute(t.Context(), tt.incoming)
+			result := s.SetRoute(tt.incoming)
 
 			assert.Equal(t, tt.expectResult, result.Result)
 			if tt.expectResult == sandboxroute.EventResultInvalid {
@@ -207,7 +207,7 @@ func TestDelete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestServer(nil)
 			for _, route := range tt.arrange {
-				s.SetRoute(t.Context(), route)
+				s.SetRoute(route)
 			}
 			routeCount.Set(-1)
 
@@ -467,14 +467,14 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	mux1.HandleFunc(refresh.Path, func(w http.ResponseWriter, r *http.Request) {
 		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
-		server1.SetRoute(r.Context(), route)
+		server1.SetRoute(route)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux2 := http.NewServeMux()
 	mux2.HandleFunc(refresh.Path, func(w http.ResponseWriter, r *http.Request) {
 		var route sandboxroute.Route
 		_ = json.NewDecoder(r.Body).Decode(&route)
-		server2.SetRoute(r.Context(), route)
+		server2.SetRoute(route)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
