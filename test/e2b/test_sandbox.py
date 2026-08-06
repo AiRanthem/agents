@@ -304,7 +304,7 @@ def test_auto_pause_resume_no_immediate_repause(sandbox_context, config):
         }
     ))
     logger.info("sandbox-id: %s", sbx.sandbox_id)
-    sandbox_name = sbx.sandbox_id
+    _, sandbox_name = resolve_sandbox_cr(sbx.sandbox_id)
 
     # Step 1: wait for the controller to auto-pause the sandbox.
     pause_deadline = time.time() + auto_pause_timeout_seconds + 60
