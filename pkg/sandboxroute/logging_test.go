@@ -68,11 +68,12 @@ func TestLogMutation(t *testing.T) {
 			},
 		},
 		{
-			name:      "applied mutation logs at info level",
-			operation: "upsert",
-			result:    MutationResult{Result: EventResultApplied},
-			expectMsg: "route mutation completed",
-			expectKV:  map[string]any{"result": "applied"},
+			name:        "applied mutation logs at debug level",
+			operation:   "upsert",
+			result:      MutationResult{Result: EventResultApplied},
+			expectLevel: float64(utils.DebugLogLevel),
+			expectMsg:   "route mutation completed",
+			expectKV:    map[string]any{"result": "applied"},
 		},
 		{
 			name:        "applied deletion logs at debug level",
