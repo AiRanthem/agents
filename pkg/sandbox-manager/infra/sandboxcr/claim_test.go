@@ -4416,3 +4416,93 @@ func TestTryClaimSandbox_SecurityToken(t *testing.T) {
 		})
 	}
 }
+
+// TestRunClaimPostProcesses_RuntimeTransport pins the claim-level behaviour of
+// the runtime transport gate. runtime.TestTransportOptionsFor already covers the
+// resolution matrix itself; what this test adds is how claim post-processing
+// reacts to it:
+//
+//   - a sandbox advertising the runtime TLS capability while the caller holds no
+//     bundle fails the claim instead of falling back to plaintext;
+//   - the gate runs ahead of the InitRuntime and CSIMount branches, so it fails
+//     even when the claim would make no runtime call at all — every case below
+//     leaves both options nil, so moving the resolution inside either branch
+//     would regress silently;
+//   - that failure stays non-retriable, since retrying cannot conjure
+//     certificate material;
+//   - a legacy sandbox carrying no capability annotation keeps working
+//     unchanged once the manager is configured with a bundle.
+func TestRunClaimPostProcesses_RuntimeTransport(t *testing.T) {
+	bundle := &runtime.TLSBundle{CABundle: []byte("pem")}
+
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		bundle      *runtime.TLSBundle
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "tls-capable sandbox without bundle fails the claim",
+			annotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			wantErr:     true,
+			errContains: "no client TLS bundle is configured",
+		},
+		{
+			name:        "tls-capable sandbox with bundle passes the transport gate",
+			annotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "49984"},
+			bundle:      bundle,
+		},
+		{
+			// The direct evidence that enabling runtime TLS leaves already
+			// running sandboxes alone: they carry no capability annotation, so
+			// they stay on the plaintext paths even though a bundle is present.
+			name:   "legacy sandbox is unaffected once runtime TLS is enabled",
+			bundle: bundle,
+		},
+		{
+			name: "legacy sandbox stays on the plaintext path without a bundle",
+		},
+		{
+			// A present but unparsable annotation means a broken injection
+			// template, which must not be papered over either.
+			name:        "unparsable capability annotation fails the claim",
+			annotations: map[string]string{agentsv1alpha1.AnnotationRuntimeTLSPort: "not-a-port"},
+			bundle:      bundle,
+			wantErr:     true,
+			errContains: "invalid runtime TLS port annotation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbx := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-sandbox",
+					Namespace:   "default",
+					Annotations: tt.annotations,
+				},
+			}}
+			// LockTypeUpdate without InplaceUpdate skips the wait-ready gate, and
+			// nil InitRuntime/CSIMount skip every runtime call, leaving the
+			// transport gate as the only step exercised here. The sandbox also
+			// carries no identity annotations, so both token steps are skipped
+			// and the nil cache is never dereferenced.
+			opts := infra.ClaimSandboxOptions{RuntimeTLSBundle: tt.bundle}
+
+			err := runClaimPostProcesses(t.Context(), sbx, infra.LockTypeUpdate, opts, nil, &infra.ClaimMetrics{})
+
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errContains)
+			// Missing or broken certificate material is a configuration error:
+			// classifying it as retriable would make ClaimSandbox burn its retry
+			// budget on an outcome that cannot change.
+			var retryErr retriableError
+			assert.False(t, errors.As(err, &retryErr), "transport resolution failure must not be retriable")
+		})
+	}
+}

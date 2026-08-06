@@ -90,9 +90,17 @@ type ClaimSandboxOptions struct {
 	Claim *v1alpha1.SandboxClaim `json:"-"`
 	// RuntimeTLSBundle is the client TLS bundle used to reach a TLS-capable
 	// agent-runtime during claim post-processing (init handshake and CSI
-	// mounts). It is injected by the Infrastructure implementation, never by
-	// API callers, mirroring how CloneSandboxOptions.CreateLimiter is injected.
-	// Nil means this process is not configured for runtime TLS.
+	// mounts). Nil means the caller is not configured for runtime TLS, so a
+	// sandbox that already advertises the capability fails the claim instead of
+	// being downgraded to plaintext (see runtime.TransportOptionsFor).
+	//
+	// The field belongs to whoever drives the claim, never to API callers:
+	//   - through Infrastructure.ClaimSandbox it is unconditionally overwritten
+	//     with the Infra-owned bundle, so a value set by an API caller is
+	//     discarded (same contract as CloneSandboxOptions.CreateLimiter);
+	//   - callers invoking sandboxcr.TryClaimSandbox directly — currently the
+	//     SandboxClaim controller — bypass that overwrite and must set it
+	//     themselves.
 	RuntimeTLSBundle *runtime.TLSBundle `json:"-"`
 }
 
@@ -118,8 +126,9 @@ type CloneSandboxOptions struct {
 	GenerateName string `json:"generateName,omitempty"`
 	// RuntimeTLSBundle is the client TLS bundle used to reach a TLS-capable
 	// agent-runtime during clone post-processing (re-init handshake and CSI
-	// mounts). Injected by the Infrastructure implementation like
-	// CreateLimiter; nil means this process is not configured for runtime TLS.
+	// mounts). Unconditionally overwritten by the Infrastructure implementation
+	// like CreateLimiter, so a value set by an API caller is discarded; nil
+	// means this process is not configured for runtime TLS.
 	RuntimeTLSBundle *runtime.TLSBundle `json:"-"`
 }
 

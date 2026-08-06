@@ -45,7 +45,7 @@ func SetupWithManager(m manager.Manager, deps Deps) error {
 	if err := sandboxset.Add(m); err != nil {
 		return err
 	}
-	if err := sandboxclaim.Add(m); err != nil {
+	if err := sandboxclaim.Add(m, deps.RuntimeTLSBundle); err != nil {
 		return err
 	}
 	if err := sandboxupdateops.Add(m); err != nil {

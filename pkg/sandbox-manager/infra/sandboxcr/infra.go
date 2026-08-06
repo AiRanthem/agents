@@ -158,8 +158,9 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 		log.Error(err, "invalid claim options")
 		return nil, metrics, err
 	}
-	// Inject the Infra-owned runtime TLS bundle so claim post-processing can
-	// resolve the per-sandbox transport; API callers never set this field.
+	// Overwrite with the Infra-owned runtime TLS bundle so claim
+	// post-processing can resolve the per-sandbox transport; the field is
+	// Infra-owned, see ClaimSandboxOptions.RuntimeTLSBundle.
 	opts.RuntimeTLSBundle = i.RuntimeTLSBundle
 
 	claimCtx, cancel := context.WithTimeout(ctx, opts.ClaimTimeout)
@@ -252,7 +253,7 @@ func (i *Infra) CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions
 	// limiting at the same gate as ClaimSandbox (see newSandboxFromSandboxSet).
 	attemptOpts := opts
 	attemptOpts.CreateLimiter = i.createLimiter
-	// Inject the Infra-owned runtime TLS bundle, mirroring the claim path.
+	// Overwrite with the Infra-owned runtime TLS bundle, mirroring the claim path.
 	attemptOpts.RuntimeTLSBundle = i.RuntimeTLSBundle
 
 	metrics.Retries = -1 // starts from 0
