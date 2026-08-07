@@ -373,7 +373,9 @@ func runClaimPostProcesses(ctx context.Context, sbx *Sandbox, lockType infra.Loc
 	// injected by modifyPickedSandbox.
 	if identity.IsIDTokenRequested(sbx.Sandbox) {
 		var err error
-		metrics.SecurityToken, err = identity.ProcessSandboxToken(ctx, cache.GetClient(), sbx.Sandbox)
+		// rtOpts rides along so the credential is delivered over the same transport
+		// the /init handshake and the CSI mounts use.
+		metrics.SecurityToken, err = identity.ProcessSandboxToken(ctx, cache.GetClient(), sbx.Sandbox, rtOpts...)
 		if err != nil {
 			return retriableError{Message: fmt.Sprintf("failed to process security token: %s", err)}
 		}

@@ -42,6 +42,89 @@ import (
 	"github.com/openkruise/agents/proto/envd/filesystem/filesystemconnect"
 )
 
+// FilesystemAPI is the runtime filesystem capability group. It covers the
+// E2B-compatible multipart /files route (Write) and the envd Filesystem service
+// (ListDir, Remove).
+//
+// Every method is addressed through the transport resolved by the owning
+// runtimeClient, so a TLS-capable sandbox is reached over HTTPS with the same
+// forced resolution the JSON routes use, while a legacy sandbox keeps the
+// plaintext runtime URL. The group is bound to one sandbox at construction
+// time, so no method takes a *Sandbox argument.
+type FilesystemAPI interface {
+	// Write pushes a single file into the sandbox, unconditionally overwriting
+	// any pre-existing file at the same path.
+	Write(ctx context.Context, req WriteFileRequest) (WriteFileResult, error)
+	// ListDir lists the entries of a directory inside the sandbox.
+	ListDir(ctx context.Context, req ListDirRequest) ([]*filesystem.EntryInfo, error)
+	// Remove deletes a file or directory inside the sandbox. Directory removal is
+	// recursive.
+	Remove(ctx context.Context, req RemovePathRequest) error
+}
+
+// WriteFileRequest describes a single file write. It is WriteFileArgs without
+// the sandbox, which the capability group already carries.
+type WriteFileRequest struct {
+	// FilePath is the absolute file path inside the sandbox runtime where Content
+	// will be materialized. The parent directory must already exist on the
+	// runtime side.
+	FilePath string
+	// Content is the raw file body, uploaded as-is via multipart/form-data.
+	Content []byte
+	// Username is the OS user the runtime should use when writing the file.
+	// Defaults to defaultRuntimeFilesUsername ("root") when empty.
+	Username string
+	// AuthUser is the user identity sent as an HTTP Basic Authorization header
+	// (empty password). Empty means no Authorization header is sent.
+	AuthUser string
+	// Timeout bounds the duration of a single HTTP write request. Defaults to
+	// defaultRuntimeWriteTimeout when zero or negative.
+	Timeout time.Duration
+	// Permissions is the intended UNIX file mode of the written file. It is
+	// currently NOT transmitted: the runtime applies its default permissions
+	// (typically 0644 derived from umask), and a caller that needs an exact mode
+	// must follow the write with ProcessAPI.Chmod. The field is retained because
+	// it records the caller's intent and becomes effective without a call-site
+	// change once the runtime honors an explicit file-mode header.
+	Permissions os.FileMode
+}
+
+// ListDirRequest describes a directory listing. It is ListDirArgs without the
+// sandbox, which the capability group already carries.
+type ListDirRequest struct {
+	// Path is the directory to list inside the sandbox.
+	Path string
+	// Depth bounds how deep the listing descends. Zero means the runtime default
+	// of 1, i.e. the direct children of Path.
+	Depth uint32
+	// AuthUser is the user identity sent as an HTTP Basic Authorization header
+	// (empty password). It is required: the Filesystem service resolves every
+	// path relative to an authenticated user and rejects requests without one.
+	AuthUser string
+	// Timeout bounds the RPC. Defaults to defaultRuntimeFilesystemTimeout when
+	// zero or negative.
+	Timeout time.Duration
+}
+
+// RemovePathRequest describes a removal. It is RemovePathArgs without the
+// sandbox, which the capability group already carries.
+type RemovePathRequest struct {
+	// Path is the file or directory to remove inside the sandbox.
+	Path string
+	// AuthUser is the user identity sent as an HTTP Basic Authorization header
+	// (empty password), required for the same reason as in ListDirRequest.
+	AuthUser string
+	// Timeout bounds the RPC. Defaults to defaultRuntimeFilesystemTimeout when
+	// zero or negative.
+	Timeout time.Duration
+}
+
+// filesystemAPI is the default FilesystemAPI implementation. It delegates
+// transport to the owning runtimeClient and carries no domain logic of its own.
+type filesystemAPI struct {
+	r *runtimeClient
+}
+
 // WriteFileArgs are the arguments accepted by WriteFileWithRuntime.
 type WriteFileArgs struct {
 	// Sbx is the target sandbox. Its annotations supply the runtime URL and access token,
@@ -64,10 +147,10 @@ type WriteFileArgs struct {
 	// Timeout bounds the duration of a single HTTP write request. Defaults to
 	// defaultRuntimeWriteTimeout when zero or negative.
 	Timeout time.Duration
-	// Permissions is the UNIX file mode applied to the written file by the runtime after
-	// creation (e.g. 0600 for credential files, 0644 for non-sensitive files). When zero,
-	// the runtime applies its default permissions (typically 0644 derived from umask).
-	// Transmitted to the agent-runtime via the X-File-Mode HTTP header as an octal string.
+	// Permissions is the intended UNIX file mode of the written file (e.g. 0600
+	// for credential files). See WriteFileRequest.Permissions: the mode is not
+	// transmitted today, so a caller needing an exact mode must follow the write
+	// with ChmodFileOnRuntime.
 	Permissions os.FileMode
 }
 
@@ -114,58 +197,83 @@ var runtimeFilesHTTPClient = &http.Client{}
 // This function is intended as the standard counterpart to RunCommandWithRuntime: any
 // caller that needs to push a file into the sandbox runtime should use it instead of
 // rolling its own HTTP client.
-func WriteFileWithRuntime(ctx context.Context, args WriteFileArgs) (WriteFileResult, error) {
-	sbx := args.Sbx
-	if sbx == nil {
+//
+// rtOpts selects the transport for this sandbox: non-empty (typically the TLS
+// options resolved by TransportOptionsFor) routes the write over HTTPS to the
+// agent-runtime, empty keeps the legacy plaintext runtime URL. The call is
+// delegated to FilesystemAPI.Write, which owns the implementation.
+func WriteFileWithRuntime(ctx context.Context, args WriteFileArgs, rtOpts ...Option) (WriteFileResult, error) {
+	// Keep the nil-sandbox guard here: NewRuntime binds the sandbox at
+	// construction time, so a nil one would otherwise surface later as an
+	// unresolved endpoint instead of naming the actual programming error.
+	if args.Sbx == nil {
 		return WriteFileResult{}, fmt.Errorf("sandbox is nil")
 	}
-	if args.FilePath == "" {
+	return NewRuntime(args.Sbx, rtOpts...).Filesystem().Write(ctx, WriteFileRequest{
+		FilePath:    args.FilePath,
+		Content:     args.Content,
+		Username:    args.Username,
+		AuthUser:    args.AuthUser,
+		Timeout:     args.Timeout,
+		Permissions: args.Permissions,
+	})
+}
+
+// Write implements FilesystemAPI by posting the file content to the runtime
+// files API. It is the single implementation of the write path, shared by the
+// capability group and the WriteFileWithRuntime convenience wrapper.
+func (f *filesystemAPI) Write(ctx context.Context, req WriteFileRequest) (WriteFileResult, error) {
+	if req.FilePath == "" {
 		return WriteFileResult{}, fmt.Errorf("filePath is required")
 	}
+	sbx := f.r.sbx
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx)).V(utils.DebugLogLevel)
 
-	rtURL := GetRuntimeURL(sbx)
-	if rtURL == "" {
-		return WriteFileResult{}, fmt.Errorf("runtime url not found on sandbox")
-	}
-
-	username := args.Username
-	if username == "" {
-		username = defaultRuntimeFilesUsername
-	}
-	timeout := args.Timeout
-	if timeout <= 0 {
-		timeout = defaultRuntimeWriteTimeout
-	}
-
-	body, contentType, err := buildRuntimeFilesMultipartBody(args.FilePath, args.Content)
+	// The multipart write shares the transport decision with every other
+	// capability group; runtimeFilesHTTPClient stays the plaintext client so the
+	// existing test seam keeps working.
+	base, httpClient, err := f.r.resolveTransport(sbx, runtimeFilesHTTPClient)
 	if err != nil {
 		return WriteFileResult{}, err
 	}
 
-	endpoint := buildRuntimeFilesEndpoint(rtURL, args.FilePath, username)
+	username := req.Username
+	if username == "" {
+		username = defaultRuntimeFilesUsername
+	}
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = defaultRuntimeWriteTimeout
+	}
+
+	body, contentType, err := buildRuntimeFilesMultipartBody(req.FilePath, req.Content)
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+
+	endpoint := buildRuntimeFilesEndpoint(base, req.FilePath, username)
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, body)
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, body)
 	if err != nil {
 		return WriteFileResult{}, fmt.Errorf("failed to build runtime files write request: %w", err)
 	}
-	req.Header.Set("Content-Type", contentType)
+	httpReq.Header.Set("Content-Type", contentType)
 	if accessToken := utils.GetAccessToken(sbx); accessToken != "" {
-		req.Header.Set("X-Access-Token", accessToken)
+		httpReq.Header.Set(accessTokenHeader, accessToken)
 	}
 	// The Basic user credential is caller-supplied: it is sent only when
-	// args.AuthUser expresses a user identity for the runtime to resolve.
-	if args.AuthUser != "" {
-		req.Header.Set("Authorization", basicAuthHeader(args.AuthUser))
+	// req.AuthUser expresses a user identity for the runtime to resolve.
+	if req.AuthUser != "" {
+		httpReq.Header.Set("Authorization", basicAuthHeader(req.AuthUser))
 	}
 
 	start := time.Now()
 	log.Info("writing file to runtime via files API",
-		"filePath", args.FilePath,
+		"filePath", req.FilePath,
 		"endpoint", endpoint)
 
-	resp, err := runtimeFilesHTTPClient.Do(req)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return WriteFileResult{}, fmt.Errorf("failed to call runtime files API: %w", err)
 	}
@@ -190,7 +298,7 @@ func WriteFileWithRuntime(ctx context.Context, args WriteFileArgs) (WriteFileRes
 	}
 
 	log.Info("file written to runtime successfully (overwrite)",
-		"filePath", args.FilePath,
+		"filePath", req.FilePath,
 		"statusCode", resp.StatusCode,
 		"cost", time.Since(start))
 	return result, nil
@@ -280,26 +388,44 @@ type ListDirArgs struct {
 //     ErrRuntimeFilesystemUnsupported;
 //   - everything else (unauthenticated, path is not a directory, transport
 //     failure) is returned as a plain wrapped error.
-func ListDirWithRuntime(ctx context.Context, args ListDirArgs) ([]*filesystem.EntryInfo, error) {
-	client, callCtx, cancel, err := newFilesystemCall(ctx, args.Sbx, args.Path, args.AuthUser, args.Timeout)
+//
+// rtOpts selects the transport for this sandbox exactly as in
+// WriteFileWithRuntime. The call is delegated to FilesystemAPI.ListDir.
+func ListDirWithRuntime(ctx context.Context, args ListDirArgs, rtOpts ...Option) ([]*filesystem.EntryInfo, error) {
+	if args.Sbx == nil {
+		return nil, fmt.Errorf("sandbox is nil")
+	}
+	return NewRuntime(args.Sbx, rtOpts...).Filesystem().ListDir(ctx, ListDirRequest{
+		Path:     args.Path,
+		Depth:    args.Depth,
+		AuthUser: args.AuthUser,
+		Timeout:  args.Timeout,
+	})
+}
+
+// ListDir implements FilesystemAPI. It is the single implementation of the
+// listing path, shared by the capability group and the ListDirWithRuntime
+// convenience wrapper.
+func (f *filesystemAPI) ListDir(ctx context.Context, req ListDirRequest) ([]*filesystem.EntryInfo, error) {
+	client, callCtx, cancel, err := f.newCall(ctx, req.Path, req.AuthUser, req.Timeout)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
 
-	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(args.Sbx)).V(utils.DebugLogLevel)
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(f.r.sbx)).V(utils.DebugLogLevel)
 	start := time.Now()
 
 	resp, err := client.ListDir(callCtx, connect.NewRequest(&filesystem.ListDirRequest{
-		Path:  args.Path,
-		Depth: args.Depth,
+		Path:  req.Path,
+		Depth: req.Depth,
 	}))
 	if err != nil {
-		return nil, classifyFilesystemError("ListDir", args.Path, err)
+		return nil, classifyFilesystemError("ListDir", req.Path, err)
 	}
 
 	entries := resp.Msg.GetEntries()
-	log.Info("listed sandbox runtime directory", "path", args.Path,
+	log.Info("listed sandbox runtime directory", "path", req.Path,
 		"entries", len(entries), "cost", time.Since(start))
 	return entries, nil
 }
@@ -335,38 +461,54 @@ type RemovePathArgs struct {
 //     ErrRuntimeFilesystemUnsupported;
 //   - everything else (unauthenticated, transport failure) is returned as a
 //     plain wrapped error.
-func RemovePathWithRuntime(ctx context.Context, args RemovePathArgs) error {
-	client, callCtx, cancel, err := newFilesystemCall(ctx, args.Sbx, args.Path, args.AuthUser, args.Timeout)
+//
+// rtOpts selects the transport for this sandbox exactly as in
+// WriteFileWithRuntime. The call is delegated to FilesystemAPI.Remove.
+func RemovePathWithRuntime(ctx context.Context, args RemovePathArgs, rtOpts ...Option) error {
+	if args.Sbx == nil {
+		return fmt.Errorf("sandbox is nil")
+	}
+	return NewRuntime(args.Sbx, rtOpts...).Filesystem().Remove(ctx, RemovePathRequest{
+		Path:     args.Path,
+		AuthUser: args.AuthUser,
+		Timeout:  args.Timeout,
+	})
+}
+
+// Remove implements FilesystemAPI. It is the single implementation of the
+// removal path, shared by the capability group and the RemovePathWithRuntime
+// convenience wrapper.
+func (f *filesystemAPI) Remove(ctx context.Context, req RemovePathRequest) error {
+	client, callCtx, cancel, err := f.newCall(ctx, req.Path, req.AuthUser, req.Timeout)
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(args.Sbx)).V(utils.DebugLogLevel)
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(f.r.sbx)).V(utils.DebugLogLevel)
 	start := time.Now()
 
 	if _, err := client.Remove(callCtx, connect.NewRequest(&filesystem.RemoveRequest{
-		Path: args.Path,
+		Path: req.Path,
 	})); err != nil {
-		return classifyFilesystemError("Remove", args.Path, err)
+		return classifyFilesystemError("Remove", req.Path, err)
 	}
 
-	log.Info("removed sandbox runtime path", "path", args.Path, "cost", time.Since(start))
+	log.Info("removed sandbox runtime path", "path", req.Path, "cost", time.Since(start))
 	return nil
 }
 
-// newFilesystemCall validates the shared arguments of the Filesystem helpers and
-// builds the connect client plus the per-call context carrying the timeout and
-// the authentication headers. The returned cancel func must always be called.
+// newCall validates the shared arguments of the Filesystem RPCs and builds the
+// connect client plus the per-call context carrying the timeout and the
+// authentication headers. The returned cancel func must always be called.
 //
-// It mirrors RunCommandWithRuntime's transport choices (connect over gRPC, the
-// X-Access-Token header, Basic user identity) so the process and filesystem
-// capabilities authenticate identically against the same runtime endpoint.
-func newFilesystemCall(ctx context.Context, sbx *agentsv1alpha1.Sandbox, path, authUser string,
+// It mirrors the Process capability group's transport choices (connect over
+// gRPC, the X-Access-Token header, Basic user identity) so the process and
+// filesystem capabilities authenticate identically against the same runtime
+// endpoint, and it resolves that endpoint through resolveTransport so a
+// TLS-capable sandbox is reached over HTTPS.
+func (f *filesystemAPI) newCall(ctx context.Context, path, authUser string,
 	timeout time.Duration) (filesystemconnect.FilesystemClient, context.Context, context.CancelFunc, error) {
-	if sbx == nil {
-		return nil, nil, nil, fmt.Errorf("sandbox is nil")
-	}
 	if path == "" {
 		return nil, nil, nil, fmt.Errorf("path is required")
 	}
@@ -376,15 +518,16 @@ func newFilesystemCall(ctx context.Context, sbx *agentsv1alpha1.Sandbox, path, a
 	if authUser == "" {
 		return nil, nil, nil, fmt.Errorf("authUser is required by the runtime filesystem service")
 	}
-	url := GetRuntimeURL(sbx)
-	if url == "" {
-		return nil, nil, nil, fmt.Errorf("runtime url not found on sandbox")
+	sbx := f.r.sbx
+	base, httpClient, err := f.r.resolveTransport(sbx, runtimeGRPCHTTPClient)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	if timeout <= 0 {
 		timeout = defaultRuntimeFilesystemTimeout
 	}
 
-	client := filesystemconnect.NewFilesystemClient(runtimeGRPCHTTPClient, url, connect.WithGRPC())
+	client := filesystemconnect.NewFilesystemClient(httpClient, base, connect.WithGRPC())
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	callCtx, callInfo := connect.NewClientContext(ctxWithTimeout)

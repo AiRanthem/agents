@@ -4161,7 +4161,8 @@ func (m *mockIdentityProvider) IssueToken(ctx context.Context, sbx *v1alpha1.San
 	return &identity.TokenResponse{AccessToken: uuid.NewString()}, nil
 }
 
-func (m *mockIdentityProvider) PropagateSecurityToken(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse) error {
+func (m *mockIdentityProvider) PropagateSecurityToken(ctx context.Context, sbx *v1alpha1.Sandbox, tokenResp *identity.TokenResponse,
+	_ ...runtime.Option) error {
 	if m.propagateFunc != nil {
 		return m.propagateFunc(ctx, sbx, tokenResp)
 	}

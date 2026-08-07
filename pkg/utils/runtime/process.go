@@ -72,36 +72,95 @@ type RunCmdFuncArgs struct {
 	AuthUser string
 }
 
-func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs) (RunCommandResult, error) {
-	sbx, processConfig, timeout := args.Sbx, args.ProcessConfig, args.Timeout
+// ProcessAPI is the runtime process capability group, backed by the envd Process
+// service. Like every other group it is addressed through the transport
+// resolved by the owning runtimeClient, so a TLS-capable sandbox is reached over
+// HTTPS with forced resolution while a legacy sandbox keeps the plaintext
+// runtime URL. The group is bound to one sandbox at construction time, so no
+// method takes a *Sandbox argument.
+type ProcessAPI interface {
+	// Run starts a process in the sandbox and consumes its event stream until the
+	// process exits, returning the collected output and exit status.
+	Run(ctx context.Context, req RunCommandRequest) (RunCommandResult, error)
+	// Chmod applies mode to filePath inside the sandbox by running chmod as root.
+	Chmod(ctx context.Context, filePath, mode string) error
+}
+
+// RunCommandRequest describes a single process execution. It is RunCmdFuncArgs
+// without the sandbox, which the capability group already carries.
+type RunCommandRequest struct {
+	// ProcessConfig is the command, arguments and environment to execute.
+	ProcessConfig *process.ProcessConfig
+	// Timeout bounds the whole execution, including consuming the event stream.
+	Timeout time.Duration
+	// AuthUser is the user identity sent as an HTTP Basic Authorization header
+	// (empty password). Empty means no Authorization header is sent.
+	AuthUser string
+}
+
+// processAPI is the default ProcessAPI implementation. It delegates transport to
+// the owning runtimeClient and carries no domain logic of its own.
+type processAPI struct {
+	r *runtimeClient
+}
+
+// RunCommandWithRuntime starts a process in the sandbox runtime and waits for it
+// to exit.
+//
+// rtOpts selects the transport for this sandbox: non-empty (typically the TLS
+// options resolved by TransportOptionsFor) routes the call over HTTPS to the
+// agent-runtime, empty keeps the legacy plaintext runtime URL. The call is
+// delegated to ProcessAPI.Run, which owns the implementation.
+func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs, rtOpts ...Option) (RunCommandResult, error) {
+	// Keep the nil-sandbox guard here: NewRuntime binds the sandbox at
+	// construction time, so a nil one would otherwise surface later as an
+	// unresolved endpoint instead of naming the actual programming error.
+	if args.Sbx == nil {
+		return RunCommandResult{}, fmt.Errorf("sandbox is nil")
+	}
+	return NewRuntime(args.Sbx, rtOpts...).Process().Run(ctx, RunCommandRequest{
+		ProcessConfig: args.ProcessConfig,
+		Timeout:       args.Timeout,
+		AuthUser:      args.AuthUser,
+	})
+}
+
+// Run implements ProcessAPI. It is the single implementation of the process
+// execution path, shared by the capability group and the RunCommandWithRuntime
+// convenience wrapper.
+func (p *processAPI) Run(ctx context.Context, req RunCommandRequest) (RunCommandResult, error) {
+	sbx, processConfig, timeout := p.r.sbx, req.ProcessConfig, req.Timeout
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx)).V(utils.DebugLogLevel)
-	url := GetRuntimeURL(sbx)
-	if url == "" {
-		return RunCommandResult{}, fmt.Errorf("runtime url not found on sandbox")
+	// The process RPC shares the transport decision with every other capability
+	// group; runtimeGRPCHTTPClient stays the plaintext client so the existing
+	// test seam keeps working.
+	base, httpClient, err := p.r.resolveTransport(sbx, runtimeGRPCHTTPClient)
+	if err != nil {
+		return RunCommandResult{}, err
 	}
 	client := processconnect.NewProcessClient(
-		runtimeGRPCHTTPClient,
-		url,
+		httpClient,
+		base,
 		connect.WithGRPC(),
 	)
 
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	clientContext, callInfo := connect.NewClientContext(ctxWithTimeout)
-	callInfo.RequestHeader().Set("X-Access-Token", utils.GetAccessToken(sbx))
+	callInfo.RequestHeader().Set(accessTokenHeader, utils.GetAccessToken(sbx))
 	// The Basic user credential is caller-supplied: it is sent only when
-	// args.AuthUser expresses a user identity for the runtime to resolve.
-	if args.AuthUser != "" {
-		callInfo.RequestHeader().Set("Authorization", basicAuthHeader(args.AuthUser))
+	// req.AuthUser expresses a user identity for the runtime to resolve.
+	if req.AuthUser != "" {
+		callInfo.RequestHeader().Set("Authorization", basicAuthHeader(req.AuthUser))
 	}
 
-	req := connect.NewRequest(&process.StartRequest{
+	startReq := connect.NewRequest(&process.StartRequest{
 		Process: processConfig,
 		Tag:     nil,
 		Pty:     nil,
 		Stdin:   nil,
 	})
-	stream, err := client.Start(clientContext, req)
+	stream, err := client.Start(clientContext, startReq)
 	if err != nil {
 		return RunCommandResult{}, err
 	}
@@ -146,11 +205,23 @@ func RunCommandWithRuntime(ctx context.Context, args RunCmdFuncArgs) (RunCommand
 }
 
 // ChmodFileOnRuntime executes `chmod <mode> <filePath>` inside the sandbox runtime
-// via RunCommandWithRuntime. This is a temporary measure to enforce file permissions
-// until the agent-runtime (envd) natively honors the X-File-Mode header.
-func ChmodFileOnRuntime(ctx context.Context, sbx *agentsv1alpha1.Sandbox, filePath, mode string) error {
-	result, err := RunCommandWithRuntime(ctx, RunCmdFuncArgs{
-		Sbx: sbx,
+// via the process capability group. This is a temporary measure to enforce file
+// permissions until the agent-runtime (envd) natively honors the X-File-Mode header.
+//
+// rtOpts selects the transport for this sandbox exactly as in
+// RunCommandWithRuntime. The call is delegated to ProcessAPI.Chmod.
+func ChmodFileOnRuntime(ctx context.Context, sbx *agentsv1alpha1.Sandbox, filePath, mode string, rtOpts ...Option) error {
+	if sbx == nil {
+		return fmt.Errorf("sandbox is nil")
+	}
+	return NewRuntime(sbx, rtOpts...).Process().Chmod(ctx, filePath, mode)
+}
+
+// Chmod implements ProcessAPI. It is the single implementation of the chmod
+// path, shared by the capability group and the ChmodFileOnRuntime convenience
+// wrapper.
+func (p *processAPI) Chmod(ctx context.Context, filePath, mode string) error {
+	result, err := p.Run(ctx, RunCommandRequest{
 		ProcessConfig: &process.ProcessConfig{
 			Cmd:  "chmod",
 			Args: []string{mode, filePath},

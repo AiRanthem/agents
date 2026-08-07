@@ -91,6 +91,12 @@ type Runtime interface {
 	// Init returns the initialization capability group, backed by the runtime
 	// /init handshake endpoint.
 	Init() InitAPI
+	// Filesystem returns the filesystem capability group, backed by the
+	// E2B-compatible multipart /files route and the envd Filesystem service.
+	Filesystem() FilesystemAPI
+	// Process returns the process capability group, backed by the envd Process
+	// service.
+	Process() ProcessAPI
 }
 
 // Option customizes a Runtime constructed by NewRuntime.
@@ -245,6 +251,47 @@ func (r *runtimeClient) Init() InitAPI {
 	return &initAPI{r: r}
 }
 
+// Filesystem returns the filesystem capability group for the bound sandbox.
+func (r *runtimeClient) Filesystem() FilesystemAPI {
+	return &filesystemAPI{r: r}
+}
+
+// Process returns the process capability group for the bound sandbox.
+func (r *runtimeClient) Process() ProcessAPI {
+	return &processAPI{r: r}
+}
+
+// resolveTransport resolves the endpoint and the HTTP client for a single call
+// against sbx, and is the single place where the plain-HTTP/TLS decision is
+// applied. Every capability group routes through it, so the JSON, multipart and
+// connect-gRPC protocols cannot drift apart on addressing or TLS.
+//
+// plainClient is the client used when TLS is off. It is a parameter rather than
+// r.client because each protocol keeps its own plaintext client (the shared
+// JSON one, runtimeFilesHTTPClient, runtimeGRPCHTTPClient), which tests
+// substitute independently; passing it in preserves that seam untouched.
+//
+// In TLS mode the returned client carries a per-call pinned transport: the
+// request is addressed by authority (so the certificate validates) while the
+// connection goes to the sandbox Pod IP. The transport is rebuilt per call
+// because a refresh may change the Pod IP between attempts.
+func (r *runtimeClient) resolveTransport(sbx *agentsv1alpha1.Sandbox, plainClient *http.Client) (string, *http.Client, error) {
+	// A TLS-config construction failure is permanent: report it before spending
+	// an attempt on a client that cannot handshake.
+	if r.tlsEnabled && r.tlsConfigErr != nil {
+		return "", nil, fmt.Errorf("invalid runtime TLS configuration: %w", r.tlsConfigErr)
+	}
+	base := r.resolveBaseURL(sbx)
+	if base == "" {
+		return "", nil, fmt.Errorf("runtime url not found on sandbox")
+	}
+	client := plainClient
+	if dialIP := r.dialIPFor(sbx); dialIP != "" {
+		client = &http.Client{Transport: newPinnedTransport(dialIP, r.tlsPort, r.tlsClientConfig.Clone())}
+	}
+	return base, client, nil
+}
+
 // resolveBaseURL resolves the runtime endpoint for the given sandbox. In TLS
 // mode (see WithTLS) it returns the HTTPS authority URL
 // (https://<authority>:<tlsPort>) so net/http derives the Host header and TLS
@@ -358,9 +405,12 @@ func (r *runtimeClient) call(ctx context.Context, method, path string, reqBody, 
 			}
 		}
 
-		base := r.resolveBaseURL(sbx)
-		if base == "" {
-			return fmt.Errorf("runtime url not found on sandbox")
+		// The endpoint and the client are resolved together so this JSON path
+		// applies exactly the same TLS decision as the multipart and connect-gRPC
+		// capability groups (see resolveTransport).
+		base, httpClient, err := r.resolveTransport(sbx, r.client)
+		if err != nil {
+			return err
 		}
 		endpoint := strings.TrimRight(base, "/") + path
 
@@ -384,17 +434,6 @@ func (r *runtimeClient) call(ctx context.Context, method, path string, reqBody, 
 		// Basic user credential is caller-supplied (WithAuthUser); absent by default.
 		if r.authUser != "" {
 			req.Header.Set("Authorization", basicAuthHeader(r.authUser))
-		}
-
-		// In automatic TLS mode dial the sandbox Pod IP while verifying the server
-		// certificate against the authority hostname (curl --resolve). The pinned
-		// transport is built per attempt because WithRefresh may change the Pod IP
-		// between retries; it disables keep-alives so the discarded transport does
-		// not strand an idle TLS connection (see newPinnedTransport). Otherwise use
-		// the shared plain-HTTP client.
-		httpClient := r.client
-		if dialIP := r.dialIPFor(sbx); dialIP != "" {
-			httpClient = &http.Client{Transport: newPinnedTransport(dialIP, r.tlsPort, r.tlsClientConfig.Clone())}
 		}
 
 		start := time.Now()

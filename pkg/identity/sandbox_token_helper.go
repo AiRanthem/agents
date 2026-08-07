@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	agentsruntime "github.com/openkruise/agents/pkg/utils/runtime"
 )
 
 // IsIDTokenRequested reports whether the sandbox opts into the ID token
@@ -182,11 +183,17 @@ func validateAccessTokenResponse(resp *TokenResponse) error {
 // The error returned by the underlying provider is surfaced verbatim so
 // callers can decide their own retry / event semantics; this function never
 // wraps or rewrites it.
-func PropagateSandboxToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox, tokenResp *TokenResponse) error {
+//
+// rtOpts is the transport the caller resolved for this sandbox and is forwarded
+// verbatim to the propagators. This function neither resolves nor inspects it:
+// the TLS decision belongs to the caller (see runtime.TransportOptionsFor), so
+// this package stays transport-neutral.
+func PropagateSandboxToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox, tokenResp *TokenResponse,
+	rtOpts ...agentsruntime.Option) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx), "action", "PropagateSandboxToken")
 	start := time.Now()
 	log.Info("propagating sandbox security token", "propagatorCount", SecurityTokenPropagatorCount())
-	if err := PropagateSecurityToken(ctx, sbx, tokenResp); err != nil {
+	if err := PropagateSecurityToken(ctx, sbx, tokenResp, rtOpts...); err != nil {
 		log.Error(err, "failed to propagate sandbox security token", "cost", time.Since(start))
 		return err
 	}
@@ -217,7 +224,15 @@ func PropagateSandboxToken(ctx context.Context, sbx *agentsv1alpha1.Sandbox, tok
 // (issue + propagate + record) is returned so callers can record metrics; on
 // failure the returned cost still reflects the elapsed time up to the failing
 // phase.
-func ProcessSandboxToken(ctx context.Context, c client.Client, sbx *agentsv1alpha1.Sandbox) (time.Duration, error) {
+//
+// rtOpts is the transport the caller resolved for this sandbox (typically via
+// runtime.TransportOptionsFor) and is forwarded to the propagation phase, so a
+// TLS-capable sandbox receives its credential over the same transport the
+// /init handshake and the CSI mounts use. Issuance and the annotation patch are
+// unaffected: they talk to the identity provider and the apiserver, not to the
+// sandbox runtime.
+func ProcessSandboxToken(ctx context.Context, c client.Client, sbx *agentsv1alpha1.Sandbox,
+	rtOpts ...agentsruntime.Option) (time.Duration, error) {
 	// Measure the whole issue -> propagate -> record lifecycle so callers record
 	// the total cost of the security-token step, not just token issuance.
 	start := time.Now()
@@ -229,7 +244,7 @@ func ProcessSandboxToken(ctx context.Context, c client.Client, sbx *agentsv1alph
 		return time.Since(start), err
 	}
 
-	if err := PropagateSandboxToken(ctx, sbx, tokenResp); err != nil {
+	if err := PropagateSandboxToken(ctx, sbx, tokenResp, rtOpts...); err != nil {
 		return time.Since(start), fmt.Errorf("failed to propagate security token: %w", err)
 	}
 

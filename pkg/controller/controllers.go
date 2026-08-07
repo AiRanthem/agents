@@ -51,7 +51,7 @@ func SetupWithManager(m manager.Manager, deps Deps) error {
 	if err := sandboxupdateops.Add(m); err != nil {
 		return err
 	}
-	if err := securitytokenrefresh.Add(m); err != nil {
+	if err := securitytokenrefresh.Add(m, deps.RuntimeTLSBundle); err != nil {
 		return err
 	}
 	if err := commit.Add(m); err != nil {

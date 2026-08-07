@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	agentsruntime "github.com/openkruise/agents/pkg/utils/runtime"
 )
 
 // fakeIdentityProvider is a minimal IdentityProvider stub used to capture the
@@ -47,7 +48,8 @@ func (f *fakeIdentityProvider) IssueToken(_ context.Context, sbx *agentsv1alpha1
 	return f.resp, f.err
 }
 
-func (f *fakeIdentityProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse) error {
+func (f *fakeIdentityProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse,
+	_ ...agentsruntime.Option) error {
 	return nil
 }
 
@@ -111,7 +113,8 @@ func (p *kindCapturingProvider) IssueToken(_ context.Context, sbx *agentsv1alpha
 	return p.resp, p.err
 }
 
-func (p *kindCapturingProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse) error {
+func (p *kindCapturingProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse,
+	_ ...agentsruntime.Option) error {
 	return nil
 }
 
@@ -373,7 +376,8 @@ func (p *annotationReadingProvider) IssueToken(_ context.Context, sbx *agentsv1a
 	return &TokenResponse{AccessToken: "tok"}, nil
 }
 
-func (p *annotationReadingProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse) error {
+func (p *annotationReadingProvider) PropagateSecurityToken(_ context.Context, _ *agentsv1alpha1.Sandbox, _ *TokenResponse,
+	_ ...agentsruntime.Option) error {
 	return nil
 }
 
@@ -513,7 +517,8 @@ func (p *propagatingFakeProvider) IssueToken(_ context.Context, _ *agentsv1alpha
 	return nil, nil
 }
 
-func (p *propagatingFakeProvider) PropagateSecurityToken(_ context.Context, sbx *agentsv1alpha1.Sandbox, resp *TokenResponse) error {
+func (p *propagatingFakeProvider) PropagateSecurityToken(_ context.Context, sbx *agentsv1alpha1.Sandbox, resp *TokenResponse,
+	_ ...agentsruntime.Option) error {
 	p.calls++
 	p.gotSandbox = sbx
 	p.gotResp = resp

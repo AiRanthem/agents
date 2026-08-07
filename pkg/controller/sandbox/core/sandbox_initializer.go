@@ -98,15 +98,12 @@ func (d *defaultSandboxInitializer) doInitialize(ctx context.Context, box *agent
 // This is the unified initialization logic for all sandboxes after resume or recreate upgrade.
 // Both E2B and SandboxClaim paths rely on this to re-initialize runtime and CSI mounts.
 //
-// rtOpts selects the runtime transport for this sandbox, applied to both the
-// /init handshake (see InitRuntime) and the CSI re-mount (see ProcessCSIMounts):
+// rtOpts selects the runtime transport for this sandbox, applied uniformly to
+// the /init handshake (see InitRuntime), the security-token propagation (see
+// identity.ProcessSandboxToken) and the CSI re-mount (see ProcessCSIMounts):
 // non-empty (typically the TLS options resolved by TransportOptionsFor) routes
 // them over HTTPS to the agent-runtime sidecar, which also relays /init to the
-// in-container runtime; empty keeps the legacy plaintext paths untouched. The
-// token propagation intentionally stays on its existing transport for now.
-//
-// TODO: carry rtOpts into the token propagation as soon as that path is
-// TLS-enabled.
+// in-container runtime; empty keeps the legacy plaintext paths untouched.
 func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *agentsv1alpha1.SandboxStatus,
 	client client.Client, apiReader client.Reader, storageRegistry storages.VolumeMountProviderRegistry,
 	rtOpts ...utilruntime.Option) error {
@@ -131,7 +128,7 @@ func Initialize(ctx context.Context, box *agentsv1alpha1.Sandbox, newStatus *age
 	// Ordering mirrors the claim flow (InitRuntime -> SecurityToken -> CSIMount):
 	// the freshly recreated runtime holds no token, so the credential must be
 	// delivered before agent-identity CSI mounts below rely on it.
-	if err := reinitSecurityToken(ctx, client, sbxForInit); err != nil {
+	if err := reinitSecurityToken(ctx, client, sbxForInit, rtOpts...); err != nil {
 		return err
 	}
 
@@ -215,12 +212,17 @@ func reinitRuntime(ctx context.Context, logger klog.Logger, box *agentsv1alpha1.
 // sharing the original sandbox ObjectMeta (annotations, name), so the opt-in
 // gate and the annotation patch behave identically to operating on the original
 // sandbox.
-func reinitSecurityToken(ctx context.Context, c client.Client, sbxForInit *agentsv1alpha1.Sandbox) error {
+//
+// rtOpts is forwarded to ProcessSandboxToken so the credential travels over the
+// transport resolved for this sandbox, exactly like the /init handshake and the
+// CSI re-mount.
+func reinitSecurityToken(ctx context.Context, c client.Client, sbxForInit *agentsv1alpha1.Sandbox,
+	rtOpts ...utilruntime.Option) error {
 	if !identity.IsIDTokenRequested(sbxForInit) {
 		return nil
 	}
 	logger := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbxForInit))
-	if _, err := identity.ProcessSandboxToken(ctx, c, sbxForInit); err != nil {
+	if _, err := identity.ProcessSandboxToken(ctx, c, sbxForInit, rtOpts...); err != nil {
 		return fmt.Errorf("failed to reinitialize security token after resume: %w", err)
 	}
 	logger.Info("security token re-issued after resume or upgrade")

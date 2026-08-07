@@ -193,8 +193,10 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	// Step 6: process security token
 	// Issue and propagate the identity-provider security token before performing
 	// access-token issuance and CSI mounts, mirroring the claim flow ordering.
+	// rtOpts rides along so the credential is delivered over the same transport
+	// as the re-init handshake.
 	if identity.IsIDTokenRequested(sbx.Sandbox) {
-		metrics.SecurityToken, err = identity.ProcessSandboxToken(ctx, cache.GetClient(), sbx.Sandbox)
+		metrics.SecurityToken, err = identity.ProcessSandboxToken(ctx, cache.GetClient(), sbx.Sandbox, rtOpts...)
 		if err != nil {
 			if !wait.Interrupted(err) {
 				err = retriableError{Message: fmt.Sprintf("security token processing failed: %s", err)}
