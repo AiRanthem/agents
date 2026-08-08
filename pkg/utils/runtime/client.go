@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,6 +322,52 @@ func (r *runtimeClient) dialIPFor(sbx *agentsv1alpha1.Sandbox) string {
 	return sbx.Status.PodInfo.PodIP
 }
 
+// transportLogValues describes the transport this client speaks to sbx as
+// structured log key-values, so a capability group can state in its own logs
+// whether the call goes over HTTPS (with forced resolution) or plaintext HTTP
+// without raising the verbosity of the whole call path.
+//
+// The values reflect the construction-time transport decision, not readiness:
+// in TLS mode the endpoint is the fixed authority URL, while dialTarget is
+// derived from the Pod IP of the given sandbox and may still be empty before a
+// refresh resolves it.
+func (r *runtimeClient) transportLogValues(sbx *agentsv1alpha1.Sandbox) []any {
+	if !r.tlsEnabled {
+		// Plain HTTP addresses the runtime by the URL host itself, so there is
+		// nothing to force-resolve.
+		return []any{
+			"transport", "http",
+			"endpoint", GetRuntimeURL(sbx),
+			"forcedResolution", false,
+		}
+	}
+	var caBundleBytes int
+	if r.tlsBundle != nil {
+		caBundleBytes = len(r.tlsBundle.CABundle)
+	}
+	var dialTarget string
+	if ip := r.dialIPFor(sbx); ip != "" {
+		dialTarget = net.JoinHostPort(ip, strconv.Itoa(r.tlsPort))
+	}
+	return []any{
+		"transport", "https",
+		"endpoint", fmt.Sprintf("https://%s:%d", r.authority, r.tlsPort),
+		// forcedResolution reports the `curl --resolve` behaviour: the dial goes
+		// to dialTarget (the sandbox Pod IP) while SNI and certificate
+		// verification stay on the endpoint authority. An empty dialTarget means
+		// the Pod IP is not resolved yet, i.e. the call cannot be addressed.
+		"forcedResolution", dialTarget != "",
+		"dialTarget", dialTarget,
+		"authority", r.authority,
+		"tlsPort", r.tlsPort,
+		// A client certificate is optional: its presence is what upgrades the
+		// connection from server-authenticated TLS to mutual TLS.
+		"mutualTLS", r.tlsClientConfig != nil && len(r.tlsClientConfig.Certificates) > 0,
+		"caBundleBytes", caBundleBytes,
+		"tlsConfigErr", r.tlsConfigErr,
+	}
+}
+
 // APIError describes a non-2xx response from the runtime. It preserves the HTTP
 // status code and the server-provided message so callers can both surface a
 // clean reason and decide whether to retry (see IsClientError).
@@ -369,8 +417,17 @@ func (e *APIError) IsClientError() bool {
 // user credential is opt-in via WithAuthUser: control-plane calls send none by
 // default, and callers whose capability resolves an OS user supply it at
 // construction time.
+//
+// Logging: the per-attempt request/response pair stays at V(DebugLogLevel)
+// because every capability group funnels through here, while a failed attempt is
+// reported at the default verbosity — retry.OnError discards every intermediate
+// error, so an attempt that is retried away would otherwise leave no trace. Both
+// carry the resolved transport (scheme, forced resolution, dial target, mutual
+// TLS) so a connectivity failure can be attributed to the protocol and
+// addressing actually used.
 func (r *runtimeClient) call(ctx context.Context, method, path string, reqBody, respOut any) error {
-	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(r.sbx)).V(utils.DebugLogLevel)
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(r.sbx))
+	debugLog := log.V(utils.DebugLogLevel)
 
 	// A TLS-config construction failure is a permanent, non-retryable error:
 	// surface it before entering the retry loop.
@@ -436,8 +493,13 @@ func (r *runtimeClient) call(ctx context.Context, method, path string, reqBody, 
 			req.Header.Set("Authorization", basicAuthHeader(r.authUser))
 		}
 
+		// attemptValues records what this attempt puts on the wire: the resolved
+		// transport of the (possibly refreshed) sandbox plus the full request URL.
+		attemptValues := append(r.transportLogValues(sbx),
+			"method", method, "requestURL", endpoint, "attempt", attempt)
+
 		start := time.Now()
-		log.Info("sending runtime request", "method", method, "endpoint", endpoint, "attempt", attempt)
+		debugLog.Info("sending runtime request", attemptValues...)
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
@@ -481,12 +543,24 @@ func (r *runtimeClient) call(ctx context.Context, method, path string, reqBody, 
 			}
 		}
 
-		log.Info("runtime request completed", "method", method, "endpoint", endpoint,
-			"statusCode", resp.StatusCode, "cost", time.Since(start), "attempt", attempt)
+		debugLog.Info("runtime request completed",
+			append(attemptValues, "statusCode", resp.StatusCode, "cost", time.Since(start))...)
 		return nil
 	}
 
-	return retry.OnError(r.backoff, retriableRuntimeError(ctx), do)
+	// Report every failed attempt with its transport: the retry loop swallows all
+	// but the last error, and a 4xx that a capability group later reclassifies as
+	// success (e.g. init's 401 on re-init) must not surface as an ERROR entry, so
+	// the error travels as a log value instead of via Error().
+	return retry.OnError(r.backoff, retriableRuntimeError(ctx), func() error {
+		err := do()
+		if err != nil {
+			log.Info("runtime request attempt failed",
+				append(r.transportLogValues(sbx), "method", method, "path", path,
+					"attempt", attempt, "err", err.Error())...)
+		}
+		return err
+	})
 }
 
 // retriableRuntimeError builds the retry predicate for call. It stops retrying

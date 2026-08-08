@@ -63,7 +63,17 @@ type initAPI struct {
 // Init implements InitAPI by posting the init options to the runtime init
 // endpoint through the shared call transport (retry, refresh and optional
 // TLS/pinned addressing included).
+//
+// The handshake runs once per sandbox lifecycle, so the resolved transport is
+// logged at the default verbosity: it is the cheapest way to tell whether init
+// reached the runtime over HTTPS/mTLS or plaintext HTTP, without turning on the
+// V(DebugLogLevel) per-attempt logs of the shared transport.
 func (i *initAPI) Init(ctx context.Context, opts config.InitRuntimeOptions) error {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(i.r.sbx))
+	transport := i.r.transportLogValues(i.r.sbx)
+	log.Info("init runtime starting", append(transport, "reInit", opts.ReInit)...)
+
+	start := time.Now()
 	err := i.r.call(ctx, http.MethodPost, initPath, opts, nil)
 	// The runtime rejects an init whose body token is absent or no longer
 	// matches its stored token with 401. On a re-init (resume/recreate) that
@@ -71,11 +81,19 @@ func (i *initAPI) Init(ctx context.Context, opts config.InitRuntimeOptions) erro
 	// call never retries a 4xx, so this classification happens exactly once.
 	var apiErr *APIError
 	if opts.ReInit && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnauthorized {
-		klog.FromContext(ctx).Info("init runtime returned 401, treated as success because ReInit is true",
-			"sandbox", klog.KObj(i.r.sbx))
+		log.Info("init runtime returned 401, treated as success because ReInit is true",
+			append(transport, "cost", time.Since(start))...)
 		return nil
 	}
-	return err
+	if err != nil {
+		// Logged here (in addition to the caller's own error handling) because
+		// this is the only layer that knows which transport was actually used,
+		// which is the first thing to check on a runtime connectivity failure.
+		log.Error(err, "init runtime failed", append(transport, "cost", time.Since(start))...)
+		return err
+	}
+	log.Info("init runtime completed", append(transport, "cost", time.Since(start))...)
+	return nil
 }
 
 // GetInitRuntimeRequest parses init runtime configuration from object annotations.
