@@ -48,6 +48,14 @@ const (
 	AnnotationCSIVolumeConfig = E2BPrefix + "csi-volume-config"
 )
 
+// AnnotationUpgradeResumeTrigger is set by SandboxUpdateOps on a paused sandbox
+// to trigger the resume phase of a two-phase upgrade. The sandbox controller
+// enters the Upgrading phase and resumes the sandbox using the OLD template.
+// Once resume succeeds (SandboxUpgradingReasonResumeSucceed), SandboxUpdateOps
+// patches the template and removes this annotation to trigger the actual
+// pod replacement.
+const AnnotationUpgradeResumeTrigger = InternalPrefix + "upgrade-resume-trigger"
+
 // LabelSandboxUpdateOps marks which SandboxUpdateOps is operating on this sandbox.
 const LabelSandboxUpdateOps = InternalPrefix + "update-ops"
 

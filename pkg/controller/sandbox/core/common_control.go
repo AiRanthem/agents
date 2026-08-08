@@ -328,7 +328,7 @@ func (r *commonControl) handleResume(ctx context.Context, args EnsureFuncArgs) e
 	// first create pod
 	if pod == nil {
 		delta := r.checkpointControl.GetPodTemplateDelta(ctx, box)
-		_, err := r.podControl.CreatePod(ctx, CreatePodArgs{Box: box, NewStatus: newStatus, PodTemplateDelta: delta})
+		_, err := r.podControl.CreatePod(ctx, CreatePodArgs{Box: box, NewStatus: newStatus, PodTemplateDelta: delta, IsResume: true})
 		return err
 	}
 

@@ -46,6 +46,12 @@ type PodGenerateArgs struct {
 	Client    client.Client
 	Box       *agentsv1alpha1.Sandbox
 	NewStatus *agentsv1alpha1.SandboxStatus
+	// IsResume indicates that this pod creation is a resume from a paused
+	// state (deep hibernation). The generator uses this to inject resume-only
+	// annotations (recover-from-instance-id, source-pod-uid, recreating)
+	// from the sandbox status PodInfo, instead of relying on the sandbox
+	// phase which may be Upgrading during an upgrade's Resuming stage.
+	IsResume bool
 }
 
 // PodGenerateFunc generates a Pod from a Sandbox spec.
@@ -65,6 +71,12 @@ type CreatePodArgs struct {
 	// checkpoint delta applied on top of the template may override the sidecar
 	// configuration, so the current template is not authoritative there.
 	AdvertiseRuntimeTLS bool
+	// IsResume indicates that this pod creation is a resume from a paused
+	// state (deep hibernation). The generator uses this to inject resume-only
+	// annotations (recover-from-instance-id, source-pod-uid, recreating)
+	// from the sandbox status PodInfo, instead of relying on the sandbox
+	// phase which may be Upgrading during an upgrade's Resuming stage.
+	IsResume bool
 }
 
 // PodControl manages Pod creation for sandbox controllers.
@@ -126,7 +138,7 @@ func (c *PodControl) CreatePod(ctx context.Context, args CreatePodArgs) (*corev1
 		}
 	}
 
-	pod, err := c.generatePod(ctx, PodGenerateArgs{Client: c.Client, Box: box, NewStatus: args.NewStatus})
+	pod, err := c.generatePod(ctx, PodGenerateArgs{Client: c.Client, Box: box, NewStatus: args.NewStatus, IsResume: args.IsResume})
 	if err != nil {
 		return nil, err
 	}

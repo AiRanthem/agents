@@ -379,19 +379,19 @@ const (
 	SandboxInplaceUpdateReasonFailed          = "Failed"
 
 	// SandboxConditionUpgrading Reason
-	SandboxUpgradingReasonResuming          = "Resuming"
-	SandboxUpgradingReasonPreUpgrade        = "PreUpgrade"
-	SandboxUpgradingReasonUpgradePod        = "UpgradePod"
-	SandboxUpgradingReasonPostUpgrade       = "PostUpgrade"
-	SandboxUpgradingReasonPreUpgradeFailed  = "PreUpgradeFailed"
-	SandboxUpgradingReasonPostUpgradeFailed = "PostUpgradeFailed"
-	SandboxUpgradingReasonSucceeded         = "Succeeded"
-	SandboxUpgradingReasonUpgradePodFailed  = "UpgradePodFailed"
-
+	SandboxUpgradingReasonResuming         = "Resuming"
+	SandboxUpgradingReasonResumeSucceed    = "ResumeSucceed"
+	SandboxUpgradingReasonPreUpgrade       = "PreUpgrade"
+	SandboxUpgradingReasonPreUpgradeFailed = "PreUpgradeFailed"
 	// SandboxUpgradingReasonCheckpointing indicates a checkpoint is being created before pod deletion.
 	SandboxUpgradingReasonCheckpointing = "Checkpointing"
 	// SandboxUpgradingReasonCheckpointFailed indicates the checkpoint creation failed during upgrade.
-	SandboxUpgradingReasonCheckpointFailed = "CheckpointFailed"
+	SandboxUpgradingReasonCheckpointFailed  = "CheckpointFailed"
+	SandboxUpgradingReasonUpgradePod        = "UpgradePod"
+	SandboxUpgradingReasonUpgradePodFailed  = "UpgradePodFailed"
+	SandboxUpgradingReasonPostUpgrade       = "PostUpgrade"
+	SandboxUpgradingReasonPostUpgradeFailed = "PostUpgradeFailed"
+	SandboxUpgradingReasonSucceeded         = "Succeeded"
 
 	// SandboxConditionPaused Reason
 	SandboxPausedReasonPausing             = "Pausing"

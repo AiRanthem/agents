@@ -583,22 +583,12 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 		}
 
 		cond := utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused))
-		// When pause has completed successfully, check for upgrade first
-		// so that a template change takes priority over resume.
+		// When pause has completed successfully, check for resume first so
+		// that an explicit un-pause takes priority over upgrade. Only when
+		// the sandbox is still paused do we check for the upgrade trigger
+		// annotation.
 		if cond != nil && cond.Status == metav1.ConditionTrue {
-			// Support upgrading a sandbox while it is paused. A fully paused
-			// sandbox has no pod (EnsureSandboxPaused deletes it), so detect
-			// the template change via the revision hash instead of pod labels.
-			if newStatus.UpdateRevision != box.Status.UpdateRevision &&
-				core.RequiresPodReplacementUpgrade(box) {
-				klog.FromContext(ctx).Info("Detected upgrade trigger", "sandbox", klog.KObj(box),
-					"oldRevision", box.Status.UpdateRevision,
-					"newRevision", newStatus.UpdateRevision)
-				newStatus.Phase = agentsv1alpha1.SandboxUpgrading
-				utils.RemoveSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionUpgrading))
-				// Do NOT remove SandboxConditionPaused here: the upgrade Resuming stage
-				// relies on it to decide whether the sandbox must be woken up first.
-			} else if !box.Spec.Paused {
+			if !box.Spec.Paused {
 				// delete paused condition
 				utils.RemoveSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused))
 				newStatus.Phase = agentsv1alpha1.SandboxResuming
@@ -609,6 +599,15 @@ func (r *SandboxReconciler) calculateStatus(ctx context.Context, args core.Ensur
 					LastTransitionTime: metav1.Now(),
 				}
 				utils.SetSandboxCondition(newStatus, rCond)
+			} else if box.Annotations[agentsv1alpha1.AnnotationUpgradeResumeTrigger] == agentsv1alpha1.True {
+				// Two-phase upgrade: the annotation triggers resume with the
+				// OLD template. The actual template patch happens in phase 2
+				// after resume succeeds (SandboxUpgradingReasonResumeSucceed).
+				klog.FromContext(ctx).Info("Detected upgrade resume trigger annotation", "sandbox", klog.KObj(box))
+				newStatus.Phase = agentsv1alpha1.SandboxUpgrading
+				utils.RemoveSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionUpgrading))
+				// Do NOT remove SandboxConditionPaused here: the upgrade Resuming stage
+				// relies on it to decide whether the sandbox must be woken up first.
 			}
 		} else {
 			// Sandbox is still pausing, not ready for upgrade or resume.
@@ -709,6 +708,10 @@ func determineUpgradeResumeReason(
 	switch upgradeCond.Reason {
 	case agentsv1alpha1.SandboxUpgradingReasonResuming:
 		return agentsv1alpha1.SandboxUpgradingReasonResuming
+	case agentsv1alpha1.SandboxUpgradingReasonResumeSucceed:
+		// Template was patched after resume succeeded.
+		// Proceed to PreUpgrade to start the actual upgrade.
+		return agentsv1alpha1.SandboxUpgradingReasonPreUpgrade
 	case agentsv1alpha1.SandboxUpgradingReasonPreUpgradeFailed:
 		return agentsv1alpha1.SandboxUpgradingReasonPreUpgrade
 	case agentsv1alpha1.SandboxUpgradingReasonUpgradePodFailed:
