@@ -48,7 +48,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	}
 	if state, reason := sbx.GetState(); state != v1alpha1.SandboxStateRunning {
 		log.Info("cannot create snapshot: sandbox is not running", "state", state, "reason", reason)
-		return web.ApiResponse[*models.Snapshot]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[*models.Snapshot]{}, withSandboxResourceContext(&web.ApiError{
 			Code:    http.StatusBadRequest,
 			Message: fmt.Sprintf("Sandbox %s is not running", sbx.GetSandboxID()),
 		}, sbx)
@@ -77,7 +77,7 @@ func (sc *Controller) CreateSnapshot(r *http.Request) (web.ApiResponse[*models.S
 	if err != nil {
 		log.Error(err, "failed to create checkpoint")
 		snapshotTotal.WithLabelValues(sbx.GetNamespace(), "failure").Inc()
-		return web.ApiResponse[*models.Snapshot]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[*models.Snapshot]{}, withSandboxResourceContext(&web.ApiError{
 			Message: err.Error(),
 		}, sbx)
 	}

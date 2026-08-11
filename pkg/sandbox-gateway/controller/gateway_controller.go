@@ -72,7 +72,7 @@ func (h *routeEventHandler) onObject(ctx context.Context, obj any) {
 		sandboxroute.LogMutation(logger, "delete", deletion, h.registry.Delete(deletion))
 		return
 	}
-	route, err := sandboxroute.ProjectSandbox(sandbox)
+	route, err := sandboxroute.RouteFromSandbox(sandbox)
 	if err != nil {
 		logger.Error(err, "failed to project gateway route", "namespace", key.Namespace, "name", key.Name)
 		return

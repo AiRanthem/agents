@@ -63,21 +63,21 @@ func newRouteTestManager(t *testing.T) *SandboxManager {
 	}
 }
 
-func TestSandboxManagerHandleRouteSandboxEventDiscards(t *testing.T) {
+func TestSandboxManagerHandleSandboxRouteEventDiscards(t *testing.T) {
 	tests := []struct {
 		name  string
-		event func() infra.RouteSandboxEvent
+		event func() infra.SandboxRouteEvent
 	}{
 		{
 			name:  "empty event is discarded",
-			event: func() infra.RouteSandboxEvent { return infra.RouteSandboxEvent{} },
+			event: func() infra.SandboxRouteEvent { return infra.SandboxRouteEvent{} },
 		},
 		{
 			name: "sandbox failing projection is discarded",
-			event: func() infra.RouteSandboxEvent {
+			event: func() infra.SandboxRouteEvent {
 				invalid := newManagerRouteTestSandbox("team-a", "sandbox")
 				invalid.UID = ""
-				return infra.RouteSandboxEvent{Sandbox: sandboxcr.AsSandbox(invalid, nil)}
+				return infra.SandboxRouteEvent{Sandbox: sandboxcr.AsSandbox(invalid, nil)}
 			},
 		},
 	}
@@ -86,7 +86,7 @@ func TestSandboxManagerHandleRouteSandboxEventDiscards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := newRouteTestManager(t)
 
-			manager.handleRouteSandboxEvent(t.Context(), tt.event())
+			manager.handleSandboxRouteEvent(t.Context(), tt.event())
 
 			_, present := manager.proxy.LoadRoute("team-a--sandbox")
 			assert.False(t, present)
@@ -94,12 +94,12 @@ func TestSandboxManagerHandleRouteSandboxEventDiscards(t *testing.T) {
 	}
 }
 
-func TestSandboxManagerHandleRouteSandboxEvent(t *testing.T) {
+func TestSandboxManagerHandleSandboxRouteEvent(t *testing.T) {
 	manager := newRouteTestManager(t)
 	sandbox := newManagerRouteTestSandbox("team-a", "sandbox")
 	id := "team-a--sandbox"
 
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(sandbox, nil),
 	})
 	route, present := manager.proxy.LoadRoute(id)
@@ -108,7 +108,7 @@ func TestSandboxManagerHandleRouteSandboxEvent(t *testing.T) {
 
 	updated := sandbox.DeepCopy()
 	updated.ResourceVersion = "12"
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(updated, nil),
 	})
 	route, present = manager.proxy.LoadRoute(id)
@@ -119,13 +119,13 @@ func TestSandboxManagerHandleRouteSandboxEvent(t *testing.T) {
 	terminating.ResourceVersion = "13"
 	now := metav1.Now()
 	terminating.DeletionTimestamp = &now
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(terminating, nil),
 	})
 	_, present = manager.proxy.LoadRoute(id)
 	assert.False(t, present)
 
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Delete: &sandboxroute.Route{
 			Namespace:       sandbox.Namespace,
 			Name:            sandbox.Name,
@@ -134,7 +134,7 @@ func TestSandboxManagerHandleRouteSandboxEvent(t *testing.T) {
 	})
 	terminating.ResourceVersion = "14"
 	terminating.DeletionTimestamp = nil
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(terminating, nil),
 	})
 	_, present = manager.proxy.LoadRoute(id)
@@ -146,13 +146,13 @@ func TestSandboxManagerHandleKeyOnlyTombstoneDelete(t *testing.T) {
 	sandbox := newManagerRouteTestSandbox("team-a", "sandbox")
 	id := "team-a--sandbox"
 
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(sandbox, nil),
 	})
 	_, present := manager.proxy.LoadRoute(id)
 	require.True(t, present)
 
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Delete: &sandboxroute.Route{
 			Namespace: sandbox.Namespace,
 			Name:      sandbox.Name,
@@ -161,7 +161,7 @@ func TestSandboxManagerHandleKeyOnlyTombstoneDelete(t *testing.T) {
 	_, present = manager.proxy.LoadRoute(id)
 	assert.False(t, present)
 
-	manager.handleRouteSandboxEvent(t.Context(), infra.RouteSandboxEvent{
+	manager.handleSandboxRouteEvent(t.Context(), infra.SandboxRouteEvent{
 		Sandbox: sandboxcr.AsSandbox(sandbox.DeepCopy(), nil),
 	})
 	_, present = manager.proxy.LoadRoute(id)

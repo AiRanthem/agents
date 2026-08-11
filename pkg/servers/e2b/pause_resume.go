@@ -51,7 +51,7 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 	if headerValues := r.Header.Values(models.ExtensionHeaderReservePausedSandboxDuration); len(headerValues) > 0 {
 		retention, err := pausedretention.ParseReservePausedSandboxDuration(headerValues[0])
 		if err != nil {
-			return web.ApiResponse[struct{}]{}, withSandboxResource(&web.ApiError{
+			return web.ApiResponse[struct{}]{}, withSandboxResourceContext(&web.ApiError{
 				Code:    http.StatusBadRequest,
 				Message: fmt.Sprintf("Bad extension param: %s", err.Error()),
 			}, sbx)
@@ -60,9 +60,9 @@ func (sc *Controller) PauseSandbox(r *http.Request) (web.ApiResponse[struct{}], 
 		reservePausedFor = &headerValues[0]
 	}
 	now := time.Now()
-	pauseOpts := sc.buildPauseOptions(ctx, sbx, now, headerRetention, reservePausedFor)
+	pauseOpts := buildPauseOptions(ctx, sbx, now, headerRetention, reservePausedFor)
 	if err := sc.manager.PauseSandbox(ctx, sbx, pauseOpts); err != nil {
-		return web.ApiResponse[struct{}]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[struct{}]{}, withSandboxResourceContext(&web.ApiError{
 			Code:    pauseSandboxErrorCode(err),
 			Message: fmt.Sprintf("Failed to pause sandbox: %v", err),
 		}, sbx)
@@ -124,7 +124,7 @@ func reservePausedForAnnotations(value *string) map[string]string {
 
 // buildPauseOptions builds pause options.
 // Retention is resolved with priority: request header > sandbox annotation > default.
-func (sc *Controller) buildPauseOptions(ctx context.Context, sbx infra.Sandbox, now time.Time, headerRetention *time.Duration, headerReservePausedFor *string) infra.PauseOptions {
+func buildPauseOptions(ctx context.Context, sbx infra.Sandbox, now time.Time, headerRetention *time.Duration, headerReservePausedFor *string) infra.PauseOptions {
 	var retention time.Duration
 	reservePausedFor := headerReservePausedFor
 	if headerRetention != nil {
@@ -189,14 +189,14 @@ func (sc *Controller) ResumeSandbox(r *http.Request) (web.ApiResponse[struct{}],
 	resumeOpts := sc.buildResumeOpts(ctx, sbx, autoPause, time.Now(), effectiveTimeout, !currentEndAt.IsZero())
 	log.Info("resuming sandbox")
 	if err := sc.manager.ResumeSandbox(ctx, sbx, resumeOpts); err != nil {
-		return web.ApiResponse[struct{}]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[struct{}]{}, withSandboxResourceContext(&web.ApiError{
 			Code:    resumeSandboxErrorCode(err),
 			Message: fmt.Sprintf("Failed to resume sandbox: %v", err),
 		}, sbx)
 	}
 
 	if apiErr := sc.updateConnectTimeout(ctx, sbx, effectiveTimeout, state, autoPause, currentEndAt); apiErr != nil {
-		return web.ApiResponse[struct{}]{}, withSandboxResource(apiErr, sbx)
+		return web.ApiResponse[struct{}]{}, withSandboxResourceContext(apiErr, sbx)
 	}
 	return web.ApiResponse[struct{}]{
 		Code: http.StatusNoContent,
@@ -300,7 +300,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 			if managererrors.GetErrCode(err) == managererrors.ErrorConflict {
 				code = http.StatusBadRequest
 			}
-			return web.ApiResponse[*models.Sandbox]{}, withSandboxResource(&web.ApiError{
+			return web.ApiResponse[*models.Sandbox]{}, withSandboxResourceContext(&web.ApiError{
 				Code:    code,
 				Message: fmt.Sprintf("Failed to resume sandbox: %v", err),
 			}, sbx)
@@ -315,7 +315,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 	log.Info("updating sandbox timeout")
 	if err := sc.updateConnectTimeout(ctx, sbx, effectiveTimeout, state, autoPause, currentEndAt); err != nil {
 		log.Error(err, "failed to update sandbox timeout")
-		return web.ApiResponse[*models.Sandbox]{}, withSandboxResource(err, sbx)
+		return web.ApiResponse[*models.Sandbox]{}, withSandboxResourceContext(err, sbx)
 	}
 	log.Info("sandbox timeout updated")
 

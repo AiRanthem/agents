@@ -35,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
 const testWorkerNamespace = "sandbox-system"
@@ -101,7 +103,7 @@ func TestLeaseWorkerIDAllocatorFailsClosedOnInvalidCounter(t *testing.T) {
 		{name: "missing holder", prefix: "missing-holder", lease: testWorkerLease("missing-holder", "", new(int32)), expectError: "holderIdentity is missing"},
 		{name: "missing counter", prefix: "missing-counter", lease: testWorkerLease("missing-counter", "other", nil), expectError: "leaseTransitions is missing"},
 		{name: "negative counter", prefix: "negative", lease: testWorkerLease("negative", "other", &negative), expectError: "is negative"},
-		{name: "maximum generation already owned", prefix: "owned-maximum", lease: testWorkerLease("owned-maximum", "manager-a", &maxGeneration), expectID: uint32(math.MaxInt32) % workerIDLimit},
+		{name: "maximum generation already owned", prefix: "owned-maximum", lease: testWorkerLease("owned-maximum", "manager-a", &maxGeneration), expectID: uint32(math.MaxInt32) % sandboxid.WorkerIDLimit},
 		{name: "maximum generation cannot advance", prefix: "exhausted", lease: testWorkerLease("exhausted", "other", &maxGeneration), expectError: "allocation generation for prefix \"exhausted\" is exhausted at 2147483647"},
 	}
 
@@ -121,7 +123,7 @@ func TestLeaseWorkerIDAllocatorFailsClosedOnInvalidCounter(t *testing.T) {
 }
 
 func TestLeaseWorkerIDAllocatorWrapsWorkerIDWithoutResettingGeneration(t *testing.T) {
-	generation := int32(workerIDLimit - 1)
+	generation := int32(sandboxid.WorkerIDLimit - 1)
 	c := newWorkerAllocatorTestClient(t, testWorkerLease("prod-", "manager-a", &generation))
 
 	workerID, err := testAllocateWorkerID(t.Context(), c, c, "manager-b", "prod-")
@@ -131,7 +133,7 @@ func TestLeaseWorkerIDAllocatorWrapsWorkerIDWithoutResettingGeneration(t *testin
 	lease := &coordinationv1.Lease{}
 	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: testWorkerNamespace, Name: workerLeaseName("prod-")}, lease))
 	require.NotNil(t, lease.Spec.LeaseTransitions)
-	assert.Equal(t, int32(workerIDLimit), *lease.Spec.LeaseTransitions)
+	assert.Equal(t, int32(sandboxid.WorkerIDLimit), *lease.Spec.LeaseTransitions)
 }
 
 func TestLeaseWorkerIDAllocatorCreateAlreadyExistsRetriesFromLatest(t *testing.T) {

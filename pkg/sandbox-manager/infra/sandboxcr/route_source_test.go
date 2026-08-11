@@ -32,14 +32,14 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 )
 
-func TestRouteSandboxSourceSubscribe(t *testing.T) {
+func TestSandboxRouteSourceSubscribe(t *testing.T) {
 	managerCache, _, err := cachetest.NewTestCache(t)
 	require.NoError(t, err)
 	provider := &routeEventProvider{Provider: managerCache, registration: &routeEventRegistration{}}
-	source := &routeSandboxSource{cache: provider}
+	source := &sandboxRouteSource{cache: provider}
 
-	var events []infra.RouteSandboxEvent
-	err = source.Subscribe(t.Context(), func(_ context.Context, event infra.RouteSandboxEvent) {
+	var events []infra.SandboxRouteEvent
+	err = source.Subscribe(t.Context(), func(_ context.Context, event infra.SandboxRouteEvent) {
 		events = append(events, event)
 	})
 	require.NoError(t, err)
@@ -65,40 +65,40 @@ func TestRouteSandboxSourceSubscribe(t *testing.T) {
 	assert.Equal(t, "11", events[2].Delete.ResourceVersion)
 }
 
-func TestRouteSandboxSourceEventValidation(t *testing.T) {
+func TestSandboxRouteSourceEventValidation(t *testing.T) {
 	tests := []struct {
 		name string
-		emit func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler)
+		emit func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler)
 		// expectDelete asserts one RV-less delete event; otherwise no event at all.
 		expectDelete bool
 	}{
 		{
 			name: "tombstone key without namespace is discarded",
-			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+			emit: func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler) {
 				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{Key: "invalid"})
 			},
 		},
 		{
 			name: "tombstone key that fails parsing is discarded",
-			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+			emit: func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler) {
 				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{Key: "a/b/c"})
 			},
 		},
 		{
 			name: "unknown delete object type is discarded",
-			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+			emit: func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler) {
 				source.handleDeleteEvent(context.Background(), handler, "not-a-sandbox")
 			},
 		},
 		{
 			name: "non-sandbox object event is discarded",
-			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+			emit: func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler) {
 				source.handleObjectEvent(context.Background(), handler, "not-a-sandbox")
 			},
 		},
 		{
 			name: "key-only tombstone emits an RV-less delete",
-			emit: func(source *routeSandboxSource, handler infra.RouteSandboxEventHandler) {
+			emit: func(source *sandboxRouteSource, handler infra.SandboxRouteEventHandler) {
 				source.handleDeleteEvent(context.Background(), handler, toolscache.DeletedFinalStateUnknown{
 					Key: "team-a/sandbox-a",
 				})
@@ -111,10 +111,10 @@ func TestRouteSandboxSourceEventValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			managerCache, _, err := cachetest.NewTestCache(t)
 			require.NoError(t, err)
-			source := &routeSandboxSource{cache: managerCache}
-			var events []infra.RouteSandboxEvent
+			source := &sandboxRouteSource{cache: managerCache}
+			var events []infra.SandboxRouteEvent
 
-			tt.emit(source, func(_ context.Context, event infra.RouteSandboxEvent) {
+			tt.emit(source, func(_ context.Context, event infra.SandboxRouteEvent) {
 				events = append(events, event)
 			})
 
@@ -131,20 +131,20 @@ func TestRouteSandboxSourceEventValidation(t *testing.T) {
 	}
 }
 
-func TestRouteSandboxSourceSubscribeValidation(t *testing.T) {
+func TestSandboxRouteSourceSubscribeValidation(t *testing.T) {
 	managerCache, _, err := cachetest.NewTestCache(t)
 	require.NoError(t, err)
-	handler := func(context.Context, infra.RouteSandboxEvent) {}
+	handler := func(context.Context, infra.SandboxRouteEvent) {}
 
-	err = (&routeSandboxSource{cache: managerCache}).Subscribe(t.Context(), nil)
+	err = (&sandboxRouteSource{cache: managerCache}).Subscribe(t.Context(), nil)
 	require.Error(t, err)
 
-	err = (&routeSandboxSource{}).Subscribe(t.Context(), handler)
+	err = (&sandboxRouteSource{}).Subscribe(t.Context(), handler)
 	require.Error(t, err)
 
 	expected := errors.New("registration failed")
 	provider := &routeEventProvider{Provider: managerCache, err: expected}
-	err = (&routeSandboxSource{cache: provider}).Subscribe(t.Context(), handler)
+	err = (&sandboxRouteSource{cache: provider}).Subscribe(t.Context(), handler)
 	require.ErrorIs(t, err, expected)
 }
 

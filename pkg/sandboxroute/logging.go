@@ -42,14 +42,6 @@ func LogMutation(logger logr.Logger, operation string, route Route, result Mutat
 		)
 		return
 	}
-	if result.Result == EventResultApplied && operation == "upsert" {
-		logger.Info(
-			"route mutation completed",
-			"result", result.Result,
-			"reason", result.Reason,
-		)
-		return
-	}
 	logger.Info(
 		"route mutation completed",
 		"result", result.Result,

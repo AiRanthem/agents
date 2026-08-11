@@ -41,7 +41,7 @@ import (
 
 type routeSourceOverrideBuilder struct {
 	base   infra.Builder
-	source infra.RouteSandboxSource
+	source infra.SandboxRouteSource
 }
 
 func (b routeSourceOverrideBuilder) Build() infra.Infrastructure {
@@ -50,10 +50,10 @@ func (b routeSourceOverrideBuilder) Build() infra.Infrastructure {
 
 type routeSourceOverrideInfra struct {
 	infra.Infrastructure
-	source infra.RouteSandboxSource
+	source infra.SandboxRouteSource
 }
 
-func (i routeSourceOverrideInfra) GetRouteSandboxSource() infra.RouteSandboxSource {
+func (i routeSourceOverrideInfra) GetSandboxRouteSource() infra.SandboxRouteSource {
 	return i.source
 }
 
@@ -65,7 +65,7 @@ func (i routeSourceOverrideInfra) GetQuotaSandboxSource() infra.QuotaSandboxSour
 	return provider.GetQuotaSandboxSource()
 }
 
-type failingRouteSandboxSource struct {
+type failingSandboxRouteSource struct {
 	err error
 }
 
@@ -91,9 +91,9 @@ func (c workerAllocationFailureCache) GetAPIReader() ctrlclient.Reader {
 	return c.reader
 }
 
-func (s failingRouteSandboxSource) Subscribe(
+func (s failingSandboxRouteSource) Subscribe(
 	context.Context,
-	infra.RouteSandboxEventHandler,
+	infra.SandboxRouteEventHandler,
 ) error {
 	return s.err
 }
@@ -407,7 +407,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 		// Infra may still use this reader for non-route operations; route setup does not.
 	})
 
-	t.Run("should require route sandbox source", func(t *testing.T) {
+	t.Run("should require sandbox route source", func(t *testing.T) {
 		opts := config.InitOptions(config.SandboxManagerOptions{})
 		managerCache, apiReader, err := cachetest.NewTestCache(t)
 		require.NoError(t, err)
@@ -419,7 +419,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 			}).
 			Build()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "route sandbox source is not configured")
+		assert.Contains(t, err.Error(), "sandbox route source is not configured")
 	})
 
 	t.Run("should defer route feeder registration until run", func(t *testing.T) {
@@ -431,11 +431,11 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 		manager, err := NewSandboxManagerBuilder(opts).
 			WithCustomInfra(func() (infra.Builder, error) {
 				base := sandboxcr.NewInfraBuilder(opts).WithCache(managerCache).WithAPIReader(apiReader)
-				return routeSourceOverrideBuilder{base: base, source: failingRouteSandboxSource{err: registerErr}}, nil
+				return routeSourceOverrideBuilder{base: base, source: failingSandboxRouteSource{err: registerErr}}, nil
 			}).
 			Build()
 		require.NoError(t, err)
-		err = manager.routeSource.Subscribe(t.Context(), manager.handleRouteSandboxEvent)
+		err = manager.routeSource.Subscribe(t.Context(), manager.handleSandboxRouteEvent)
 		require.ErrorIs(t, err, registerErr)
 	})
 

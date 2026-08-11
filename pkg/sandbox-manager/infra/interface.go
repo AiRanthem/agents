@@ -48,23 +48,23 @@ type QuotaSandboxSourceProvider interface {
 	GetQuotaSandboxSource() QuotaSandboxSource
 }
 
-// RouteSandboxEvent carries one Sandbox observation or deletion. Normal
+// SandboxRouteEvent carries one Sandbox observation or deletion. Normal
 // deletions include their Kubernetes resource version; an empty deletion
 // resource version is reserved for DeletedFinalStateUnknown.
-type RouteSandboxEvent struct {
+type SandboxRouteEvent struct {
 	Sandbox Sandbox
 	Delete  *sandboxroute.Route
 }
 
-// RouteSandboxEventHandler consumes one neutral Sandbox informer event.
-type RouteSandboxEventHandler func(context.Context, RouteSandboxEvent)
+// SandboxRouteEventHandler consumes one neutral Sandbox informer event.
+type SandboxRouteEventHandler func(context.Context, SandboxRouteEvent)
 
-// RouteSandboxSource hides backend-specific informer registration. Sources
+// SandboxRouteSource hides backend-specific informer registration. Sources
 // emit only Sandboxes within their configured observation scope, leaving
 // projection and route mutation in Manager. A subscription lives for the
 // process lifetime.
-type RouteSandboxSource interface {
-	Subscribe(context.Context, RouteSandboxEventHandler) error
+type SandboxRouteSource interface {
+	Subscribe(context.Context, SandboxRouteEventHandler) error
 }
 
 type QuotaSandboxSource interface {
@@ -246,7 +246,7 @@ type Infrastructure interface {
 	HasTemplate(ctx context.Context, opts HasTemplateOptions) bool
 	HasCheckpoint(ctx context.Context, opts HasCheckpointOptions) bool
 	GetCache() cache.Provider // Get the CacheProvider for the infra
-	GetRouteSandboxSource() RouteSandboxSource
+	GetSandboxRouteSource() SandboxRouteSource
 	LoadDebugInfo() map[string]any
 	SelectSandboxes(ctx context.Context, opts SelectSandboxesOptions) ([]Sandbox, error)
 	GetSandbox(ctx context.Context, opts GetSandboxOptions) (Sandbox, error)
@@ -270,7 +270,7 @@ type Sandbox interface {
 	// the sandbox-id label when assigned, otherwise the legacy namespace--name form.
 	GetSandboxID() string
 	// GetRoute projects this sandbox into its gateway route; it is a pure
-	// delegate to sandboxroute.ProjectSandbox.
+	// delegate to sandboxroute.RouteFromSandbox.
 	GetRoute() (sandboxroute.Route, error)
 	GetTemplate() string          // Get the template name of the Sandbox
 	GetResource() SandboxResource // Get the CPU / Memory requirements of the Sandbox

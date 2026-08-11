@@ -29,10 +29,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	netutils "k8s.io/apimachinery/pkg/util/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
 const (
-	workerIDLimit       = 1 << 18
 	workerLeaseNameBase = "sandbox-manager-sandbox-id-worker-"
 )
 
@@ -56,6 +57,10 @@ func workerLeaseName(prefix string) string {
 	return workerLeaseNameBase + hex.EncodeToString(sum[:12])
 }
 
+// Manager instances have no stable unique ordinal, so random or hash-based
+// Sonyflake worker IDs cannot provide coordinated allocation. This per-prefix
+// Lease is a persistent allocation ledger, not leader election: it is not
+// renewed, used for liveness detection, or reset.
 func allocateLeaseWorkerID(
 	ctx context.Context,
 	writer client.Client,
@@ -84,9 +89,10 @@ func allocateLeaseWorkerID(
 		}
 		// known-limit: reuse requires the previous holder of this worker ID
 		// to have exited and wall-clock time not to repeat; otherwise switch prefixes
-		// before wraparound or upgrade to a fenced allocator.
+		// before the generation wraps through sandboxid.WorkerIDLimit, or upgrade
+		// to a fenced allocator.
 		if owned {
-			return generation % workerIDLimit, nil
+			return generation % sandboxid.WorkerIDLimit, nil
 		}
 		if generation == math.MaxInt32 {
 			return 0, fmt.Errorf("sandbox ID allocation generation for prefix %q is exhausted at %d, please use a different id prefix", prefix, generation)
@@ -98,7 +104,7 @@ func allocateLeaseWorkerID(
 		lease.Spec.LeaseTransitions = &counter
 		updateErr := writer.Update(ctx, lease)
 		if updateErr == nil {
-			return nextGeneration % workerIDLimit, nil
+			return nextGeneration % sandboxid.WorkerIDLimit, nil
 		}
 		if !apierrors.IsConflict(updateErr) && !isAmbiguousLeaseWrite(updateErr) {
 			return 0, fmt.Errorf("update sandbox ID worker Lease %s: %w", key, updateErr)

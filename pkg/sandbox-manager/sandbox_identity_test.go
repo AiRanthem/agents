@@ -30,7 +30,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
-func TestApplySandboxIDToModifier(t *testing.T) {
+func TestWithSandboxIDAssignment(t *testing.T) {
 	callerErr := errors.New("caller failed")
 	generateErr := errors.New("generate failed")
 	tests := []struct {
@@ -141,7 +141,7 @@ func TestApplySandboxIDToModifier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			modifier := applySandboxIDToModifier(tt.modifier, tt.enabled, tt.prefix, tt.generate)
+			modifier := withSandboxIDAssignment(tt.modifier, tt.enabled, tt.prefix, tt.generate)
 			require.NotNil(t, modifier)
 			sandbox := sandboxcr.AsSandbox(&agentsv1alpha1.Sandbox{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels}}, nil)
 			err := modifier(sandbox)
@@ -158,9 +158,9 @@ func TestApplySandboxIDToModifier(t *testing.T) {
 	}
 }
 
-func TestApplySandboxIDToModifierGeneratesIDForEachAttempt(t *testing.T) {
+func TestWithSandboxIDAssignmentGeneratesIDForEachDelivery(t *testing.T) {
 	generateCalls := 0
-	modifier := applySandboxIDToModifier(nil, true, "", func() (string, error) {
+	modifier := withSandboxIDAssignment(nil, true, "", func() (string, error) {
 		generateCalls++
 		if generateCalls == 1 {
 			return "aaaaaaaaaaaac", nil

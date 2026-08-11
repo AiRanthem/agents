@@ -25,7 +25,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/web"
 )
 
-func TestWithSandboxResource(t *testing.T) {
+func TestWithSandboxResourceContext(t *testing.T) {
 	tests := []struct {
 		name        string
 		apiErr      *web.ApiError
@@ -43,7 +43,7 @@ func TestWithSandboxResource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := withSandboxResource(tt.apiErr, tt.sandbox)
+			got := withSandboxResourceContext(tt.apiErr, tt.sandbox)
 			if tt.expectNil {
 				assert.Nil(t, got)
 				return

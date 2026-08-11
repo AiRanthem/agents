@@ -40,6 +40,9 @@ const (
 	// is owned by callers.
 	ShortIDLength = 13
 	workerIDBits  = 18
+	// WorkerIDLimit is the size of the worker-ID domain accepted by the
+	// Sonyflake generator.
+	WorkerIDLimit = 1 << workerIDBits
 	sequenceBits  = 4
 )
 

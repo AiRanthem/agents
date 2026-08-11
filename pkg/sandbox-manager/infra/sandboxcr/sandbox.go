@@ -74,7 +74,7 @@ func (s *Sandbox) GetSandboxID() string {
 }
 
 func (s *Sandbox) GetRoute() (sandboxroute.Route, error) {
-	return sandboxroute.ProjectSandbox(s.Sandbox)
+	return sandboxroute.RouteFromSandbox(s.Sandbox)
 }
 
 var DefaultDeleteSandbox = deleteSandbox

@@ -112,7 +112,7 @@ func (sc *Controller) DeleteSandbox(r *http.Request) (web.ApiResponse[struct{}],
 		Quota:   quotaSpec,
 	}); err != nil {
 		log.Error(err, "failed to delete sandbox", "id", id)
-		return web.ApiResponse[struct{}]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[struct{}]{}, withSandboxResourceContext(&web.ApiError{
 			Message: fmt.Sprintf("Failed to delete sandbox: %v", err),
 		}, sbx)
 	}
@@ -159,20 +159,20 @@ func (sc *Controller) BrowserUse(r *http.Request) (web.ApiResponse[*browserHandS
 	}
 	resp, err := sbx.Request(r.Context(), r.Method, "/json/version", cdpPort, r.Body)
 	if err != nil {
-		return web.ApiResponse[*browserHandShake]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[*browserHandShake]{}, withSandboxResourceContext(&web.ApiError{
 			Message: fmt.Sprintf("Failed to proxy request to sandbox port %d: %v", cdpPort, err),
 		}, sbx)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return web.ApiResponse[*browserHandShake]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[*browserHandShake]{}, withSandboxResourceContext(&web.ApiError{
 			Message: fmt.Sprintf("Failed to read response body: %v", err),
 		}, sbx)
 	}
 	var h browserHandShake
 	if err = json.Unmarshal(body, &h); err != nil {
-		return web.ApiResponse[*browserHandShake]{}, withSandboxResource(&web.ApiError{
+		return web.ApiResponse[*browserHandShake]{}, withSandboxResourceContext(&web.ApiError{
 			Message: fmt.Sprintf("Failed to unmarshal response body: %v", err),
 		}, sbx)
 	}

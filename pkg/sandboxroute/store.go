@@ -63,8 +63,10 @@ type deletionFence struct {
 // Store owns source records, deletion fences, and an active ID-to-ObjectKey index.
 // A record and a deletion fence for the same ObjectKey never coexist.
 // Supported producers must supply IDs that are unique across ObjectKeys.
-// Duplicate IDs violate the upstream identity contract; Store reports a
-// takeover defensively but does not define collision-recovery semantics.
+// A duplicate-ID upsert defensively takes over the active lookup while the
+// displaced record remains as its ObjectKey RV watermark. Deleting the takeover
+// leaves the ID inactive until a newer displaced-ObjectKey observation arrives,
+// so stale events cannot revive it.
 type Store struct {
 	mu                       sync.RWMutex
 	recordByObject           map[types.NamespacedName]Route
@@ -126,7 +128,7 @@ func (s *Store) Delete(route Route) MutationResult {
 		return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 	}
 	if route.ResourceVersion != "" {
-		if _, err := resourceversion.CompareResourceVersion(route.ResourceVersion, route.ResourceVersion); err != nil {
+		if err := validateResourceVersion(route.ResourceVersion); err != nil {
 			return MutationResult{Result: EventResultInvalid, Reason: ReasonInvalidRoute}
 		}
 	}

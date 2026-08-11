@@ -24,8 +24,11 @@ const (
 	AnnotationClaimTime          = InternalPrefix + "claim-timestamp"
 	AnnotationRestoreFrom        = InternalPrefix + "restore-from"
 	AnnotationInitRuntimeRequest = InternalPrefix + "init-runtime-request"
-	AnnotationSandboxID          = InternalPrefix + "sandbox-id"
-	AnnotationMemberlistURL      = InternalPrefix + "memberlist-url"
+	// AnnotationSandboxID records the referenced Sandbox ID on associated resources,
+	// such as Checkpoints and TrafficPolicies; LabelSandboxID is the authoritative
+	// identity for the Sandbox itself.
+	AnnotationSandboxID     = InternalPrefix + "sandbox-id"
+	AnnotationMemberlistURL = InternalPrefix + "memberlist-url"
 
 	// AnnotationCleanupEnabled marks a sandbox as supporting recycle.
 	AnnotationCleanupEnabled = InternalPrefix + "cleanup-enabled"
@@ -75,8 +78,7 @@ const (
 // E2B annotations
 
 const (
-	E2BPrefix      = "e2b." + InternalPrefix
-	E2BLabelPrefix = "label:"
+	E2BPrefix = "e2b." + InternalPrefix
 
 	AnnotationEnvdAccessToken = E2BPrefix + "envd-access-token"
 	AnnotationEnvdURL         = E2BPrefix + "envd-url"

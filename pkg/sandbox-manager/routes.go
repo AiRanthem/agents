@@ -26,7 +26,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
-func (m *SandboxManager) handleRouteSandboxEvent(ctx context.Context, event infra.RouteSandboxEvent) {
+func (m *SandboxManager) handleSandboxRouteEvent(ctx context.Context, event infra.SandboxRouteEvent) {
 	log := klog.FromContext(ctx)
 	if event.Delete != nil {
 		result := m.proxy.Delete(*event.Delete)

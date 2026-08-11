@@ -30,25 +30,25 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute"
 )
 
-type routeSandboxSource struct {
+type sandboxRouteSource struct {
 	cache cache.Provider
 }
 
-var _ infra.RouteSandboxSource = (*routeSandboxSource)(nil)
+var _ infra.SandboxRouteSource = (*sandboxRouteSource)(nil)
 
-func (i *Infra) GetRouteSandboxSource() infra.RouteSandboxSource {
-	return &routeSandboxSource{cache: i.Cache}
+func (i *Infra) GetSandboxRouteSource() infra.SandboxRouteSource {
+	return &sandboxRouteSource{cache: i.Cache}
 }
 
-func (s *routeSandboxSource) Subscribe(
+func (s *sandboxRouteSource) Subscribe(
 	ctx context.Context,
-	handler infra.RouteSandboxEventHandler,
+	handler infra.SandboxRouteEventHandler,
 ) error {
 	if handler == nil {
-		return fmt.Errorf("route sandbox event handler must not be nil")
+		return fmt.Errorf("sandbox route event handler must not be nil")
 	}
 	if s == nil || s.cache == nil {
-		return fmt.Errorf("route sandbox cache is not configured")
+		return fmt.Errorf("sandbox route cache is not configured")
 	}
 
 	_, err := s.cache.AddSandboxEventHandler(ctx, toolscache.ResourceEventHandlerFuncs{
@@ -63,36 +63,36 @@ func (s *routeSandboxSource) Subscribe(
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("register route sandbox informer handler: %w", err)
+		return fmt.Errorf("register sandbox route informer handler: %w", err)
 	}
 	return nil
 }
 
-func (s *routeSandboxSource) handleObjectEvent(
+func (s *sandboxRouteSource) handleObjectEvent(
 	ctx context.Context,
-	handler infra.RouteSandboxEventHandler,
+	handler infra.SandboxRouteEventHandler,
 	obj any,
 ) {
 	sandbox, ok := obj.(*agentsv1alpha1.Sandbox)
 	if !ok {
 		klog.FromContext(ctx).Error(
 			nil,
-			"discarding unexpected route sandbox informer object",
+			"discarding unexpected sandbox route informer object",
 			"type", fmt.Sprintf("%T", obj),
 		)
 		return
 	}
-	handler(ctx, infra.RouteSandboxEvent{Sandbox: AsSandbox(sandbox, s.cache)})
+	handler(ctx, infra.SandboxRouteEvent{Sandbox: AsSandbox(sandbox, s.cache)})
 }
 
-func (s *routeSandboxSource) handleDeleteEvent(
+func (s *sandboxRouteSource) handleDeleteEvent(
 	ctx context.Context,
-	handler infra.RouteSandboxEventHandler,
+	handler infra.SandboxRouteEventHandler,
 	obj any,
 ) {
 	switch value := obj.(type) {
 	case *agentsv1alpha1.Sandbox:
-		handler(ctx, infra.RouteSandboxEvent{Delete: &sandboxroute.Route{
+		handler(ctx, infra.SandboxRouteEvent{Delete: &sandboxroute.Route{
 			Namespace:       value.Namespace,
 			Name:            value.Name,
 			ResourceVersion: value.ResourceVersion,
@@ -100,17 +100,17 @@ func (s *routeSandboxSource) handleDeleteEvent(
 	case toolscache.DeletedFinalStateUnknown:
 		key, err := routeObjectKeyFromTombstone(value)
 		if err != nil {
-			klog.FromContext(ctx).Error(err, "discarding invalid route sandbox tombstone")
+			klog.FromContext(ctx).Error(err, "discarding invalid sandbox route tombstone")
 			return
 		}
-		handler(ctx, infra.RouteSandboxEvent{Delete: &sandboxroute.Route{
+		handler(ctx, infra.SandboxRouteEvent{Delete: &sandboxroute.Route{
 			Namespace: key.Namespace,
 			Name:      key.Name,
 		}})
 	default:
 		klog.FromContext(ctx).Error(
 			nil,
-			"discarding unexpected route sandbox delete object",
+			"discarding unexpected sandbox route delete object",
 			"type", fmt.Sprintf("%T", obj),
 		)
 	}

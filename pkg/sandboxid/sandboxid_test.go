@@ -120,10 +120,10 @@ func TestGenerator(t *testing.T) {
 func TestNewGeneratorWorkerIDBoundary(t *testing.T) {
 	assert.Equal(t, 63, 41+workerIDBits+sequenceBits)
 
-	_, err := NewGenerator((1 << workerIDBits) - 1)
+	_, err := NewGenerator(WorkerIDLimit - 1)
 	require.NoError(t, err)
 
-	_, err = NewGenerator(1 << workerIDBits)
+	_, err = NewGenerator(WorkerIDLimit)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid machine id")
 }

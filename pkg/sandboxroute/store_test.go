@@ -373,26 +373,57 @@ func TestStoreRejectsRoutesWithoutFullObjectKeyWithoutAllocatingState(t *testing
 }
 
 func TestStoreShortIDCollisionAcrossObjects(t *testing.T) {
-	store := NewStore()
 	keyA := types.NamespacedName{Namespace: "ns", Name: "a"}
 	keyB := types.NamespacedName{Namespace: "ns", Name: "b"}
 	routeA := fullRoute("shared", keyA.Namespace, keyA.Name, "uid-a", "1")
 	routeB := fullRoute("shared", keyB.Namespace, keyB.Name, "uid-b", "1")
 
-	firstResult := store.Upsert(routeA)
-	require.Equal(t, EventResultApplied, firstResult.Result)
-	assert.Empty(t, firstResult.Reason)
-	takeoverResult := store.Upsert(routeB)
-	require.Equal(t, EventResultApplied, takeoverResult.Result)
-	assert.Equal(t, ReasonIDTakeover, takeoverResult.Reason)
-	assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
+	newCollisionStore := func(t *testing.T) *Store {
+		t.Helper()
+		store := NewStore()
+		firstResult := store.Upsert(routeA)
+		require.Equal(t, EventResultApplied, firstResult.Result)
+		assert.Empty(t, firstResult.Reason)
+		takeoverResult := store.Upsert(routeB)
+		require.Equal(t, EventResultApplied, takeoverResult.Result)
+		assert.Equal(t, ReasonIDTakeover, takeoverResult.Reason)
+		assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
+		return store
+	}
 
-	deletion := Route{Namespace: keyA.Namespace, Name: keyA.Name, ResourceVersion: "2"}
-	require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
-	assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
-	assert.Equal(t, 1, store.Len())
-	assertStoreObjectInvariant(t, store, keyA)
-	assertStoreObjectInvariant(t, store, keyB)
+	t.Run("deleting displaced object keeps takeover active", func(t *testing.T) {
+		store := newCollisionStore(t)
+		deletion := Route{Namespace: keyA.Namespace, Name: keyA.Name, ResourceVersion: "2"}
+		require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
+		assert.Equal(t, routeB, mustGetRoute(t, store, "shared"))
+		assert.Equal(t, 1, store.Len())
+		assertStoreObjectInvariant(t, store, keyA)
+		assertStoreObjectInvariant(t, store, keyB)
+	})
+
+	t.Run("deleting takeover keeps ID inactive until displaced object advances", func(t *testing.T) {
+		store := newCollisionStore(t)
+		deletion := Route{Namespace: keyB.Namespace, Name: keyB.Name, ResourceVersion: "2"}
+		require.Equal(t, EventResultApplied, store.Delete(deletion).Result)
+		_, present := store.Get("shared")
+		assert.False(t, present)
+		assert.Equal(t, 0, store.Len())
+
+		staleResult := store.Upsert(routeA)
+		assert.Equal(t, MutationResult{
+			Result: EventResultIgnored,
+			Reason: ReasonStaleResourceVersion,
+		}, staleResult)
+		_, present = store.Get("shared")
+		assert.False(t, present)
+
+		updatedRouteA := routeA
+		updatedRouteA.ResourceVersion = "2"
+		require.Equal(t, EventResultApplied, store.Upsert(updatedRouteA).Result)
+		assert.Equal(t, updatedRouteA, mustGetRoute(t, store, "shared"))
+		assertStoreObjectInvariant(t, store, keyA)
+		assertStoreObjectInvariant(t, store, keyB)
+	})
 }
 
 func TestStoreConcurrentReadWrite(t *testing.T) {
@@ -406,14 +437,17 @@ func TestStoreConcurrentReadWrite(t *testing.T) {
 			defer wg.Done()
 			for rv := 1; rv <= 100; rv++ {
 				id := fmt.Sprintf("id-%d", worker)
-				store.Upsert(fullRoute(id, "ns", id, types.UID(id), fmt.Sprint(rv)))
-				store.Get(id)
+				route := fullRoute(id, "ns", id, types.UID(id), fmt.Sprint(rv))
+				assert.Equal(t, EventResultApplied, store.Upsert(route).Result)
+				_, present := store.Get(id)
+				assert.True(t, present)
 				store.Len()
+				store.Delete(route)
 			}
 		}()
 	}
 	wg.Wait()
-	assert.Equal(t, workers, store.Len())
+	assert.Equal(t, 0, store.Len())
 }
 
 func mustGetRoute(t *testing.T, store *Store, id string) Route {

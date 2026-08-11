@@ -182,9 +182,9 @@ func (b *SandboxManagerBuilder) Build() (*SandboxManager, error) {
 		return nil, errors.NewError(errors.ErrorInternal, "failed to get infra builder: %v", err)
 	}
 	b.instance.infra = builder.Build()
-	routeSource := b.instance.infra.GetRouteSandboxSource()
+	routeSource := b.instance.infra.GetSandboxRouteSource()
 	if routeSource == nil {
-		return nil, errors.NewError(errors.ErrorInternal, "route sandbox source is not configured")
+		return nil, errors.NewError(errors.ErrorInternal, "sandbox route source is not configured")
 	}
 	b.instance.routeSource = routeSource
 
@@ -224,7 +224,7 @@ type SandboxManager struct {
 	infra infra.Infrastructure
 	proxy *proxy.Server
 
-	routeSource infra.RouteSandboxSource
+	routeSource infra.SandboxRouteSource
 
 	systemNamespace   string
 	enableShortID     bool
@@ -315,7 +315,7 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 	log := klog.FromContext(ctx)
 
 	if m.routeSource != nil {
-		if err := m.routeSource.Subscribe(ctx, m.handleRouteSandboxEvent); err != nil {
+		if err := m.routeSource.Subscribe(ctx, m.handleSandboxRouteEvent); err != nil {
 			return fmt.Errorf("subscribe manager route feeder: %w", err)
 		}
 	}

@@ -102,7 +102,7 @@ func TestRouteSecurityAndJSONCompatibility(t *testing.T) {
 	}
 }
 
-func TestProjectSandboxDerivation(t *testing.T) {
+func TestRouteFromSandboxDerivation(t *testing.T) {
 	newSandbox := func(labels, annotations map[string]string) *agentsv1alpha1.Sandbox {
 		if annotations == nil {
 			annotations = map[string]string{}
@@ -220,7 +220,7 @@ func TestProjectSandboxDerivation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			route, err := ProjectSandbox(tt.sandbox)
+			route, err := RouteFromSandbox(tt.sandbox)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.expectError)

@@ -23,8 +23,11 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxid"
 )
 
-// applySandboxIDToModifier replaces any prior delivery ID after the caller modifier.
-func applySandboxIDToModifier(
+// withSandboxIDAssignment validates the enabled generator before mutation, then
+// runs the caller modifier and applies Manager-owned Sandbox ID policy last.
+// This prevents caller-supplied or recycled IDs from surviving into the new
+// delivery: enabled mode replaces them; disabled mode clears the reserved label.
+func withSandboxIDAssignment(
 	modifier func(infra.Sandbox) error,
 	enabled bool,
 	prefix string,

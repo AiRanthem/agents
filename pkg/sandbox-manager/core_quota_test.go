@@ -134,7 +134,7 @@ func buildQuotaTestManager(t *testing.T, spyCache *quotaInitCache) *SandboxManag
 				WithCache(spyCache).
 				WithAPIReader(apiReader).
 				WithRouteReader(proxyServer)
-			return routeSourceOverrideBuilder{base: base, source: failingRouteSandboxSource{}}, nil
+			return routeSourceOverrideBuilder{base: base, source: failingSandboxRouteSource{}}, nil
 		}).
 		Build()
 	require.NoError(t, err)

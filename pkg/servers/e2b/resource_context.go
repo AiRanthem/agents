@@ -26,7 +26,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/web"
 )
 
-func withSandboxResource(apiErr *web.ApiError, sandbox metav1.Object) *web.ApiError {
+func withSandboxResourceContext(apiErr *web.ApiError, sandbox metav1.Object) *web.ApiError {
 	if apiErr == nil || sandbox == nil {
 		return apiErr
 	}

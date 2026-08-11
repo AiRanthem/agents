@@ -65,7 +65,7 @@ func (sc *Controller) setSandboxTimeout(r *http.Request) *web.ApiError {
 	state, reason := sbx.GetState()
 	if state != v1alpha1.SandboxStateRunning {
 		log.Info("cannot set sandbox timeout for sandbox not running", "name", sbx.GetName(), "state", state, "reason", reason)
-		return withSandboxResource(&web.ApiError{
+		return withSandboxResourceContext(&web.ApiError{
 			Code:    http.StatusConflict,
 			Message: fmt.Sprintf("sandbox %s is not running", sbx.GetSandboxID()),
 		}, sbx)
@@ -78,7 +78,7 @@ func (sc *Controller) setSandboxTimeout(r *http.Request) *web.ApiError {
 			Timeout:          opts,
 			ExtraAnnotations: extraAnnotations,
 		}, timeoututils.UpdatePolicyAlways); err != nil {
-			return withSandboxResource(&web.ApiError{
+			return withSandboxResourceContext(&web.ApiError{
 				Message: fmt.Sprintf("Failed to set sandbox timeout: %v", err),
 			}, sbx)
 		}
