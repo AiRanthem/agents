@@ -311,24 +311,34 @@ func TestInfra_GetClaimedSandboxWithOptions_NamespaceScoped(t *testing.T) {
 func TestInfra_GetSandbox_InitialCacheRead(t *testing.T) {
 	cacheUnavailable := errors.New("cache unavailable")
 	tests := []struct {
-		name      string
-		sandbox   *v1alpha1.Sandbox
-		cacheErr  error
-		expectErr error
+		name        string
+		sandbox     *v1alpha1.Sandbox
+		cacheErr    error
+		expectErr   error
+		expectCalls int64
 	}{
 		{
-			name:    "cache hit reads once",
-			sandbox: makeClaimedSandbox("team-a", "cache-hit", "10.0.0.10"),
+			name:        "cache hit reads once",
+			sandbox:     makeClaimedSandbox("team-a", "cache-hit", "10.0.0.10"),
+			expectCalls: 1,
 		},
 		{
-			name:      "cache miss without route returns not found",
-			cacheErr:  fmt.Errorf("initial lookup: %w", infracache.ErrSandboxNotFound),
-			expectErr: infracache.ErrSandboxNotFound,
+			name:        "cache miss without route returns not found",
+			cacheErr:    fmt.Errorf("initial lookup: %w", infracache.ErrSandboxNotFound),
+			expectErr:   infra.ErrSandboxNotFound,
+			expectCalls: 1,
 		},
 		{
-			name:      "non-not-found cache error returns immediately",
-			cacheErr:  cacheUnavailable,
-			expectErr: cacheUnavailable,
+			name:        "transient non-not-found cache error retries",
+			sandbox:     makeClaimedSandbox("team-a", "cache-hit", "10.0.0.10"),
+			cacheErr:    cacheUnavailable,
+			expectCalls: 2,
+		},
+		{
+			name:        "transient error followed by definitive miss returns not found",
+			cacheErr:    cacheUnavailable,
+			expectErr:   infra.ErrSandboxNotFound,
+			expectCalls: 2,
 		},
 	}
 
@@ -352,7 +362,7 @@ func TestInfra_GetSandbox_InitialCacheRead(t *testing.T) {
 				require.NotNil(t, got)
 				assert.Equal(t, "cache-hit", got.GetName())
 			}
-			assert.Equal(t, int64(1), retryCache.getCalls.Load())
+			assert.Equal(t, tt.expectCalls, retryCache.getCalls.Load())
 			assert.Equal(t, int64(0), stub.getCalls.Load())
 		})
 	}

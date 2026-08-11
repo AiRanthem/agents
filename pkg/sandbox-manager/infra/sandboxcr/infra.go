@@ -421,23 +421,25 @@ func (i *Infra) readClaimedSandbox(ctx context.Context, opts infra.GetSandboxOpt
 
 // lookupSandbox reads the informer cache once. A real miss returns immediately
 // unless an existing route says cache propagation may still be in progress.
-// In that case it retains the route as resource-version evidence and polls
-// until the cache observes the Sandbox or the caller's context ends.
+// Other initial cache errors get one delayed retry through pollClaimedSandbox.
+// A retained route keeps polling until the cache observes the Sandbox or the
+// caller's context ends.
 func (i *Infra) lookupSandbox(ctx context.Context, opts infra.GetSandboxOptions) (claimedSandboxLookup, error) {
 	var lookup claimedSandboxLookup
 	err := i.readClaimedSandbox(ctx, opts, &lookup)
 	if err == nil {
 		return lookup, nil
 	}
-	if !errors.Is(err, cache.ErrSandboxNotFound) || !lookup.observeRoute(i.Routes, opts.SandboxID) {
+	if errors.Is(err, cache.ErrSandboxNotFound) && !lookup.observeRoute(i.Routes, opts.SandboxID) {
 		return lookup, err
 	}
 	return i.pollClaimedSandbox(ctx, opts, lookup)
 }
 
-// pollClaimedSandbox polls the informer cache until a claimed Sandbox is found
-// or ctx is done. The first retry waits for RetryInterval so the initial cache
-// read is never immediately duplicated.
+// pollClaimedSandbox retries the informer cache until a claimed Sandbox is
+// found, a definitive miss or other error is returned, or ctx is done. The
+// first retry waits for RetryInterval so the initial cache read is never
+// immediately duplicated.
 func (i *Infra) pollClaimedSandbox(ctx context.Context, opts infra.GetSandboxOptions, lookup claimedSandboxLookup) (claimedSandboxLookup, error) {
 	err := wait.PollUntilContextCancel(ctx, RetryInterval, false, func(pollCtx context.Context) (bool, error) {
 		err := i.readClaimedSandbox(pollCtx, opts, &lookup)
@@ -445,7 +447,10 @@ func (i *Infra) pollClaimedSandbox(ctx context.Context, opts infra.GetSandboxOpt
 			return true, nil
 		}
 		if errors.Is(err, cache.ErrSandboxNotFound) {
-			return false, nil
+			if lookup.observeRoute(i.Routes, opts.SandboxID) {
+				return false, nil
+			}
+			return false, err
 		}
 		return false, err
 	})
@@ -522,7 +527,7 @@ func (i *Infra) getSandboxFromAPIReader(ctx context.Context, key client.ObjectKe
 func (i *Infra) GetSandbox(ctx context.Context, opts infra.GetSandboxOptions) (infra.Sandbox, error) {
 	lookup, err := i.lookupSandbox(ctx, opts)
 	if err != nil {
-		return nil, err
+		return nil, wrapGetSandboxError(err)
 	}
 
 	if !isSandboxStale(ctx, lookup) {
@@ -532,7 +537,17 @@ func (i *Infra) GetSandbox(ctx context.Context, opts infra.GetSandboxOptions) (i
 	key := client.ObjectKey{Namespace: lookup.sandbox.Namespace, Name: lookup.sandbox.Name}
 	fresh, err := i.getSandboxFromAPIReader(ctx, key, opts.SandboxID)
 	if err != nil {
-		return nil, err
+		return nil, wrapGetSandboxError(err)
 	}
 	return AsSandbox(fresh, i.Cache), nil
+}
+
+func wrapGetSandboxError(err error) error {
+	switch {
+	case errors.Is(err, cache.ErrSandboxNotFound):
+		return fmt.Errorf("%w: %w", infra.ErrSandboxNotFound, err)
+	case errors.Is(err, cache.ErrSandboxIDAmbiguous):
+		return fmt.Errorf("%w: %w", infra.ErrSandboxIDAmbiguous, err)
+	}
+	return err
 }

@@ -226,8 +226,18 @@ func (m *SandboxManager) GetSandbox(ctx context.Context, user string, expectedSt
 	log.Info("try to get claimed sandbox")
 	sbx, err := m.infra.GetSandbox(ctx, opts)
 	if err != nil {
+		// A definitive miss is a normal client outcome; only an inconclusive
+		// lookup indicates an infra failure worth an error-level record.
+		if errors.Is(err, infra.ErrSandboxNotFound) {
+			log.Info("sandbox not found", "err", err)
+			return nil, managererrors.NewError(managererrors.ErrorNotFound, "sandbox %s not found", opts.SandboxID)
+		}
+		if errors.Is(err, infra.ErrSandboxIDAmbiguous) {
+			log.Info("sandbox ID is ambiguous", "err", err)
+			return nil, managererrors.WrapError(managererrors.ErrorNotFound, err, "sandbox %s not found: %v", opts.SandboxID, err)
+		}
 		log.Error(err, "failed to get sandbox from cache")
-		return nil, managererrors.WrapError(managererrors.ErrorNotFound, err, "sandbox %s not found: %v", opts.SandboxID, err)
+		return nil, managererrors.NewError(managererrors.ErrorInternal, "failed to get sandbox %s: %v", opts.SandboxID, err)
 	}
 
 	state, reason := sbx.GetState()

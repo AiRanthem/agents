@@ -42,10 +42,12 @@ import (
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
 	"github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/identity"
+	"github.com/openkruise/agents/pkg/proxy"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandbox-manager/quota"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
+	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -1911,6 +1913,7 @@ func TestDeleteSandbox(t *testing.T) {
 	tests := []struct {
 		name          string
 		sandboxID     string // if not set, use the created sandbox ID
+		mockGetErr    error
 		mockDeleteErr error
 		expectStatus  int
 	}{
@@ -1922,6 +1925,11 @@ func TestDeleteSandbox(t *testing.T) {
 			name:         "delete non-existent sandbox returns success (idempotent)",
 			sandboxID:    "non-existent-sandbox",
 			expectStatus: http.StatusNoContent,
+		},
+		{
+			name:         "delete sandbox with lookup error",
+			mockGetErr:   fmt.Errorf("mock get error"),
+			expectStatus: http.StatusInternalServerError,
 		},
 		{
 			name:          "delete sandbox with kill error",
@@ -1946,6 +1954,11 @@ func TestDeleteSandbox(t *testing.T) {
 			require.Nil(t, err)
 			assert.Equal(t, models.SandboxStateRunning, createResp.Body.State)
 
+			if tt.mockGetErr != nil {
+				infraInstance := controller.manager.GetInfra().(*sandboxcr.Infra)
+				infraInstance.Cache = &fixedClaimedSandboxCache{Provider: infraInstance.Cache, err: tt.mockGetErr}
+			}
+
 			// Decorator: DefaultDeleteSandbox - control delete result (set after create)
 			if tt.mockDeleteErr != nil {
 				origDeleteSandbox := sandboxcr.DefaultDeleteSandbox
@@ -1966,7 +1979,10 @@ func TestDeleteSandbox(t *testing.T) {
 
 			if tt.expectStatus >= 300 {
 				require.NotNil(t, apiErr)
-				if apiErr.Code == 0 {
+				// The delete path leaves Code unset and relies on the web
+				// framework default; the lookup path must carry an explicit
+				// status, so it is asserted as returned.
+				if tt.mockDeleteErr != nil && apiErr.Code == 0 {
 					apiErr.Code = http.StatusInternalServerError
 				}
 				assert.Equal(t, tt.expectStatus, apiErr.Code)
@@ -2273,8 +2289,9 @@ func TestDeleteSandbox_StalePendingCacheUsesRunningAPIObject(t *testing.T) {
 
 	infraInstance := controller.manager.GetInfra().(*sandboxcr.Infra)
 	infraInstance.Cache = &fixedClaimedSandboxCache{Provider: infraInstance.Cache, sandbox: stale}
-	route := proxyutils.DefaultGetRouteFunc(fresh)
-	infraInstance.Proxy.SetRoute(t.Context(), route)
+	route, err := sandboxroute.RouteFromSandbox(fresh)
+	require.NoError(t, err)
+	infraInstance.Routes.(*proxy.Server).SetRoute(route)
 
 	deleteResp, apiErr := controller.DeleteSandbox(NewRequest(t, nil, nil, map[string]string{
 		"sandboxID": route.ID,
@@ -2291,9 +2308,13 @@ func TestDeleteSandbox_StalePendingCacheUsesRunningAPIObject(t *testing.T) {
 type fixedClaimedSandboxCache struct {
 	cache.Provider
 	sandbox *v1alpha1.Sandbox
+	err     error
 }
 
 func (c *fixedClaimedSandboxCache) GetClaimedSandbox(ctx context.Context, _ cache.GetClaimedSandboxOptions) (*v1alpha1.Sandbox, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
