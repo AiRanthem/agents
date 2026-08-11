@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 
 	"github.com/google/uuid"
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -31,8 +32,7 @@ import (
 )
 
 const (
-	workerIDBits        = 20
-	workerIDLimit       = 1 << workerIDBits
+	workerIDLimit       = 1 << 18
 	workerLeaseNameBase = "sandbox-manager-sandbox-id-worker-"
 )
 
@@ -78,27 +78,27 @@ func allocateLeaseWorkerID(
 			return 0, err
 		}
 
-		current, owned, err := validateWorkerLease(lease, holderIdentity)
+		generation, owned, err := validateWorkerLease(lease, holderIdentity)
 		if err != nil {
 			return 0, fmt.Errorf("invalid sandbox ID worker Lease %s: %w", key, err)
 		}
+		// known-limit: reuse requires the previous holder of this worker ID
+		// to have exited and wall-clock time not to repeat; otherwise switch prefixes
+		// before wraparound or upgrade to a fenced allocator.
 		if owned {
-			return current, nil
+			return generation % workerIDLimit, nil
 		}
-		if current == workerIDLimit-1 {
-			// one prefix intentionally supports only 2^20 process
-			// incarnations. Stop all managers and switch to a never-used prefix;
-			// widening the worker field requires a new ID-format version.
-			return 0, fmt.Errorf("sandbox ID worker domain for prefix %q is exhausted at %d", prefix, workerIDLimit)
+		if generation == math.MaxInt32 {
+			return 0, fmt.Errorf("sandbox ID allocation generation for prefix %q is exhausted at %d, please use a different id prefix", prefix, generation)
 		}
 
-		next := current + 1
-		counter := int32(next)
+		nextGeneration := generation + 1
+		counter := int32(nextGeneration)
 		lease.Spec.HolderIdentity = &holderIdentity
 		lease.Spec.LeaseTransitions = &counter
 		updateErr := writer.Update(ctx, lease)
 		if updateErr == nil {
-			return next, nil
+			return nextGeneration % workerIDLimit, nil
 		}
 		if !apierrors.IsConflict(updateErr) && !isAmbiguousLeaseWrite(updateErr) {
 			return 0, fmt.Errorf("update sandbox ID worker Lease %s: %w", key, updateErr)
@@ -171,9 +171,6 @@ func validateWorkerLease(lease *coordinationv1.Lease, holderIdentity string) (ui
 	counter := *lease.Spec.LeaseTransitions
 	if counter < 0 {
 		return 0, false, fmt.Errorf("leaseTransitions %d is negative", counter)
-	}
-	if counter >= workerIDLimit {
-		return 0, false, fmt.Errorf("leaseTransitions %d reached the %d-worker limit, please use a different id prefix", counter, workerIDLimit)
 	}
 	return uint32(counter), *lease.Spec.HolderIdentity == holderIdentity, nil
 }

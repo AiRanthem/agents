@@ -39,8 +39,8 @@ const (
 	// eight-byte big-endian buffer as unpadded Base32. Length policy on top of it
 	// is owned by callers.
 	ShortIDLength = 13
-	workerIDBits  = 20
-	sequenceBits  = 2
+	workerIDBits  = 18
+	sequenceBits  = 4
 )
 
 var shortEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -50,7 +50,7 @@ var sonyflakeEpoch = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 var validPrefixPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // NewGenerator creates a generator with a 41-bit millisecond timestamp, a
-// 20-bit worker ID, and a 2-bit sequence number.
+// 18-bit worker ID, and a 4-bit sequence number.
 func NewGenerator(workerID uint32) (func() (string, error), error) {
 	flake, err := sonyflake.New(sonyflake.Settings{
 		BitsSequence:  sequenceBits,

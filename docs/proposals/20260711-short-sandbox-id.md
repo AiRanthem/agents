@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-07-11
-last-updated: 2026-08-05
+last-updated: 2026-08-11
 status: implemented
 ---
 
@@ -28,10 +28,10 @@ This proposal introduces an optional short Sandbox ID:
 <operator-prefix><13-character Snowflake encoding>
 ```
 
-The suffix encodes a 63-bit Sonyflake value. Sandbox-manager obtains a non-reused 20-bit worker
-incarnation from a prefix-scoped Kubernetes Lease during startup, then stores generated IDs in the
-Sandbox label `agents.kruise.io/sandbox-id`. A non-empty label becomes that Sandbox CR's
-authoritative identity for its current user delivery.
+The suffix encodes a 63-bit Sonyflake value. During startup, sandbox-manager increments a complete
+allocation generation in a prefix-scoped Kubernetes Lease and uses its 18-bit residue as the
+worker ID. Generated IDs are stored in the Sandbox label `agents.kruise.io/sandbox-id`. A non-empty
+label becomes that Sandbox CR's authoritative identity for its current user delivery.
 
 The change is deliberately incremental:
 
@@ -70,7 +70,7 @@ short-ID design therefore needs to answer four broader questions:
 - Support a staged manager/gateway rollout before short-ID assignment is activated.
 - Let operators locate a labeled Sandbox directly with `kubectl`.
 - Restore namespace/name diagnostics only after authorization succeeds.
-- Allocate manager worker incarnations without reusing a worker ID within one prefix domain.
+- Allocate manager worker IDs with explicit reuse invariants within one prefix domain.
 - Provide an explicit prefix-switch recovery procedure for worker exhaustion and etcd restore.
 
 ### Non-Goals
@@ -84,7 +84,7 @@ short-ID design therefore needs to answer four broader questions:
 - Repairing or normalizing a non-empty persisted label during reads.
 - Supporting administrator-written, copied, or otherwise forged reserved labels and Routes.
 - Rolling back to label-unaware binaries after short-ID assignment has begun.
-- Reusing or resetting a prefix's worker counter after stopping old processes.
+- Resetting a prefix's allocation generation after stopping old processes.
 - Eliminating the duplicate-ID risk after restoring the cluster to an older etcd snapshot while
   continuing with the same prefix.
 
@@ -163,15 +163,15 @@ The short suffix is produced by `github.com/sony/sonyflake/v2` with this fixed b
 | Field | Bits | Contract |
 |---|---:|---|
 | Time | 41 | Milliseconds since `2025-01-01 00:00:00 UTC` |
-| Worker incarnation | 20 | Allocated once at manager startup within the prefix domain |
-| Sequence | 2 | Up to four IDs per millisecond before the generator waits |
+| Worker ID | 18 | Allocation generation modulo `2^18` within the prefix domain |
+| Sequence | 4 | Up to 16 IDs per millisecond before the generator waits |
 
-The two-bit sequence field limits each manager generator to four ID assignments per millisecond,
-or approximately 4,000 assignments per second under sustained load. After consuming all four
+The four-bit sequence field limits each manager generator to 16 ID assignments per millisecond,
+or approximately 16,000 assignments per second under sustained load. After consuming all 16
 sequence values in one millisecond, the generator waits for the next millisecond instead of
 rejecting or rate-limiting the request. This is a per-manager Sandbox ID assignment throughput
 limit, not an aggregate API QPS limit: only operations that create a new ID consume this capacity,
-and managers use independent worker incarnations and generators.
+and managers use independent worker IDs and generators.
 
 The positive 63-bit value is placed in an eight-byte big-endian buffer and encoded with unpadded,
 lowercase RFC 4648 Base32. The result is always 13 characters from `[a-z2-7]`.
@@ -182,9 +182,9 @@ For example:
 aae57hpxaaqac
 ```
 
-The generator guarantees uniqueness only while its worker incarnation is not reused. It does not
-read Kubernetes or choose replica identity; cross-process uniqueness comes from the startup Lease
-protocol below.
+The generator does not read Kubernetes or choose replica identity. Cross-process uniqueness comes
+from the startup Lease protocol and requires that a reused worker ID's previous holder has exited
+and that wall-clock time does not repeat across those holders.
 
 ### Prefix-scoped worker allocation
 
@@ -197,20 +197,25 @@ sandbox-manager-sandbox-id-worker-<first 24 hexadecimal characters of sha256(pre
 The Lease lives in sandbox-manager's system namespace. The first process creates it with
 `leaseTransitions=0`. Later processes use its `resourceVersion` as a CAS, replace
 `holderIdentity`, and increment `leaseTransitions`. The holder is a full process-generated UUID and
-remains stable for that allocation attempt. The counter value is the 20-bit Sonyflake worker ID.
+remains stable for that allocation attempt. `leaseTransitions` is the complete, non-negative
+allocation generation and is never reduced; the Sonyflake worker ID is
+`leaseTransitions % 2^18`.
 
 The allocator uses live API-server `Get` operations because informer staleness cannot safely
 confirm a CAS result. It retries `Conflict` and `AlreadyExists` after re-reading the Lease. A
 timeout or other ambiguous Create/Update result is also re-read:
 
-- if the holder is this process, the Lease counter is accepted;
+- if the holder is this process, the Lease generation is accepted;
 - if another holder is present, the possibly consumed value is not reused and allocation advances
-  from the latest counter;
+  from the latest generation;
 - if confirmation fails or the parent context is cancelled, startup fails.
 
-A missing holder, missing counter, negative counter, or counter at or above `2^20` fails closed.
-The Lease is never renewed, released, reset, or deleted. These fields are used as a persistent CAS
-record, following the [Kubernetes Lease API](https://kubernetes.io/docs/reference/kubernetes-api/coordination-resources/lease-v1/),
+A missing holder, missing generation, or negative generation fails closed. At
+`math.MaxInt32`, the current holder can recover its existing allocation, but a different holder
+cannot advance the generation and startup fails with instructions to use a different prefix. The
+Lease is never renewed, released, reset, or deleted, including when the 18-bit worker ID wraps.
+These fields are used as a persistent CAS record, following the
+[Kubernetes Lease API](https://kubernetes.io/docs/reference/kubernetes-api/coordination-resources/lease-v1/),
 not as liveness evidence.
 
 ### Optional prefix
@@ -271,7 +276,7 @@ The identity decision crosses several components, but each layer keeps one kind 
 | API and controllers | Reject reserved metadata at public inputs and present protocol-specific responses |
 | Sandbox-manager | Own per-delivery assignment, prefix policy, prefix-scoped Lease worker allocation, generator initialization, and Modifier decoration |
 | Infrastructure | Persist generic Sandbox changes and expose neutral backend observations |
-| `pkg/sandboxid` | Implement the fixed bit layout and opaque encoding for a caller-supplied worker incarnation |
+| `pkg/sandboxid` | Implement the fixed bit layout and opaque encoding for a caller-supplied worker ID |
 | Shared routing | Apply protocol-neutral projection, ordering, replacement, and deletion semantics |
 | E2B compatibility | Enforce legacy namespace constraints and present authorized diagnostics |
 
@@ -398,6 +403,11 @@ The rollout protocol is a correctness precondition:
    peer startup, and cache startup; it then allocates one worker and initializes its generator
    before the proxy and E2B HTTP server can accept traffic.
 
+The `41/18/4` layout is incompatible with the earlier `41/20/2` layout under the same prefix. If
+the earlier layout has produced any ID in the target environment, drain every old generator and
+select a prefix never used in that environment before enabling the new layout. Historical labels
+and Checkpoint annotations remain readable as opaque IDs and are not rewritten.
+
 During the initial disabled rollout, new receivers ignore old ID-only peer route messages and rely
 on their own informer for convergence. A brief missing or stale route is acceptable during this
 window. This compatibility behavior is only for reaching the activation point; old senders are not
@@ -420,11 +430,21 @@ short-ID assignment to remain enabled after activation.
 Removing legacy compatibility is a separate future change after operators confirm that no
 supported unlabeled Sandboxes remain.
 
-### Worker exhaustion and disaster recovery
+### Worker reuse, exhaustion, and disaster recovery
 
-One prefix supports 1,048,576 manager process incarnations. CrashLoop restarts consume worker IDs,
-although allocating only after earlier startup prerequisites succeed avoids consumption by those
-failures. Exhaustion recovery is deliberately a domain change rather than a counter reset:
+The Lease records a complete allocation generation while the generator uses its value modulo
+`2^18`. Generation `g` therefore reuses the worker ID first used by generation `g - 2^18`. Before
+that reuse, the earlier holder must have exited, and `CLOCK_REALTIME` must not repeat a millisecond
+that the earlier holder used with that worker ID. A deployment that cannot guarantee both
+conditions must switch to a never-used prefix before wraparound or upgrade to an allocator that
+fences active worker IDs.
+
+The allocation-count invariant is exact: a worker ID wraps after `2^18` successful generation
+increments. No elapsed-time or CrashLoopBackOff estimate is part of the protocol because restart
+timing is deployment-configurable. The signed `int32` Lease field can persist generations through
+`math.MaxInt32`; at that value, the recorded holder may restart and recover its worker ID, but no
+new holder can advance the allocation. Recovery is deliberately a domain change rather than a
+generation reset:
 
 1. Scale sandbox-manager to zero and confirm all old processes have exited.
 2. Choose a prefix never used in this cluster's history.
@@ -434,8 +454,8 @@ failures. Exhaustion recovery is deliberately a domain change rather than a coun
    normal recycle will retire active Sandbox IDs when those deliveries end.
 
 If the Lease derived from the candidate prefix already exists, choose another prefix. Stopping old
-processes and resetting the old counter is unsupported because historical Sandbox/Checkpoint IDs
-and clock rollback can still reproduce a complete ID.
+processes and resetting the old generation is unsupported because historical
+Sandbox/Checkpoint IDs and repeated wall-clock timestamps can still reproduce a complete ID.
 
 An etcd snapshot restore rolls Kubernetes API objects back together, so it may also roll back the
 allocator Lease. Continuing with the same prefix after restore is an accepted duplicate-ID risk.
@@ -451,10 +471,11 @@ before serving traffic. See the [Kubernetes etcd operations documentation](https
   could make one Sandbox alternate IDs during rollout or configuration changes.
 - A startup Lease allocation protocol is accepted in exchange for a 13-character suffix and
   atomic persistence in the original claim/clone write.
-- Late worker allocation reduces, but cannot eliminate, CrashLoop consumption. Prefix switching is
-  the recovery boundary for the fixed 20-bit worker field.
+- Late worker allocation reduces, but cannot eliminate, allocation-generation consumption. Prefix
+  switching is the recovery boundary for worker-ID reuse, the `int32` generation ceiling, and etcd
+  restore.
 - Ambiguous CAS writes are confirmed by a live re-read so process restarts do not blindly consume
-  an additional incarnation.
+  an additional generation.
 - Prefix-scoped Leases keep recovery domains disjoint without deleting historical allocation state.
 - Deployments must prevent `CLOCK_REALTIME` from stepping backward while sandbox-manager runs.
   Sonyflake's sequence-exhaustion wait cannot observe request cancellation, and a backward step can

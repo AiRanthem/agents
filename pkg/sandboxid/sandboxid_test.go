@@ -117,8 +117,13 @@ func TestGenerator(t *testing.T) {
 	assert.Len(t, seen, count)
 }
 
-func TestNewGeneratorRejectsWorkerIDOutside20Bits(t *testing.T) {
-	_, err := NewGenerator(1 << workerIDBits)
+func TestNewGeneratorWorkerIDBoundary(t *testing.T) {
+	assert.Equal(t, 63, 41+workerIDBits+sequenceBits)
+
+	_, err := NewGenerator((1 << workerIDBits) - 1)
+	require.NoError(t, err)
+
+	_, err = NewGenerator(1 << workerIDBits)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid machine id")
 }

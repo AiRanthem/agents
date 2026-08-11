@@ -19,6 +19,7 @@ package sandbox_manager
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -71,7 +72,7 @@ func TestLeaseWorkerIDAllocatorPrefixDomains(t *testing.T) {
 	assert.Equal(t, uint32(0), workerID)
 	workerID, err = testAllocateWorkerID(t.Context(), c, c, "manager-a", "prod-")
 	require.NoError(t, err)
-	assert.Equal(t, uint32(0), workerID, "one process reuses its confirmed incarnation")
+	assert.Equal(t, uint32(0), workerID, "one process reuses its confirmed allocation")
 
 	workerID, err = testAllocateWorkerID(t.Context(), c, c, "manager-b", "prod-")
 	require.NoError(t, err)
@@ -89,35 +90,48 @@ func TestLeaseWorkerIDAllocatorPrefixDomains(t *testing.T) {
 
 func TestLeaseWorkerIDAllocatorFailsClosedOnInvalidCounter(t *testing.T) {
 	negative := int32(-1)
-	reachedLimit := int32(workerIDLimit)
-	lastWorker := int32(workerIDLimit - 1)
+	maxGeneration := int32(math.MaxInt32)
 	tests := []struct {
 		name        string
 		prefix      string
 		lease       *coordinationv1.Lease
+		expectID    uint32
 		expectError string
 	}{
 		{name: "missing holder", prefix: "missing-holder", lease: testWorkerLease("missing-holder", "", new(int32)), expectError: "holderIdentity is missing"},
 		{name: "missing counter", prefix: "missing-counter", lease: testWorkerLease("missing-counter", "other", nil), expectError: "leaseTransitions is missing"},
 		{name: "negative counter", prefix: "negative", lease: testWorkerLease("negative", "other", &negative), expectError: "is negative"},
-		{name: "counter reached limit", prefix: "limit", lease: testWorkerLease("limit", "other", &reachedLimit), expectError: "reached the 1048576-worker limit"},
-		{name: "last worker already owned", prefix: "owned-last", lease: testWorkerLease("owned-last", "manager-a", &lastWorker)},
-		{name: "domain exhausted before next worker", prefix: "exhausted", lease: testWorkerLease("exhausted", "other", &lastWorker), expectError: "is exhausted"},
+		{name: "maximum generation already owned", prefix: "owned-maximum", lease: testWorkerLease("owned-maximum", "manager-a", &maxGeneration), expectID: uint32(math.MaxInt32) % workerIDLimit},
+		{name: "maximum generation cannot advance", prefix: "exhausted", lease: testWorkerLease("exhausted", "other", &maxGeneration), expectError: "allocation generation for prefix \"exhausted\" is exhausted at 2147483647"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newWorkerAllocatorTestClient(t, tt.lease)
 			workerID, err := testAllocateWorkerID(t.Context(), c, c, "manager-a", tt.prefix)
-			if tt.name == "last worker already owned" {
+			if tt.expectError == "" {
 				require.NoError(t, err)
-				assert.Equal(t, uint32(workerIDLimit-1), workerID)
+				assert.Equal(t, tt.expectID, workerID)
 				return
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectError)
 		})
 	}
+}
+
+func TestLeaseWorkerIDAllocatorWrapsWorkerIDWithoutResettingGeneration(t *testing.T) {
+	generation := int32(workerIDLimit - 1)
+	c := newWorkerAllocatorTestClient(t, testWorkerLease("prod-", "manager-a", &generation))
+
+	workerID, err := testAllocateWorkerID(t.Context(), c, c, "manager-b", "prod-")
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), workerID)
+
+	lease := &coordinationv1.Lease{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: testWorkerNamespace, Name: workerLeaseName("prod-")}, lease))
+	require.NotNil(t, lease.Spec.LeaseTransitions)
+	assert.Equal(t, int32(workerIDLimit), *lease.Spec.LeaseTransitions)
 }
 
 func TestLeaseWorkerIDAllocatorCreateAlreadyExistsRetriesFromLatest(t *testing.T) {
