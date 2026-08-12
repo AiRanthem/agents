@@ -235,7 +235,7 @@ func TestBuildTrafficPolicy(t *testing.T) {
 			assert.Equal(t, "tp-", tp.GenerateName)
 			assert.Equal(t, "default", tp.Namespace)
 			assert.Equal(t, "test-sandbox", tp.Spec.Selector.MatchLabels[agentsv1alpha1.LabelSandboxName])
-			assert.Equal(t, int32(1000), tp.Spec.Priority)
+			assert.Equal(t, e2bPerSandboxTrafficPolicyPriority, tp.Spec.Priority)
 			// Verify OwnerReference is set
 			require.Len(t, tp.OwnerReferences, 1)
 			assert.Equal(t, "Sandbox", tp.OwnerReferences[0].Kind)
@@ -379,11 +379,43 @@ func TestUpdateSelectNetworkPolicy_RoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"1.2.3.4/32"}, result.AllowOut)
 	assert.Nil(t, result.DenyOut)
 
+	// Simulate a legacy policy so the update verifies priority migration too.
+	sandboxID := utils.GetSandboxID(sbx)
+	tpList := &agentsv1alpha1.TrafficPolicyList{}
+	require.NoError(t, fc.List(t.Context(), tpList,
+		ctrlclient.InNamespace(sbx.Namespace),
+		ctrlclient.MatchingFields{cache.IndexTrafficPolicySandboxID: sandboxID},
+	))
+	require.Len(t, tpList.Items, 1)
+	legacyPolicy := &tpList.Items[0]
+	legacyPolicy.Spec.Priority = 1000
+	require.NoError(t, fc.Update(t.Context(), legacyPolicy))
+
 	// Step 2: Update to allowOut + denyOut (whitelist mode with deny)
 	require.NoError(t, sandbox.UpdateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{
 		AllowOut: []string{"1.2.3.4"},
 		DenyOut:  []string{"10.0.0.0/8"},
 	}))
+
+	tpList = &agentsv1alpha1.TrafficPolicyList{}
+	require.NoError(t, fc.List(t.Context(), tpList,
+		ctrlclient.InNamespace(sbx.Namespace),
+		ctrlclient.MatchingFields{cache.IndexTrafficPolicySandboxID: sandboxID},
+	))
+	require.Len(t, tpList.Items, 1)
+	updatedPolicy := &tpList.Items[0]
+	assert.Equal(t, e2bPerSandboxTrafficPolicyPriority, updatedPolicy.Spec.Priority)
+	require.NotNil(t, updatedPolicy.Spec.Egress)
+	assert.Equal(t, []agentsv1alpha1.TrafficPolicyRule{
+		{
+			Action: agentsv1alpha1.RuleActionAllow,
+			To:     []agentsv1alpha1.TrafficPolicyPeer{{CIDR: "1.2.3.4/32"}},
+		},
+		{
+			Action: agentsv1alpha1.RuleActionReject,
+			To:     []agentsv1alpha1.TrafficPolicyPeer{{CIDR: "10.0.0.0/8"}},
+		},
+	}, updatedPolicy.Spec.Egress.Rules)
 
 	result, err = sandbox.SelectNetworkPolicy(t.Context())
 	require.NoError(t, err)
