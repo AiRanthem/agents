@@ -36,7 +36,15 @@ trap 'rm -rf "${TMPDIR}"' EXIT
 echo "==> Generating self-signed CA and server certificate..."
 
 # Generate CA key and certificate (SKI + CA basicConstraints so leaf AKI can resolve)
-cat > "${TMPDIR}/ca-ext.cnf" <<EOF
+cat > "${TMPDIR}/ca.conf" <<EOF
+[req]
+distinguished_name = dn
+x509_extensions = v3_ca
+prompt = no
+
+[dn]
+CN = e2e-registry-ca
+
 [v3_ca]
 basicConstraints = critical,CA:true
 keyUsage = critical,keyCertSign,cRLSign
@@ -46,8 +54,7 @@ EOF
 openssl genrsa -out "${TMPDIR}/ca.key" 2048 2>/dev/null
 openssl req -x509 -new -nodes -key "${TMPDIR}/ca.key" \
   -sha256 -days 365 -out "${TMPDIR}/ca.crt" \
-  -subj "/CN=e2e-registry-ca" \
-  -extfile "${TMPDIR}/ca-ext.cnf" -extensions v3_ca 2>/dev/null
+  -config "${TMPDIR}/ca.conf" 2>/dev/null
 
 # Generate server key and CSR
 openssl genrsa -out "${TMPDIR}/server.key" 2048 2>/dev/null
