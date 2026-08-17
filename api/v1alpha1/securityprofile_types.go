@@ -124,8 +124,11 @@ type QueryParamMatch struct {
 //
 // Domains is required. All other fields further restrict the match.
 type RuleMatch struct {
-	// Domains lists target host names. "*" matches any host, and a leading
-	// wildcard such as "*.example.com" matches subdomains.
+	// Domains lists target host names. Supports "*" (any domain) and
+	// "*.example.com" wildcard prefixes.
+	//
+	// CAUTION: wildcard and specific domains can both match the same request
+	// under Default Continue semantics, so rule ordering matters.
 	// +kubebuilder:validation:MinItems=1
 	Domains []string `json:"domains"`
 	// Paths lists URL path matches. Multiple entries are ORed. The query
