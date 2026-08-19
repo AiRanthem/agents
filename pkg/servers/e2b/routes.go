@@ -92,8 +92,8 @@ func RegisterE2BRoute[T any](mux *http.ServeMux, method, path string, handler we
 	web.RegisterRoute(mux, method, adapters.CustomPrefix+"/api"+path, handler, middlewares...)
 }
 
-// AnonymousUser is used only when authentication is disabled. It has the same Key as Admin,
-// allowing for subsequent restrictions on Admin user request interfaces.
+// AnonymousUser owns resources created while authentication is disabled. Reusing AdminKeyID
+// lets the canonical admin key access those resources after authentication is enabled.
 var AnonymousUser = &models.CreatedTeamAPIKey{
 	ID:   keys.AdminKeyID,
 	Name: "auth-disabled",
@@ -132,10 +132,15 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 				Message: fmt.Sprintf("Sandbox route not found, maybe it is crashed or killed: %s", sandboxID),
 			}
 		}
-		if owner != AnonymousUser.ID.String() && owner != user.ID.String() {
+		// An ownership mismatch returns the same not-found response as a missing route so
+		// authenticated callers cannot probe which sandbox IDs exist. That makes this log
+		// the only signal separating a denial from a genuine miss, so it carries the ID
+		// itself rather than relying on the logger's accumulated values.
+		if owner != user.ID.String() {
+			middleWareLog.Info("sandbox owner mismatch", "sandboxID", sandboxID, "owner", owner, "user", user.ID.String())
 			return ctx, &web.ApiError{
-				Code:    http.StatusUnauthorized,
-				Message: fmt.Sprintf("The user of API key is not the owner of sandbox: %s", sandboxID),
+				Code:    http.StatusNotFound,
+				Message: fmt.Sprintf("Sandbox route not found, maybe it is crashed or killed: %s", sandboxID),
 			}
 		}
 	}
@@ -153,10 +158,13 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 				Message: fmt.Sprintf("Volume not found: %s", volumeID),
 			}
 		}
-		if owner != AnonymousUser.ID.String() && owner != user.ID.String() {
+		// Same anti-enumeration rule as the sandbox check above: ownership mismatch is
+		// indistinguishable from a missing volume.
+		if owner != user.ID.String() {
+			middleWareLog.Info("volume owner mismatch", "volumeID", volumeID, "owner", owner, "user", user.ID.String())
 			return ctx, &web.ApiError{
-				Code:    http.StatusUnauthorized,
-				Message: fmt.Sprintf("The user of API key is not the owner of volume: %s", volumeID),
+				Code:    http.StatusNotFound,
+				Message: fmt.Sprintf("Volume not found: %s", volumeID),
 			}
 		}
 	}
