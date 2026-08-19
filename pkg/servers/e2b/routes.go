@@ -103,7 +103,7 @@ var AnonymousUser = &models.CreatedTeamAPIKey{
 // CheckApiKey implements common ApiKey validation
 func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context.Context, *web.ApiError) {
 	logger := klog.FromContext(ctx)
-	middleWareLog := logger.WithValues("middleware", "CheckApiKey").V(utils.DebugLogLevel)
+	middleWareLog := logger.WithValues("middleware", "CheckApiKey")
 	apiKey := r.Header.Get(models.HeaderApiKey)
 	var user *models.CreatedTeamAPIKey
 	var ok bool
@@ -115,7 +115,7 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		rawAPIKey := keys.ToStoredRawAPIKey(apiKey)
 		user, ok = sc.keys.LoadByKey(ctx, rawAPIKey)
 		if !ok {
-			middleWareLog.Info("failed to load key by API-KEY")
+			middleWareLog.V(utils.DebugLogLevel).Info("failed to load key by API-KEY")
 			return ctx, &web.ApiError{
 				Code:    http.StatusUnauthorized,
 				Message: "Invalid API Key",
@@ -126,7 +126,7 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		middleWareLog = middleWareLog.WithValues("sandboxID", sandboxID)
 		owner, ok := sc.manager.GetOwnerOfSandbox(sandboxID)
 		if !ok {
-			middleWareLog.Info("failed to get owner of sandbox")
+			middleWareLog.V(utils.DebugLogLevel).Info("failed to get owner of sandbox")
 			return ctx, &web.ApiError{
 				Code:    http.StatusNotFound,
 				Message: fmt.Sprintf("Sandbox route not found, maybe it is crashed or killed: %s", sandboxID),
@@ -134,10 +134,9 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		}
 		// An ownership mismatch returns the same not-found response as a missing route so
 		// authenticated callers cannot probe which sandbox IDs exist. That makes this log
-		// the only signal separating a denial from a genuine miss, so it carries the ID
-		// itself rather than relying on the logger's accumulated values.
+		// the only signal separating a denial from a genuine miss.
 		if owner != user.ID.String() {
-			middleWareLog.Info("sandbox owner mismatch", "sandboxID", sandboxID, "owner", owner, "user", user.ID.String())
+			middleWareLog.Info("sandbox owner mismatch", "owner", owner, "user", user.ID.String())
 			return ctx, &web.ApiError{
 				Code:    http.StatusNotFound,
 				Message: fmt.Sprintf("Sandbox route not found, maybe it is crashed or killed: %s", sandboxID),
@@ -152,7 +151,7 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		}
 		owner, ok := sc.manager.GetOwnerOfVolume(ctx, namespace, volumeID)
 		if !ok {
-			middleWareLog.Info("failed to get owner of volume")
+			middleWareLog.V(utils.DebugLogLevel).Info("failed to get owner of volume")
 			return ctx, &web.ApiError{
 				Code:    http.StatusNotFound,
 				Message: fmt.Sprintf("Volume not found: %s", volumeID),
@@ -161,7 +160,7 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 		// Same anti-enumeration rule as the sandbox check above: ownership mismatch is
 		// indistinguishable from a missing volume.
 		if owner != user.ID.String() {
-			middleWareLog.Info("volume owner mismatch", "volumeID", volumeID, "owner", owner, "user", user.ID.String())
+			middleWareLog.Info("volume owner mismatch", "owner", owner, "user", user.ID.String())
 			return ctx, &web.ApiError{
 				Code:    http.StatusNotFound,
 				Message: fmt.Sprintf("Volume not found: %s", volumeID),
