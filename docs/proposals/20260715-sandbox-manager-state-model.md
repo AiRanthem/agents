@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-07-15
-last-updated: 2026-08-21
+last-updated: 2026-08-24
 status: provisional
 ---
 
@@ -28,11 +28,16 @@ authorization, and maps domain results to the public protocol.
 State contains four independent dimensions:
 
     State {
-        Claimed     bool
+        Delivery    unclaimed | claimed | ready
         Release     none | due | terminal | committed
         PauseResume none | pausing | resuming
         Workload    provisioning | ready | paused | unready | completed
     }
+
+`Delivery` separates persisted ownership from completed delivery. `claimed` proves that one owner
+and DeliveryEpoch have been assigned, but the Sandbox remains externally invisible and cannot
+route traffic. `ready` is persisted only after the Controller has observed the claimed workload
+revision and every required delivery action, including the initial TrafficPolicy, has succeeded.
 
 `Release` distinguishes a reversible deadline, a stopped workload, and an irreversible release
 commit. Those facts have different Kill, Route, visibility, and quota behavior. An absent object is
@@ -46,25 +51,31 @@ Every state-sensitive operation uses one Observation:
         MutationToken opaque
     }
 
-The existing persisted claim-lock UUID is the immutable DeliveryEpoch for one claim delivery. The
-token binds the observation to that DeliveryEpoch and one backend object version. Infra must not
-transparently retry an operation after the token becomes stale. This prevents an operation
-authorized for one owner from crossing a recycle boundary and affecting the next owner of the same
-Sandbox CR.
+The existing persisted claim-lock UUID is the immutable DeliveryEpoch for one claim delivery. A
+manager-owned top-level Sandbox annotation records that the current epoch is ready. The token binds
+the observation to that DeliveryEpoch and one backend object version. Infra must not transparently
+retry an operation after the token becomes stale. This prevents an operation authorized for one
+owner from crossing a recycle boundary and affecting the next owner of the same Sandbox CR.
 
 `ShutdownTime` is an instruction to Controller, not an immediate traffic or quota boundary. A
-locally reached deadline produces `Release=due`, but the Sandbox remains owner-visible and its Route
-is derived from workload capability until Controller persists an irreversible release fact. While
-due, only List, Describe, and Kill are admitted; other owner capabilities cannot rescue the
-deadline. No deadline is added to the Route wire shape.
+locally reached deadline produces `Release=due`, but a ready delivery remains owner-visible and its
+Route is derived from workload capability until Controller persists an irreversible release fact.
+While due, only List, Describe, and Kill are admitted for that ready delivery; other owner
+capabilities cannot rescue the deadline. No deadline is added to the Route wire shape.
 
-Claim persistence remains the visibility commit. Create or Clone may therefore be discovered by the
-same owner before the handler returns; this proposal deliberately provides no isolation guarantee
-for that in-flight window. A successful response is still returned only after all delivery work has
-finished.
+Claim and ready persistence form a two-stage delivery. Claim persistence is not a visibility
+commit: Create or Clone remains hidden and unroutable while Delivery is `claimed`. The final
+`claimed -> ready` metadata patch is the visibility commit and the successful-response
+linearization point. It occurs only after all delivery work has finished, so a Sandbox may become
+visible shortly before the handler returns but never while its delivery is incomplete.
+
+For a selected ready warm Sandbox, that final annotation Patch changes the successful-path write
+count from three to four without an initial TrafficPolicy, or from four to five with one. It changes
+no spec, Pod template, or status and therefore causes no dependent write. The extra API-server write
+rate is exactly the successful Create or Clone rate.
 
 The proposal remains provisional. It defines per-observation safety and delivery fencing, not
-multi-replica consistency or linearizable public responses.
+multi-replica consistency, linearizable public responses, or recovery from partial delivery.
 
 ## Background
 
@@ -83,6 +94,12 @@ Sandbox CR and UID, clears the old claim, and later permits a new owner to claim
 and State before a mutation is insufficient if the backend mutation can silently retry against the
 new claim.
 
+Creation has another boundary: a ready warm Pod can already serve while runtime initialization,
+credentials, CSI mounts, and the initial TrafficPolicy are still being established. Persisted
+ownership alone therefore cannot prove that the Sandbox is safe to expose. In particular, allowing
+a running Route before the TrafficPolicy and the policy-selecting Pod labels are durable creates a
+Route-before-policy window that no delivery-epoch fence can repair after the fact.
+
 State does not create a second backend lifecycle beside the Sandbox CR. It creates a dependency
 boundary: Sandbox CR Infra interprets native facts once, while Manager and API depend on neutral
 meanings and conditional capability contracts.
@@ -97,6 +114,9 @@ meanings and conditional capability contracts.
 - Keep workload capability separate from owner visibility and quota release.
 - Define safe, typed provisioning and ready predicates.
 - Prevent a stale authorized operation from affecting another claim delivery.
+- Give ownership assignment and completed delivery separate persisted commit points.
+- Keep Route and every owner capability closed until the initial TrafficPolicy and all other
+  delivery requirements are complete.
 
 ### Non-goals
 
@@ -104,9 +124,10 @@ meanings and conditional capability contracts.
 - It does not preserve visibility when the Sandbox CR is actually absent.
 - It does not make `ShutdownTime` a strict wall-clock traffic cutoff and does not add a deadline to
   Route.
-- It does not isolate a Sandbox from its owner between claim persistence and Create or Clone
-  response.
 - It does not make Claim or Clone recoverable from an arbitrary Manager process crash.
+- It does not model which delivery steps have completed, introduce a failed Delivery state, or
+  define retry, rollback, cleanup, quota, or retention behavior for partial delivery. This proposal
+  specifies the successful path and records partial-delivery cases as open questions.
 - It does not coordinate observations between Manager replicas or synchronize Manager and Gateway
   informer state. It introduces no persistent Sandbox-ID resolver or business-API primary gate.
 - It does not otherwise change Checkpoint API or lifecycle semantics; only claim-delivery fencing
@@ -162,7 +183,7 @@ existing eventual behavior and is not an authority for visibility, authorization
 
 | Field | Values | Question answered |
 |---|---|---|
-| Claimed | true / false | Has user ownership for this delivery been persisted? |
+| Delivery | unclaimed / claimed / ready | Has ownership been persisted, and has this delivery completed? |
 | Release | none / due / terminal / committed | What release fact has been observed? |
 | PauseResume | none / pausing / resuming | Is an ordinary Pause or Resume transition in progress? |
 | Workload | provisioning / ready / paused / unready / completed | What workload capability is currently proven? |
@@ -179,7 +200,7 @@ Infra lookup returns State, the neutral owner identity, and one opaque MutationT
 snapshot. The token binds at least:
 
 - Sandbox UID and backend object version;
-- the claimed marker and owner;
+- Delivery, the persisted claimed marker, and owner;
 - the DeliveryEpoch, which is the current persisted claim-lock UUID;
 - the public Sandbox ID for the current delivery.
 
@@ -187,18 +208,20 @@ The DeliveryEpoch is non-secret, is persisted atomically with owner and claimed 
 rotates within one claim, and is cleared by successful recycle. No new Sandbox epoch field is
 introduced.
 
-A claimed observation is valid only when owner, DeliveryEpoch, and a uniquely resolvable public
-Sandbox ID are non-empty and a MutationToken can be constructed. Invalid claimed identity returns
-neutral internal or unavailable, and Route projection fails closed. It must never appear as
-NotFound, owner mismatch, or a running Route.
+A `claimed` or `ready` observation is valid only when owner, DeliveryEpoch, and a uniquely
+resolvable public Sandbox ID are non-empty and a MutationToken can be constructed. Invalid
+delivery identity returns neutral internal or unavailable, and Route projection fails closed. It
+must never appear as NotFound, owner mismatch, or a running Route.
 
 The token is required by Pause, Resume, Connect, Snapshot, Set timeout, Update network, Browser use,
-checkpoint creation, and release commit. It applies to workload access as well as CR writes.
+checkpoint creation, delivery finalization, and release commit. It applies to workload access as
+well as CR writes.
 
 Infra validates the token at the effective backend boundary of each capability:
 
-- Sandbox CR writes test the observed resource version, claimed marker, owner, public ID, and
-  DeliveryEpoch. A failed precondition returns conflict and is never retried against a new claim.
+- Sandbox CR writes test the observed resource version, Delivery, claimed marker, owner, public ID,
+  and DeliveryEpoch. A failed precondition returns conflict and is never retried against a new
+  claim.
 - Browser requests carry a delivery-scoped runtime credential, and runtime rejects a credential
   from another DeliveryEpoch. Browser is not admitted when no verifiable credential exists.
 - TrafficPolicy and its selected Pod identity carry the DeliveryEpoch. Create, update, read, and
@@ -221,20 +244,41 @@ new snapshot. Manager obtains a new Observation and re-evaluates lifecycle admis
 re-evaluates caller-to-owner authorization. Manager may retry only if the refreshed Observation
 still describes the same authorized claim and still admits the operation.
 
-#### Claimed
+#### Delivery
 
-Claimed is true only when the persisted sandbox-claimed marker is explicitly true. A missing,
-false, or unrecognized marker maps to false.
+Delivery combines ownership assignment and delivery completion without exposing the individual
+post-claim steps:
 
-For a pool candidate, Infra atomically persists lock, owner, Sandbox ID, and claimed=true. A newly
-created Sandbox contains those facts in its create write. That write is the only claim commit. It
-does not assert that Create or Clone has returned or that delivery work has finished.
+| Delivery | Persisted facts | External meaning |
+|---|---|---|
+| unclaimed | The sandbox-claimed marker is not true and no ready fact exists | No user delivery owns the Sandbox |
+| claimed | The claimed marker and complete claim identity exist, but no ready fact exists | Ownership is reserved; the Sandbox is hidden and unroutable |
+| ready | The claimed marker and complete claim identity exist, and the ready fact equals the current DeliveryEpoch | Delivery is complete and may become owner-visible |
+
+The ready fact is the manager-owned top-level Sandbox annotation
+`agents.kruise.io/delivery-ready`; its value is the current DeliveryEpoch. It is not part of spec,
+the Pod template, or status. Persisting it therefore does not increment Sandbox Generation, change
+the desired workload revision, or require a Pod or status mutation. A ready fact that is non-empty
+but does not equal the current DeliveryEpoch is invalid; it must never make the Sandbox visible or
+routable.
+
+For a pool candidate, Infra atomically persists lock, owner, Sandbox ID, the claimed marker, and
+removal of any old ready fact. A newly created Sandbox contains those facts in its create write.
+This first commit produces Delivery=`claimed`. It reserves one delivery identity but proves
+nothing about delivery completion.
+
+After all delivery requirements succeed, Infra conditionally patches the ready fact from absent to
+the current DeliveryEpoch. The patch succeeds only when the claimed marker, owner, public ID,
+DeliveryEpoch, backend object version, and `Release=none` still match the observation used to
+authorize finalization. Conflict is re-observed and re-authorized; it is never transparently
+retried across a different delivery. This second commit produces Delivery=`ready` and is the only
+visibility commit.
 
 Successful recycle first persists removal of claim-scoped SandboxPaused, SandboxResumed, and
 RuntimeInitialized conditions. It then atomically clears the old claim, owner, lock, public Sandbox
-ID, and cleanup trigger as the final claim-clear write. The object cannot become a candidate before
-that final write. A later claim has a different DeliveryEpoch and MutationToken even though the CR
-UID is unchanged.
+ID, ready fact, and cleanup trigger as the final claim-clear write. The object cannot become a
+candidate before that final write. A later claim has a different DeliveryEpoch and MutationToken
+even though the CR UID is unchanged.
 
 #### Release
 
@@ -251,15 +295,15 @@ capability, but status that already reports terminal, Recycling, or Terminating 
 conservative and does not restore service.
 
 `due` is reversible. Controller's paused-retention policy may persist a later ShutdownTime before
-deletion is committed, after which a new observation returns `none`. While `due` remains observed,
-only List, Describe, and Kill are admitted. Pause, Resume, Connect, Snapshot, Set timeout, Update
-network, and Browser use cannot advance the deadline or otherwise rescue the Sandbox. The
-Controller may conditionally commit timeout release only for the DeliveryEpoch whose deadline it
-observed. Owner visibility, public state, traffic, and quota remain based on the other State
-dimensions until that commit is persisted.
+deletion is committed, after which a new observation returns `none`. For Delivery=`ready`, only
+List, Describe, and Kill are admitted while `due` remains observed. Pause, Resume, Connect,
+Snapshot, Set timeout, Update network, and Browser use cannot advance the deadline or otherwise
+rescue the Sandbox. The Controller may conditionally commit timeout release only for the
+DeliveryEpoch whose deadline it observed. Owner visibility, public state, traffic, and quota remain
+based on the other State dimensions until that commit is persisted.
 
-`terminal` says that the workload has stopped, not that cleanup is committed. It hides the Sandbox
-and denies traffic, but Kill must still commit release and quota remains held.
+`terminal` says that the workload has stopped, not that cleanup is committed. It hides a ready
+delivery and denies traffic, but Kill must still commit release and quota remains held.
 
 `committed` is monotonic for one claim delivery. A persisted cleanup trigger counts as committed
 because Controller has the following contract:
@@ -273,7 +317,9 @@ because Controller has the following contract:
 These rules make a successful cleanup-trigger write sufficient for Kill success and quota release;
 Manager does not need a second recycle acknowledgement.
 
-Release policies are independent:
+For Delivery=`ready`, release policies are independent of PauseResume and Workload. Delivery values
+`unclaimed` and `claimed` remain externally invisible and make Kill an idempotent no-op regardless
+of this table:
 
 | Observation | Owner visibility | Kill | Quota | Traffic |
 |---|---|---|---|---|
@@ -286,16 +332,17 @@ Release policies are independent:
 #### PauseResume
 
 PauseResume uses typed desired and observed pause facts rather than whole-object generation. A
-timeout-only spec update therefore cannot erase an in-progress Pause or Resume. Claimed=false
-always maps to `none`, even if claim-scoped transition Conditions remain on a recycled object.
+timeout-only spec update therefore cannot erase an in-progress Pause or Resume.
+Delivery=`unclaimed` always maps to `none`, even if claim-scoped transition Conditions remain on a
+recycled object.
 
 The exact Condition Types are `SandboxPaused` (`SandboxConditionPaused`), `SandboxResumed`
 (`SandboxConditionResumed`), and `RuntimeInitialized`.
 
 The first matching rule wins:
 
-1. Claimed=false; Release is terminal or committed; or Phase is Succeeded, Failed, or Upgrading:
-   `none`.
+1. Delivery is `unclaimed`; Release is terminal or committed; or Phase is Succeeded, Failed, or
+   Upgrading: `none`.
 2. Phase is Resuming; or Phase is Paused, SandboxPaused=True, and spec.paused=false; or Phase is
    Running, SandboxResumed=True, and RuntimeInitialized is missing or not True: `resuming`.
 3. Phase is Running and spec.paused=true; or Phase is Paused and SandboxPaused is missing or not
@@ -343,15 +390,16 @@ fact in its own mapper.
 
 | State combination | Meaning |
 |---|---|
-| Claimed=false, Release=none, Workload=ready | Available pool Sandbox |
-| Claimed=true, Release=none, Workload=ready | Normal user Sandbox |
-| Claimed=true, Release=due, Workload=ready | Deadline reached; Controller has not committed release |
-| Claimed=true, Release=terminal, Workload=completed | Workload stopped; cleanup is still required |
-| Claimed=true, Release=committed, Workload=ready | Release committed before workload shutdown |
-| Claimed=false, Release=committed | Unclaimed object being deleted or recycled |
+| Delivery=unclaimed, Release=none, Workload=ready | Available pool Sandbox |
+| Delivery=claimed, Release=none, Workload=ready | Warm workload assigned to an incomplete, hidden delivery |
+| Delivery=ready, Release=none, Workload=ready | Normal user Sandbox |
+| Delivery=ready, Release=due, Workload=ready | Deadline reached; Controller has not committed release |
+| Delivery=ready, Release=terminal, Workload=completed | Workload stopped; cleanup is still required |
+| Delivery in {claimed, ready}, Release=committed | Hidden delivery undergoing cleanup |
+| Delivery=unclaimed, Release=committed | Unclaimed object being deleted or recycled |
 
-Claimed=false alone does not make an object a candidate. Release must be none, the object must
-belong to the target pool and be unlocked, and its Workload must satisfy candidate policy.
+Delivery=`unclaimed` alone does not make an object a candidate. Release must be none, the object
+must belong to the target pool and be unlocked, and its Workload must satisfy candidate policy.
 
 ### 3. Layer Responsibilities
 
@@ -385,9 +433,9 @@ Manager uses these candidate rules:
 
 | Candidate | Required facts |
 |---|---|
-| Normal | Claimed=false, Release=none, PauseResume=none, Workload=ready, target pool, unlocked |
-| Speculative | Claimed=false, Release=none, PauseResume=none, Workload=provisioning, target pool, unlocked, speculation age elapsed |
-| Ineligible | Claimed=true; Release is due, terminal, or committed; Workload is paused, unready, or completed; wrong pool; or locked |
+| Normal | Delivery=unclaimed, Release=none, PauseResume=none, Workload=ready, target pool, unlocked |
+| Speculative | Delivery=unclaimed, Release=none, PauseResume=none, Workload=provisioning, target pool, unlocked, speculation age elapsed |
+| Ineligible | Delivery is claimed or ready; Release is due, terminal, or committed; Workload is paused, unready, or completed; wrong pool; or locked |
 
 CreationTimestamp may be used only as the elapsed-time threshold after the typed provisioning
 predicate is true. A zero configured duration disables speculative selection.
@@ -395,21 +443,55 @@ predicate is true. A zero configured duration disables speculative selection.
 Claim and Clone follow this contract:
 
 1. Manager validates the request and reserves quota.
-2. Infra atomically persists or creates owner, lock, public Sandbox ID, and claimed=true.
-3. Manager waits for Workload=ready and completes runtime initialization, credentials, CSI, network,
-   and other required delivery capabilities.
-4. Create or Clone returns success only after all delivery requirements succeed.
+2. Infra atomically persists or creates owner, lock, public Sandbox ID, DeliveryEpoch, and the
+   claimed marker, producing Delivery=`claimed`.
+3. Manager waits until Controller has observed the current desired workload revision, the selected
+   Pod carries the current owner and DeliveryEpoch metadata, and Workload is ready.
+4. Manager completes runtime initialization, credentials, CSI, and every other required delivery
+   action. If the request requires an initial TrafficPolicy, that policy is persisted with the same
+   DeliveryEpoch before delivery can complete.
+5. Infra conditionally patches the ready fact to the current DeliveryEpoch, producing
+   Delivery=`ready`.
+6. Create or Clone returns success only after the ready patch succeeds.
 
-Step 2 is both the claim and visibility commit. There is no Delivery dimension or later visibility
-commit. During steps 2 and 3, a concurrent List by the same owner may discover the Sandbox ID. If
-the warm Sandbox already satisfies State admission, other operations by that owner may run before
-Create or Clone returns. This in-flight behavior has no isolation guarantee and callers must not
-depend on it.
+Delivery=`claimed` is an internal reservation, not resource visibility. List, Describe, Kill, and
+every other owner API treat it as invisible, and Route projection remains non-running even when the
+warm Pod itself is ready. Consequently, the initial TrafficPolicy and its policy-selecting Pod
+labels become durable before any Route can run. Update network cannot race initial network setup
+because no user capability is admitted before Delivery=`ready`.
 
-A successful Create or Clone response guarantees that delivery work has completed. Failure before
-claim commit releases the reservation. Failure after claim commit may leave an owner-visible
-Sandbox; quota remains held until release is committed or absence is observed. Manager selects
-retention or cleanup policy and Infra performs it with the same claim fence.
+The `claimed -> ready` patch is the successful-response linearization point. It re-validates the
+same DeliveryEpoch and `Release=none`; a concurrent release or recycled delivery prevents success.
+After the patch, informer propagation may make the Sandbox visible shortly before Create or Clone
+returns, but every delivery requirement is already complete.
+
+#### Marginal Write Cost
+
+The final ready fact adds exactly one successful Sandbox metadata Patch to each successful Create
+or Clone. The following count covers the selected, already-ready warm Sandbox and its existing Pod.
+It assumes no conflict or retry, no image or resource in-place update, and excludes SandboxSet
+replenishment, Kubernetes Events, and scheduler or kubelet writes.
+
+The three-write claim-only reference consists of the Manager claim update to the Sandbox, the
+Controller patch that brings the selected Pod metadata to the claimed revision, and the Controller
+status patch that records that observed revision. Initial network configuration adds one
+TrafficPolicy create. Requested ID-token delivery adds one Sandbox annotation patch. Two-stage
+delivery adds only the final ready annotation patch.
+
+| Successful delivery path | Sandbox writes | Pod writes | TrafficPolicy writes | Total writes | Ready-patch increase |
+|---|---:|---:|---:|---:|---:|
+| Claim-only reference, no TrafficPolicy | 2 | 1 | 0 | 3 | - |
+| Two-stage delivery, no TrafficPolicy | 3 | 1 | 0 | 4 | +1 (+33%) |
+| Claim-only reference, with TrafficPolicy | 2 | 1 | 1 | 4 | - |
+| Two-stage delivery, with TrafficPolicy | 3 | 1 | 1 | 5 | +1 (+25%) |
+| Two-stage delivery, with TrafficPolicy and ID token | 4 | 1 | 1 | 6 | +1 (+20% versus the corresponding claim-only path) |
+
+The additional Patch changes one fixed annotation key to one 36-character UUID DeliveryEpoch
+value. Its payload does not grow with Sandbox spec size, Pod count, or the number of delivery steps.
+It does not increment Generation and therefore adds no dependent Pod Patch or Sandbox status
+Patch. It produces one additional Sandbox watch event; Controller observes a delivery-only change
+without a write. At a successful Create or Clone rate of `R` per second, the added API-server write
+rate is exactly `R` small metadata Patches per second.
 
 ### 5. Owner Visibility and Public State
 
@@ -417,7 +499,7 @@ Manager derives caller-independent resource visibility:
 
     ResourceVisible =
         Sandbox exists
-        && State.Claimed
+        && State.Delivery == ready
         && State.Release in {none, due}
 
 API then applies owner authorization:
@@ -427,23 +509,24 @@ API then applies owner authorization:
 | Situation | Non-Kill owner API | Kill |
 |---|---|---|
 | NotFound | HTTP 404 | HTTP 204 |
-| Claimed=false | HTTP 404 | HTTP 204 |
+| Delivery=unclaimed or claimed | HTTP 404 | HTTP 204, no-op |
 | Release=terminal | HTTP 404 | Commit cleanup for the same claim |
 | Release=committed | HTTP 404 | HTTP 204 |
-| Claimed=true and owner mismatch | HTTP 404 | HTTP 204, no-op |
+| Delivery=ready and owner mismatch | HTTP 404 | HTTP 204, no-op |
 | OwnerVisible | Apply State admission | Commit release for the same claim |
 
 Release=due remains OwnerVisible, but Kill must commit release and every owner capability other
 than List, Describe, and Kill is rejected while the deadline remains due.
 
-Kill returns HTTP 204 for NotFound, Claimed=false, Release=committed, and owner mismatch. An owner
-mismatch is recorded only in protected audit logs and has no resource, Route, or quota side effect.
-For the correct owner with Release=none, due, or terminal, HTTP 204 requires a successful
-claim-fenced release commit. Backend failure or invalid claimed identity returns the mapped
-unavailable or internal result instead of false success.
+Kill returns HTTP 204 for NotFound, Delivery=`unclaimed` or `claimed`, Release=committed, and owner
+mismatch. An owner mismatch is recorded only in protected audit logs and has no resource, Route, or
+quota side effect. For the correct owner of a ready delivery with Release=none, due, or terminal,
+HTTP 204 requires a successful claim-fenced release commit. Backend failure or invalid delivery
+identity returns the mapped unavailable or internal result instead of false success.
 
 List contains only OwnerVisible Sandboxes and filters them before pagination. Describe returns 200
-for every OwnerVisible Sandbox, including paused, provisioning, unready, and due observations.
+for every OwnerVisible ready delivery, including paused, provisioning, unready, and due
+observations.
 
 E2B public state remains intentionally small:
 
@@ -454,8 +537,9 @@ E2B public state remains intentionally small:
 
 ### 6. Operation Admission
 
-The following table applies only after OwnerVisible authorization. Every admitted operation still
-requires a valid MutationToken or claim-delivery fence.
+The following table applies only after Delivery=`ready` and OwnerVisible authorization. Every
+admitted operation still requires a valid MutationToken or claim-delivery fence. Delivery=`claimed`
+never reaches this table.
 
 Release=due is an independent denial for every capability in this section. Only List, Describe,
 and Kill remain admitted until Controller changes the deadline or persists release commit.
@@ -499,11 +583,12 @@ object, the first matching rule wins:
 | State and route data | Route.State |
 |---|---|
 | Any of: Release=terminal or committed; Workload=completed; invalid or incomplete State | dead |
-| Claimed=true, Release=none or due, PauseResume=none, Workload=ready, IP exists | running |
+| Delivery=claimed | dead |
+| Delivery=ready, Release=none or due, PauseResume=none, Workload=ready, IP exists | running |
 | PauseResume is pausing or resuming, or Workload=paused | paused |
 | Workload=unready | dead |
 | Workload=provisioning or IP missing | creating |
-| Claimed=false, Release=none, Workload=ready, IP exists | available |
+| Delivery=unclaimed, Release=none, Workload=ready, IP exists | available |
 | Any other combination | dead |
 
 Release=due never changes Route. If no CR mutation occurs when ShutdownTime passes, Gateway may
@@ -511,15 +596,17 @@ continue forwarding the existing running Route. Controller persistence of Deleti
 Terminating, Recycling, or another committed fact produces the event that denies or deletes Route.
 This is the selected eventual deadline contract.
 
-Gateway forwards only Route.State=running. Route identity, DeliveryEpoch, and version ordering
-reject stale events from another claim delivery, but Route presence or state never determines
-Sandbox existence, owner authorization, or Manager State in the opposite direction. DeliveryEpoch
-does not make an already-forwarded unauthenticated client request delivery-aware.
+Gateway forwards only Route.State=running. The ready metadata event is the earliest event that can
+produce that state, so a running Route implies that initial network policy creation and the other
+delivery requirements completed first. Route identity, DeliveryEpoch, and version ordering reject
+stale events from another claim delivery, but Route presence or state never determines Sandbox
+existence, owner authorization, or Manager State in the opposite direction. DeliveryEpoch does not
+make an already-forwarded unauthenticated client request delivery-aware.
 
 ### 8. Quota and Failure Behavior
 
-Quota is not a State dimension. Manager reserves quota before claim commit and treats it as active
-after owner and claimed facts are persisted.
+Quota is not a State dimension. Manager reserves quota before the first delivery commit and treats
+it as active after Delivery becomes `claimed`, even though the Sandbox is not externally visible.
 
 Quota is releasable only when Release=committed or the backend object is authoritatively NotFound.
 Release=due and Release=terminal keep quota. A cleanup trigger is committed only because the
@@ -535,15 +622,37 @@ result. API maps the domain result without inspecting CR state.
 | Scenario | Target behavior | Why |
 |---|---|---|
 | Owner mismatch | Non-Kill APIs return HTTP 404; Kill returns HTTP 204 with no side effect | Keep Kill idempotent without creating an existence oracle |
-| Reached ShutdownTime before Controller commit | Visibility, public state, and Route remain governed by the other State dimensions; due alone does not change Route; only List, Describe, and Kill are admitted; quota stays held | Deadline is a Controller instruction, not a release commit |
-| Persisted cleanup trigger | Kill may return success and quota may release; Controller must recycle or delete | Trigger is an irreversible current-claim commitment |
-| Terminal Succeeded or Failed | Hidden and Route dead; Kill still commits cleanup; quota stays held | Workload termination is not cleanup completion |
+| Reached ShutdownTime on a ready delivery before Controller commit | Visibility, public state, and Route remain governed by the other State dimensions; due alone does not change Route; only List, Describe, and Kill are admitted; quota stays held | Deadline is a Controller instruction, not a release commit |
+| Persisted cleanup trigger for a ready delivery | Kill may return success and quota may release; Controller must recycle or delete | Trigger is an irreversible current-claim commitment |
+| Terminal Succeeded or Failed on a ready delivery | Hidden and Route dead; Kill still commits cleanup; quota stays held | Workload termination is not cleanup completion |
 | Stale Observation after recycle and re-claim | CR writes, Browser, TrafficPolicy, Route, Checkpoint, and composite Connect are fenced and cannot affect the new owner | UID alone does not identify one delivery |
-| Create or Clone in progress | Same owner may discover and operate the Sandbox; no isolation is promised | Claim persistence is the visibility commit |
+| Create or Clone before ready commit | Hidden from every owner API and Route dead | Persisted ownership does not prove completed delivery |
+| Initial TrafficPolicy setup | The current-epoch policy and policy-selecting Pod labels exist before the ready commit; Update network is not reachable earlier | No traffic or owner mutation can race incomplete initial policy |
+| Ready commit succeeds | Sandbox may become owner-visible and Route may become running; Create or Clone may return success | The ready patch is the visibility and successful-response commit |
 | Running with Ready missing, False, Unknown, revision mismatch, or unsafe update | Workload=unready and never a speculative candidate solely because of age | Service or progress cannot be proven |
 | InplaceUpdate=False/Failed with Ready=True | Workload may remain ready when all other serving predicates pass | Update convergence and existing workload capability are separate |
-| Claimed identity is incomplete or conflicting | Internal or unavailable; Route fails closed | Corruption must not appear invisible or routable |
+| Claimed or ready delivery identity is incomplete or conflicting | Internal or unavailable; Route fails closed | Corruption must not appear invisible or routable |
 | More than one Manager process | Replicas may disagree temporarily; no replica may use a stale authorized observation to mutate another delivery | Replica synchronization is a separate design |
+
+## Open Questions
+
+### Partial Delivery
+
+This proposal deliberately defines only the successful `unclaimed -> claimed -> ready` path and
+does not introduce a failed Delivery value or per-step progress. The following partial outcomes are
+possible in a real system but are not resolved here:
+
+- runtime initialization succeeds before credential delivery or CSI mounts finish;
+- some CSI mounts succeed before a later mount fails;
+- the current-epoch TrafficPolicy is created but the ready patch does not complete;
+- Manager stops after any subset of delivery actions and before the ready patch.
+
+Without the ready fact these outcomes remain externally invisible and cannot produce a running
+Route. A separate design must decide whether the same epoch resumes, rolls back, or commits release;
+how partial runtime, credential, CSI, and TrafficPolicy effects are reconciled; when quota is
+released; how long a claimed delivery may remain; and what operators can observe or repair. This
+proposal makes no recovery, cleanup, retention, or latency guarantee for those cases and
+deliberately leaves those guarantees to separate future design work.
 
 ## Implementation Notes
 
