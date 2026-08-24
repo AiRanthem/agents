@@ -193,14 +193,14 @@ func (k *secretKeyStorage) ensureAdminKey(ctx context.Context) error {
 	// Exhausted Conflict does not re-read after the last patch. Check the API
 	// server: succeed if the desired admin key is already there, otherwise fail.
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
+		return errors.Join(err, ctxErr)
 	}
 	if err == nil || !apierrors.IsConflict(err) {
 		return err
 	}
 	rereadSecret := &corev1.Secret{}
 	if getErr := k.APIReader.Get(ctx, client.ObjectKey{Namespace: k.Namespace, Name: KeySecretName}, rereadSecret); getErr != nil {
-		return fmt.Errorf("ensure admin key: %w (reread after conflict: %v)", err, getErr)
+		return fmt.Errorf("ensure admin key: %w", errors.Join(err, getErr))
 	}
 	if adminKeyStateSatisfied(rereadSecret, k.AdminKey) {
 		return nil
@@ -209,14 +209,19 @@ func (k *secretKeyStorage) ensureAdminKey(ctx context.Context) error {
 }
 
 // adminKeyStateSatisfied reports whether Secret.Data[AdminKeyID] holds the
-// configured admin key. Missing or unreadable entries are treated as absent.
+// configured admin key on the admin team. Missing or unreadable entries are
+// treated as absent.
 func adminKeyStateSatisfied(secret *corev1.Secret, configuredKey string) bool {
 	raw, ok := secret.Data[AdminKeyID.String()]
 	if !ok {
 		return false
 	}
 	key, err := unmarshalStoredAPIKey(raw, false)
-	return err == nil && key.ID == AdminKeyID && key.Key == configuredKey
+	return err == nil &&
+		key.ID == AdminKeyID &&
+		key.Key == configuredKey &&
+		key.Name == models.AdminTeamName &&
+		TeamForKey(key).Name == models.AdminTeamName
 }
 
 func (k *secretKeyStorage) refresh(ctx context.Context, reader client.Reader) error {
@@ -400,7 +405,7 @@ func (k *secretKeyStorage) retryPatchSecretKey(
 		return nil
 	})
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, ctxErr
+		return nil, errors.Join(err, ctxErr)
 	}
 	if err != nil {
 		return nil, err

@@ -292,20 +292,41 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 				_, c := newSecretStorageForTest(t, map[string][]byte{
 					AdminKeyID.String(): b,
 				})
-				patchCalls := 0
 				hookClient := &patchHookClient{
 					Client: c,
 					patchHook: func(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-						patchCalls++
-						return nil
+						return errors.New("unexpected patch")
 					},
 				}
 				return NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage), hookClient
+			},
+		},
+		{
+			name: "wrong team on admin key is repaired",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{
+					ID:   AdminKeyID,
+					Key:  "admin-key",
+					Name: "not-admin",
+					Team: &models.Team{ID: uuid.New(), Name: "other-team"},
+				}
+				b, err := json.Marshal(admin)
+				require.NoError(t, err)
+				return newSecretStorageForTest(t, map[string][]byte{
+					AdminKeyID.String(): b,
+				})
 			},
 			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
 				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
 				require.True(t, found)
 				require.Equal(t, "admin-key", loaded.Key)
+				require.Equal(t, models.AdminTeamName, loaded.Name)
+				require.Equal(t, models.AdminTeam(), loaded.Team)
+				secret := getSecretForTest(t, c)
+				var admin models.CreatedTeamAPIKey
+				require.NoError(t, json.Unmarshal(secret.Data[AdminKeyID.String()], &admin))
+				require.Equal(t, models.AdminTeamName, admin.Name)
+				require.Equal(t, models.AdminTeam(), admin.Team)
 			},
 		},
 		{
@@ -366,9 +387,16 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 }
 
 func TestSecretKeyStorage_InitReturnsContextCancellation(t *testing.T) {
-	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+	_, c := newSecretStorageForTest(t, map[string][]byte{})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+	hookClient := &getHookClient{
+		Client: c,
+		getHook: func(ctx context.Context, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+			return ctx.Err()
+		},
+	}
+	storage := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
 	require.ErrorIs(t, storage.Init(ctx), context.Canceled)
 }
 
@@ -1044,6 +1072,28 @@ func TestSecretKeyStorage_RetryPatchSecretKeyErrors(t *testing.T) {
 					patchHook: func(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 						cancel()
 						return apierrors.NewConflict(schema.GroupResource{Group: "", Resource: "secrets"}, KeySecretName, errors.New("conflict"))
+					},
+				}
+				storage := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
+				_, err := storage.retryPatchSecretKey(ctx, hookClient, uuid.NewString(), func(*corev1.Secret) *models.CreatedTeamAPIKey {
+					return &models.CreatedTeamAPIKey{ID: uuid.New(), Key: "new"}
+				})
+				require.ErrorIs(t, err, context.Canceled)
+				require.True(t, apierrors.IsConflict(err))
+				return nil
+			},
+		},
+		{
+			name: "context cancellation after successful patch",
+			run: func(t *testing.T) error {
+				_, c := newSecretStorageForTest(t, map[string][]byte{})
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				hookClient := &patchHookClient{
+					Client: c,
+					patchHook: func(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+						cancel()
+						return nil
 					},
 				}
 				storage := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
