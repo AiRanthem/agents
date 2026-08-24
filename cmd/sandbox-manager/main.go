@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/spf13/pflag"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -113,7 +112,7 @@ func main() {
 
 	// Register server configuration flags
 	pflag.IntVar(&port, "port", 8080, "The port the server listens on")
-	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (if empty, a random UUID will be generated)")
+	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (required when --e2b-enable-auth is true)")
 	pflag.BoolVar(&e2bEnableAuth, "e2b-enable-auth", true, "Enable E2B authentication")
 	pflag.StringVar(&domain, "e2b-domain", "",
 		"Static E2B domain. When empty, the domain is resolved per-request from "+
@@ -196,9 +195,8 @@ func main() {
 		klog.Fatalf("--peer-selector is required")
 	}
 
-	// Generate admin key if not provided
-	if e2bAdminKey == "" {
-		e2bAdminKey = uuid.NewString()
+	if e2bEnableAuth && e2bAdminKey == "" {
+		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
 	}
 
 	// Validate positive values

@@ -243,6 +243,28 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 			expectError: "not found",
 		},
 		{
+			name: "configured admin key is rotated",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "old-admin-key", Name: "admin"}
+				b, err := json.Marshal(admin)
+				require.NoError(t, err)
+				return newSecretStorageForTest(t, map[string][]byte{
+					AdminKeyID.String(): b,
+				})
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
+				require.True(t, found)
+				require.Equal(t, "admin-key", loaded.Key)
+				_, foundOld := storage.LoadByKey(context.Background(), "old-admin-key")
+				assert.False(t, foundOld)
+				secret := getSecretForTest(t, c)
+				var admin models.CreatedTeamAPIKey
+				require.NoError(t, json.Unmarshal(secret.Data[AdminKeyID.String()], &admin))
+				require.Equal(t, "admin-key", admin.Key)
+			},
+		},
+		{
 			name: "admin key exists under id",
 			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
 				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "admin-key", Name: "admin"}
@@ -259,8 +281,31 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 				require.Equal(t, models.AdminTeam(), loaded.Team)
 				secret := getSecretForTest(t, c)
 				assert.Len(t, secret.Data, 1)
-				_, hasLegacy := secret.Data["admin-key"]
-				assert.False(t, hasLegacy)
+			},
+		},
+		{
+			name: "satisfied admin key does not perform patch during init",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "admin-key", Name: "admin"}
+				b, err := json.Marshal(admin)
+				require.NoError(t, err)
+				_, c := newSecretStorageForTest(t, map[string][]byte{
+					AdminKeyID.String(): b,
+				})
+				patchCalls := 0
+				hookClient := &patchHookClient{
+					Client: c,
+					patchHook: func(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+						patchCalls++
+						return nil
+					},
+				}
+				return NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage), hookClient
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
+				require.True(t, found)
+				require.Equal(t, "admin-key", loaded.Key)
 			},
 		},
 		{
@@ -278,26 +323,7 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 			},
 		},
 		{
-			name: "legacy admin-key map entry gets id-keyed entry",
-			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
-				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "admin-key", Name: "admin"}
-				b, err := json.Marshal(admin)
-				require.NoError(t, err)
-				return newSecretStorageForTest(t, map[string][]byte{
-					"admin-key": b,
-				})
-			},
-			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
-				secret := getSecretForTest(t, c)
-				_, ok := secret.Data[AdminKeyID.String()]
-				assert.True(t, ok)
-				loaded, found := storage.LoadByID(context.Background(), AdminKeyID.String())
-				require.True(t, found)
-				require.Equal(t, "admin-key", loaded.Key)
-			},
-		},
-		{
-			name: "conflict while creating admin key tolerated",
+			name: "conflict while ensuring admin key returns error when persisted value differs",
 			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
 				_, c := newSecretStorageForTest(t, map[string][]byte{})
 				hookClient := &patchHookClient{
@@ -308,6 +334,7 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 				}
 				return NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage), c
 			},
+			expectError: "does not match desired value",
 		},
 		{
 			name: "non-conflict patch error returned",
@@ -336,6 +363,13 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSecretKeyStorage_InitReturnsContextCancellation(t *testing.T) {
+	storage, _ := newSecretStorageForTest(t, map[string][]byte{})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, storage.Init(ctx), context.Canceled)
 }
 
 func TestSecretKeyStorage_Refresh(t *testing.T) {
@@ -849,18 +883,7 @@ func TestSecretKeyStorage_InvalidQuotaPayloadLoadsAsUnlimited(t *testing.T) {
 	}
 }
 
-func TestSecretKeyStorage_ListLimitedReturnsInvalidStoredPayload(t *testing.T) {
-	storage, _ := newSecretStorageForTest(t, map[string][]byte{
-		"broken": []byte(`{`),
-	})
-
-	limitedKeys, err := storage.ListLimited(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decode stored api-key")
-	require.Nil(t, limitedKeys)
-}
-
-func TestSecretKeyStorage_ListLimitedSkipsInvalidQuotaPayload(t *testing.T) {
+func TestSecretKeyStorage_ListLimitedSkipsUnreadableEntries(t *testing.T) {
 	validKeyID := uuid.MustParse("22222222-2222-2222-2222-222222222222")
 	validPayload, err := json.Marshal(&models.CreatedTeamAPIKey{
 		ID:        validKeyID,
@@ -870,23 +893,42 @@ func TestSecretKeyStorage_ListLimitedSkipsInvalidQuotaPayload(t *testing.T) {
 		QuotaSpec: quotaSpecWithMultipleLimits(),
 	})
 	require.NoError(t, err)
-	invalidPayload := buildStoredKeyPayloadWithQuotaRaw(t, &models.CreatedTeamAPIKey{
+	invalidQuotaPayload := buildStoredKeyPayloadWithQuotaRaw(t, &models.CreatedTeamAPIKey{
 		ID:   uuid.MustParse("33333333-3333-3333-3333-333333333333"),
 		Key:  "invalid-key",
 		Name: "invalid-limited",
 		Team: &models.Team{Name: "team-a"},
 	}, `{"limits":[{"dimension":"sandbox.count","scope":"running","limit":"bad"}]}`)
 
-	storage, _ := newSecretStorageForTest(t, map[string][]byte{
-		validKeyID.String(): validPayload,
-		"invalid":           invalidPayload,
-	})
-
-	limitedKeys, err := storage.ListLimited(context.Background())
-	require.NoError(t, err)
-	require.Len(t, limitedKeys, 1)
-	assert.Equal(t, validKeyID, limitedKeys[0].ID)
-	assert.Equal(t, quotaSpecWithMultipleLimits(), limitedKeys[0].QuotaSpec)
+	tests := []struct {
+		name string
+		data map[string][]byte
+	}{
+		{
+			name: "invalid JSON",
+			data: map[string][]byte{
+				validKeyID.String(): validPayload,
+				"broken":            []byte(`{`),
+			},
+		},
+		{
+			name: "invalid quota",
+			data: map[string][]byte{
+				validKeyID.String(): validPayload,
+				"invalid":           invalidQuotaPayload,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage, _ := newSecretStorageForTest(t, tt.data)
+			limitedKeys, err := storage.ListLimited(context.Background())
+			require.NoError(t, err)
+			require.Len(t, limitedKeys, 1)
+			assert.Equal(t, validKeyID, limitedKeys[0].ID)
+			assert.Equal(t, quotaSpecWithMultipleLimits(), limitedKeys[0].QuotaSpec)
+		})
+	}
 }
 
 func TestSecretKeyStorage_LoadInvalidStoredQuotaAsUnlimited(t *testing.T) {
@@ -990,6 +1032,27 @@ func TestSecretKeyStorage_RetryPatchSecretKeyErrors(t *testing.T) {
 				return err
 			},
 			expectError: "patch failed",
+		},
+		{
+			name: "context cancellation after conflict",
+			run: func(t *testing.T) error {
+				_, c := newSecretStorageForTest(t, map[string][]byte{})
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				hookClient := &patchHookClient{
+					Client: c,
+					patchHook: func(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+						cancel()
+						return apierrors.NewConflict(schema.GroupResource{Group: "", Resource: "secrets"}, KeySecretName, errors.New("conflict"))
+					},
+				}
+				storage := NewSecretKeyStorage(hookClient, hookClient, nil, "default", "admin-key").(*secretKeyStorage)
+				_, err := storage.retryPatchSecretKey(ctx, hookClient, uuid.NewString(), func(*corev1.Secret) *models.CreatedTeamAPIKey {
+					return &models.CreatedTeamAPIKey{ID: uuid.New(), Key: "new"}
+				})
+				require.ErrorIs(t, err, context.Canceled)
+				return nil
+			},
 		},
 	}
 
