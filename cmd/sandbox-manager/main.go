@@ -47,6 +47,7 @@ import (
 )
 
 const (
+	E2BAdminKeyEnvVar        = "E2B_ADMIN_KEY"
 	E2BKeyStorageDSNEnvVar   = "E2B_KEY_STORAGE_DSN"
 	E2BKeyHashPepperEnvVar   = "E2B_KEY_HASH_PEPPER"
 	QuotaRedisUsernameEnvVar = "QUOTA_REDIS_USERNAME"
@@ -116,6 +117,7 @@ func main() {
 	var trafficTokenValidity time.Duration
 	var trafficTokenMinValidity time.Duration
 	var trafficTokenMaxValidity time.Duration
+	var secretConfigRef string
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
 
@@ -170,6 +172,12 @@ func main() {
 	pflag.DurationVar(&trafficTokenValidity, "traffic-access-token-validity", config.DefaultTrafficAccessTokenValidity, "Validity requested for traffic access tokens.")
 	pflag.DurationVar(&trafficTokenMinValidity, "traffic-access-token-min-validity", config.DefaultTrafficAccessTokenMinValidity, "Minimum allowed traffic access token validity.")
 	pflag.DurationVar(&trafficTokenMaxValidity, "traffic-access-token-max-validity", config.DefaultTrafficAccessTokenMaxValidity, "Maximum allowed traffic access token validity.")
+	pflag.StringVar(&secretConfigRef, "secret-config", "",
+		"name or namespace/name of the Secret that provides the five secret values "+E2BAdminKeyEnvVar+", "+E2BKeyStorageDSNEnvVar+", "+
+			E2BKeyHashPepperEnvVar+", "+QuotaRedisUsernameEnvVar+", "+QuotaRedisPasswordEnvVar+". "+
+			"When the namespace is omitted, --system-namespace is used. "+
+			"When set, the Secret is read once at startup and overrides those values (all five keys must be present); "+
+			"changes take effect only on restart. Leave it empty to keep flag and env values.")
 
 	// Tracing flags (definitions shared with agent-sandbox-controller via
 	// tracing.Config.BindFlags; pulled into pflag by AddGoFlagSet below)
@@ -313,6 +321,40 @@ func main() {
 		klog.InfoS("runtime client TLS enabled", "secret", runtimeClientCertSecret)
 	} else {
 		klog.InfoS("runtime client TLS disabled, using the legacy plaintext runtime paths")
+	}
+
+	// Override values from secret config if provided
+	if secretConfigRef != "" {
+		reader, err := ctrlclient.New(clientConfig, ctrlclient.Options{})
+		if err != nil {
+			klog.Fatalf("Failed to create client for the secret config: %v", err)
+		}
+		cfg, err := loadSecretConfig(reader, secretConfigRef, sysNs)
+		if err != nil {
+			klog.Fatalf("Failed to load secret config: %v", err)
+		}
+		e2bAdminKey = cfg.AdminKey
+		e2bKeyStorageDSN = cfg.KeyStorageDSN
+		e2bKeyStoragePepper = cfg.KeyHashPepper
+		quotaRedisUsername = cfg.RedisUsername
+		quotaRedisPassword = cfg.RedisPassword
+		quotaOpts.RedisUsername = cfg.RedisUsername
+		quotaOpts.RedisPassword = cfg.RedisPassword
+		if err := validateSecretValues(e2bAdminKey, e2bKeyStorageDSN, e2bKeyStoragePepper, e2bEnableAuth, keys.StorageMode(e2bKeyStorage)); err != nil {
+			klog.Fatalf("invalid secret config %s: %v", secretConfigRef, err)
+		}
+		klog.InfoS("secret config loaded", "secret", secretConfigRef)
+	}
+
+	// hookCtx carries the startup hook and any background work it starts. It is a
+	// plain cancelable context: registering a signal handler here (before the
+	// controller registers its own in Run) would suppress the default process
+	// exit for a SIGTERM arriving during controller Init. It is instead wired to
+	// the controller's shutdown below.
+	hookCtx, hookCancel := context.WithCancel(context.Background())
+	defer hookCancel()
+	if err := startupHook(hookCtx, clientConfig); err != nil {
+		klog.Fatalf("startup hook failed: %v", err)
 	}
 
 	var keyCfg *keys.Config
