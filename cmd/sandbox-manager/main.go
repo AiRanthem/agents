@@ -62,6 +62,16 @@ func validateE2BTimeoutFlags(maxTimeout int) error {
 	return nil
 }
 
+func validateMetricsPort(metricsPort int) error {
+	if metricsPort == 0 {
+		return nil
+	}
+	if metricsPort < 1 || metricsPort > 65535 {
+		return fmt.Errorf("--metrics-port must be 0 or a valid TCP port in the range 1-65535, got %d", metricsPort)
+	}
+	return nil
+}
+
 func main() {
 	// Define variables for pprof configuration
 	var enablePprof bool
@@ -69,6 +79,7 @@ func main() {
 
 	// Define variables for server configuration
 	var port int
+	var metricsPort int
 	var e2bAdminKey string
 	var e2bEnableAuth bool
 	var domain string
@@ -107,6 +118,8 @@ func main() {
 
 	// Register server configuration flags
 	pflag.IntVar(&port, "port", 8080, "The port the server listens on")
+	pflag.IntVar(&metricsPort, "metrics-port", 0,
+		"Port for /metrics and /health; 0 or the same value as --port reuses the control API listener")
 	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (required when --e2b-enable-auth is true)")
 	pflag.BoolVar(&e2bEnableAuth, "e2b-enable-auth", true, "Enable E2B authentication")
 	pflag.StringVar(&domain, "e2b-domain", "",
@@ -197,6 +210,9 @@ func main() {
 	// Validate timeout flags.
 	if err := validateE2BTimeoutFlags(e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
+	}
+	if err := validateMetricsPort(metricsPort); err != nil {
+		klog.Fatalf("invalid metrics-port flag: %v", err)
 	}
 	if quotaRedisOperationTimeout <= 0 {
 		klog.Fatalf("--quota-redis-operation-timeout must be greater than 0")
@@ -305,10 +321,11 @@ func main() {
 	}
 
 	sandboxController := e2b.NewController(e2b.ControllerOptions{
-		Domain:     domain,
-		Port:       port,
-		MaxTimeout: e2bMaxTimeout,
-		KeyConfig:  keyCfg,
+		Domain:      domain,
+		Port:        port,
+		MetricsPort: metricsPort,
+		MaxTimeout:  e2bMaxTimeout,
+		KeyConfig:   keyCfg,
 		Manager: config.SandboxManagerOptions{
 			SystemNamespace:       sysNs,
 			PeerSelector:          peerSelector,

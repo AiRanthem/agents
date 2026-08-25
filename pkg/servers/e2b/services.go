@@ -206,9 +206,3 @@ func parseCDPPort(r *http.Request) (int, *web.ApiError) {
 
 	return port, nil
 }
-
-func (sc *Controller) Debug(_ *http.Request) (web.ApiResponse[sandboxmanager.DebugInfo], *web.ApiError) {
-	return web.ApiResponse[sandboxmanager.DebugInfo]{
-		Body: sc.manager.GetDebugInfo(),
-	}, nil
-}

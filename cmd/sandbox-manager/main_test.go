@@ -47,3 +47,29 @@ func TestValidateE2BTimeoutFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateMetricsPort(t *testing.T) {
+	cases := []struct {
+		name        string
+		metricsPort int
+		wantErr     bool
+	}{
+		{name: "shared-zero", metricsPort: 0},
+		{name: "min-valid", metricsPort: 1},
+		{name: "max-valid", metricsPort: 65535},
+		{name: "negative", metricsPort: -1, wantErr: true},
+		{name: "too-large", metricsPort: 65536, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateMetricsPort(tc.metricsPort)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "--metrics-port")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
