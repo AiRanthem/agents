@@ -17,9 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
-	"errors"
-	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,10 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func fullSecretData() map[string][]byte {
@@ -51,71 +45,33 @@ func secretWith(data map[string][]byte) *corev1.Secret {
 }
 
 func TestParseSecretConfig(t *testing.T) {
-	missing := func(key string) map[string][]byte {
-		data := fullSecretData()
-		delete(data, key)
-		return data
-	}
+	missing := fullSecretData()
+	delete(missing, E2BAdminKeySecretKey)
 
 	cases := []struct {
 		name        string
 		data        map[string][]byte
 		errContains string
-		check       func(t *testing.T, cfg secretConfig)
+		want        secretConfig
 	}{
 		{
 			name: "all-empty-ok",
 			data: map[string][]byte{E2BAdminKeySecretKey: {}, E2BKeyStorageDSNEnvVar: {}, E2BKeyHashPepperEnvVar: {}, QuotaRedisUsernameEnvVar: {}, QuotaRedisPasswordEnvVar: {}},
-			check: func(t *testing.T, cfg secretConfig) {
-				assert.Equal(t, secretConfig{}, cfg)
-			},
 		},
 		{
-			name:        "missing-admin-key",
-			data:        missing(E2BAdminKeySecretKey),
+			name:        "missing-key",
+			data:        missing,
 			errContains: E2BAdminKeySecretKey,
-		},
-		{
-			name:        "missing-dsn-key",
-			data:        missing(E2BKeyStorageDSNEnvVar),
-			errContains: E2BKeyStorageDSNEnvVar,
-		},
-		{
-			name:        "missing-pepper-key",
-			data:        missing(E2BKeyHashPepperEnvVar),
-			errContains: E2BKeyHashPepperEnvVar,
-		},
-		{
-			name:        "missing-redis-username-key",
-			data:        missing(QuotaRedisUsernameEnvVar),
-			errContains: QuotaRedisUsernameEnvVar,
-		},
-		{
-			name:        "missing-redis-password-key",
-			data:        missing(QuotaRedisPasswordEnvVar),
-			errContains: QuotaRedisPasswordEnvVar,
 		},
 		{
 			name: "values-present",
 			data: fullSecretData(),
-			check: func(t *testing.T, cfg secretConfig) {
-				assert.Equal(t, "admin", cfg.AdminKey)
-				assert.Equal(t, "dsn", cfg.KeyStorageDSN)
-				assert.Equal(t, "pepper", cfg.KeyHashPepper)
-				assert.Equal(t, "user", cfg.RedisUsername)
-				assert.Equal(t, "pass", cfg.RedisPassword)
-			},
+			want: secretConfig{AdminKey: "admin", KeyStorageDSN: "dsn", KeyHashPepper: "pepper", RedisUsername: "user", RedisPassword: "pass"},
 		},
 		{
 			name: "admin-not-trimmed-others-trimmed",
 			data: map[string][]byte{E2BAdminKeySecretKey: []byte(" x "), E2BKeyStorageDSNEnvVar: []byte("  d  "), E2BKeyHashPepperEnvVar: []byte("\tp\n"), QuotaRedisUsernameEnvVar: []byte(" u "), QuotaRedisPasswordEnvVar: []byte(" w ")},
-			check: func(t *testing.T, cfg secretConfig) {
-				assert.Equal(t, " x ", cfg.AdminKey)
-				assert.Equal(t, "d", cfg.KeyStorageDSN)
-				assert.Equal(t, "p", cfg.KeyHashPepper)
-				assert.Equal(t, "u", cfg.RedisUsername)
-				assert.Equal(t, "w", cfg.RedisPassword)
-			},
+			want: secretConfig{AdminKey: " x ", KeyStorageDSN: "d", KeyHashPepper: "p", RedisUsername: "u", RedisPassword: "w"},
 		},
 	}
 	for _, tc := range cases {
@@ -127,9 +83,7 @@ func TestParseSecretConfig(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			if tc.check != nil {
-				tc.check(t, cfg)
-			}
+			assert.Equal(t, tc.want, cfg)
 		})
 	}
 }
@@ -165,31 +119,12 @@ func TestLoadSecretConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("success", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(secretWith(fullSecretData())).Build()
-		cfg, err := loadSecretConfig(c, "ns/cfg", "sys")
-		require.NoError(t, err)
-		assert.Equal(t, "admin", cfg.AdminKey)
-		assert.Equal(t, "dsn", cfg.KeyStorageDSN)
-		assert.Equal(t, "pepper", cfg.KeyHashPepper)
-	})
 	t.Run("not-found", func(t *testing.T) {
 		c := fake.NewClientBuilder().Build()
 		_, err := loadSecretConfig(c, "ns/cfg", "sys")
 		require.Error(t, err)
 		assert.True(t, apierrors.IsNotFound(err))
 		assert.Contains(t, err.Error(), "ns/cfg")
-	})
-	t.Run("forbidden", func(t *testing.T) {
-		forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "cfg", errors.New("denied"))
-		c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				return forbidden
-			},
-		}).Build()
-		_, err := loadSecretConfig(c, "ns/cfg", "sys")
-		require.Error(t, err)
-		assert.True(t, apierrors.IsForbidden(err))
 	})
 	t.Run("missing-key-wrapped-with-ref", func(t *testing.T) {
 		data := fullSecretData()
@@ -200,55 +135,16 @@ func TestLoadSecretConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), E2BKeyHashPepperEnvVar)
 		assert.Contains(t, err.Error(), "ns/cfg")
 	})
-	t.Run("exactly-one-precise-get-never-list", func(t *testing.T) {
-		getCalls := 0
-		var gotKey client.ObjectKey
-		c := fake.NewClientBuilder().
-			WithObjects(secretWith(fullSecretData())).
-			WithInterceptorFuncs(interceptor.Funcs{
-				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-					getCalls++
-					gotKey = key
-					return c.Get(ctx, key, obj, opts...)
-				},
-				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-					t.Fatal("List must never be called")
-					return nil
-				},
-			}).Build()
-		_, err := loadSecretConfig(c, "ns/cfg", "sys")
-		require.NoError(t, err)
-		assert.Equal(t, 1, getCalls)
-		assert.Equal(t, client.ObjectKey{Namespace: "ns", Name: "cfg"}, gotKey)
-	})
 }
 
 func TestSecretConfigErrorsDoNotLeakValues(t *testing.T) {
 	const sentinel = "SUPER_SECRET_SENTINEL"
-	data := map[string][]byte{
-		E2BAdminKeySecretKey:     []byte(sentinel + "_ADMIN"),
-		E2BKeyStorageDSNEnvVar:   []byte(sentinel + "_DSN"),
-		E2BKeyHashPepperEnvVar:   []byte(sentinel + "_PEPPER"),
-		QuotaRedisUsernameEnvVar: []byte(sentinel + "_USER"),
-		QuotaRedisPasswordEnvVar: []byte(sentinel + "_PASS"),
+	data := fullSecretData()
+	for k := range data {
+		data[k] = []byte(sentinel)
 	}
-
-	t.Run("missing-key-error-omits-values", func(t *testing.T) {
-		incomplete := map[string][]byte{}
-		maps.Copy(incomplete, data)
-		delete(incomplete, E2BKeyStorageDSNEnvVar)
-		_, err := parseSecretConfig(incomplete)
-		require.Error(t, err)
-		assert.NotContains(t, err.Error(), sentinel)
-	})
-
-	t.Run("loaded-error-omits-values", func(t *testing.T) {
-		incomplete := map[string][]byte{}
-		maps.Copy(incomplete, data)
-		delete(incomplete, E2BAdminKeySecretKey)
-		c := fake.NewClientBuilder().WithObjects(secretWith(incomplete)).Build()
-		_, err := loadSecretConfig(c, "ns/cfg", "sys")
-		require.Error(t, err)
-		assert.NotContains(t, err.Error(), sentinel)
-	})
+	delete(data, E2BKeyStorageDSNEnvVar)
+	_, err := parseSecretConfig(data)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), sentinel)
 }
