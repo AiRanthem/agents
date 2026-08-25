@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,7 +29,8 @@ import (
 
 // secretConfig holds the five secret values loaded from --secret-config.
 // It does not validate them against auth or key-storage mode; the caller overlays
-// these onto the corresponding process settings and validates afterwards.
+// these onto the corresponding process settings. Emptiness against auth and
+// key-storage mode is checked later by keys.Config.validate when key storage is constructed.
 type secretConfig struct {
 	AdminKey      string
 	KeyStorageDSN string
@@ -50,7 +50,7 @@ const secretConfigLoadTimeout = 30 * time.Second
 // data does not leak in.
 func parseSecretConfig(data map[string][]byte) (secretConfig, error) {
 	for _, key := range []string{
-		E2BAdminKeyEnvVar,
+		E2BAdminKeySecretKey,
 		E2BKeyStorageDSNEnvVar,
 		E2BKeyHashPepperEnvVar,
 		QuotaRedisUsernameEnvVar,
@@ -61,7 +61,7 @@ func parseSecretConfig(data map[string][]byte) (secretConfig, error) {
 		}
 	}
 	return secretConfig{
-		AdminKey:      string(data[E2BAdminKeyEnvVar]),
+		AdminKey:      string(data[E2BAdminKeySecretKey]),
 		KeyStorageDSN: strings.TrimSpace(string(data[E2BKeyStorageDSNEnvVar])),
 		KeyHashPepper: strings.TrimSpace(string(data[E2BKeyHashPepperEnvVar])),
 		RedisUsername: strings.TrimSpace(string(data[QuotaRedisUsernameEnvVar])),
@@ -111,25 +111,4 @@ func loadSecretConfig(reader ctrlclient.Reader, ref, defaultNamespace string) (s
 		return secretConfig{}, fmt.Errorf("invalid secret config %s/%s: %w", namespace, name, err)
 	}
 	return cfg, nil
-}
-
-// validateSecretValues checks emptiness of the five secret values against the
-// current auth and key-storage mode. Missing Secret keys are rejected when the
-// Secret is parsed; this only covers values that are present but empty.
-func validateSecretValues(adminKey, dsn, pepper string, enableAuth bool, storageMode keys.StorageMode) error {
-	if !enableAuth {
-		return nil
-	}
-	if adminKey == "" {
-		return fmt.Errorf("key %q must not be empty when API authentication is enabled", E2BAdminKeyEnvVar)
-	}
-	if storageMode == keys.StorageModeMySQL {
-		if dsn == "" {
-			return fmt.Errorf("key %q must not be empty when API authentication is enabled and key storage is mysql", E2BKeyStorageDSNEnvVar)
-		}
-		if pepper == "" {
-			return fmt.Errorf("key %q must not be empty when API authentication is enabled and key storage is mysql", E2BKeyHashPepperEnvVar)
-		}
-	}
-	return nil
 }

@@ -47,7 +47,7 @@ import (
 )
 
 const (
-	E2BAdminKeyEnvVar        = "E2B_ADMIN_KEY"
+	E2BAdminKeySecretKey     = "E2B_ADMIN_KEY"
 	E2BKeyStorageDSNEnvVar   = "E2B_KEY_STORAGE_DSN"
 	E2BKeyHashPepperEnvVar   = "E2B_KEY_HASH_PEPPER"
 	QuotaRedisUsernameEnvVar = "QUOTA_REDIS_USERNAME"
@@ -173,7 +173,7 @@ func main() {
 	pflag.DurationVar(&trafficTokenMinValidity, "traffic-access-token-min-validity", config.DefaultTrafficAccessTokenMinValidity, "Minimum allowed traffic access token validity.")
 	pflag.DurationVar(&trafficTokenMaxValidity, "traffic-access-token-max-validity", config.DefaultTrafficAccessTokenMaxValidity, "Maximum allowed traffic access token validity.")
 	pflag.StringVar(&secretConfigRef, "secret-config", "",
-		"name or namespace/name of the Secret that provides the five secret values "+E2BAdminKeyEnvVar+", "+E2BKeyStorageDSNEnvVar+", "+
+		"name or namespace/name of the Secret that provides the five secret values "+E2BAdminKeySecretKey+", "+E2BKeyStorageDSNEnvVar+", "+
 			E2BKeyHashPepperEnvVar+", "+QuotaRedisUsernameEnvVar+", "+QuotaRedisPasswordEnvVar+". "+
 			"When the namespace is omitted, --system-namespace is used. "+
 			"When set, the Secret is read once at startup and overrides those values (all five keys must be present); "+
@@ -218,10 +218,6 @@ func main() {
 		klog.Fatalf("--peer-selector is required")
 	}
 
-	if e2bEnableAuth && e2bAdminKey == "" {
-		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
-	}
-
 	// Validate timeout flags.
 	if err := validateE2BTimeoutFlags(e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
@@ -261,6 +257,36 @@ func main() {
 	quotaRedisUsername := strings.TrimSpace(os.Getenv(QuotaRedisUsernameEnvVar))
 	quotaRedisPassword := strings.TrimSpace(os.Getenv(QuotaRedisPasswordEnvVar))
 
+	clientConfig, err := clients.NewRestConfig(float32(kubeClientQPS), kubeClientBurst)
+	if err != nil {
+		klog.Fatalf("Failed to initialize Kubernetes client: %v", err)
+	}
+
+	var startupReader ctrlclient.Client
+	if runtimeClientCertSecret != "" || secretConfigRef != "" {
+		startupReader, err = ctrlclient.New(clientConfig, ctrlclient.Options{})
+		if err != nil {
+			klog.Fatalf("Failed to create client for startup Secrets: %v", err)
+		}
+	}
+	if secretConfigRef != "" {
+		// Override flags from secret config
+		cfg, err := loadSecretConfig(startupReader, secretConfigRef, sysNs)
+		if err != nil {
+			klog.Fatalf("Failed to load secret config: %v", err)
+		}
+		e2bAdminKey = cfg.AdminKey
+		e2bKeyStorageDSN = cfg.KeyStorageDSN
+		e2bKeyStoragePepper = cfg.KeyHashPepper
+		quotaRedisUsername = cfg.RedisUsername
+		quotaRedisPassword = cfg.RedisPassword
+		klog.InfoS("secret config loaded", "secret", secretConfigRef)
+	}
+
+	if e2bEnableAuth && e2bAdminKey == "" {
+		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
+	}
+
 	quotaOpts := config.QuotaOptions{
 		RedisAddr:         quotaRedisAddr,
 		RedisUsername:     quotaRedisUsername,
@@ -271,12 +297,6 @@ func main() {
 		BreakerD:          quotaRedisBreakerD,
 		AntiDriftInterval: quotaAntiDriftInterval,
 		AntiDriftGrace:    quotaAntiDriftGrace,
-	}
-
-	// Initialize Kubernetes client and config
-	clientConfig, err := clients.NewRestConfig(float32(kubeClientQPS), kubeClientBurst)
-	if err != nil {
-		klog.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
 
 	// Initialize tracing
@@ -308,12 +328,8 @@ func main() {
 		if !found || secretNamespace == "" || secretName == "" {
 			klog.Fatalf("--runtime-client-cert-secret must be in namespace/name form, got %q", runtimeClientCertSecret)
 		}
-		secretReader, err := ctrlclient.New(clientConfig, ctrlclient.Options{})
-		if err != nil {
-			klog.Fatalf("Failed to create client for the runtime client TLS bundle: %v", err)
-		}
 		loadCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		runtimeTLSBundle, err = utilruntime.NewTLSBundleFromSecret(loadCtx, secretReader, secretNamespace, secretName)
+		runtimeTLSBundle, err = utilruntime.NewTLSBundleFromSecret(loadCtx, startupReader, secretNamespace, secretName)
 		cancel()
 		if err != nil {
 			klog.Fatalf("Failed to load the runtime client TLS bundle: %v", err)
@@ -321,40 +337,6 @@ func main() {
 		klog.InfoS("runtime client TLS enabled", "secret", runtimeClientCertSecret)
 	} else {
 		klog.InfoS("runtime client TLS disabled, using the legacy plaintext runtime paths")
-	}
-
-	// Override values from secret config if provided
-	if secretConfigRef != "" {
-		reader, err := ctrlclient.New(clientConfig, ctrlclient.Options{})
-		if err != nil {
-			klog.Fatalf("Failed to create client for the secret config: %v", err)
-		}
-		cfg, err := loadSecretConfig(reader, secretConfigRef, sysNs)
-		if err != nil {
-			klog.Fatalf("Failed to load secret config: %v", err)
-		}
-		e2bAdminKey = cfg.AdminKey
-		e2bKeyStorageDSN = cfg.KeyStorageDSN
-		e2bKeyStoragePepper = cfg.KeyHashPepper
-		quotaRedisUsername = cfg.RedisUsername
-		quotaRedisPassword = cfg.RedisPassword
-		quotaOpts.RedisUsername = cfg.RedisUsername
-		quotaOpts.RedisPassword = cfg.RedisPassword
-		if err := validateSecretValues(e2bAdminKey, e2bKeyStorageDSN, e2bKeyStoragePepper, e2bEnableAuth, keys.StorageMode(e2bKeyStorage)); err != nil {
-			klog.Fatalf("invalid secret config %s: %v", secretConfigRef, err)
-		}
-		klog.InfoS("secret config loaded", "secret", secretConfigRef)
-	}
-
-	// hookCtx carries the startup hook and any background work it starts. It is a
-	// plain cancelable context: registering a signal handler here (before the
-	// controller registers its own in Run) would suppress the default process
-	// exit for a SIGTERM arriving during controller Init. It is instead wired to
-	// the controller's shutdown below.
-	hookCtx, hookCancel := context.WithCancel(context.Background())
-	defer hookCancel()
-	if err := startupHook(hookCtx, clientConfig); err != nil {
-		klog.Fatalf("startup hook failed: %v", err)
 	}
 
 	var keyCfg *keys.Config
@@ -367,6 +349,17 @@ func main() {
 			DisableAutoMigrate: e2bKeyStorageDisableAutoMigrate,
 			Pepper:             e2bKeyStoragePepper,
 		}
+	}
+
+	// hookCtx is a cancelable context for the startup hook and any background
+	// work it starts. A signal handler is not registered here: doing so before
+	// the controller registers its own in Run would suppress the default process
+	// exit for a SIGTERM during controller Init. Cancellation runs on main
+	// return via defer; klog.Fatalf skips that defer, and the hook is not waited.
+	hookCtx, hookCancel := context.WithCancel(context.Background())
+	defer hookCancel()
+	if err := startupHook(hookCtx, clientConfig); err != nil {
+		klog.Fatalf("startup hook failed: %v", err)
 	}
 
 	sandboxController := e2b.NewController(e2b.ControllerOptions{

@@ -22,7 +22,6 @@ import (
 	"maps"
 	"testing"
 
-	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -36,7 +35,7 @@ import (
 
 func fullSecretData() map[string][]byte {
 	return map[string][]byte{
-		E2BAdminKeyEnvVar:        []byte("admin"),
+		E2BAdminKeySecretKey:     []byte("admin"),
 		E2BKeyStorageDSNEnvVar:   []byte("dsn"),
 		E2BKeyHashPepperEnvVar:   []byte("pepper"),
 		QuotaRedisUsernameEnvVar: []byte("user"),
@@ -66,15 +65,15 @@ func TestParseSecretConfig(t *testing.T) {
 	}{
 		{
 			name: "all-empty-ok",
-			data: map[string][]byte{E2BAdminKeyEnvVar: {}, E2BKeyStorageDSNEnvVar: {}, E2BKeyHashPepperEnvVar: {}, QuotaRedisUsernameEnvVar: {}, QuotaRedisPasswordEnvVar: {}},
+			data: map[string][]byte{E2BAdminKeySecretKey: {}, E2BKeyStorageDSNEnvVar: {}, E2BKeyHashPepperEnvVar: {}, QuotaRedisUsernameEnvVar: {}, QuotaRedisPasswordEnvVar: {}},
 			check: func(t *testing.T, cfg secretConfig) {
 				assert.Equal(t, secretConfig{}, cfg)
 			},
 		},
 		{
 			name:        "missing-admin-key",
-			data:        missing(E2BAdminKeyEnvVar),
-			errContains: E2BAdminKeyEnvVar,
+			data:        missing(E2BAdminKeySecretKey),
+			errContains: E2BAdminKeySecretKey,
 		},
 		{
 			name:        "missing-dsn-key",
@@ -109,7 +108,7 @@ func TestParseSecretConfig(t *testing.T) {
 		},
 		{
 			name: "admin-not-trimmed-others-trimmed",
-			data: map[string][]byte{E2BAdminKeyEnvVar: []byte(" x "), E2BKeyStorageDSNEnvVar: []byte("  d  "), E2BKeyHashPepperEnvVar: []byte("\tp\n"), QuotaRedisUsernameEnvVar: []byte(" u "), QuotaRedisPasswordEnvVar: []byte(" w ")},
+			data: map[string][]byte{E2BAdminKeySecretKey: []byte(" x "), E2BKeyStorageDSNEnvVar: []byte("  d  "), E2BKeyHashPepperEnvVar: []byte("\tp\n"), QuotaRedisUsernameEnvVar: []byte(" u "), QuotaRedisPasswordEnvVar: []byte(" w ")},
 			check: func(t *testing.T, cfg secretConfig) {
 				assert.Equal(t, " x ", cfg.AdminKey)
 				assert.Equal(t, "d", cfg.KeyStorageDSN)
@@ -227,7 +226,7 @@ func TestLoadSecretConfig(t *testing.T) {
 func TestSecretConfigErrorsDoNotLeakValues(t *testing.T) {
 	const sentinel = "SUPER_SECRET_SENTINEL"
 	data := map[string][]byte{
-		E2BAdminKeyEnvVar:        []byte(sentinel + "_ADMIN"),
+		E2BAdminKeySecretKey:     []byte(sentinel + "_ADMIN"),
 		E2BKeyStorageDSNEnvVar:   []byte(sentinel + "_DSN"),
 		E2BKeyHashPepperEnvVar:   []byte(sentinel + "_PEPPER"),
 		QuotaRedisUsernameEnvVar: []byte(sentinel + "_USER"),
@@ -246,42 +245,10 @@ func TestSecretConfigErrorsDoNotLeakValues(t *testing.T) {
 	t.Run("loaded-error-omits-values", func(t *testing.T) {
 		incomplete := map[string][]byte{}
 		maps.Copy(incomplete, data)
-		delete(incomplete, E2BAdminKeyEnvVar)
+		delete(incomplete, E2BAdminKeySecretKey)
 		c := fake.NewClientBuilder().WithObjects(secretWith(incomplete)).Build()
 		_, err := loadSecretConfig(c, "ns/cfg", "sys")
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), sentinel)
 	})
-}
-
-func TestValidateSecretValues(t *testing.T) {
-	cases := []struct {
-		name        string
-		adminKey    string
-		dsn         string
-		pepper      string
-		enableAuth  bool
-		storageMode keys.StorageMode
-		errContains string
-	}{
-		{name: "auth-off-all-empty-ok", enableAuth: false},
-		{name: "auth-on-empty-admin-fails", enableAuth: true, errContains: E2BAdminKeyEnvVar},
-		{name: "auth-on-secret-storage-empty-dsn-ok", adminKey: "admin", enableAuth: true, storageMode: keys.StorageModeSecret},
-		{name: "auth-on-mysql-empty-dsn-fails", adminKey: "admin", pepper: "pepper", enableAuth: true, storageMode: keys.StorageModeMySQL, errContains: E2BKeyStorageDSNEnvVar},
-		{name: "auth-on-mysql-empty-pepper-fails", adminKey: "admin", dsn: "dsn", enableAuth: true, storageMode: keys.StorageModeMySQL, errContains: E2BKeyHashPepperEnvVar},
-		{name: "auth-on-mysql-all-present-ok", adminKey: "admin", dsn: "dsn", pepper: "pepper", enableAuth: true, storageMode: keys.StorageModeMySQL},
-		{name: "empty-admin-error-omits-other-values", adminKey: "", dsn: "SUPER_SECRET_SENTINEL", pepper: "SUPER_SECRET_SENTINEL", enableAuth: true, storageMode: keys.StorageModeMySQL, errContains: E2BAdminKeyEnvVar},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateSecretValues(tc.adminKey, tc.dsn, tc.pepper, tc.enableAuth, tc.storageMode)
-			if tc.errContains != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errContains)
-				assert.NotContains(t, err.Error(), "SUPER_SECRET_SENTINEL")
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
 }
