@@ -29,6 +29,7 @@ import (
 	"github.com/spf13/pflag"
 	zapRaw "go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -78,6 +79,28 @@ func validateMetricsPort(metricsPort, controlPort, memberlistBindPort int) error
 		return fmt.Errorf("--metrics-port (%d) must differ from --memberlist-bind-port (%d) when using a dedicated metrics listener", metricsPort, memberlistBindPort)
 	}
 	return nil
+}
+
+// newStartupSecretClient builds a client only when startup needs to read Secrets.
+func newStartupSecretClient(clientConfig *rest.Config, runtimeClientCertSecret, secretConfigRef string) (ctrlclient.Client, error) {
+	if runtimeClientCertSecret == "" && secretConfigRef == "" {
+		return nil, nil
+	}
+	return ctrlclient.New(clientConfig, ctrlclient.Options{})
+}
+
+// resolveSecretSettings leaves flag/env values unchanged when --secret-config is
+// empty. When set, the Secret values overlay those settings, including empty ones.
+func resolveSecretSettings(reader ctrlclient.Reader, ref, sysNs string, current secretConfig) (secretConfig, error) {
+	if ref == "" {
+		return current, nil
+	}
+	cfg, err := loadSecretConfig(reader, ref, sysNs)
+	if err != nil {
+		return secretConfig{}, err
+	}
+	klog.InfoS("secret config loaded", "secret", ref)
+	return cfg, nil
 }
 
 func main() {
@@ -262,26 +285,25 @@ func main() {
 		klog.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
 
-	var startupReader ctrlclient.Client
-	if runtimeClientCertSecret != "" || secretConfigRef != "" {
-		startupReader, err = ctrlclient.New(clientConfig, ctrlclient.Options{})
-		if err != nil {
-			klog.Fatalf("Failed to create client for startup Secrets: %v", err)
-		}
+	startupReader, err := newStartupSecretClient(clientConfig, runtimeClientCertSecret, secretConfigRef)
+	if err != nil {
+		klog.Fatalf("Failed to create client for startup Secrets: %v", err)
 	}
-	if secretConfigRef != "" {
-		// Override flags from secret config
-		cfg, err := loadSecretConfig(startupReader, secretConfigRef, sysNs)
-		if err != nil {
-			klog.Fatalf("Failed to load secret config: %v", err)
-		}
-		e2bAdminKey = cfg.AdminKey
-		e2bKeyStorageDSN = cfg.KeyStorageDSN
-		e2bKeyStoragePepper = cfg.KeyHashPepper
-		quotaRedisUsername = cfg.RedisUsername
-		quotaRedisPassword = cfg.RedisPassword
-		klog.InfoS("secret config loaded", "secret", secretConfigRef)
+	secretSettings, err := resolveSecretSettings(startupReader, secretConfigRef, sysNs, secretConfig{
+		AdminKey:      e2bAdminKey,
+		KeyStorageDSN: e2bKeyStorageDSN,
+		KeyHashPepper: e2bKeyStoragePepper,
+		RedisUsername: quotaRedisUsername,
+		RedisPassword: quotaRedisPassword,
+	})
+	if err != nil {
+		klog.Fatalf("Failed to load secret config: %v", err)
 	}
+	e2bAdminKey = secretSettings.AdminKey
+	e2bKeyStorageDSN = secretSettings.KeyStorageDSN
+	e2bKeyStoragePepper = secretSettings.KeyHashPepper
+	quotaRedisUsername = secretSettings.RedisUsername
+	quotaRedisPassword = secretSettings.RedisPassword
 
 	if e2bEnableAuth && e2bAdminKey == "" {
 		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
