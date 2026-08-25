@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-07-15
-last-updated: 2026-08-24
+last-updated: 2026-08-25
 status: provisional
 ---
 
@@ -25,15 +25,11 @@ Sandbox 事实。Infra 将得到的 State 和 Observation 返回给 Manager；Ma
 State 包含四个互相独立的维度：
 
     State {
-        Delivery    unclaimed | claimed | ready
+        Claimed     bool
         Release     none | due | terminal | committed
         PauseResume none | pausing | resuming
         Workload    provisioning | ready | paused | unready | completed
     }
-
-`Delivery` 将持久化 owner 归属和交付完成分开。`claimed` 证明某个 owner 和 DeliveryEpoch 已经分配，
-但 Sandbox 对外仍不可见，也不能路由流量。只有 Controller 已观察到本次 claim 的 workload revision，
-并且包括初始 TrafficPolicy 在内的所有必要交付动作都成功后，才能持久化 `ready`。
 
 `Release` 将可逆的截止时间、已经停止的工作负载和不可逆的释放提交分开。这些事实分别具有不同的
 Kill、Route、可见性和配额语义。对象不存在是独立的 NotFound 结果，不伪造成 State。
@@ -46,28 +42,26 @@ Kill、Route、可见性和配额语义。对象不存在是独立的 NotFound �
         MutationToken opaque
     }
 
-现有持久化 claim lock UUID 是一次 claim delivery 中不可变的 DeliveryEpoch。一个由 Manager
-负责的 Sandbox 顶层 annotation 用来记录当前 epoch 已经 ready。token 将 observation 绑定到该
-DeliveryEpoch 和一个后端对象版本。token 失效后，Infra 不得针对新快照透明重试操作。这样可以防止
-为一个 owner 授权的操作跨过 recycle 边界，落到同一 Sandbox CR 的下一名 owner 上。
+现有持久化 claim lock UUID 是一次 claim delivery 中不可变的 DeliveryEpoch。token 将 observation
+绑定到该 DeliveryEpoch 和一个后端对象版本。token 失效后，Infra 不得针对新快照透明重试操作。
+这样可以防止为一个 owner 授权的操作跨过 recycle 边界，落到同一 Sandbox CR 的下一名 owner 上。
 
 `ShutdownTime` 是交给 Controller 的指令，不是立即生效的流量或配额边界。本地时间到达后产生
-`Release=due`，但在 Controller 持久化不可逆释放事实前，ready delivery 仍对 owner 可见，Route
-仍由工作负载能力决定。该 ready delivery 在 due 期间只准入 List、Describe 和 Kill；其他 owner
-能力不能救回 deadline。Route wire 不新增 deadline。
+`Release=due`，但在 Controller 持久化不可逆释放事实前，Sandbox 仍对 owner 可见，Route 仍由
+工作负载能力决定。due 期间只准入 List、Describe 和 Kill；其他 owner 能力不能救回 deadline。
+Route wire 不新增 deadline。
 
-claim 和 ready 两次持久化形成两阶段 delivery。claim 持久化不是可见性提交：Delivery=`claimed`
-时，Create 或 Clone 对外隐藏且不可路由。最终的 `claimed -> ready` metadata patch 才是可见性提交，
-也是成功响应的线性化点。它只能在所有交付工作完成后发生；因此 Sandbox 可能在 handler 返回前不久
-变得可见，但绝不会在交付未完成时可见。
+claim 持久化仍然是可见性提交。因此，同一 owner 可能在 Create 或 Clone 返回前发现 Sandbox；
+本提案明确不为这个请求处理窗口提供隔离保证。成功响应仍然只能在所有交付工作完成后返回。
 
-对于选中的 ready warm Sandbox，这个最终 annotation Patch 会把不含初始 TrafficPolicy 的成功路径
-写入数从 3 次变为 4 次，或者把包含 TrafficPolicy 的路径从 4 次变为 5 次。它不修改 spec、Pod
-template 或 status，因此不会引发依赖写入。额外的 API-server 写入速率恰好等于成功 Create 或 Clone
-的速率。
+State 不记录 claim 后的交付仍在进行还是已经完成。这个单次提交契约基于以下前提：所有 Sandbox
+使用短 ID，Create 或 Clone 在成功响应前不会直接返回该 ID；同一 owner 仍可能通过并发 List 获得
+该 ID。线上 sandbox-manager 在 claim 后、响应前崩溃被视为低概率事件；提前可见、在其他 Route
+条件满足时提前产生 running Route，以及失败后留下部分交付 Sandbox 都是明确接受的行为。因此，
+本提案不增加持久化 ready 阶段。
 
 本提案保持 provisional。它定义单次 observation 内的安全性和 delivery fence，不提供多副本
-一致性，不承诺线性一致的公开响应，也不解决部分交付恢复。
+一致性，也不承诺线性一致的公开响应。
 
 ## 背景
 
@@ -83,11 +77,6 @@ Recycle 使 observation 边界更加重要。成功 recycle 会保留同一个 S
 claim，之后允许新 owner 再次认领。如果后端 mutation 可以在静默重试时落到新 claim，那么操作前
 检查 owner 和 State 并不足够。
 
-创建还有另一条边界：ready warm Pod 可能已经具备服务能力，但 runtime 初始化、credential、CSI
-mount 和初始 TrafficPolicy 仍在建立。仅有持久化 owner 归属不能证明 Sandbox 可以安全暴露。尤其
-是 TrafficPolicy 和用于选择策略的 Pod label 尚未持久化时就允许 running Route，会形成无法靠事后
-delivery-epoch fence 修复的 Route-before-policy 窗口。
-
 State 不会在 Sandbox CR 旁边创建第二套后端生命周期。它建立的是依赖边界：Sandbox CR Infra
 统一解释原生事实，Manager 和 API 只依赖中立含义与条件能力契约。
 
@@ -100,17 +89,15 @@ State 不会在 Sandbox CR 旁边创建第二套后端生命周期。它建立�
 - 将工作负载能力与 owner 可见性、quota release 分开。
 - 精确定义安全、类型化的 provisioning 和 ready 谓词。
 - 防止 stale 的已授权操作影响另一轮 claim delivery。
-- 为 owner 归属和交付完成分别提供持久化提交点。
-- 在初始 TrafficPolicy 和其他所有交付要求完成前，保持 Route 和所有 owner 能力关闭。
 
 ### 非目标
 
 - 不引入 SandboxRecord 或其他权威可见性存储。
 - 不保证在 Sandbox CR 实际不存在时仍能恢复可见性。
 - 不把 `ShutdownTime` 变成严格的墙钟流量截止点，也不向 Route 增加 deadline。
+- 不在 claim 持久化到 Create 或 Clone 响应之间隔离 owner 与 Sandbox。
+- 不通过持久化 State 区分 claim 后仍在交付和已经完成交付，也不记录交付进度。
 - 不把 Claim 或 Clone 变成可从任意 Manager 进程崩溃中恢复的事务。
-- 不记录已经完成了哪些交付步骤，不引入 failed Delivery 状态，也不定义部分交付的 retry、rollback、
-  cleanup、quota 或 retention 行为。本提案只定义成功路径，并把部分交付场景记录为开放问题。
 - 不协调 Manager 副本之间的 observation，也不同步 Manager 与 Gateway 的 informer state；不引入
   持久化 Sandbox ID resolver 或业务 API primary gate。
 - 除 claim delivery fencing 外，不改变 Checkpoint API 或 lifecycle 语义；只有创建、生产、完成和
@@ -162,7 +149,7 @@ Sandbox Controller 继续负责原生 status 和工作负载协调。它同时�
 
 | 字段 | 取值 | 回答的问题 |
 |---|---|---|
-| Delivery | unclaimed / claimed / ready | owner 归属是否已持久化，以及本次 delivery 是否已完成？ |
+| Claimed | true / false | 本次 delivery 的用户归属是否已经持久化？ |
 | Release | none / due / terminal / committed | 当前观察到了哪一种释放事实？ |
 | PauseResume | none / pausing / resuming | 是否正在执行普通 Pause 或 Resume 转换？ |
 | Workload | provisioning / ready / paused / unready / completed | 当前能够证明什么工作负载能力？ |
@@ -178,7 +165,7 @@ Infra lookup 从同一个快照返回 State、中立 owner identity 和一个 op
 绑定：
 
 - Sandbox UID 和后端对象版本；
-- Delivery、持久化 claimed marker 和 owner；
+- claimed marker 和 owner；
 - DeliveryEpoch，也就是当前持久化的 claim lock UUID；
 - 本次 delivery 的公开 Sandbox ID。
 
@@ -186,16 +173,15 @@ DeliveryEpoch 不是 secret；它与 owner 和 claimed identity 原子持久化�
 并在成功 recycle 时清除。本提案不新增 Sandbox epoch 字段。
 
 只有 owner、DeliveryEpoch 和可唯一解析的公开 Sandbox ID 均非空，且能够构造 MutationToken 时，
-`claimed` 或 `ready` observation 才有效。delivery identity 非法时返回中立 internal 或
-unavailable，Route 失败关闭；不能表现为 NotFound、owner mismatch 或 running Route。
+claimed observation 才有效。claimed identity 非法时返回中立 internal 或 unavailable，Route 失败
+关闭；不能表现为 NotFound、owner mismatch 或 running Route。
 
 Pause、Resume、Connect、Snapshot、Set timeout、Update network、Browser use、创建 checkpoint
-以及 delivery finalization 和 release commit 都必须携带该 token。它既约束 CR 写入，也约束工作
-负载访问。
+以及 release commit 都必须携带该 token。它既约束 CR 写入，也约束工作负载访问。
 
 Infra 在每项能力真正生效的后端边界校验 token：
 
-- Sandbox CR 写入校验观察到的 resourceVersion、Delivery、claimed marker、owner、公开 ID 和
+- Sandbox CR 写入校验观察到的 resourceVersion、claimed marker、owner、公开 ID 和
   DeliveryEpoch。前置条件失败时返回 conflict，不能针对新 claim 重试。
 - Browser 请求携带 delivery-scoped runtime credential，由 runtime 拒绝其他 DeliveryEpoch 的
   credential；没有可验证 credential 时 Browser 不准入。
@@ -209,7 +195,7 @@ Infra 在每项能力真正生效的后端边界校验 token：
 能力边界无法证明 DeliveryEpoch 匹配时，必须返回 conflict 或 unavailable，不能退回到只匹配
 Sandbox name、UID、公开 ID 或 owner reference。
 
-这些 fence 防止旧操作通过复用名称、legacy Sandbox ID 或相同 Sandbox UID 到达后续 delivery。
+这些 fence 防止旧操作通过复用名称、公开 Sandbox ID 或相同 Sandbox UID 到达后续 delivery。
 但 traffic auth 未启用且公开 Sandbox ID 被复用时，它们无法区分已经由 Gateway 转发的外部请求；
 该客户端流量限制不在本提案范围内。
 
@@ -217,34 +203,22 @@ Sandbox name、UID、公开 ID 或 owner reference。
 重新执行生命周期准入；API 随后重新校验调用方与 owner 的授权关系。只有刷新后的 Observation
 仍属于同一个已授权 claim 且仍满足准入时，Manager 才能重试。
 
-#### Delivery
+#### Claimed
 
-Delivery 将 owner 归属和交付完成合并为一个维度，但不暴露 claim 后各个处理步骤：
+只有持久化 sandbox-claimed marker 明确为 true 时 Claimed 才为 true；缺失、false 或无法识别的
+值均映射为 false。
 
-| Delivery | 持久化事实 | 对外含义 |
-|---|---|---|
-| unclaimed | sandbox-claimed marker 不为 true，且 ready fact 不存在 | 没有用户 delivery 拥有该 Sandbox |
-| claimed | claimed marker 和完整 claim identity 存在，但 ready fact 不存在 | owner 归属已预留；Sandbox 隐藏且不可路由 |
-| ready | claimed marker 和完整 claim identity 存在，且 ready fact 等于当前 DeliveryEpoch | delivery 已完成，可以对 owner 可见 |
+对于池候选，Infra 原子持久化 lock、owner、Sandbox ID 和 claimed=true；新建 Sandbox 的 create
+写入直接包含这些事实。该写入是唯一的 claim commit，不表示 Create 或 Clone 已经返回，也不表示
+交付工作已经完成。
 
-ready fact 是 Manager 负责的 Sandbox 顶层 annotation
-`agents.kruise.io/delivery-ready`，其值为当前 DeliveryEpoch。它不属于 spec、Pod template 或 status。
-因此，持久化该事实不会增加 Sandbox Generation，不会改变 desired workload revision，也不需要修改
-Pod 或 status。非空但不等于当前 DeliveryEpoch 的 ready fact 非法，绝不能使 Sandbox 可见或可路由。
-
-对于池候选，Infra 原子持久化 lock、owner、Sandbox ID、claimed marker，并清除任何旧 ready fact；
-新建 Sandbox 的 create 写入直接包含这些事实。第一次提交产生 Delivery=`claimed`。它只预留一次
-delivery identity，不证明交付已经完成。
-
-所有交付要求成功后，Infra 才把 ready fact 从不存在条件 Patch 为当前 DeliveryEpoch。只有 claimed
-marker、owner、公开 ID、DeliveryEpoch、后端对象版本和 `Release=none` 仍与授权 finalization 所用的
-observation 一致，Patch 才能成功。发生 conflict 后重新 observation 和 authorization，绝不能跨到
-另一次 delivery 透明重试。第二次提交产生 Delivery=`ready`，并且是唯一的 visibility commit。
+Claimed 只证明 owner 和本次 claim identity 已经持久化。没有其他持久化事实可以区分仍在交付的
+Sandbox 和已经完成交付的 Sandbox。
 
 成功 recycle 先持久化清除 claim-scoped 的 SandboxPaused、SandboxResumed 和 RuntimeInitialized
 Condition，然后通过最终 claim-clear 写入原子清除旧 claim、owner、lock、公开 Sandbox ID 和
-ready fact、cleanup trigger。在该最终写入完成前，对象不能成为候选。即使 CR UID 不变，后续
-claim 也必须得到不同的 DeliveryEpoch 和 MutationToken。
+cleanup trigger。在该最终写入完成前，对象不能成为候选。即使 CR UID 不变，后续 claim 也必须
+得到不同的 DeliveryEpoch 和 MutationToken。
 
 #### Release
 
@@ -264,10 +238,10 @@ ShutdownTime，新的 observation 随后返回 `none`。只要仍观察到 `due`
 和 Kill。Pause、Resume、Connect、Snapshot、Set timeout、Update network 和 Browser use 都不能
 推进 deadline 或以其他方式救回 Sandbox。Controller 只能为其观察到 deadline 的 DeliveryEpoch
 条件提交 timeout release。在该 commit 持久化前，owner 可见性、公开状态、流量和 quota 仍由其他
-State 维度决定；这些规则只影响 Delivery=`ready` 的对外行为。
+State 维度决定。
 
-`terminal` 只表示工作负载已经停止，不表示清理已经提交。它会隐藏 ready delivery 并拒绝流量，
-但 Kill 仍须提交释放，quota 继续保留。
+`terminal` 只表示工作负载已经停止，不表示清理已经提交。它会隐藏 Sandbox 并拒绝流量，但 Kill
+仍须提交释放，quota 继续保留。
 
 `committed` 对一次 claim delivery 单调。cleanup trigger 一旦持久化就算 committed，因为
 Controller 满足以下契约：
@@ -281,8 +255,7 @@ Controller 满足以下契约：
 因此，cleanup-trigger 写入成功已经足以让 Kill 成功并释放 quota；Manager 不需要等待第二次
 recycle acknowledgement。
 
-下表适用于 Delivery=`ready`，各项 Release 策略与 PauseResume 和 Workload 互相独立。
-Delivery=`unclaimed` 或 `claimed` 时始终对外隐藏，Kill 也始终是幂等无操作，不受下表影响：
+各项 Release 策略互相独立：
 
 | Observation | Owner 可见性 | Kill | Quota | 流量 |
 |---|---|---|---|---|
@@ -295,16 +268,16 @@ Delivery=`unclaimed` 或 `claimed` 时始终对外隐藏，Kill 也始终是幂�
 #### PauseResume
 
 PauseResume 根据类型化的 desired 和 observed pause 事实判断，不使用整个对象的 generation。
-因此，只更新 timeout spec 不会抹掉进行中的 Pause 或 Resume。Delivery=`unclaimed` 始终映射为
-`none`，即使 recycle 后仍意外残留 claim-scoped transition Condition。
+因此，只更新 timeout spec 不会抹掉进行中的 Pause 或 Resume。Claimed=false 始终映射为 `none`，
+即使 recycle 后仍意外残留 claim-scoped transition Condition。
 
 准确的 Condition Type 是 `SandboxPaused`（`SandboxConditionPaused`）、`SandboxResumed`
 （`SandboxConditionResumed`）和 `RuntimeInitialized`。
 
 按第一条匹配规则映射：
 
-1. Delivery 为 `unclaimed`；Release 为 terminal 或 committed；或者 Phase 为 Succeeded、Failed
-   或 Upgrading：`none`。
+1. Claimed=false；Release 为 terminal 或 committed；或者 Phase 为 Succeeded、Failed 或
+   Upgrading：`none`。
 2. Phase 为 Resuming；或者 Phase 为 Paused、SandboxPaused=True 且 spec.paused=false；或者 Phase
    为 Running、SandboxResumed=True 且 RuntimeInitialized 缺失或不为 True：`resuming`。
 3. Phase 为 Running 且 spec.paused=true；或者 Phase 为 Paused 且 SandboxPaused 缺失或不为 True：
@@ -348,16 +321,15 @@ age 的辅助阈值；age 本身不能证明 provisioning。
 
 | State 组合 | 含义 |
 |---|---|
-| Delivery=unclaimed, Release=none, Workload=ready | 池中可用的 Sandbox |
-| Delivery=claimed, Release=none, Workload=ready | warm workload 已分配给尚未完成且隐藏的 delivery |
-| Delivery=ready, Release=none, Workload=ready | 正常用户 Sandbox |
-| Delivery=ready, Release=due, Workload=ready | deadline 已到，Controller 尚未提交释放 |
-| Delivery=ready, Release=terminal, Workload=completed | 工作负载已停止，仍需清理 |
-| Delivery in {claimed, ready}, Release=committed | 隐藏的 delivery 正在清理 |
-| Delivery=unclaimed, Release=committed | 未认领对象正在删除或 recycle |
+| Claimed=false, Release=none, Workload=ready | 池中可用的 Sandbox |
+| Claimed=true, Release=none, Workload=ready | 正常用户 Sandbox |
+| Claimed=true, Release=due, Workload=ready | deadline 已到，Controller 尚未提交释放 |
+| Claimed=true, Release=terminal, Workload=completed | 工作负载已停止，仍需清理 |
+| Claimed=true, Release=committed, Workload=ready | 工作负载停止前已经提交释放 |
+| Claimed=false, Release=committed | 未认领对象正在删除或 recycle |
 
-Delivery=`unclaimed` 本身不能使对象成为候选。Release 必须为 none，对象必须属于目标池、未锁定，
-并满足 Workload 候选策略。
+Claimed=false 本身不能使对象成为候选。Release 必须为 none，对象必须属于目标池、未锁定，并满足
+Workload 候选策略。
 
 ### 3. 分层职责
 
@@ -389,9 +361,9 @@ Manager 使用以下候选规则：
 
 | 候选 | 必要事实 |
 |---|---|
-| 普通候选 | Delivery=unclaimed、Release=none、PauseResume=none、Workload=ready、属于目标池且未锁定 |
-| 投机候选 | Delivery=unclaimed、Release=none、PauseResume=none、Workload=provisioning、属于目标池、未锁定且 speculation age 已到 |
-| 不可选 | Delivery 为 claimed 或 ready；Release 为 due、terminal 或 committed；Workload 为 paused、unready 或 completed；池不匹配；或已锁定 |
+| 普通候选 | Claimed=false、Release=none、PauseResume=none、Workload=ready、属于目标池且未锁定 |
+| 投机候选 | Claimed=false、Release=none、PauseResume=none、Workload=provisioning、属于目标池、未锁定且 speculation age 已到 |
+| 不可选 | Claimed=true；Release 为 due、terminal 或 committed；Workload 为 paused、unready 或 completed；池不匹配；或已锁定 |
 
 只有 typed provisioning 谓词已经成立后，CreationTimestamp 才能作为等待时长阈值。配置时长为零时
 禁用 speculative selection。
@@ -399,48 +371,21 @@ Manager 使用以下候选规则：
 Claim 和 Clone 满足以下契约：
 
 1. Manager 校验请求并预留 quota。
-2. Infra 原子持久化或创建 owner、lock、公开 Sandbox ID、DeliveryEpoch 和 claimed marker，产生
-   Delivery=`claimed`。
-3. Manager 等待 Controller 已观察到当前 desired workload revision、选中的 Pod 带有当前 owner 和
-   DeliveryEpoch metadata，并且 Workload=ready。
-4. Manager 完成 runtime 初始化、credential、CSI 和其他所有必要交付动作。如果请求需要初始
-   TrafficPolicy，该 policy 必须以相同 DeliveryEpoch 持久化后，delivery 才能完成。
-5. Infra 条件 Patch ready fact 为当前 DeliveryEpoch，产生 Delivery=`ready`。
-6. ready Patch 成功后，Create 或 Clone 才返回成功。
+2. Infra 原子持久化或创建 owner、lock、公开 Sandbox ID、DeliveryEpoch 和 claimed=true。
+3. Manager 等待 Workload=ready，并完成 runtime 初始化、credential、CSI、network、初始
+   TrafficPolicy 和其他必要交付能力。
+4. 所有交付要求成功后，Create 或 Clone 才返回成功。
 
-Delivery=`claimed` 是内部预留，不是资源可见性。List、Describe、Kill 和所有其他 owner API 都将其
-视为不可见；即使 warm Pod 本身已经 ready，Route 投影也保持 non-running。因此，初始
-TrafficPolicy 和用于选择 policy 的 Pod label 都会在 Route 可以 running 前持久化。Delivery=`ready`
-之前不准入任何用户能力，所以 Update network 不会与初始网络配置并发竞争。
+第 2 步同时是 claim commit 和 visibility commit，不存在 Delivery 维度或更晚的 visibility commit。
+在第 2、3 步期间，同一 owner 的并发 List 可能发现 Sandbox ID。如果 warm Sandbox 已经满足 State
+准入，同一 owner 的其他操作可能在 Create 或 Clone 返回前执行；如果同时满足 Route 条件，Route
+可能在初始 TrafficPolicy 或其他剩余交付动作完成前变为 running。这个请求处理窗口没有隔离保证，
+调用方不得依赖其行为。
 
-`claimed -> ready` Patch 是成功响应的线性化点。它重新校验同一个 DeliveryEpoch 和
-`Release=none`；并发 release 或已经 recycle 的 delivery 会阻止成功。Patch 后，informer 传播可能
-让 Sandbox 在 Create 或 Clone 返回前不久对外可见，但此时所有交付要求都已经完成。
-
-#### 边际写入成本
-
-最终 ready fact 为每次成功 Create 或 Clone 增加恰好一次 Sandbox metadata Patch。下表只统计选中
-的单个、已经 ready 的 warm Sandbox 及其现有 Pod；假设没有 conflict 或 retry，不发生 image 或
-resource in-place update，并且不统计 SandboxSet 补池、Kubernetes Event、scheduler 或 kubelet 写入。
-
-单阶段 claim 参照路径的 3 次写入分别是：Manager 对 Sandbox 的 claim update、Controller 将选中 Pod
-metadata 收敛到本次 claim revision 的 Patch，以及 Controller 记录已观察 revision 的 status Patch。
-初始网络配置增加 1 次 TrafficPolicy create；请求 ID token 会增加 1 次 Sandbox annotation Patch；
-两阶段 delivery 只再增加最终 ready annotation Patch。
-
-| 成功 delivery 路径 | Sandbox 写入 | Pod 写入 | TrafficPolicy 写入 | 总写入 | Ready Patch 增量 |
-|---|---:|---:|---:|---:|---:|
-| 单阶段 claim 参照，不含 TrafficPolicy | 2 | 1 | 0 | 3 | - |
-| 两阶段 delivery，不含 TrafficPolicy | 3 | 1 | 0 | 4 | +1（+33%） |
-| 单阶段 claim 参照，包含 TrafficPolicy | 2 | 1 | 1 | 4 | - |
-| 两阶段 delivery，包含 TrafficPolicy | 3 | 1 | 1 | 5 | +1（+25%） |
-| 两阶段 delivery，包含 TrafficPolicy 和 ID token | 4 | 1 | 1 | 6 | +1（相对对应单阶段路径为 +20%） |
-
-额外 Patch 只把一个固定 annotation key 设置为一个 36 字符 UUID DeliveryEpoch。payload 不随
-Sandbox spec 大小、Pod 数量或交付步骤数量增长。它不增加 Generation，因此不会增加依赖的 Pod
-Patch 或 Sandbox status Patch。它会额外产生一个 Sandbox watch event；Controller 只观察这个
-delivery 事实，不执行写入。当成功 Create 或 Clone 的速率为每秒 `R` 次时，新增 API-server 写入
-速率恰好是每秒 `R` 次小型 metadata Patch。
+Create 或 Clone 成功响应保证交付工作已经完成。claim commit 前失败会释放预留；claim commit 后
+失败可能留下 owner-visible 且在 Route 条件满足时可路由的部分交付 Sandbox，quota 继续保留，直到
+release committed 或观察到对象不存在。Manager 选择保留或清理策略，Infra 使用同一个 claim fence
+执行。
 
 ### 5. Owner 可见性和公开状态
 
@@ -448,7 +393,7 @@ Manager 推导与调用方无关的资源可见性：
 
     ResourceVisible =
         Sandbox 存在
-        && State.Delivery == ready
+        && State.Claimed
         && State.Release in {none, due}
 
 API 随后执行 owner authorization：
@@ -458,23 +403,22 @@ API 随后执行 owner authorization：
 | 情况 | 非 Kill owner API | Kill |
 |---|---|---|
 | NotFound | HTTP 404 | HTTP 204 |
-| Delivery=unclaimed 或 claimed | HTTP 404 | HTTP 204，无操作 |
+| Claimed=false | HTTP 404 | HTTP 204 |
 | Release=terminal | HTTP 404 | 为同一 claim 提交清理 |
 | Release=committed | HTTP 404 | HTTP 204 |
-| Delivery=ready 且 owner mismatch | HTTP 404 | HTTP 204，无操作 |
+| Claimed=true 且 owner mismatch | HTTP 404 | HTTP 204，无操作 |
 | OwnerVisible | 应用 State 准入 | 为同一 claim 提交释放 |
 
 Release=due 仍然 OwnerVisible，但 Kill 必须提交释放；deadline 仍为 due 时，除 List、Describe 和
 Kill 外的所有 owner capability 都被拒绝。
 
-NotFound、Delivery=`unclaimed` 或 `claimed`、Release=committed 和 owner mismatch 的 Kill 都返回
-HTTP 204。owner mismatch 只写入受保护的审计日志，不产生资源、Route 或 quota 副作用。ready
-delivery 的正确 owner 对 Release=none、due 或 terminal 执行 Kill 时，只有 claim-fenced release
-commit 成功后才能返回 HTTP 204。后端失败或 delivery identity 非法时返回映射后的 unavailable
-或 internal，不能假报成功。
+NotFound、Claimed=false、Release=committed 和 owner mismatch 的 Kill 都返回 HTTP 204。owner
+mismatch 只写入受保护的审计日志，不产生资源、Route 或 quota 副作用。正确 owner 对
+Release=none、due 或 terminal 执行 Kill 时，只有 claim-fenced release commit 成功后才能返回
+HTTP 204。后端失败或 claimed identity 非法时返回映射后的 unavailable 或 internal，不能假报成功。
 
-List 只包含 OwnerVisible Sandbox，并在 pagination 前完成过滤。Describe 对每个 OwnerVisible ready
-delivery 返回 200，包括 paused、provisioning、unready 和 due observation。
+List 只包含 OwnerVisible Sandbox，并在 pagination 前完成过滤。Describe 对每个 OwnerVisible Sandbox
+返回 200，包括 paused、provisioning、unready 和 due observation。
 
 E2B 公开状态继续保持最小集合：
 
@@ -485,8 +429,8 @@ E2B 公开状态继续保持最小集合：
 
 ### 6. 操作准入
 
-以下规则只在 Delivery=`ready` 且通过 OwnerVisible authorization 后适用。每个已准入操作仍然必须
-携带有效 MutationToken 或 claim-delivery fence。Delivery=`claimed` 永远不会进入下表。
+以下规则只在 OwnerVisible authorization 之后适用。每个已准入操作仍然必须携带有效
+MutationToken 或 claim-delivery fence。
 
 Release=due 是本节所有能力的独立拒绝条件。在 Controller 改变 deadline 或持久化 release commit
 前，只准入 List、Describe 和 Kill。
@@ -528,28 +472,30 @@ DeletionTimestamp、确认的 delete event 或 tombstone 删除 Route。对于�
 | State 和 Route 数据 | Route.State |
 |---|---|
 | 以下任一成立：Release=terminal 或 committed；Workload=completed；State 非法或不完整 | dead |
-| Delivery=claimed | dead |
-| Delivery=ready、Release 为 none 或 due、PauseResume=none、Workload=ready 且 IP 存在 | running |
+| Claimed=true、Release 为 none 或 due、PauseResume=none、Workload=ready 且 IP 存在 | running |
 | PauseResume 为 pausing 或 resuming，或者 Workload=paused | paused |
 | Workload=unready | dead |
 | Workload=provisioning 或 IP 缺失 | creating |
-| Delivery=unclaimed、Release=none、Workload=ready 且 IP 存在 | available |
+| Claimed=false、Release=none、Workload=ready 且 IP 存在 | available |
 | 其他组合 | dead |
+
+Claimed 是 Route 的 owner 归属条件，不是交付完成条件。一旦其他 Route 条件满足，Route 就可能在
+Create 或 Clone 返回前以及初始 TrafficPolicy 等剩余交付动作完成前变为 running。这是单次提交契约
+明确接受的窗口；DeliveryEpoch 只阻止其他 claim delivery 的 stale event，不能隐藏部分交付。
 
 Release=due 绝不改变 Route。如果 ShutdownTime 到达时没有 CR mutation，Gateway 可以继续转发既有
 running Route。Controller 持久化 DeletionTimestamp、Terminating、Recycling 或其他 committed
 事实后，才会产生拒绝或删除 Route 的事件。这就是选定的 eventual deadline 契约。
 
-Gateway 只转发 Route.State=running。ready metadata event 是最早能够产生 running 的事件，因此
-running Route 意味着初始 network policy 创建和其他交付要求已经先完成。Route identity、
-DeliveryEpoch 和版本顺序会拒绝其他 claim delivery 的 stale event，但 Route 是否存在以及 Route
-state 都不能反向决定 Sandbox 存在性、owner authorization 或 Manager State。DeliveryEpoch 不能
-让已经转发的未认证客户端请求感知 delivery。
+Gateway 只转发 Route.State=running。Route identity、DeliveryEpoch 和版本顺序会拒绝其他 claim
+delivery 的 stale event，但 Route 是否存在以及 Route state 都不能反向决定 Sandbox 存在性、
+owner authorization 或 Manager State。DeliveryEpoch 不能让已经转发的未认证客户端请求感知
+delivery。
 
 ### 8. 配额和失败行为
 
-Quota 不是 State 维度。Manager 在第一次 delivery commit 前预留 quota，并在 Delivery 变为
-`claimed` 后将其视为 active，即使 Sandbox 此时对外不可见。
+Quota 不是 State 维度。Manager 在 claim commit 前预留 quota，并在 owner 和 claimed 事实持久化后
+将其视为 active。
 
 只有 Release=committed 或后端权威返回 NotFound 时，quota 才可释放。Release=due 和
 Release=terminal 继续占用 quota。cleanup trigger 之所以算 committed，是因为 Controller 契约保证
@@ -564,34 +510,15 @@ release 写入失败时，Release 不会变为 committed，Kill 返回后端派�
 | 场景 | 目标行为 | 原因 |
 |---|---|---|
 | Owner mismatch | 非 Kill API 返回 HTTP 404；Kill 返回 HTTP 204 且无副作用 | 保持 Kill 幂等，同时不形成存在性探针 |
-| ready delivery 的 ShutdownTime 已到但 Controller 尚未提交 | 可见性、公开状态和 Route 继续由其他 State 维度决定；due 本身不改变 Route；只准入 List、Describe 和 Kill；quota 保留 | deadline 是 Controller 指令，不是 release commit |
-| ready delivery 的 cleanup trigger 已持久化 | Kill 可以成功且 quota 可以释放；Controller 必须 recycle 或 delete | trigger 是当前 claim 的不可逆承诺 |
-| ready delivery 进入 Succeeded 或 Failed 终态 | 隐藏且 Route dead；Kill 仍需提交清理；quota 保留 | 工作负载终止不等于清理完成 |
+| ShutdownTime 已到但 Controller 尚未提交 | 可见性、公开状态和 Route 继续由其他 State 维度决定；due 本身不改变 Route；只准入 List、Describe 和 Kill；quota 保留 | deadline 是 Controller 指令，不是 release commit |
+| cleanup trigger 已持久化 | Kill 可以成功且 quota 可以释放；Controller 必须 recycle 或 delete | trigger 是当前 claim 的不可逆承诺 |
+| Succeeded 或 Failed 终态 | 隐藏且 Route dead；Kill 仍需提交清理；quota 保留 | 工作负载终止不等于清理完成 |
 | recycle 后重新 claim，旧 Observation 到达 | CR 写入、Browser、TrafficPolicy、Route、Checkpoint 和 composite Connect 都被 fence，不能影响新 owner | UID 不能单独标识一次 delivery |
-| Create 或 Clone 尚未 ready commit | 所有 owner API 都不可见，Route dead | 持久化 owner 归属不能证明交付已经完成 |
-| 建立初始 TrafficPolicy | 当前 epoch 的 policy 和用于选择 policy 的 Pod label 在 ready commit 前存在；此前无法调用 Update network | 流量和 owner mutation 都不能与未完成的初始 policy 并发竞争 |
-| ready commit 成功 | Sandbox 可以对 owner 可见，Route 可以变为 running；Create 或 Clone 可以返回成功 | ready Patch 是可见性和成功响应的 commit |
+| Create 或 Clone 处理中 | 同一 owner 可能通过 List 获得短 ID 并操作 Sandbox；满足 Route 条件时 Route 可能提前 running；不承诺隔离 | claim 持久化就是 visibility commit 和 Route owner 归属事实；不存在交付完成事实 |
 | Running 且 Ready 缺失、False、Unknown、revision 不匹配或 update 不安全 | Workload=unready，不能仅因 age 成为 speculative candidate | 无法证明服务能力或进展 |
 | InplaceUpdate=False/Failed 且 Ready=True | 其他 serving 谓词全部满足时，Workload 可以保持 ready | update convergence 与现有 workload capability 互相独立 |
-| claimed 或 ready delivery identity 缺失或冲突 | 返回 internal 或 unavailable，Route 失败关闭 | 损坏数据不能表现为 invisible 或可路由 |
+| claimed identity 缺失或冲突 | 返回 internal 或 unavailable，Route 失败关闭 | 损坏数据不能表现为 invisible 或可路由 |
 | 存在多个 Manager 进程 | 副本可以暂时不一致；任何副本都不能使用 stale 的已授权 observation 修改其他 delivery | 副本状态同步属于独立设计 |
-
-## 开放问题
-
-### 部分交付
-
-本提案只定义成功的 `unclaimed -> claimed -> ready` 路径，不引入 failed Delivery 取值，也不记录每个
-步骤的进度。真实系统仍可能出现以下部分结果，但本提案不解决这些情况：
-
-- runtime 初始化成功后，credential 交付或 CSI mount 尚未完成；
-- 一部分 CSI mount 成功，后续 mount 失败；
-- 当前 epoch 的 TrafficPolicy 已创建，但 ready Patch 未完成；
-- Manager 在任意一部分交付动作完成后、ready Patch 前停止。
-
-没有 ready fact 时，这些结果保持对外不可见，也不能产生 running Route。后续独立设计需要决定同一
-epoch 是继续、回滚还是提交 release；如何收敛部分 runtime、credential、CSI 和 TrafficPolicy
-副作用；何时释放 quota；claimed delivery 可以保留多久；以及 operator 能观察和修复什么。本提案
-不为这些情况承诺 recovery、cleanup、retention 或 latency，而是明确留给后续独立设计解决。
 
 ## 实现注意事项
 
