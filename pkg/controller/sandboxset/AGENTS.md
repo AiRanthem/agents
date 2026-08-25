@@ -6,9 +6,6 @@ This package maintains the pool of unclaimed Sandboxes for each `SandboxSet`.
 
 - Scale and rolling-update logic operates only on unclaimed pool members.
   Claimed Sandboxes must not be deleted or replaced by this controller.
-- Skip Reconcile when the SandboxSet has a non-empty deletion timestamp.
-  Owner-ref GC owns dependents; do not scale, update, or rewrite status
-  while the object is terminating.
 - Keep create and delete expectations around cache-delayed writes. Do not
   start conflicting scale or update work while expectations are unsatisfied.
 - Preserve availability budgets across scaling and rolling updates, and keep
