@@ -193,6 +193,7 @@ func (k *secretKeyStorage) ensureAdminKey(ctx context.Context) error {
 	// Exhausted Conflict does not re-read after the last patch. Check the API
 	// server: succeed if the desired admin key is already there, otherwise fail.
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		log.V(utils.DebugLogLevel).Error(ctxErr, "ensure admin key: request canceled")
 		return errors.Join(err, ctxErr)
 	}
 	if err == nil || !apierrors.IsConflict(err) {
@@ -405,6 +406,7 @@ func (k *secretKeyStorage) retryPatchSecretKey(
 		return nil
 	})
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		klog.FromContext(ctx).V(utils.DebugLogLevel).Error(ctxErr, "retryPatchSecretKey: request canceled")
 		return nil, errors.Join(err, ctxErr)
 	}
 	if err != nil {
