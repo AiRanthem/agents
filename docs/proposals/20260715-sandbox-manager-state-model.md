@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-07-15
-last-updated: 2026-08-25
+last-updated: 2026-08-26
 status: provisional
 ---
 
@@ -12,567 +12,641 @@ status: provisional
 
 ## Summary
 
-**Scope discipline:** this proposal does not solve State, Route, or cache synchronization between
-sandbox-manager replicas. Healthy replicas continue serving requests independently, and the
-existing primary Lease remains limited to background coordination. Cross-replica observations may
-temporarily disagree. This proposal must not make that existing limitation worse by allowing a
-stale observation to mutate another delivery, release its quota, or remove its Route. A separate
-design will define replica synchronization.
+This proposal defines a backend-neutral structured State for sandbox-manager. It separates user
+delivery, release, Pause/Resume transitions, and current workload capability so visibility,
+routing, operation admission, and quota no longer interpret Sandbox CR Phases, Conditions,
+annotations, or reasons independently.
 
-This proposal defines one backend-neutral structured State for sandbox-manager. A shared
-Sandbox-CR-specific mapper translates native Sandbox facts once. Infra returns the resulting State
-and an Observation to Manager. Manager applies lifecycle and capability policy without reading
-Sandbox CR Phase, Conditions, or reasons. API authenticates the caller, checks caller-to-owner
-authorization, and maps domain results to the public protocol.
-
-State contains four independent dimensions:
+State has four independent dimensions:
 
     State {
-        Claimed     bool
+        Delivery    unclaimed | claimed | ready | reserved-failed
         Release     none | due | terminal | committed
         PauseResume none | pausing | resuming
         Workload    provisioning | ready | paused | unready | completed
     }
 
-`Release` distinguishes a reversible deadline, a stopped workload, and an irreversible release
-commit. Those facts have different Kill, Route, visibility, and quota behavior. An absent object is
-a separate NotFound result, not a synthetic State.
+Claim and Clone use two-stage delivery. The first-stage Sandbox CR write records the owner, public
+ID, claim lock, quota reservation reference, and fixed delivery deadline, producing a hidden and
+non-routable `claimed` delivery.
+Only after the current Pod's runtime, credentials, CSI, and TrafficPolicy serving facts are ready
+does the final conditional write of the second stage commit `DeliveryReady=True` and produce
+`ready`. That final write is the commit point for visibility, a running Route, and a successful
+response.
 
-Every state-sensitive operation uses one Observation:
+The claim-lock UUID is the DeliveryEpoch, the identity of one delivery attempt. Traffic and every
+operation that requires proven-safe state must match the current epoch. Missing or mismatched
+facts are rejected. Before another claim is allowed, Recycle forms a complete isolation barrier so
+resources, credentials, connections, and late operations from the old epoch cannot affect the
+next owner.
 
-    Observation {
-        State         State
-        Owner         string
-        MutationToken opaque
-    }
+The design assumes that healthy sandbox-manager and Gateway replicas share one authoritative
+serving snapshot: the common Sandbox CR and Route view from which they answer requests and forward
+traffic. A replica that is behind or has not completed its initial snapshot does not serve. This
+proposal defines the target state and provides no degraded or mixed-version compatibility.
 
-The existing persisted claim-lock UUID is the immutable DeliveryEpoch for one claim delivery. The
-token binds the observation to that DeliveryEpoch and one backend object version. Infra must not
-transparently retry an operation after the token becomes stale. This prevents an operation
-authorized for one owner from crossing a recycle boundary and affecting the next owner of the same
-Sandbox CR.
-
-`ShutdownTime` is an instruction to Controller, not an immediate traffic or quota boundary. A
-locally reached deadline produces `Release=due`, but the Sandbox remains owner-visible and its Route
-is derived from workload capability until Controller persists an irreversible release fact. While
-due, only List, Describe, and Kill are admitted; other owner capabilities cannot rescue the
-deadline. No deadline is added to the Route wire shape.
-
-Claim persistence remains the visibility commit. Create or Clone may therefore be discovered by the
-same owner before the handler returns; this proposal deliberately provides no isolation guarantee
-for that in-flight window. A successful response is still returned only after all delivery work has
-finished.
-
-State deliberately does not persist whether post-claim delivery is still in progress or complete.
-This single-commit contract assumes that every Sandbox uses a short ID and that Create or Clone
-does not directly return that ID before a successful response; the same owner may still learn it
-through a concurrent List. A sandbox-manager crash after claim but before response is treated as a
-low-probability event. Early visibility, an early running Route when the other Route conditions
-pass, and a partially delivered Sandbox after failure are explicitly accepted. The proposal
-therefore adds no persisted ready stage.
-
-The proposal remains provisional. It defines per-observation safety and delivery fencing, not
-multi-replica consistency or linearizable public responses.
+This proposal remains `provisional`.
 
 ## Background
 
-Sandbox state affects pool candidate selection, Create and Clone completion, Pause and Resume,
-traffic forwarding, owner visibility, quota, and release. When each path interprets Sandbox CR
-Phase, Conditions, annotations, or local time independently, the same backend fact can produce
-different business results.
+Sandbox state affects pool candidate selection, completion of Create and Clone, Pause and Resume,
+traffic forwarding, owner visibility, quota, and release. Flattening those questions into one
+state conflates facts that are not interchangeable:
 
-A flat lifecycle string also collapses questions that are not interchangeable. A pool Sandbox that
-is still starting, a claimed Sandbox that is temporarily unready, a stopped workload awaiting
-cleanup, a reached deadline, and an accepted deletion all cannot be represented safely as one
-`dead` or `releasing` value.
+- the resource belongs to a user but delivery is incomplete;
+- initial delivery completed but the workload is now pausing, resuming, or upgrading;
+- the workload stopped but cleanup has not been committed;
+- a deadline passed but the release mutation has not won its concurrent commit;
+- release is irrevocably committed but the Recycle barrier is still converging.
 
-Recycle makes the observation boundary especially important. A successful recycle keeps the same
-Sandbox CR and UID, clears the old claim, and later permits a new owner to claim it. Checking owner
-and State before a mutation is insufficient if the backend mutation can silently retry against the
-new claim.
+The Sandbox CR remains the authoritative source of backend facts. State does not create a second
+lifecycle store. It creates one interpretation boundary: a Sandbox CR mapper produces neutral
+facts, Manager applies business policy, API performs authentication, authorization, and public
+protocol mapping, and Route projects traffic state only.
 
-State does not create a second backend lifecycle beside the Sandbox CR. It creates a dependency
-boundary: Sandbox CR Infra interprets native facts once, while Manager and API depend on neutral
-meanings and conditional capability contracts.
+Recycle retains the same Sandbox CR and UID while allowing the same object to be delivered to
+different owners over time. A UID, name, or public ID therefore cannot identify one delivery by
+itself. Without a delivery epoch and a complete isolation barrier, an old operation, credential, or
+TrafficPolicy can cross the Recycle boundary and affect the next delivery.
 
 ### Goals
 
-- Give release due, terminal workload, and irreversible release commit distinct meanings.
-- Keep Sandbox CR Phase, Conditions, annotations, and reasons out of Manager and API business
-  decisions.
-- Make every state-sensitive capability conditional on the claim delivery that was authorized.
-- Use one CR mapper for Infra observations and Route projection.
-- Keep workload capability separate from owner visibility and quota release.
-- Define safe, typed provisioning and ready predicates.
-- Prevent a stale authorized operation from affecting another claim delivery.
+- Hide a Sandbox and reject traffic until its security delivery completes.
+- Separate ownership, release, Pause/Resume, and workload capability.
+- Keep Sandbox CR Phases, Conditions, annotations, and reasons out of Manager and API decisions.
+- Use the same Sandbox CR mapper for Infra Observations and Route projection.
+- After the first claim write, bind every delivery capability to an authorized DeliveryEpoch and
+  backend object version.
+- Prove that the current Pod matches its desired inputs with an effective workload digest.
+- Reject traffic and operations that require safe state when the required facts are unknown,
+  incomplete, or mismatched.
+- Provide consistent visibility and Route serving snapshots across healthy replicas.
 
 ### Non-goals
 
 - This proposal does not introduce SandboxRecord or another authoritative visibility store.
 - It does not preserve visibility when the Sandbox CR is actually absent.
-- It does not make `ShutdownTime` a strict wall-clock traffic cutoff and does not add a deadline to
-  Route.
-- It does not isolate a Sandbox from its owner between claim persistence and Create or Clone
-  response.
-- It does not use persisted State to distinguish delivery still in progress after claim from
-  completed delivery, and it does not record delivery progress.
-- It does not make Claim or Clone recoverable from an arbitrary Manager process crash.
-- It does not coordinate observations between Manager replicas or synchronize Manager and Gateway
-  informer state. It introduces no persistent Sandbox-ID resolver or business-API primary gate.
-- It does not otherwise change Checkpoint API or lifecycle semantics; only claim-delivery fencing
-  for creation, production, completion, and consumption is in scope.
-- Except for the release-safety prerequisite in Implementation Notes, it does not describe
-  migration, rollout, implementation tasks, or test procedures.
+- It does not make `ShutdownTime` a strict wall-clock traffic cutoff or add a deadline to Route.
+- It does not persist every delivery step or resume the same delivery execution after a process
+  crash.
+- It does not change the public E2B state set or established error categories.
+- Except for storage facts explicitly named as part of a contract below, it does not specify
+  concrete annotations, labels, RPCs, selectors, cache data structures, hash algorithms, or
+  Recycle cleanup steps.
+- It does not design legacy-object migration, mixed-version protocols, version negotiation, or
+  degraded fallback.
+- Other than delivery provenance and isolation, it does not change Checkpoint lifecycle or storage
+  policy.
 
 ## Target Design
 
-### 1. Overall Boundary
+### 1. Boundaries and Preconditions
 
-Dependencies follow one direction:
+The dependency direction is fixed:
 
     Sandbox CR
         |
-        | pkg/sandboxstate/sandboxcr mapper
+        | Sandbox CR mapper
         v
-    pkg/sandboxstate State + Observation
-        |                                   |
-        | Infra observation/capability      | sandboxroute projection
-        v                                   v
-    Manager business policy -> API     manager and gateway Route stores
-                                                |
-                                                v
-                                      gateway traffic admission
+    neutral State + Observation
+        |                              |
+        | Infra capabilities           | Route projection
+        v                              v
+    Manager policy -> API       Manager/Gateway Route stores
+                                         |
+                                         v
+                                Gateway traffic admission
 
-`pkg/sandboxstate` defines only backend-neutral State, Observation, enum validation, and opaque
-token contracts. It does not import the Sandbox API. `pkg/sandboxstate/sandboxcr` owns the Sandbox
-CR mapping and may import the Sandbox API. Both `infra/sandboxcr` and `sandboxroute` use the CR
-mapper. Manager and neutral Infra interfaces use only the neutral package.
+The neutral State package defines State values, validation, and the MutationToken contract only. A
+MutationToken is an opaque mutation credential returned by Infra; Manager must return it unchanged
+and cannot parse it. The Sandbox CR-specific mapper interprets CR fields. Concrete Kubernetes
+reads and writes remain in Sandbox CR Infra; Manager depends only on neutral Observations and
+capabilities. Sandbox Controller is an independent operator and does not depend on Manager, API,
+or a concrete Infra implementation.
 
-The desired workload revision is the policy-neutral hash of `spec.template` or `spec.templateRef`.
-The Controller and CR mapper use the same neutral revision function without introducing a
-Controller-to-Manager dependency.
+The design depends on two target-state preconditions:
 
-The mapper accepts the clock explicitly:
+1. **Recycle isolation barrier.** Before old claim identity is cleared and the Sandbox re-enters the
+   candidate pool, every old runtime, credential, long-lived connection, CSI state, Pod identity,
+   TrafficPolicy match, Route, internal Checkpoint, and late writer that could affect the next
+   delivery is ineffective. If completion cannot be proven, the Sandbox is deleted or isolated and
+   cannot be claimed again. A standalone user Snapshot is not deleted, but it retains source-epoch
+   provenance and is not active state for the next delivery.
+2. **Consistent serving snapshot.** Every healthy Manager and Gateway serves from the same
+   authoritative Sandbox CR snapshot and its Route projection. A replica that is behind,
+   disconnected, restarting without a complete initial snapshot, or unable to reject an old peer
+   event leaves readiness. The primary Lease selects a background cleanup worker only; it is not a
+   single entry point for owner APIs.
 
-    FromSandbox(sandbox, now) -> State
+The authoritative publisher exposes a monotonically advancing publication watermark. A ready
+Kubernetes resourceVersion (RV) and its Route are common serving state once the watermark includes
+them. A Manager or Gateway may report healthy only after it has caught up to that watermark;
+joining and recovering replicas do not change what an already-started wait means because they
+remain unready until caught up.
 
-Local time may change `Release` between `none` and `due`. Route projection deliberately ignores
-that difference, so the same persisted CR facts still produce the same Route even when Manager and
-Gateway clocks differ.
+A consistent snapshot does not replace MutationToken or compare-and-swap (CAS). State may change
+after a request reads the snapshot, so every mutation revalidates the object version and
+DeliveryEpoch at the boundary where it takes effect. Local clocks can produce different `due`
+Observations at the deadline boundary. Route ignores `due`, so this does not create Route
+divergence.
 
-The Sandbox Controller continues to own native status and workload reconciliation. It also owns the
-irreversible meaning of a persisted cleanup trigger: once that trigger exists for a claim, the
-Controller must recycle or delete that claim and must never restore it to service.
+### 2. State and Observation
 
-Every healthy Manager replica may continue to serve owner-facing APIs. The primary Lease controls
-only background reconciliation jobs. Route and informer disagreement between replicas retains its
-existing eventual behavior and is not an authority for visibility, authorization, or absence.
-
-### 2. State and Observation Contracts
-
-| Field | Values | Question answered |
+| Dimension | Values | Question answered |
 |---|---|---|
-| Claimed | true / false | Has user ownership for this delivery been persisted? |
-| Release | none / due / terminal / committed | What release fact has been observed? |
-| PauseResume | none / pausing / resuming | Is an ordinary Pause or Resume transition in progress? |
-| Workload | provisioning / ready / paused / unready / completed | What workload capability is currently proven? |
+| Delivery | unclaimed / claimed / ready / reserved-failed | How far has this user delivery progressed? |
+| Release | none / due / terminal / committed | Which release fact is currently observed? |
+| PauseResume | none / pausing / resuming | Is an ordinary Pause or Resume in progress? |
+| Workload | provisioning / ready / paused / unready / completed | Which workload capability is currently proven? |
 
-The mapper turns incomplete input and stale positive status into a valid conservative State,
-normally Workload=unready. An unknown output State enum value or invalid State combination fails
-validation; Infra returns a neutral internal or unavailable error instead of presenting it as
-invisible or NotFound. Only a validated State enters Manager policy. Route projection fails closed
-to dead when it cannot obtain a valid State. NotFound remains outside State.
+Object absence is a `NotFound` result outside State. Absence is never represented as a State, and
+an invalid State is never disguised as NotFound.
 
-#### Observation and MutationToken
+An Infra lookup returns one snapshot:
 
-Infra lookup returns State, the neutral owner identity, and one opaque MutationToken from the same
-snapshot. The token binds at least:
+    Observation {
+        State         State
+        Owner         string
+        MutationToken // opaque mutation credential
+    }
 
-- Sandbox UID and backend object version;
-- the claimed marker and owner;
-- the DeliveryEpoch, which is the current persisted claim-lock UUID;
-- the public Sandbox ID for the current delivery.
+MutationToken binds at least the Sandbox ObjectKey, UID, resourceVersion, claimed marker, owner,
+public ID, current claim lock, quota reservation ID and generation, claim timestamp, and delivery
+deadline.
+Manager and API do not parse it.
 
-The DeliveryEpoch is non-secret, is persisted atomically with owner and claimed identity, never
-rotates within one claim, and is cleared by successful recycle. No new Sandbox epoch field is
-introduced.
+#### Delivery
 
-A claimed observation is valid only when owner, DeliveryEpoch, and a uniquely resolvable public
-Sandbox ID are non-empty and a MutationToken can be constructed. Invalid claimed identity returns
-neutral internal or unavailable, and Route projection fails closed. It must never appear as
-NotFound, owner mismatch, or a running Route.
+The mapper validates claim facts first, then derives Delivery in this order:
 
-The token is required by Pause, Resume, Connect, Snapshot, Set timeout, Update network, Browser use,
-checkpoint creation, and release commit. It applies to workload access as well as CR writes.
+1. The claimed marker is absent or explicitly false, and owner, public ID, claim lock, quota
+   reservation reference, and failure-retention facts are all absent: `unclaimed`. An old
+   `DeliveryReady` or delivery deadline may remain, but has no effect without a current epoch.
+2. The claimed marker is true, claim identity is complete, and failure-retention facts for the
+   current epoch are complete: `reserved-failed`. A matching `DeliveryReady=True` for the same
+   epoch makes the Observation invalid instead.
+3. The claimed marker is true, claim identity is complete, and the current `DeliveryReady=True`
+   Message parses and matches the current claim lock: `ready`.
+4. The claimed marker is true, claim identity is complete, and no matching ready fact exists:
+   `claimed`.
+5. An unknown claimed-marker value, or any other missing, residual, malformed, or conflicting
+   combination, makes the Observation invalid. Infra returns internal or unavailable, and Route
+   rejects traffic.
 
-Infra validates the token at the effective backend boundary of each capability:
+`DeliveryReady` is a claim-scoped Condition:
 
-- Sandbox CR writes test the observed resource version, claimed marker, owner, public ID, and
-  DeliveryEpoch. A failed precondition returns conflict and is never retried against a new claim.
-- Browser requests carry a delivery-scoped runtime credential, and runtime rejects a credential
-  from another DeliveryEpoch. Browser is not admitted when no verifiable credential exists.
-- TrafficPolicy and its selected Pod identity carry the DeliveryEpoch. Create, update, read, and
-  delete paths match both Sandbox ID and DeliveryEpoch.
-- Route carries DeliveryEpoch and rejects stale events from another delivery.
-- Checkpoint and its SandboxTemplate carry DeliveryEpoch. The producer validates it before work and
-  before completion; consumers reject results from another delivery.
-- Connect obtains a new Observation after Resume and continues only when DeliveryEpoch is unchanged.
+- its `Type` is `DeliveryReady`;
+- a successful commit uses `Status=True` and a stable completion reason;
+- `Message` is JSON with separate `deliveryEpoch` and `diagnostic` fields;
+- only `Status=True` with a `deliveryEpoch` equal to the current claim lock produces `ready`;
+- a malformed, missing, or epoch-mismatched Condition grants neither traffic nor an operation that
+  requires proven-safe state and remains hidden `claimed`;
+- `ObservedGeneration` is not an epoch because claim metadata changes do not advance generation;
+- the Condition may remain across Recycle; a new claim lock automatically invalidates the old
+  Condition.
 
-When a capability boundary cannot prove a matching DeliveryEpoch, the capability returns conflict
-or unavailable. It must not fall back to Sandbox name, UID, public ID, or owner reference alone.
+Sandbox CR Infra is the sole writer of `DeliveryReady`. Sandbox Controller does not set, clear, or
+interpret it. Its informer may observe the update, but semantic filters on every Sandbox Controller
+watch do not enqueue an update whose only meaningful change is `DeliveryReady`. A successful
+second-stage commit therefore performs one Infra status write, causes no Sandbox Controller
+reconcile, and causes no additional Controller-originated API-server write. Every status writer
+uses an object-version precondition and preserves Conditions it does not own, so an in-flight old
+writer cannot overwrite the new ready fact.
 
-These fences prevent a stale operation from reaching a later delivery through a reused name,
-public Sandbox ID, or the same Sandbox UID. They do not distinguish an already-forwarded external
-Gateway request when traffic authentication is disabled and the public Sandbox ID is reused; that
-client-traffic limitation is outside this proposal.
+The four values mean:
 
-When validation fails, Infra returns a conflict without retrying the business mutation against a
-new snapshot. Manager obtains a new Observation and re-evaluates lifecycle admission. API then
-re-evaluates caller-to-owner authorization. Manager may retry only if the refreshed Observation
-still describes the same authorized claim and still admits the operation.
+| Delivery | Meaning | Visibility | Route |
+|---|---|---|---|
+| unclaimed | No user delivery | Hidden | available/creating/dead from pool workload |
+| claimed | Identity committed; delivery in progress or outcome unknown | Hidden | dead |
+| ready | Initial security delivery completed | Derived from Release | Derived from current capability |
+| reserved-failed | Known failure retained by request policy for diagnosis | Hidden | dead |
 
-#### Claimed
+`reserved-failed` exists only for `reserve-failed-sandbox-for`. Its persisted retention fact is
+bound to the current epoch and contains either an absolute expiry or `forever`; marker, epoch, and
+retention choice commit in one conditional write. Manager admits that write only from the current
+`claimed` delivery when the matching quota generation is still binding or active. Infra then
+requires matching RV and epoch, no matching `DeliveryReady=True`, and no committed cleanup. It
+competes with ready and cleanup using the same CAS rule. If quota is already closed or cleanup
+wins, retention cannot retry with a newer RV to rescue the delivery; if retention wins, ordinary
+terminal cleanup honors its retention period. A known failure without retention commits cleanup
+directly and never enters this value. Finite retention commits cleanup when it expires.
+`forever` retains the Sandbox until administrator cleanup and continues charging quota. Retention
+takes priority even if the workload becomes terminal; the ordinary terminal cleanup worker cannot
+remove it early. A `reserved-failed` delivery can never become `ready` in the same epoch, so a retry
+uses a new epoch. Final Recycle claim clearing also atomically clears the failure-retention fact.
 
-Claimed is true only when the persisted sandbox-claimed marker is explicitly true. A missing,
-false, or unrecognized marker maps to false.
-
-For a pool candidate, Infra atomically persists lock, owner, Sandbox ID, and claimed=true. A newly
-created Sandbox contains those facts in its create write. That write is the only claim commit. It
-does not assert that Create or Clone has returned or that delivery work has finished.
-
-Claimed proves only that the owner and current claim identity have been persisted. No other
-persisted fact distinguishes a Sandbox still being delivered from one whose delivery has
-completed.
-
-Successful recycle first persists removal of claim-scoped SandboxPaused, SandboxResumed, and
-RuntimeInitialized conditions. It then atomically clears the old claim, owner, lock, public Sandbox
-ID, and cleanup trigger as the final claim-clear write. The object cannot become a candidate before
-that final write. A later claim has a different DeliveryEpoch and MutationToken even though the CR
-UID is unchanged.
+`ready` proves initial delivery only, not perpetual workload service. Pause, Resume, upgrade, Pod
+replacement, or failure changes PauseResume and Workload without regressing Delivery to claimed.
 
 #### Release
 
-The mapper uses the first matching release rule:
+The mapper derives Release by first match. A cleanup trigger is a persisted fact, bound to the
+current DeliveryEpoch, that irrevocably commits release for that delivery:
 
-1. `committed` when DeletionTimestamp exists, a cleanup trigger is persisted, or Phase is
-   Recycling or Terminating;
-2. `terminal` when Phase is Succeeded or Failed;
-3. `due` when ShutdownTime exists and `now.After(ShutdownTime)` is true;
-4. `none` otherwise.
+1. DeletionTimestamp, a cleanup trigger for the current delivery, or Phase
+   Recycling/Terminating: `committed`.
+2. Phase Succeeded/Failed: `terminal`.
+3. ShutdownTime exists and local `now` has passed it: `due`.
+4. Otherwise: `none`.
 
-The exact deadline is not due. Typed serving freshness is required before granting positive
-capability, but status that already reports terminal, Recycling, or Terminating remains
-conservative and does not restore service.
+`due` is an Observation-local, reversible deadline fact, not an irrevocable release commit. It
+does not change owner visibility, public E2B state, quota, or Route. It does prevent a new claim and
+admits only List, Describe, and Kill for owner APIs.
 
-`due` is reversible. Controller's paused-retention policy may persist a later ShutdownTime before
-deletion is committed, after which a new observation returns `none`. While `due` remains observed,
-only List, Describe, and Kill are admitted. Pause, Resume, Connect, Snapshot, Set timeout, Update
-network, and Browser use cannot advance the deadline or otherwise rescue the Sandbox. The
-Controller may conditionally commit timeout release only for the DeliveryEpoch whose deadline it
-observed. Owner visibility, public state, traffic, and quota remain based on the other State
-dimensions until that commit is persisted.
+The write whose observed object version is still current wins a deadline race. A timeout update
+and Controller cleanup both carry the resourceVersion and DeliveryEpoch they observed. If the
+update commits first, stale cleanup conflicts; if cleanup commits first, the timeout update
+conflicts. Time passing does not advance resourceVersion, so this proposal neither promises a
+strict wall-clock cutoff nor promises that authorization obtained before the deadline can never
+win CAS after the deadline.
 
-`terminal` says that the workload has stopped, not that cleanup is committed. It hides the Sandbox
-and denies traffic, but Kill must still commit release and quota remains held.
+`terminal` means the workload stopped but cleanup is not committed. It hides the Sandbox, rejects
+traffic, and retains quota. Except for a `reserved-failed` delivery whose retention is still
+active, the background cleanup worker eventually commits cleanup for the current epoch.
 
-`committed` is monotonic for one claim delivery. A persisted cleanup trigger counts as committed
-because Controller has the following contract:
-
-- a recyclable Sandbox enters recycle;
-- a paused Sandbox, a Sandbox with PVCs, or another Sandbox that cannot recycle is deleted;
-- recycle failure may retain the object only as hidden committed cleanup with eventual deletion;
-- no rejection or failure path may clear the release fact and return the same claim to service;
-- only successful recycle may clear the trigger, together with all old claim identity.
-
-These rules make a successful cleanup-trigger write sufficient for Kill success and quota release;
-Manager does not need a second recycle acknowledgement.
-
-Release policies are independent:
-
-| Observation | Owner visibility | Kill | Quota | Traffic |
-|---|---|---|---|---|
-| Release=none | Evaluate other State | Commit release | Keep | Evaluate capability |
-| Release=due | Evaluate other State | Commit release | Keep | Evaluate capability |
-| Release=terminal | Hidden | Commit cleanup | Keep | Deny |
-| Release=committed | Hidden | Idempotent success | Releasable | Deny |
-| NotFound | Hidden | Idempotent success | Converge release | No Route |
+`committed` is monotonic within one delivery. Once the cleanup trigger persists, owner APIs hide
+the Sandbox, Route is dead, and quota may be released asynchronously. The Recycle barrier governs
+final claim clearing, pool re-entry, and a later claim. Barrier failure cannot restore the same
+delivery to service.
 
 #### PauseResume
 
-PauseResume uses typed desired and observed pause facts rather than whole-object generation. A
-timeout-only spec update therefore cannot erase an in-progress Pause or Resume. Claimed=false
-always maps to `none`, even if claim-scoped transition Conditions remain on a recycled object.
+PauseResume uses typed desired and observed pause facts, not whole-object generation:
 
-The exact Condition Types are `SandboxPaused` (`SandboxConditionPaused`), `SandboxResumed`
-(`SandboxConditionResumed`), and `RuntimeInitialized`.
-
-The first matching rule wins:
-
-1. Claimed=false; Release is terminal or committed; or Phase is Succeeded, Failed, or Upgrading:
-   `none`.
-2. Phase is Resuming; or Phase is Paused, SandboxPaused=True, and spec.paused=false; or Phase is
-   Running, SandboxResumed=True, and RuntimeInitialized is missing or not True: `resuming`.
-3. Phase is Running and spec.paused=true; or Phase is Paused and SandboxPaused is missing or not
-   True: `pausing`.
+1. Delivery is unclaimed, Release is terminal/committed, or Phase is
+   Succeeded/Failed/Upgrading: `none`.
+2. Resume is active, paused was observed while desired is running, or runtime re-initialization is
+   incomplete: `resuming`.
+3. Desired is paused but completion is not observed: `pausing`.
 4. Otherwise: `none`.
 
-An internal Controller wake-up during upgrade is not an ordinary Resume.
+An internal wake-up during Controller upgrade is not an ordinary Resume. A timeout-only spec update
+cannot erase an active Pause or Resume.
 
-#### Workload
+#### Workload and Effective Revision
 
-Workload freshness is scoped to serving-related facts. The mapper computes the desired workload
-revision from `spec.template` or `spec.templateRef` and compares it with `Status.UpdateRevision`.
-PauseTime and ShutdownTime changes do not change this revision. The mapper then uses the first
-matching rule:
+Workload freshness uses a content digest of the effective workload, not a hash of the
+`templateRef` name alone. The digest covers:
 
-1. Phase Succeeded or Failed: `completed`.
-2. Phase Paused and SandboxPaused=True: `paused`.
-3. Phase Running, desired revision equals `Status.UpdateRevision`, Ready=True,
-   `Status.PodInfo.PodIP` is non-empty, and InplaceUpdate is absent or has a recognized safe result:
-   `ready`.
-4. Phase Pending and desired revision equals `Status.UpdateRevision`: `provisioning`.
-5. Every other input: `unready`.
+- the resolved PodTemplate;
+- VolumeClaimTemplates and PersistentContents;
+- Runtimes and every other Sandbox-declared input that changes actual Pod/runtime serving
+  capability.
 
-For InplaceUpdate, absent, True/Succeeded, and False/Failed are serving-safe results.
-False/InplaceUpdating, Unknown, and unknown or invalid status/reason combinations are unready.
-False/Failed records that the desired update did not converge, but it does not override serving
-capability: when Ready=True and every other ready predicate passes, the existing workload remains
-ready. Update convergence and serving capability are separate facts.
+Pure policy fields such as ShutdownTime and PauseTime are excluded. Global injection ConfigMaps,
+feature gates, and other mutable external configuration may be excluded only when they are proven
+not to change security or serving behavior. Every other such input has a persisted revision and is
+included in the digest or in a separate serving-readiness check.
 
-Ready missing, False, or Unknown is not ready. A revision mismatch, missing PodInfo.PodIP,
-Upgrading, unknown native Sandbox CR Phase, or incomplete State is unready unless a higher
-conservative terminal rule applies. RuntimeInitialized missing, False, or Failed after Resume does
-not override Workload when Ready=True; it keeps PauseResume=resuming, which independently denies
-Route and capability admission. An InplaceUpdate failure is never provisioning.
+The authoritative desired digest becomes stale atomically with the desired inputs; it cannot rely
+only on the last status value written asynchronously by Controller. An inline input change binds a
+new digest to that Sandbox desired version. A `templateRef` either names an immutable,
+content-addressed template revision, or its resolved revision is part of the Sandbox's
+authoritative desired input. A model in which referenced content changes without changing the
+Sandbox serving snapshot cannot produce `ready`.
 
-SandboxSet ownership does not prove provisioning. In particular, SandboxSet-controlled
-Running+Ready!=True is unready. The CR CreationTimestamp is only an auxiliary speculation-age
-threshold after Workload is already provisioning; age never proves provisioning by itself.
+After Controller observes that authoritative desired version, it writes the same digest to
+`status.updateRevision` and copies the actual Pod `pod-template-hash` to
+`status.podInfo.labels["pod-template-hash"]`. Sandbox, SandboxSet, and Controller use one digest
+definition that excludes business-policy fields. The mapper does not read a mutable templateRef.
+It requires the authoritative desired digest, the Controller-observed digest, and the Pod-applied
+digest to match, and requires the observed desired version to identify the current Sandbox desired
+version.
 
-Backend reasons may remain in Infra diagnostics, but Manager and API do not branch on them. A
-future backend may map another explicit typed progress fact to provisioning, but it must define that
-fact in its own mapper.
+For a claimed Sandbox, the Sandbox CR also persists serving-readiness facts for the current Pod.
+Those facts bind DeliveryEpoch, `status.podInfo.podUID`, and the applied digest, and separately
+prove runtime initialization, delivery credential activation, CSI initialization when configured,
+and TrafficPolicy data-plane protection for that Pod. A binding mismatch invalidates old facts.
+Pod replacement, Resume, or upgrade establishes them again for the current Pod instead of relying
+on the initial `DeliveryReady` fact.
 
-#### Valid Combinations
+Workload is derived by first match:
 
-| State combination | Meaning |
+1. Phase Succeeded/Failed: `completed`.
+2. Phase Paused with paused fact=True: `paused`.
+3. Phase Running; all three digests match; Ready=True; PodUID and PodIP are non-empty; and the
+   InplaceUpdate fact explicitly says that no update is active for the current Pod and digest, or
+   that such an update succeeded: the base workload is ready. For Delivery=unclaimed this produces
+   `ready`. For a claimed delivery, matching serving-readiness facts for the current epoch and Pod
+   are also required before it produces `ready`.
+4. Phase Pending, all three digests match, and `status.podInfo.podUID` identifies the current Pod:
+   `provisioning`.
+5. Otherwise: `unready`.
+
+Ready missing, False, or Unknown; a missing or mismatched digest or desired version; missing PodUID
+or PodIP; an InplaceUpdate fact that is absent, belongs to another Pod/digest, or reports failure;
+incomplete serving-readiness facts for a claimed Sandbox; an unknown Phase; or any other incomplete
+status cannot produce `ready`. CreationTimestamp is only a speculation-age threshold after
+`provisioning` is already proven; age does not prove progress.
+
+#### Validity Invariants
+
+Mapper output satisfies:
+
+- `claimed`, `ready`, and `reserved-failed` all have complete owner, public ID, epoch, and
+  MutationToken, plus a valid claim timestamp, fixed delivery deadline, and quota reservation ID
+  and generation bound to that epoch;
+- `unclaimed` has no owner, public ID, claim lock, quota reservation reference, or
+  failure-retention fact;
+- `reserved-failed` cannot coexist with matching-epoch `DeliveryReady=True`;
+- PauseResume is none for `Delivery=unclaimed` and Release terminal/committed;
+- `Release=terminal` has `Workload=completed`;
+- `Release=committed` may preserve any conservative workload snapshot but has
+  `PauseResume=none`;
+- Workload completed coexists only with Release terminal or committed;
+- non-none PauseResume does not coexist with Workload provisioning or completed;
+- Delivery ready may coexist with Workload paused, unready, or completed because delivery
+  completion and current capability are different facts.
+
+An unknown enum or a combination that cannot be normalized fails State validation. Infra returns
+internal or unavailable, and Route is dead.
+
+### 3. DeliveryEpoch and Backend Isolation Checks
+
+The claim lock on the current claimed Sandbox CR is the authoritative DeliveryEpoch. It never
+rotates within one delivery. Successful Recycle clears it when claim identity is finally cleared,
+and that final transition also clears the quota reservation reference and failure-retention fact.
+The next claim creates a new epoch. The epoch rules below apply to delivery operations and
+results after the first claim write. An unclaimed pool object has no DeliveryEpoch. It can produce
+only a non-forwarding `available` or `creating` Route, whose events are ordered by ObjectKey, UID,
+and resourceVersion.
+
+Every backend boundary follows the same protocol:
+
+| Stage | Contract |
 |---|---|
-| Claimed=false, Release=none, Workload=ready | Available pool Sandbox |
-| Claimed=true, Release=none, Workload=ready | Normal user Sandbox |
-| Claimed=true, Release=due, Workload=ready | Deadline reached; Controller has not committed release |
-| Claimed=true, Release=terminal, Workload=completed | Workload stopped; cleanup is still required |
-| Claimed=true, Release=committed, Workload=ready | Release committed before workload shutdown |
-| Claimed=false, Release=committed | Unclaimed object being deleted or recycled |
+| Install | Persist and verify the new epoch identity and isolation data; failed installation remains unavailable |
+| Activate | After runtime, credential, CSI, and TrafficPolicy serving facts hold for the current Pod, CAS DeliveryReady with current epoch and RV |
+| Use | Requests, credentials, resources, and results match current epoch; reject missing or mismatched facts |
+| Revoke | Cleanup stops traffic and operations that require proven-safe state; claim clears only after Recycle proves the old epoch ineffective |
+| Restart | Recover from persisted authoritative snapshot; inability to recover current epoch remains unavailable |
 
-Claimed=false alone does not make an object a candidate. Release must be none, the object must
-belong to the target pool and be unlocked, and its Workload must satisfy candidate policy.
+The boundaries include:
 
-### 3. Layer Responsibilities
+- **Sandbox CR mutation:** validate ObjectKey, UID, RV, owner, public ID, claimed marker, and epoch.
+  A conflict cannot transparently retry the original operation against a new delivery.
+- **Runtime and credentials:** runtime installs current epoch and accepts only matching
+  initialization, Browser credentials, and workload requests. Old credentials, long-lived
+  connections, and late completions become ineffective within the Recycle barrier.
+- **Gateway requests:** a public ID is an address, not an authorization credential. All traffic to
+  a recyclable Sandbox carries a credential bound to the current epoch. Gateway verifies both the
+  Route epoch and credential epoch before forwarding. Unauthenticated traffic cannot use the
+  recyclable delivery path defined here.
+- **Pod and TrafficPolicy:** both carry the same epoch. Policy CRUD matches public ID and epoch.
+  Selector mismatch, missing Pod epoch, or missing policy makes the data plane deny by default.
+- **Route:** a claimed Route carries ObjectKey, UID, RV, public ID, and epoch. Authoritative snapshot outranks peer
+  deltas, and a non-current epoch event cannot update or delete a Route. An unclaimed event has no
+  epoch and can update only the pool Route for the same ObjectKey and UID; it cannot overwrite a
+  claimed public ID. Multiple objects claiming the same active public ID reject traffic as a
+  whole; the last event cannot take ownership.
+- **Connect:** after Resume, obtain a new Observation and connect only if epoch is unchanged and
+  the new State still admits the operation.
 
-| Layer | Owns | Does not own |
-|---|---|---|
-| API | Authentication, caller-to-owner authorization, protocol validation, HTTP mapping, E2B projection | CR status interpretation, Route-based existence, lifecycle policy |
-| Manager | Resource visibility, candidate policy, quota, lifecycle and capability admission, orchestration after conflict | CR Phase, Conditions, annotations, HTTP semantics |
-| Infra | Observation, CR mapping, conditional backend capabilities, waits, conflicts, claim fencing | Caller authentication, HTTP status, quota policy |
-| Controller | Native CR and workload reconciliation, irreversible cleanup-trigger outcome | Manager or API policy, dependencies on Manager or Infra implementations |
+Checkpoint distinguishes two epochs:
 
-The API obtains the authenticated owner identity and supplies it as an explicit selection or lookup
-constraint. Manager derives resource visibility from neutral State. API compares Observation.Owner
-with the authenticated caller. Non-Kill APIs map absence, invisibility, and owner mismatch to the
-same public 404; Kill applies its separate uniform HTTP 204 contract. This keeps authentication and
-authorization in API while keeping backend-neutral visibility policy in Manager.
-
-Route is never the authority for Sandbox existence or owner authorization. Missing, stale, or
-non-running Route state cannot reject a request before the authoritative Observation is evaluated.
-
-List applies authenticated owner and resource-visibility filtering before pagination. Describe and
-all single-Sandbox APIs use the same observation and authorization boundary.
-
-Manager replicas continue to accept owner-facing API traffic independently. The primary Lease is
-not an API admission or readiness gate. This proposal neither synchronizes their observations nor
-claims identical responses across replicas; its safety guarantee begins after one replica has
-obtained an Observation.
+- source DeliveryEpoch proves which source delivery produced the Snapshot/Checkpoint; the producer
+  validates it before starting and before completing;
+- Clone validates source provenance and owner but creates a new target DeliveryEpoch for the target
+  Sandbox;
+- source epoch is not compared for equality with target epoch; target Pod, runtime, Route, and
+  TrafficPolicy use only target epoch;
+- the Recycle barrier isolates delivery-scoped internal Checkpoints, while a standalone Snapshot
+  may outlive the source Sandbox.
 
 ### 4. Claim and Clone
 
-Manager uses these candidate rules:
+A candidate satisfies:
 
 | Candidate | Required facts |
 |---|---|
-| Normal | Claimed=false, Release=none, PauseResume=none, Workload=ready, target pool, unlocked |
-| Speculative | Claimed=false, Release=none, PauseResume=none, Workload=provisioning, target pool, unlocked, speculation age elapsed |
-| Ineligible | Claimed=true; Release is due, terminal, or committed; Workload is paused, unready, or completed; wrong pool; or locked |
+| Normal | Delivery=unclaimed, Release=none, PauseResume=none, Workload=ready, target pool, unlocked |
+| Speculative | Delivery=unclaimed, Release=none, PauseResume=none, Workload=provisioning, target pool, unlocked, speculation age elapsed |
+| Ineligible | Any other Delivery; Release due/terminal/committed; paused/unready/completed; wrong pool; or locked |
 
-CreationTimestamp may be used only as the elapsed-time threshold after the typed provisioning
-predicate is true. A zero configured duration disables speculative selection.
+Claim and Clone run in this order:
 
-Claim and Clone follow this contract:
+1. Manager validates the request and creates a persisted quota reservation with a fixed expiry,
+   reservation ID, and generation. The pair of reservation ID and generation is the quota
+   reservation generation. Closing it permanently invalidates that generation. It is distinct
+   from DeliveryEpoch, MutationToken, and a traffic access token. Claim binding and expiry
+   reclamation use CAS on the quota record, so exactly one can move it out of reserved state.
+2. The winning claim binding moves the reservation generation into a quota-counting binding state.
+   Infra's first claim write stores owner, public ID, claim lock, claimed marker,
+   claim timestamp, reservation ID and generation, and a fixed absolute delivery deadline selected
+   by the service. A write that races after the generation was closed is a stale orphan write: it
+   stays hidden, can never pass ready admission, and is cleaned up. It cannot reactivate or reuse
+   the closed quota generation.
+3. Manager waits until the current Pod, PodUID, desired digest, applied digest, and Ready condition
+   satisfy the base-workload prerequisites. It then installs runtime, credentials, CSI when
+   configured, and TrafficPolicy for the current epoch, and persists serving-readiness facts bound
+   to that epoch, PodUID, and digest.
+4. Manager obtains a new Observation. It conditionally commits `DeliveryReady=True` with that
+   Observation's RV only if Delivery=claimed, Release=none, Workload=ready, owner, public ID, and
+   epoch still match; the matching quota allocation is active; and no cleanup or failure-retention
+   fact exists. After a CAS conflict it must satisfy the complete predicate again; it cannot merely
+   retry with a newer RV.
+5. Create or Clone returns success only after the authoritative Route publication watermark
+   includes the ready RV and its running Route. Every Manager and Gateway that reports healthy has
+   caught up to that watermark; joining or recovering replicas remain unready until they do.
 
-1. Manager validates the request and reserves quota.
-2. Infra atomically persists or creates owner, lock, public Sandbox ID, DeliveryEpoch, and
-   claimed=true.
-3. Manager waits for Workload=ready and completes runtime initialization, credentials, CSI,
-   network, the initial TrafficPolicy, and other required delivery capabilities.
-4. Create or Clone returns success only after all delivery requirements succeed.
+The delivery deadline is a fixed, server-selected abandonment-cleanup time. It is not user workload
+ShutdownTime and is not renewed by a request heartbeat. It lets the background cleanup worker find
+a claimed delivery that nobody is advancing, but it is not a strict activation cutoff. Expiry does
+not advance resourceVersion; before cleanup commits, a ready write that still satisfies the full
+predicate in step 4 may win CAS. The deadline may remain on the object and be ignored after ready,
+avoiding a third cleanup write.
 
-Step 2 is both the claim and visibility commit. There is no Delivery dimension or later visibility
-commit. During steps 2 and 3, a concurrent List by the same owner may discover the Sandbox ID. If
-the warm Sandbox already satisfies State admission, other operations by that owner may run before
-Create or Clone returns. If it also satisfies the Route conditions, Route may become running before
-the initial TrafficPolicy or other remaining delivery work completes. This in-flight behavior has
-no isolation guarantee and callers must not depend on it.
+The Manager primary finds expired claimed deliveries from the authoritative snapshot. Its
+background cleanup worker and the ready commit compete with the same RV and epoch: if ready commits
+first, cleanup does not proceed; if the cleanup trigger commits first, the ready commit conflicts
+and cannot rescue the delivery. Sandbox Controller executes committed cleanup only and does not
+interpret the delivery deadline or DeliveryReady.
 
-A successful Create or Clone response guarantees that delivery work has completed. Failure before
-claim commit releases the reservation. Failure after claim commit may leave an owner-visible
-and, when Route conditions pass, routable partially delivered Sandbox. Quota remains held until
-release is committed or absence is observed. Manager selects retention or cleanup policy and Infra
-performs it with the same claim fence.
+Failures behave as follows:
 
-### 5. Owner Visibility and Public State
+| Scenario | Result |
+|---|---|
+| Process crashes before quota binding | Expiry reclamation closes the reserved generation and releases quota |
+| Process crashes after quota binding but before claim | Resolver closes the binding generation after its deadline; a late CR write stays hidden and is cleaned up |
+| Quota reserved, claim commit definitely failed | Close the generation and release quota after authoritative confirmation that the epoch did not persist |
+| Claim commit outcome unknown | Let the quota convergence worker inspect the quota reservation record and Sandbox CR; never guess and release quota |
+| Known pre-ready failure without retention | Commit cleanup for the same epoch; retry with a new epoch |
+| Known pre-ready failure with retention | CAS the epoch-bound marker and absolute expiry/forever fact; finite retention cleans up on expiry, forever requires administrator cleanup |
+| Request cancellation | Use bounded cleanup detached from request cancellation; the background cleanup worker covers an uncertain outcome |
+| Manager crashes before ready | Keep the claimed Sandbox hidden and retain quota; the background cleanup worker acts after the fixed deadline |
+| Ready commit succeeds but Route publication or response fails | Do not roll back; return unavailable, and List/Describe can discover the ready Sandbox |
 
-Manager derives caller-independent resource visibility:
+This proposal does not resume partial delivery in the same epoch. A retry after a crash or final
+failure uses a new Sandbox delivery and epoch.
+
+A traffic access token may exist only in the transient Create/Clone response. If ready commits but
+Route publication times out, the workload loses ready while waiting, or the response is lost, the
+token is not guaranteed recoverable and the committed delivery is not rolled back. The owner can
+find the Sandbox through List/Describe, then Kill it and create another one. This proposal neither
+persists the token nor adds an idempotent response store or token reissuance API.
+
+### 5. Owner Visibility and Public API
+
+Manager derives caller-independent visibility:
 
     ResourceVisible =
         Sandbox exists
-        && State.Claimed
-        && State.Release in {none, due}
+        && Delivery == ready
+        && Release in {none, due}
 
-API then applies owner authorization:
+API then performs owner authorization:
 
     OwnerVisible = ResourceVisible && Observation.Owner == authenticated caller
 
-| Situation | Non-Kill owner API | Kill |
+List filters owner and OwnerVisible before pagination. Describe and every single-Sandbox API use
+the same Observation. Route is not authoritative for existence or owner authorization. A
+single-Sandbox API checks owner first and then applies State rows from top to bottom, so an owner
+mismatch never reaches a later release row.
+
+| Case | Non-Kill owner API | Kill |
 |---|---|---|
-| NotFound | HTTP 404 | HTTP 204 |
-| Claimed=false | HTTP 404 | HTTP 204 |
-| Release=terminal | HTTP 404 | Commit cleanup for the same claim |
+| NotFound / unclaimed | HTTP 404 | HTTP 204, no-op |
+| claimed / reserved-failed | HTTP 404 | HTTP 204, no-op |
+| ready with owner mismatch | HTTP 404 | HTTP 204, no-op |
+| ready + Release=none/due | Apply State admission | Commit release for current epoch |
+| ready + Release=terminal | HTTP 404 | Commit cleanup for current epoch |
 | Release=committed | HTTP 404 | HTTP 204 |
-| Claimed=true and owner mismatch | HTTP 404 | HTTP 204, no-op |
-| OwnerVisible | Apply State admission | Commit release for the same claim |
+| Invalid Observation or backend unavailable | Map to internal/unavailable | Do not report a resource mutation that was not proven |
 
-Release=due remains OwnerVisible, but Kill must commit release and every owner capability other
-than List, Describe, and Kill is rejected while the deadline remains due.
+`reserved-failed=forever` exists for administrator diagnosis only. Owner APIs neither expose it nor
+attach a cleanup side effect.
 
-Kill returns HTTP 204 for NotFound, Claimed=false, Release=committed, and owner mismatch. An owner
-mismatch is recorded only in protected audit logs and has no resource, Route, or quota side effect.
-For the correct owner with Release=none, due, or terminal, HTTP 204 requires a successful
-claim-fenced release commit. Backend failure or invalid claimed identity returns the mapped
-unavailable or internal result instead of false success.
+The public E2B state set remains minimal:
 
-List contains only OwnerVisible Sandboxes and filters them before pagination. Describe returns 200
-for every OwnerVisible Sandbox, including paused, provisioning, unready, and due observations.
-
-E2B public state remains intentionally small:
-
-| State | E2B state |
+| OwnerVisible State | E2B state |
 |---|---|
-| OwnerVisible, PauseResume=none, Workload=ready | running |
-| Every other OwnerVisible State | paused |
+| PauseResume=none and Workload=ready | running |
+| Otherwise | paused |
+
+Therefore `Delivery=ready, Release=due, Workload=ready` remains publicly `running`, but does not
+mean Connect is currently admitted. Only List, Describe, and Kill are admitted while due.
 
 ### 6. Operation Admission
 
-The following table applies only after OwnerVisible authorization. Every admitted operation still
-requires a valid MutationToken or claim-delivery fence.
-
-Release=due is an independent denial for every capability in this section. Only List, Describe,
-and Kill remain admitted until Controller changes the deadline or persists release commit.
+An operation that uses the workload first requires OwnerVisible, a valid MutationToken, and a
+current epoch match.
+Release=due is an independent rejection condition.
 
 | PauseResume and Workload | Pause | Resume | Connect |
 |---|---|---|---|
 | none + ready | Start Pause | No-op success | Connect |
-| none + paused | No-op success | Start Resume | Resume, then connect |
-| pausing + any Workload | Join and wait | HTTP 409 | HTTP 400 |
-| resuming + any Workload | HTTP 409 | Join and wait | Wait, then connect |
-| none + provisioning or unready | HTTP 409 | HTTP 409 | HTTP 500 |
+| none + paused | No-op success | Start Resume | Re-observe and connect after Resume |
+| pausing + any valid Workload | Join and wait | HTTP 409 | HTTP 400 |
+| resuming + any valid Workload | HTTP 409 | Join and wait | Wait, re-observe, then connect |
+| none + provisioning/unready | HTTP 409 | HTTP 409 | HTTP 500 |
 
-Snapshot, Set timeout, Update network, and Browser use require PauseResume=none and Workload=ready.
-Their public rejection results remain:
+Snapshot, Set timeout, Update network, and Browser operations require PauseResume=none and
+Workload=ready.
+When they are not admitted, established public error categories remain: HTTP 400 for Snapshot and
+HTTP 500 for the other three, with no partial mutation.
 
-| API | OwnerVisible but not admitted |
-|---|---|
-| Snapshot | HTTP 400; no Sandbox mutation |
-| Set timeout | HTTP 500; no deadline mutation |
-| Update network | HTTP 500; no policy mutation |
-| Browser use | HTTP 500 |
-
-As one consequence, Set timeout is not admitted for Release=due even when Workload=ready. A
-Controller-persisted paused-retention extension may later change Release back to none, after which a
-new Set timeout observation is evaluated normally.
-
-Manager owns same-direction join, opposite-direction conflict, and refreshed admission after a
-token conflict. Infra owns only the conditional backend action and wait. API owns the status-code
-mapping. Composite Connect obtains a new Observation after Resume and does not reuse the original
-token for workload access.
+Same-direction Pause/Resume joins the active operation; the opposite direction conflicts. After a
+MutationToken conflict, Manager obtains a new Observation and repeats State admission and owner
+authorization. It never retries old authorization against a new delivery.
 
 ### 7. Route
 
-`sandboxroute.RouteFromSandbox` uses the same Sandbox CR mapper as Infra, then combines State with
-route identity, DeliveryEpoch, and `Status.PodInfo.PodIP`. Route does not carry full State or
-ShutdownTime.
+Route uses the same Sandbox CR mapper as Infra and carries ObjectKey, UID, resourceVersion, and
+PodIP. A claimed Route also carries public ID and DeliveryEpoch. An unclaimed pool Route has
+neither; it uses an internal pool key and cannot be addressed publicly through Gateway. Route does
+not carry complete State or a deadline.
 
-DeletionTimestamp, a confirmed delete event, or a tombstone deletes the Route. For another existing
-object, the first matching rule wins:
+A delete event or reliable tombstone deletes Route. Other objects project by first match:
 
-| State and route data | Route.State |
+| State and Route facts | Route.State |
 |---|---|
-| Any of: Release=terminal or committed; Workload=completed; invalid or incomplete State | dead |
-| Claimed=true, Release=none or due, PauseResume=none, Workload=ready, IP exists | running |
-| PauseResume is pausing or resuming, or Workload=paused | paused |
-| Workload=unready | dead |
-| Workload=provisioning or IP missing | creating |
-| Claimed=false, Release=none, Workload=ready, IP exists | available |
-| Any other combination | dead |
+| Invalid State | dead |
+| Release=terminal or committed | dead |
+| Workload=completed | dead |
+| Delivery=claimed/reserved-failed | dead |
+| Delivery=ready, PauseResume=none, Workload=ready, IP exists | running |
+| Delivery=ready, PauseResume=pausing or resuming | paused |
+| Delivery=ready, PauseResume=none, Workload=paused | paused |
+| Delivery=ready, Workload=provisioning | creating |
+| Delivery=ready and Workload=unready | dead |
+| Delivery=unclaimed, Workload=ready, IP exists | available |
+| Delivery=unclaimed, Workload=provisioning | creating |
+| Otherwise | dead |
 
-Claimed is the Route ownership condition, not a delivery-completion condition. Once the other Route
-conditions pass, Route may become running before Create or Clone returns and before remaining
-delivery work such as the initial TrafficPolicy completes. This is an explicitly accepted window
-of the single-commit contract. DeliveryEpoch rejects stale events from another claim delivery; it
-does not hide partial delivery.
+The projection is identical for Release=none and due; due never changes an existing Route.
+`unclaimed+due` is not a claim candidate but keeps the same Route projection. Route `available`
+is not authoritative candidate eligibility or existence.
 
-Release=due never changes Route. If no CR mutation occurs when ShutdownTime passes, Gateway may
-continue forwarding the existing running Route. Controller persistence of DeletionTimestamp,
-Terminating, Recycling, or another committed fact produces the event that denies or deletes Route.
-This is the selected eventual deadline contract.
+Gateway forwards only `running`. The ready commit must enter the authoritative Route publication
+watermark before Create/Clone returns. Gateway forwards no traffic before completing its initial
+snapshot after restart, and a peer event cannot overwrite a newer authoritative epoch/RV.
 
-Gateway forwards only Route.State=running. Route identity, DeliveryEpoch, and version ordering
-reject stale events from another claim delivery, but Route presence or state never determines
-Sandbox existence, owner authorization, or Manager State in the opposite direction. DeliveryEpoch
-does not make an already-forwarded unauthenticated client request delivery-aware.
+### 8. Quota and Background Convergence
 
-### 8. Quota and Failure Behavior
+Quota is not a State dimension. Its reservation record is the authority for reserved, binding,
+active, and released quota. Claim binding and expiry reclamation CAS the same quota reservation
+generation. The first claim write persists the reservation ID and generation with DeliveryEpoch.
+A quota convergence worker that finds binding without a known write outcome activates it when the
+matching claim exists, or closes the generation and releases it after the binding deadline when no
+claim exists. A late CR write from a closed generation cannot reactivate quota or pass the ready
+predicate; it remains hidden and is submitted for cleanup. This generation protocol prevents both
+an orphan reservation and a visible delivery without quota without moving quota policy into Infra.
+Once a matching claim exists, its binding or active generation does not expire independently. It
+can close only after a persisted fact changes the Sandbox CR to `Release=committed`, so a
+concurrent ready or retention CAS sees an RV conflict.
 
-Quota is not a State dimension. Manager reserves quota before claim commit and treats it as active
-after owner and claimed facts are persisted.
+Quota uses the following priority from top to bottom:
 
-Quota is releasable only when Release=committed or the backend object is authoritatively NotFound.
-Release=due and Release=terminal keep quota. A cleanup trigger is committed only because the
-Controller contract guarantees recycle-or-delete and forbids restoration of the same claim.
+| Condition | Quota |
+|---|---|
+| A claim-bound current epoch has Release=committed | May release asynchronously, regardless of Delivery |
+| No matching claim exists, and (reservation is reserved before expiry or binding is before its binding deadline) | Retain |
+| No matching claim exists and reservation remains reserved at expiry and reclaim wins CAS | Close its generation and release quota |
+| Binding reaches its deadline | Resolve against the Sandbox CR: activate and retain a matching claim, otherwise close and release; a late CR write cannot become ready or reserved-failed |
+| A current-epoch allocation or claim-bound reservation exists, and (Delivery=claimed/ready/reserved-failed or Release=due/terminal) | Retain |
+| NotFound with no open reserved, binding, or active generation | Reconcile to released |
 
-If a release write fails, Release does not become committed, Kill returns the backend-derived
-error, owner visibility is unchanged, and quota stays held. Infra reports neutral NotFound,
-conflict, unavailable, or operation failure. Manager combines the latest Observation with that
-result. API maps the domain result without inspecting CR state.
+For a claim-bound current-epoch allocation, any persisted fact that maps Release to `committed`
+permits quota release; a cleanup trigger is one such fact. An unbound reservation instead releases
+when its expiry CAS closes the reservation generation. A quota backend update may fail and be
+repaired by quota reconciliation. If the first claim write has an unknown outcome, the quota
+convergence worker checks the quota reservation record and Sandbox CR before activating or closing
+the generation; request failure alone never releases it. Finite reserved-failed explicitly extends
+quota use. Forever retention explicitly consumes quota until administrator cleanup.
 
-### 9. External Contract
+### 9. Layer Responsibilities
 
-| Scenario | Target behavior | Why |
+| Layer | Owns | Does not own |
 |---|---|---|
-| Owner mismatch | Non-Kill APIs return HTTP 404; Kill returns HTTP 204 with no side effect | Keep Kill idempotent without creating an existence oracle |
-| Reached ShutdownTime before Controller commit | Visibility, public state, and Route remain governed by the other State dimensions; due alone does not change Route; only List, Describe, and Kill are admitted; quota stays held | Deadline is a Controller instruction, not a release commit |
-| Persisted cleanup trigger | Kill may return success and quota may release; Controller must recycle or delete | Trigger is an irreversible current-claim commitment |
-| Terminal Succeeded or Failed | Hidden and Route dead; Kill still commits cleanup; quota stays held | Workload termination is not cleanup completion |
-| Stale Observation after recycle and re-claim | CR writes, Browser, TrafficPolicy, Route, Checkpoint, and composite Connect are fenced and cannot affect the new owner | UID alone does not identify one delivery |
-| Create or Clone in progress | Same owner may learn the short ID through List and operate the Sandbox; Route may become running early when its conditions pass; no isolation is promised | Claim persistence is the visibility commit and Route ownership fact; no delivery-completion fact exists |
-| Running with Ready missing, False, Unknown, revision mismatch, or unsafe update | Workload=unready and never a speculative candidate solely because of age | Service or progress cannot be proven |
-| InplaceUpdate=False/Failed with Ready=True | Workload may remain ready when all other serving predicates pass | Update convergence and existing workload capability are separate |
-| Claimed identity is incomplete or conflicting | Internal or unavailable; Route fails closed | Corruption must not appear invisible or routable |
-| More than one Manager process | Replicas may disagree temporarily; no replica may use a stale authorized observation to mutate another delivery | Replica synchronization is a separate design |
+| API | Authentication, owner authorization, protocol validation, HTTP/E2B mapping | CR status interpretation, Route existence, lifecycle policy |
+| Manager | Visibility, candidates, quota, background cleanup, lifecycle and capability admission, orchestration after conflict | CR Phase/Condition/annotation, HTTP semantics |
+| Infra | Observation, CR mapping, conditional backend capabilities, waiting, CAS, epoch isolation checks | Caller authentication, HTTP status, quota policy |
+| Controller | Native CR/workload coordination, execution of cleanup and Recycle barrier | Manager/API policy, interpreting DeliveryReady, dependency on Manager/Infra implementation |
+| Route/Gateway | Shared projection, authoritative snapshot, running traffic admission | Sandbox existence, owner authorization, Manager State |
 
 ## Implementation Notes
 
-The Controller recycle-or-delete contract is a hard release prerequisite. Every Controller instance
-must first be upgraded and verified to delete paused, PVC-backed, or otherwise non-recyclable
-Sandboxes after a cleanup trigger, and to retain failed recycle only as committed cleanup with
-eventual deletion. Only after that prerequisite is satisfied may Manager and Gateway treat a
-persisted cleanup trigger as Release=committed. This proposal uses deployment ordering rather than
-a feature gate or version handshake.
+The safety semantics in this design may be enabled only after all of these prerequisites hold:
+
+- Current Recycle cannot prove removal of every old delivery effect and may reject some Sandboxes.
+  It does not yet satisfy the complete isolation barrier. Enablement requires deletion or
+  isolation when the barrier cannot be proven, instead of returning the Sandbox to the pool.
+- Current Manager and Gateway use process-local informer/Route caches and cannot guarantee one
+  serving snapshot across every healthy replica. Enablement requires a common authoritative
+  publication watermark and removal of a lagging replica from readiness.
+- Current Sandbox Controller observes ordinary Sandbox status updates, and status writers do not
+  guarantee optimistic CAS across multiple writers. Enablement requires DeliveryReady-only zero
+  enqueue and preservation of Conditions owned by other writers.
+- Current ShutdownTime cleanup does not validate RV and epoch together. Enablement requires every
+  deadline mutation and cleanup write to follow the object-version winner contract in this design.
+- Current quota reservation and claim do not share the reservation-generation protocol in this
+  design. Enablement requires quota binding/reclamation CAS, closed-generation rejection, and an
+  active matching quota allocation before ready or retained-failure commit.
+
+New Manager, Gateway, Controller, quota backend, runtime, and TrafficPolicy/Pod data plane
+semantics must not be enabled before these prerequisites hold. A claimed delivery with a missing
+epoch, DeliveryReady,
+required workload digest or desired version, or serving-readiness fact rejects traffic and
+relevant operations, and never falls back to name, UID, public ID, or ownerReference. This proposal
+does not support mixed-version operation or define legacy backfill or rollout migration steps.
