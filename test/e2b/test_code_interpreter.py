@@ -5,7 +5,7 @@ from e2b_code_interpreter import Sandbox
 
 import logging
 
-from utils import run_code_sandbox
+from utils import connect_sandbox, run_code_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def test_pause_resume_code_context(sandbox_context, config):
     time.sleep(120)
 
     logger.info("Resuming (connecting) to sandbox...")
-    sbx = sbx.connect()
+    sbx = connect_sandbox(sbx)
     logger.info("Connected to sandbox: %s", sbx.sandbox_id)
 
     # 4) Verify sandbox is operational after resume.

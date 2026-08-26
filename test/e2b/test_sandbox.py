@@ -615,7 +615,7 @@ def test_never_timeout(sandbox_context, config):
     assert info.end_at == zero_time
     assert sbx.is_running() is False
 
-    sbx.connect(timeout=60)
+    connect_sandbox(sbx, timeout=60)
     info = sbx.get_info()
     assert info.end_at == zero_time
     assert sbx.is_running() is True
@@ -802,7 +802,7 @@ def test_concurrent_pause_resume_on_running_sandbox(sandbox_context, config):
 
     def do_resume():
         try:
-            sbx.connect()
+            connect_sandbox(sbx)
         except Exception as e:
             if "409" in str(e) or "conflict" in str(e).lower():
                 logger.info("Concurrent resume got expected conflict: %s", e)

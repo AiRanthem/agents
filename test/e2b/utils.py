@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # then the sandbox-id label that short-ID deliveries carry.
 SANDBOX_RESOURCE_METADATA_KEY = "e2b.agents.kruise.io/sandbox-resource"
 SANDBOX_ID_LABEL = "agents.kruise.io/sandbox-id"
+SDK_REQUEST_TIMEOUT_SECONDS = 120
 
 
 def _find_sandbox_cr_by_id(sandbox_id: str, namespace: str = None):
@@ -68,10 +69,11 @@ def connect_sandbox(sbx: Sandbox, timeout: Optional[int] = None) -> Sandbox | No
     """Connect to a sandbox with retry logic for pausing state.
 
     If the sandbox is pausing, will retry up to 30 times with 2 second intervals.
+    The SDK HTTP request timeout is independent from the sandbox lifecycle timeout.
 
     Args:
         sbx: The Sandbox instance to connect to.
-        timeout: Optional timeout parameter to pass to connect().
+        timeout: Optional sandbox lifecycle timeout to pass to connect().
 
     Returns:
         The connected Sandbox instance.
@@ -86,9 +88,9 @@ def connect_sandbox(sbx: Sandbox, timeout: Optional[int] = None) -> Sandbox | No
     for attempt in range(max_retries):
         try:
             if timeout is not None:
-                return sbx.connect(timeout=timeout)
+                return sbx.connect(timeout=timeout, request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
             else:
-                return sbx.connect()
+                return sbx.connect(request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
         except Exception as e:
             error_msg = str(e)
             # Server-side pausing-state errors. The legacy phrasing predates
