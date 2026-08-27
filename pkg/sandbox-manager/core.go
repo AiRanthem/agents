@@ -99,7 +99,7 @@ func (b *SandboxManagerBuilder) WithSandboxInfra() *SandboxManagerBuilder {
 		if err != nil {
 			return nil, err
 		}
-		cache, err := infracache.NewCacheWithHealth(mgr, health)
+		cache, err := infracache.NewCacheWithHealth(mgr, health, false)
 		if err != nil {
 			return nil, err
 		}

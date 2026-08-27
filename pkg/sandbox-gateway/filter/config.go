@@ -71,6 +71,19 @@ type Config struct {
 	TrafficAccessTokenHeader string `json:"traffic-access-token-header,omitempty"`
 	// EnableRuntimeMTLS routes requests to the agent-runtime port through the mTLS upstream cluster.
 	EnableRuntimeMTLS bool `json:"enable-runtime-mtls,omitempty"`
+	// EnableWakeOnTraffic enables wake-on-traffic for paused sandboxes.
+	// When true, the gateway will attempt to resume a paused sandbox by
+	// patching Spec.Paused=false when traffic arrives.
+	// Listener-level only: per-route configuration is NOT supported. Merge
+	// only lets an explicit true override the listener value, so a
+	// per-route false cannot disable wake enabled at the listener level.
+	EnableWakeOnTraffic bool `json:"enable-wake-on-traffic,omitempty"`
+	// WakeTimeoutSeconds is the max time (in seconds) to wait for a sandbox
+	// to resume before returning an error. Defaults to 60.
+	// Listener-level only: per-route configuration is NOT supported. Every
+	// parsed config carries the default 60, so any per-route config block
+	// would unintentionally reset a listener-level timeout.
+	WakeTimeoutSeconds int `json:"wake-timeout-seconds,omitempty"`
 }
 
 // DefaultConfig returns default configuration
@@ -81,6 +94,7 @@ func DefaultConfig() *Config {
 		HostHeaderName:           DefaultHostHeaderName,
 		DefaultPort:              DefaultSandboxPort,
 		TrafficAccessTokenHeader: DefaultTrafficAccessTokenHeader,
+		WakeTimeoutSeconds:       60,
 	}
 }
 
@@ -137,6 +151,14 @@ func (c *Config) GetTrafficAccessTokenHeader() string {
 		return strings.ToLower(c.TrafficAccessTokenHeader)
 	}
 	return DefaultTrafficAccessTokenHeader
+}
+
+// GetWakeTimeoutSeconds returns the wake timeout in seconds, defaulting to 60.
+func (c *Config) GetWakeTimeoutSeconds() int {
+	if c.WakeTimeoutSeconds > 0 {
+		return c.WakeTimeoutSeconds
+	}
+	return 60
 }
 
 // FilterConfig wraps Config and holds the adapter created from the config
@@ -280,6 +302,15 @@ func (p *ConfigParser) Merge(parent interface{}, child interface{}) interface{} 
 	}
 	if childCfg.trafficAccessTokenHeaderExplicit {
 		merged.TrafficAccessTokenHeader = childCfg.TrafficAccessTokenHeader
+	}
+	// Wake-on-traffic is listener-level configuration: per-route overrides
+	// are not supported. Only an explicit true / positive value propagates;
+	// a per-route config can neither disable wake nor reset the timeout.
+	if childCfg.EnableWakeOnTraffic {
+		merged.EnableWakeOnTraffic = childCfg.EnableWakeOnTraffic
+	}
+	if childCfg.WakeTimeoutSeconds > 0 {
+		merged.WakeTimeoutSeconds = childCfg.WakeTimeoutSeconds
 	}
 
 	jwtAuthManager := parentCfg.jwtAuthManager

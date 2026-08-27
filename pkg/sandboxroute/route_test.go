@@ -129,6 +129,7 @@ func TestRouteFromSandboxDerivation(t *testing.T) {
 		expectID    string
 		expectToken string
 		expectAuth  bool
+		expectWake  bool
 		expectState string
 		expectIP    string
 		expectError string
@@ -172,6 +173,21 @@ func TestRouteFromSandboxDerivation(t *testing.T) {
 			name: "jwt auth non-true value is ignored",
 			sandbox: newSandbox(nil, map[string]string{
 				identity.AnnotationEnableJwtAuth: "True",
+			}),
+			expectID: "ns--name",
+		},
+		{
+			name: "wake-on-traffic requires exact true",
+			sandbox: newSandbox(nil, map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
+			}),
+			expectID:   "ns--name",
+			expectWake: true,
+		},
+		{
+			name: "wake-on-traffic non-true value is ignored",
+			sandbox: newSandbox(nil, map[string]string{
+				agentsv1alpha1.AnnotationWakeOnTraffic: "True",
 			}),
 			expectID: "ns--name",
 		},
@@ -241,6 +257,7 @@ func TestRouteFromSandboxDerivation(t *testing.T) {
 			assert.Equal(t, "owner", route.Owner)
 			assert.Equal(t, tt.expectToken, route.AccessToken)
 			assert.Equal(t, tt.expectAuth, route.RequireTrafficAuth)
+			assert.Equal(t, tt.expectWake, route.WakeOnTraffic)
 		})
 	}
 }

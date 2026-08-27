@@ -1,0 +1,255 @@
+"""E2E test: wake a paused sandbox by sending traffic through the gateway."""
+import json
+import subprocess
+import time
+from importlib.metadata import version as _pkg_version
+
+import pytest
+import requests
+from e2b_code_interpreter import Sandbox, SandboxState
+
+from utils import resolve_sandbox_cr
+
+GATEWAY_URL = "http://localhost:80"
+# Health-check path routed to manager_cluster by Envoy (prefix: /kruise/api).
+# GET /health is the manager's dedicated health endpoint (returns 200 OK).
+# A 200 here confirms the port-forward and Envoy are both alive.
+_HEALTH_PATH = "/kruise/api/health"
+
+# Annotation keys used by the wake-on-traffic feature.
+_ANN_WAKE_ON_TRAFFIC = "agents.kruise.io/wake-on-traffic"
+_ANN_WAKE_TIMEOUT_SECONDS = "agents.kruise.io/wake-timeout-seconds"
+
+# e2b-code-interpreter 2.4.x predates the `lifecycle={"on_timeout": "pause"}`
+# parameter, so auto-pause cannot be requested through that SDK.
+_E2B_CODE_INTERPRETER_VERSION = _pkg_version("e2b-code-interpreter")
+_SDK_LACKS_AUTO_PAUSE = _E2B_CODE_INTERPRETER_VERSION.startswith("2.4.")
+
+
+def _gateway_health_check():
+    """Return True if the gateway port-forward is alive."""
+    try:
+        r = requests.get(f"{GATEWAY_URL}{_HEALTH_PATH}", timeout=10)
+        ok = r.status_code == 200
+        print(f"gateway health-check: status={r.status_code} ok={ok}")
+        return ok
+    except Exception as e:
+        print(f"gateway health-check failed: {e}")
+        return False
+
+
+def _get_sandbox_cr(sbx: Sandbox) -> dict:
+    """Fetch a Sandbox CR via kubectl.
+
+    The E2B sandbox ID is not necessarily the CR name: sandboxes claimed
+    from a pre-warmed pool keep their original name and carry the ID in the
+    agents.kruise.io/sandbox-id label. Resolve the CR through the shared
+    resolver instead of treating the ID as a name.
+    """
+    namespace, name = resolve_sandbox_cr(sbx.sandbox_id, getattr(sbx, "metadata", None))
+    assert namespace and name, f"could not resolve Sandbox CR for id {sbx.sandbox_id}"
+    result = subprocess.run(
+        ["kubectl", "get", "sandbox", name, "-n", namespace, "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def _get_sandbox_annotations(sbx: Sandbox) -> dict:
+    """Fetch the annotations of a Sandbox CR via kubectl."""
+    return _get_sandbox_cr(sbx).get("metadata", {}).get("annotations", {})
+
+
+def _wait_sandbox_fully_paused(sbx: Sandbox, budget_sec: int = 120):
+    """Wait until the CR has fully completed the pause transition.
+
+    get_info() reports paused as soon as spec.paused is set, while
+    status.phase may still be Running. Resume rejects that intermediate
+    state ("sandbox is not resumable, reason: SandboxIsPausing"), so the
+    single wake request may only be sent after the controller has finished
+    pausing: status.phase == Paused and the SandboxPaused condition is
+    True. Polling is allowed here because this is pre-wake synchronization,
+    not the wake request itself.
+    """
+    deadline = time.time() + budget_sec
+    while time.time() < deadline:
+        cr = _get_sandbox_cr(sbx)
+        phase = cr.get("status", {}).get("phase")
+        conditions = cr.get("status", {}).get("conditions", [])
+        paused_cond = next(
+            (c for c in conditions if c.get("type") == "SandboxPaused"), None
+        )
+        if phase == "Paused" and paused_cond and paused_cond.get("status") == "True":
+            print(f"sandbox fully paused: phase={phase}")
+            return
+        print(f"waiting for pause transition to complete, phase={phase}")
+        time.sleep(2)
+    raise AssertionError(
+        f"sandbox {sbx.sandbox_id} did not finish pausing within {budget_sec}s"
+    )
+
+
+# Response bodies of every local reply the gateway filter can send instead of
+# forwarding the request upstream. A response carrying any of these bodies was
+# produced by the gateway itself, not by the sandbox, so it cannot prove the
+# pending wake request was continued.
+_GATEWAY_LOCAL_REPLY_BODIES = (
+    "sandbox gateway is not ready",
+    "sandbox not found:",
+    "unauthorized: invalid or missing access token",
+    "forbidden:",
+    "service unavailable: traffic access token verifier is not ready",
+    "healthy sandbox not found:",
+    "wake failed",
+    "sandbox wake failed",
+)
+
+
+def _send_single_wake_request(headers: dict, timeout_sec: int = 180) -> requests.Response:
+    """Send exactly one request through the gateway and return its response.
+
+    The wake-on-traffic filter holds this very request (api.Running) while
+    the sandbox resumes and continues it once the sandbox is Ready, so the
+    response proves both that the wake happened and that the original
+    request was forwarded upstream. The client timeout must cover the full
+    wake budget.
+
+    Deliberately no retry: a retried request can succeed once the sandbox
+    is Running even if the original pending request was never continued,
+    which would hide a broken wake-completion path. Retries belong in the
+    pre-wake synchronization steps only.
+    """
+    return requests.get(f"{GATEWAY_URL}/", headers=headers, timeout=timeout_sec)
+
+
+@pytest.mark.skipif(_SDK_LACKS_AUTO_PAUSE, reason="SDK lacks lifecycle on_timeout pause")
+def test_wake_on_traffic(sandbox_context):
+    """Traffic to a paused sandbox with wake-on-traffic should resume it."""
+    # Step 1: Create sandbox with auto-pause and auto-resume enabled.
+    # auto_resume=True causes the API to set the wake-on-traffic annotation
+    # automatically at sandbox creation time (no kubectl annotate needed).
+    # Use a longer timeout (120s) to give enough time for the auto-pause wait
+    # and the wake test to complete before ShutdownTime triggers deletion.
+    sbx: Sandbox = sandbox_context.add(Sandbox.create(
+        template="code-interpreter",
+        timeout=120,
+        lifecycle={"on_timeout": "pause", "auto_resume": True},
+        metadata={"test_case": "test_wake_on_traffic"},
+        headers={"x-request-id": sandbox_context.request_id},
+    ))
+    sandbox_id = sbx.sandbox_id
+    print(f"sandbox-id: {sandbox_id}")
+    assert sbx.get_info().state == SandboxState.RUNNING
+
+    # Step 2: Verify wake annotations were set by the API.
+    annotations = _get_sandbox_annotations(sbx)
+    assert annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
+        f"autoResume=true should set wake-on-traffic annotation, got: {annotations}"
+    )
+    wake_timeout_ann = annotations.get(_ANN_WAKE_TIMEOUT_SECONDS)
+    assert wake_timeout_ann == "120", (
+        f"autoResume=true should set wake-timeout-seconds annotation, got: {annotations}"
+    )
+    print(
+        "wake annotations verified: "
+        f"wake-on-traffic=true, wake-timeout-seconds={wake_timeout_ann}"
+    )
+
+    # Step 3: Wait for auto-pause.
+    # The sandbox timeout is 120s, but the E2B SDK's auto-pause is triggered
+    # by the server-side timeout handler. The server may use a shorter internal
+    # pause deadline. Poll until the sandbox reports PAUSED state.
+    pause_deadline = time.time() + 120 + 120
+    paused = False
+    while time.time() < pause_deadline:
+        info = sbx.get_info()
+        if info.state == SandboxState.PAUSED:
+            paused = True
+            print(f"sandbox auto-paused: {sandbox_id} state={info.state}")
+            break
+        time.sleep(2)
+    assert paused, f"sandbox {sandbox_id} did not auto-pause within deadline"
+
+    # Step 3.5: Wait for the pause transition to fully complete. get_info()
+    # flips to PAUSED as soon as spec.paused is set (phase may still be
+    # Running); a wake request in that window is rejected with
+    # SandboxIsPausing. Since step 5 sends exactly one request, it must only
+    # go out after status.phase is Paused and the SandboxPaused condition
+    # is True.
+    _wait_sandbox_fully_paused(sbx)
+
+    # Step 4: Verify gateway connectivity before sending wake traffic.
+    assert _gateway_health_check(), (
+        "Gateway port-forward is not alive before wake request. "
+        "The port-forward may have dropped during the auto-pause wait."
+    )
+
+    # Step 5: Send a single request through the gateway (triggers wake).
+    # The wake-on-traffic annotation was set by the API (autoResume=true),
+    # so the gateway registry already has WakeOnTraffic=true.
+    #
+    # The access token is required by the agent-runtime sidecar inside
+    # the pod (not the gateway filter). Even when gateway auth is disabled,
+    # the pod's envd still validates the token. The SDK returns it directly
+    # from the create response, so no kubectl lookup is needed.
+    access_token = sbx._envd_access_token or ""
+    headers = {
+        "e2b-sandbox-id": sandbox_id,
+        "e2b-sandbox-port": "49983",
+    }
+    if access_token:
+        headers["X-Access-Token"] = access_token
+
+    print(f"sending wake traffic to {GATEWAY_URL} for {sandbox_id}")
+    resp = _send_single_wake_request(headers, timeout_sec=180)
+    print(f"wake response: status={resp.status_code} body={resp.text[:200]!r}")
+    print(f"wake response headers: {dict(resp.headers)}")
+
+    # Step 6: Assert the single pending request was continued to the
+    # sandbox's envd upstream. Any gateway local reply (wake failure,
+    # auth rejection, missing route) means the original request was
+    # answered by the filter instead of being forwarded, which fails the
+    # test regardless of whether a later request would have succeeded.
+    # (Gateway auth is disabled in this setup, so a 401 cannot come from
+    # the gateway filter here.)
+    body_start = resp.text.lstrip()[:120]
+    assert not any(body_start.startswith(marker) for marker in _GATEWAY_LOCAL_REPLY_BODIES), (
+        f"gateway answered the wake request locally instead of forwarding it "
+        f"upstream: status={resp.status_code} body={resp.text[:200]!r}"
+    )
+    assert resp.status_code != 401, (
+        f"envd rejected the access token: status=401 body={resp.text[:200]!r}"
+    )
+
+    # Step 7: Verify sandbox is Running (poll with retry for controller
+    # reconciliation — the gateway wake triggers an async controller
+    # reconcile to update Status.Phase from Paused to Running).
+    running_deadline = time.time() + 60
+    running = False
+    last_state = None
+    while time.time() < running_deadline:
+        info = sbx.get_info()
+        last_state = info.state
+        if info.state == SandboxState.RUNNING:
+            running = True
+            break
+        print(f"waiting for running state, current: {info.state}")
+        time.sleep(2)
+    assert running, (
+        f"sandbox should be RUNNING after wake; got {last_state}"
+    )
+    print(f"wake-on-traffic succeeded: {sandbox_id} is running")
+
+    # Step 8: Verify wake-on-traffic annotation persists after wake.
+    # The Resume operation should preserve the wake annotations (they are
+    # part of the sandbox metadata, not stripped by Resume).
+    post_wake_annotations = _get_sandbox_annotations(sbx)
+    assert post_wake_annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
+        f"wake-on-traffic annotation should persist after wake, got: {post_wake_annotations}"
+    )
+    assert post_wake_annotations.get(_ANN_WAKE_TIMEOUT_SECONDS) == wake_timeout_ann, (
+        f"wake-timeout-seconds annotation should persist after wake, got: {post_wake_annotations}"
+    )
+    print(f"post-wake annotations verified: {post_wake_annotations}")

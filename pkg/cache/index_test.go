@@ -76,9 +76,10 @@ func TestAddIndexesToCache(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		absent     bool
-		wantFields []string
+		name        string
+		absent      bool
+		sandboxOnly bool
+		wantFields  []string
 	}{
 		{
 			name:       "TrafficPolicy CRD present registers every index",
@@ -90,6 +91,11 @@ func TestAddIndexesToCache(t *testing.T) {
 			absent:     true,
 			wantFields: withoutTrafficPolicy,
 		},
+		{
+			name:        "sandboxOnly registers only Sandbox indexes",
+			sandboxOnly: true,
+			wantFields:  []string{IndexSandboxPool, IndexClaimedSandboxID, IndexUser},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -100,7 +106,7 @@ func TestAddIndexesToCache(t *testing.T) {
 			t.Cleanup(func() { discoverGVK = old })
 
 			c := &recordingCache{}
-			if err := AddIndexesToCache(c); err != nil {
+			if err := AddIndexesToCache(c, tt.sandboxOnly); err != nil {
 				t.Fatalf("AddIndexesToCache() error = %v", err)
 			}
 			if len(c.fields) != len(tt.wantFields) {
@@ -116,7 +122,7 @@ func TestAddIndexesToCache(t *testing.T) {
 }
 
 func TestAddIndexesToCache_NilCache(t *testing.T) {
-	if err := AddIndexesToCache(nil); err != nil {
+	if err := AddIndexesToCache(nil, false); err != nil {
 		t.Errorf("AddIndexesToCache(nil) error = %v, want nil", err)
 	}
 }

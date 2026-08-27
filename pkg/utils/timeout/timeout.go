@@ -22,6 +22,23 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
 
+// DefaultMinResumeTimeoutSeconds floors the timeout carried by a Resume of a
+// paused sandbox (E2B Connect/Resume and gateway wake-on-traffic), so the
+// freshly written deadline cannot expire while the sandbox is still resuming.
+// The E2B floor is tunable via --e2b-min-resume-timeout.
+const DefaultMinResumeTimeoutSeconds = 300
+
+// ApplyResumeTimeoutFloor raises requested to at least floor, so a short
+// timeout cannot expire while the sandbox is still resuming and trigger a
+// re-pause mid-resume. A floor <= 0 disables the floor and requested is
+// returned unchanged.
+func ApplyResumeTimeoutFloor(requested, floor int) int {
+	if floor <= 0 || requested >= floor {
+		return requested
+	}
+	return floor
+}
+
 func GetTimeoutFromSandbox(sbx *agentsv1alpha1.Sandbox) Options {
 	opts := Options{}
 	if sbx.Spec.ShutdownTime != nil {

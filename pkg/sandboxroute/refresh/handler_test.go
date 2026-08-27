@@ -121,6 +121,29 @@ func TestHandler(t *testing.T) {
 			expectAfterCalls: 1,
 		},
 		{
+			name: "empty state route is deleted",
+			route: &sandboxroute.Route{
+				Namespace:       "ns",
+				Name:            "sandbox",
+				State:           "",
+				ResourceVersion: "2",
+			},
+			deleteResult:     applied,
+			expectStatus:     http.StatusNoContent,
+			expectOperation:  "delete",
+			expectMutations:  1,
+			expectAfterCalls: 1,
+		},
+		{
+			name: "empty state route without resource version is rejected",
+			route: &sandboxroute.Route{
+				Namespace: "ns",
+				Name:      "sandbox",
+				State:     "",
+			},
+			expectStatus: http.StatusBadRequest,
+		},
+		{
 			name:             "running route is upserted",
 			route:            fullRoute(v1alpha1.SandboxStateRunning, "1"),
 			upsertResult:     applied,

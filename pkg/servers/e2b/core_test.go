@@ -58,6 +58,7 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 	"github.com/openkruise/agents/pkg/utils/testutils"
+	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 var TestServerPort = 9999
@@ -84,11 +85,11 @@ func CreateSandboxWithStatus(t *testing.T, c ctrlclient.Client, sbx *agentsv1alp
 }
 
 func Setup(t *testing.T) (*Controller, ctrlclient.Client, func()) {
-	return SetupWithMinResumeTimeout(t, models.DefaultMinResumeTimeoutSeconds)
+	return SetupWithMinResumeTimeout(t, timeout.DefaultMinResumeTimeoutSeconds)
 }
 
 func SetupWithQuota(t *testing.T, enforcer sandboxmanager.QuotaEnforcer) (*Controller, ctrlclient.Client, func()) {
-	return setupWithMinResumeTimeoutAndQuota(t, models.DefaultMinResumeTimeoutSeconds, enforcer)
+	return setupWithMinResumeTimeoutAndQuota(t, timeout.DefaultMinResumeTimeoutSeconds, enforcer)
 }
 
 func refreshKeyStorageForTest(t *testing.T, controller *Controller) {

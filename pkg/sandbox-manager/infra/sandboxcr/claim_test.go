@@ -2477,7 +2477,7 @@ func TestTryClaimSandbox_LockConflict(t *testing.T) {
 				WithClient(fc).
 				WithWaitSimulation().
 				Build()
-			testCache, err := infracache.NewCache(mgr)
+			testCache, err := infracache.NewCache(mgr, false)
 			require.NoError(t, err)
 			mgr.SetWaitHooks(testCache.GetWaitHooks())
 
@@ -3128,7 +3128,7 @@ func TestTryClaimSandbox_ReleasesAdmissionOnRejectedLockWrite(t *testing.T) {
 				mgrBuilder, err := controllers.NewMockManagerBuilder(t)
 				require.NoError(t, err)
 				mgr := mgrBuilder.WithScheme(scheme).WithClient(fc).WithWaitSimulation().Build()
-				testCache, err := infracache.NewCache(mgr)
+				testCache, err := infracache.NewCache(mgr, false)
 				require.NoError(t, err)
 				mgr.SetWaitHooks(testCache.GetWaitHooks())
 

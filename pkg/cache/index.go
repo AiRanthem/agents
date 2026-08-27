@@ -197,14 +197,21 @@ func GetIndexFuncs() []IndexFunc {
 	}
 }
 
-// AddIndexesToCache registers all required field indexes on the controller-runtime cache.
+// AddIndexesToCache registers required field indexes on the controller-runtime cache.
+// When sandboxOnly is true, only indexes for the Sandbox CR are registered;
+// SandboxSet, Checkpoint, and PersistentVolumeClaim indexes are skipped.
 // Indexes whose OptionalGVK is reliably absent from API server discovery (e.g. the
 // corresponding CRD is not installed) are skipped instead of failing the startup.
-func AddIndexesToCache(c ctrlcache.Cache) error {
+func AddIndexesToCache(c ctrlcache.Cache, sandboxOnly bool) error {
 	if c == nil {
 		return nil
 	}
 	for _, idx := range GetIndexFuncs() {
+		if sandboxOnly {
+			if _, ok := idx.Obj.(*agentsv1alpha1.Sandbox); !ok {
+				continue
+			}
+		}
 		if !idx.OptionalGVK.Empty() && !discoverGVK(idx.OptionalGVK) {
 			klog.InfoS("Skipping field index for absent CRD", "field", idx.FieldName, "gvk", idx.OptionalGVK.String())
 			continue

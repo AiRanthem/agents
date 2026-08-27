@@ -1182,7 +1182,9 @@ func TestResetForPool(t *testing.T) {
 						agentsv1alpha1.AnnotationEnvdURL:                "http://legacy-envd.example.com",
 						agentsv1alpha1.AnnotationRuntimeURL:             "http://runtime.example.com",
 						agentsv1alpha1.AnnotationSecurityRules:          `[{"name":"leaked","match":[{"domains":["api.example.com"]}],"actions":{"block":{"statusCode":403}}}]`,
-						"user-anno":                                     "user-value",
+						agentsv1alpha1.AnnotationWakeOnTraffic:          "true",
+						agentsv1alpha1.AnnotationWakeTimeoutSeconds:     "300",
+						"user-anno": "user-value",
 						agentsv1alpha1.AnnotationUpdatedMetadataInClaim: mustMarshal(agentsv1alpha1.UpdatedMetadataInClaim{
 							Labels:      []string{"user-label"},
 							Annotations: []string{"user-anno"},
@@ -1308,6 +1310,11 @@ func TestResetForPool(t *testing.T) {
 			// pool: a leaked chain would apply that tenant's rules (and any
 			// injected credentials) to the next claimant.
 			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationSecurityRules])
+			// Wake annotations of the previous delivery must not leak into
+			// the pool: the next claim may serve a delivery that never
+			// enabled autoResume.
+			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationWakeOnTraffic])
+			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds])
 			assert.Empty(t, updated.Annotations[agentsv1alpha1.AnnotationUpdatedMetadataInClaim])
 			if tt.expectLabels != nil {
 				assert.Equal(t, tt.expectLabels, updated.Labels)

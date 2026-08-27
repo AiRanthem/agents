@@ -71,7 +71,10 @@ func NewHandler(
 		}
 
 		var result sandboxroute.MutationResult
-		if route.State == v1alpha1.SandboxStateDead {
+		// Delete routes for dead and empty (unset) states; retain routes for
+		// every other state, including Paused — wake-on-traffic depends on
+		// Paused routes surviving peer sync.
+		if route.State == v1alpha1.SandboxStateDead || route.State == "" {
 			if route.ResourceVersion == "" {
 				http.Error(w, "invalid route refresh payload", http.StatusBadRequest)
 				return

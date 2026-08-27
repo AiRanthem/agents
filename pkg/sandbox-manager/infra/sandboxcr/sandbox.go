@@ -197,6 +197,80 @@ func (s *Sandbox) retryUpdate(ctx context.Context, modifier ModifierFunc) (bool,
 	return updated, nil
 }
 
+// retryPatch mirrors retryUpdate but persists the mutation with a
+// MergeFromWithOptimisticLock patch instead of a full Update. The patch body
+// only carries the fields the modifier changed plus the resourceVersion
+// precondition, so callers backed by a field-stripping informer cache (the
+// sandbox-gateway cache, see stripSandboxCacheFields) cannot erase stripped
+// fields such as spec.embeddedSandboxTemplate on the API server.
+//
+// Returns the same contract as retryUpdate.
+func (s *Sandbox) retryPatch(ctx context.Context, modifier ModifierFunc) (bool, error) {
+	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(s.Sandbox))
+	objectKey := client.ObjectKeyFromObject(s.Sandbox)
+	updated := false
+	first := true
+	var attemptErr error
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() (err error) {
+		defer func() { attemptErr = err }()
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		latest := &agentsv1alpha1.Sandbox{}
+		if first {
+			err = s.Cache.GetClient().Get(ctx, objectKey, latest)
+		} else {
+			err = s.Cache.GetAPIReader().Get(ctx, objectKey, latest)
+		}
+		first = false
+		if err != nil {
+			return err
+		}
+
+		copied := latest.DeepCopy()
+		shouldUpdate, err := modifier(copied)
+		if err != nil {
+			return err
+		}
+		if !shouldUpdate {
+			// The informer view may lag behind writes made earlier in the same
+			// operation; never roll the wrapper back to an older object.
+			if expectations.IsResourceVersionNewer(s.Sandbox.ResourceVersion, latest.ResourceVersion) {
+				s.Sandbox = latest
+			}
+			updated = false
+			return nil
+		}
+		// Inject trace context into annotations before patching so the
+		// sandbox-controller can establish parent-child span relationship.
+		copied.Annotations = tracing.InjectTraceContext(ctx, copied.Annotations)
+		patch := client.MergeFromWithOptions(latest, client.MergeFromWithOptimisticLock{})
+		if err = s.Cache.GetClient().Patch(ctx, copied, patch); err != nil {
+			return err
+		}
+		s.Sandbox = copied
+		expectations.ResourceVersionExpectationExpect(copied)
+		updated = true
+		return nil
+	})
+	if err == nil && attemptErr != nil {
+		// retry.OnError rewrites wait.Interrupted errors (context cancellation
+		// included) to the last conflict, which is nil when no conflict
+		// happened; restore the real cause instead of reporting success.
+		err = attemptErr
+	}
+	if err != nil {
+		log.Error(err, "failed to patch sandbox after retries")
+		return false, err
+	}
+	if updated {
+		log.Info("sandbox patched successfully")
+	} else {
+		log.Info("sandbox patch skipped")
+	}
+	return updated, nil
+}
+
 func (s *Sandbox) refreshFromAPIReader(ctx context.Context) error {
 	latest := &agentsv1alpha1.Sandbox{}
 	if err := s.Cache.GetAPIReader().Get(ctx, client.ObjectKeyFromObject(s.Sandbox), latest); err != nil {
@@ -491,7 +565,7 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) (err err
 
 	state, reason := s.GetState()
 	log.Info("try to resume sandbox", "state", state, "reason", reason)
-	resumeUpdated, err := s.retryUpdate(ctx, func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
+	resumeModifier := func(sbx *agentsv1alpha1.Sandbox) (bool, error) {
 		if !sbx.Spec.Paused {
 			// First-writer-wins: the loser must not overwrite the winner's
 			// fresh PauseTime, otherwise the controller would auto-pause.
@@ -502,7 +576,8 @@ func (s *Sandbox) Resume(ctx context.Context, opts infra.ResumeOptions) (err err
 			setTimeout(sbx, *opts.Timeout)
 		}
 		return true, nil
-	})
+	}
+	resumeUpdated, err := s.retryPatch(ctx, resumeModifier)
 	if err != nil {
 		log.Error(err, "failed to update sandbox spec.paused")
 		return err

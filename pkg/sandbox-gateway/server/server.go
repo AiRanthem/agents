@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -46,6 +47,30 @@ const (
 
 // ReadinessCheck reports whether the gateway is ready to receive traffic.
 type ReadinessCheck func() error
+
+// globalPeerManager is set when server.Start() creates the peerManager.
+// It allows other packages (e.g. wake) to access the peer manager for
+// SyncRouteWithPeers without creating a full Server instance.
+// Protected by globalPeerManagerMu for concurrent read/write safety.
+var (
+	globalPeerManagerMu sync.RWMutex
+	globalPeerManager   peers.Peers
+)
+
+// setPeerManager sets the global peer manager. Called during Start.
+func setPeerManager(pm peers.Peers) {
+	globalPeerManagerMu.Lock()
+	defer globalPeerManagerMu.Unlock()
+	globalPeerManager = pm
+}
+
+// GetPeerManager returns the peer manager for use by the wake package.
+// Returns nil if the server has not been started yet.
+func GetPeerManager() peers.Peers {
+	globalPeerManagerMu.RLock()
+	defer globalPeerManagerMu.RUnlock()
+	return globalPeerManager
+}
 
 // getMemberlistBindPort reads the memberlist bind port from environment variable
 // Returns the default port if not set or invalid
@@ -140,6 +165,7 @@ func (s *Server) Start(ctx context.Context) error {
 	labelSelector := os.Getenv(EnvLabelSelector)
 
 	s.peerManager = peers.NewMemberlistPeers(s.client, peers.NodePrefixSandboxGateway+nodeName, namespace, labelSelector)
+	setPeerManager(s.peerManager)
 
 	if err := s.peerManager.Start(ctx, s.memberlistBindPort); err != nil {
 		return err
@@ -199,6 +225,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		if err := s.peerManager.Stop(); err != nil {
 			errs = append(errs, err)
 		}
+		setPeerManager(nil)
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)

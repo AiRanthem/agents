@@ -851,6 +851,7 @@ func TestSandbox_Resume(t *testing.T) {
 		withInitRuntime         bool
 		simulateResumeCompleted bool // use time.AfterFunc to simulate underlying resume completion
 		useShortTimeout         bool // simulate underlying not completing by using short context timeout
+		withEmbeddedTemplate    bool // seed spec.embeddedSandboxTemplate and assert the resume patch preserves it
 	}{
 		{
 			name: "resume paused sandbox - operation completed successfully",
@@ -867,6 +868,29 @@ func TestSandbox_Resume(t *testing.T) {
 			expectedState:           v1alpha1.SandboxStateRunning,
 			expectError:             "",
 			simulateResumeCompleted: true,
+		},
+		{
+			name: "resume paused sandbox preserves embedded template",
+			initSandbox: func(sbx *v1alpha1.Sandbox) {
+				sbx.Status.Phase = v1alpha1.SandboxPaused
+				sbx.Status.Conditions = append(sbx.Status.Conditions, metav1.Condition{
+					Type:   string(v1alpha1.SandboxConditionPaused),
+					Status: metav1.ConditionTrue,
+				})
+				sbx.Spec.Paused = true
+				// The gateway informer cache strips the embedded template
+				// (#724); the resume patch must not erase it on the API
+				// server while unpausing.
+				sbx.Spec.EmbeddedSandboxTemplate = v1alpha1.EmbeddedSandboxTemplate{
+					TemplateRef: &v1alpha1.SandboxTemplateRef{Name: "wake-template"},
+				}
+				state, reason := utils.GetSandboxState(sbx)
+				assert.Equal(t, v1alpha1.SandboxStatePaused, state, reason)
+			},
+			expectedState:           v1alpha1.SandboxStateRunning,
+			expectError:             "",
+			simulateResumeCompleted: true,
+			withEmbeddedTemplate:    true,
 		},
 		{
 			name: "resume paused sandbox - underlying operation not completed",
@@ -1087,6 +1111,11 @@ func TestSandbox_Resume(t *testing.T) {
 			require.NotNil(t, updatedSbx.Spec.PauseTime)
 			assert.WithinDuration(t, shutdownTime, updatedSbx.Spec.ShutdownTime.Time, time.Second)
 			assert.WithinDuration(t, pauseTime, updatedSbx.Spec.PauseTime.Time, time.Second)
+			if tt.withEmbeddedTemplate {
+				require.NotNil(t, updatedSbx.Spec.EmbeddedSandboxTemplate.TemplateRef,
+					"resume patch must not erase the embedded template")
+				assert.Equal(t, "wake-template", updatedSbx.Spec.EmbeddedSandboxTemplate.TemplateRef.Name)
+			}
 		})
 	}
 }
@@ -1616,7 +1645,7 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 			// IsSandboxResumable passes and the mutator runs (released by the
 			// Ready-flip AfterFunc below). Losers (initialPaused=false):
 			// Phase=Running + ConditionReady so Resume() hits the
-			// "sandbox is already resumed" early-return before retryUpdate.
+			// "sandbox is already resumed" early-return before retryPatch.
 			phase := v1alpha1.SandboxPaused
 			conds := []metav1.Condition{
 				{Type: string(v1alpha1.SandboxConditionPaused), Status: metav1.ConditionTrue, Reason: "Paused"},
@@ -1665,16 +1694,16 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 				})
 			}
 
-			// Intercept Update calls to capture the payload that crossed the wire.
-			var updatePayloads []*v1alpha1.Sandbox
+			// Intercept Patch calls to capture the payload that crossed the wire.
+			var patchPayloads []*v1alpha1.Sandbox
 			cacheClient, ok := cache.GetClient().(ctrl.WithWatch)
 			require.True(t, ok)
 			interceptedClient := interceptor.NewClient(cacheClient, interceptor.Funcs{
-				Update: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, opts ...ctrl.UpdateOption) error {
+				Patch: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, patch ctrl.Patch, opts ...ctrl.PatchOption) error {
 					if sbx, ok := obj.(*v1alpha1.Sandbox); ok {
-						updatePayloads = append(updatePayloads, sbx.DeepCopy())
+						patchPayloads = append(patchPayloads, sbx.DeepCopy())
 					}
-					return c.Update(ctx, obj, opts...)
+					return c.Patch(ctx, obj, patch, opts...)
 				},
 			})
 
@@ -1688,12 +1717,12 @@ func TestSandbox_ResumeMutatorAtomicity(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			// Loser case: Resume early-returns; no Update should have happened.
+			// Loser case: Resume early-returns; no Patch should have happened.
 			if !tc.initialPaused {
-				assert.Empty(t, updatePayloads, "loser path must not Update")
+				assert.Empty(t, patchPayloads, "loser path must not Patch")
 			} else {
-				require.Len(t, updatePayloads, 1, "exactly one Update payload expected")
-				payload := updatePayloads[0]
+				require.Len(t, patchPayloads, 1, "exactly one Patch payload expected")
+				payload := patchPayloads[0]
 				assert.False(t, payload.Spec.Paused, "Paused must be false in the payload")
 				assertTimePtrEqual(t, tc.want.pauseTime, payload.Spec.PauseTime, "PauseTime in payload must match expected")
 				assertTimePtrEqual(t, tc.want.shutdownTime, payload.Spec.ShutdownTime, "ShutdownTime in payload must match expected")
@@ -1912,11 +1941,11 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 				resumeCtx, cancel := context.WithCancel(t.Context())
 				cacheClient, ok := cache.GetClient().(ctrl.WithWatch)
 				require.True(t, ok)
-				var updates atomic.Int32
+				var patches atomic.Int32
 				interceptedClient := interceptor.NewClient(cacheClient, interceptor.Funcs{
-					Update: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, opts ...ctrl.UpdateOption) error {
-						err := c.Update(ctx, obj, opts...)
-						if _, ok := obj.(*v1alpha1.Sandbox); ok && updates.Add(1) == 1 {
+					Patch: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, patch ctrl.Patch, opts ...ctrl.PatchOption) error {
+						err := c.Patch(ctx, obj, patch, opts...)
+						if _, ok := obj.(*v1alpha1.Sandbox); ok && patches.Add(1) == 1 {
 							cancel()
 						}
 						return err
@@ -1958,7 +1987,9 @@ func TestSandbox_ResumeFailurePathsLeaveRealTimeout(t *testing.T) {
 				var updates atomic.Int32
 				interceptedClient := interceptor.NewClient(cacheClient, interceptor.Funcs{
 					Update: func(ctx context.Context, c ctrl.WithWatch, obj ctrl.Object, opts ...ctrl.UpdateOption) error {
-						if _, ok := obj.(*v1alpha1.Sandbox); ok && updates.Add(1) > 1 {
+						// Resume mutates via Patch, so the first intercepted
+						// Update belongs to SaveTimeoutWithPolicy: fail it.
+						if _, ok := obj.(*v1alpha1.Sandbox); ok && updates.Add(1) >= 1 {
 							return injectedErr
 						}
 						return c.Update(ctx, obj, opts...)

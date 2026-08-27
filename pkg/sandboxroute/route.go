@@ -41,13 +41,14 @@ type Route struct {
 	ResourceVersion    string    `json:"resourceVersion"`
 	AccessToken        string    `json:"accessToken,omitempty"`
 	RequireTrafficAuth bool      `json:"requireTrafficAuth,omitempty"`
+	WakeOnTraffic      bool      `json:"wakeOnTraffic,omitempty"`
 }
 
 // String implements fmt.Stringer without exposing the access token.
 func (r Route) String() string {
 	return fmt.Sprintf(
-		"{IP:%s ID:%s Namespace:%s Name:%s UID:%s Owner:%s State:%s ResourceVersion:%s AccessToken:*** RequireTrafficAuth:%t}",
-		r.IP, r.ID, r.Namespace, r.Name, r.UID, r.Owner, r.State, r.ResourceVersion, r.RequireTrafficAuth,
+		"{IP:%s ID:%s Namespace:%s Name:%s UID:%s Owner:%s State:%s ResourceVersion:%s AccessToken:*** RequireTrafficAuth:%t WakeOnTraffic:%t}",
+		r.IP, r.ID, r.Namespace, r.Name, r.UID, r.Owner, r.State, r.ResourceVersion, r.RequireTrafficAuth, r.WakeOnTraffic,
 	)
 }
 
@@ -113,6 +114,7 @@ func RouteFromSandbox(sandbox *agentsv1alpha1.Sandbox) (Route, error) {
 		ResourceVersion:    sandbox.ResourceVersion,
 		AccessToken:        utils.GetAccessToken(sandbox),
 		RequireTrafficAuth: identity.IsAccessTokenRequested(sandbox),
+		WakeOnTraffic:      annotations[agentsv1alpha1.AnnotationWakeOnTraffic] == agentsv1alpha1.True,
 	}
 	if err := route.validate(); err != nil {
 		return Route{}, err

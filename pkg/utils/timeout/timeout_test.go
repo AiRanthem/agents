@@ -339,3 +339,50 @@ func TestTimeEqual(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyResumeTimeoutFloor(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested int
+		floor     int
+		want      int
+	}{
+		{
+			name:      "below floor is raised",
+			requested: 30,
+			floor:     DefaultMinResumeTimeoutSeconds,
+			want:      DefaultMinResumeTimeoutSeconds,
+		},
+		{
+			name:      "equal to floor unchanged",
+			requested: DefaultMinResumeTimeoutSeconds,
+			floor:     DefaultMinResumeTimeoutSeconds,
+			want:      DefaultMinResumeTimeoutSeconds,
+		},
+		{
+			name:      "above floor unchanged",
+			requested: 600,
+			floor:     DefaultMinResumeTimeoutSeconds,
+			want:      600,
+		},
+		{
+			name:      "zero floor disables",
+			requested: 30,
+			floor:     0,
+			want:      30,
+		},
+		{
+			name:      "negative floor disables",
+			requested: 30,
+			floor:     -1,
+			want:      30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ApplyResumeTimeoutFloor(tt.requested, tt.floor)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
