@@ -12,7 +12,7 @@ import requests
 from e2b.exceptions import NotFoundException
 from e2b_code_interpreter import Sandbox, SandboxState
 
-from utils import connect_sandbox, resolve_sandbox_cr
+from utils import SDK_REQUEST_TIMEOUT_SECONDS, connect_sandbox, resolve_sandbox_cr
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -26,8 +26,18 @@ QUOTA_NO_REDIS_TEST = "test_quota_is_accepted_and_unenforced_without_redis"
 REDIS_NAMESPACE = "sandbox-system"
 REDIS_SELECTOR = "app.kubernetes.io/name=redis"
 REDIS_DEPLOYMENT = "redis"
-SDK_REQUEST_TIMEOUT_SECONDS = 120
+MANAGER_NAMESPACE = "sandbox-system"
+MANAGER_SELECTOR = "app.kubernetes.io/name=sandbox-manager"
 SNAPSHOT_WAIT_SUCCESS_SECONDS = 300
+QUOTA_BREAKER_RECOVERY_WAIT_SECONDS = 35
+QUOTA_METRIC_LABELS = {
+    "fail_open": ("sandbox_manager_quota_acquire_total", "result", "fail_open"),
+    "allowed": ("sandbox_manager_quota_acquire_total", "result", "allowed"),
+    "rejected": ("sandbox_manager_quota_acquire_total", "result", "rejected"),
+    "backend_errors": ("sandbox_manager_quota_backend_errors_total", "operation", "acquire"),
+    "breaker_open": ("sandbox_manager_quota_breaker_state_total", "state", "open"),
+    "breaker_closed": ("sandbox_manager_quota_breaker_state_total", "state", "closed"),
+}
 
 pytestmark = pytest.mark.skipif(
     QUOTA_E2E_PROFILE not in QUOTA_E2E_PROFILES,
@@ -162,6 +172,81 @@ def kubectl_json(*args):
 
 def kubectl(*args):
     return subprocess.run(["kubectl", *args], capture_output=True, text=True, check=True).stdout
+
+
+def prometheus_counter_value(metrics_text, metric_name, label_name, label_value):
+    sample_name = f'{metric_name}{{{label_name}="{label_value}"}}'
+    for line in metrics_text.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == sample_name:
+            return float(fields[1])
+    return 0.0
+
+
+def quota_metrics_snapshot():
+    pods = kubectl_json("get", "pod", "-n", MANAGER_NAMESPACE, "-l", MANAGER_SELECTOR)
+    items = sorted(pods.get("items", []), key=lambda item: item["metadata"]["name"])
+    assert items, "no sandbox-manager pod found for quota metrics"
+
+    instances = []
+    counters = {name: 0.0 for name in QUOTA_METRIC_LABELS}
+    instance_counters = {}
+    for item in items:
+        metadata = item["metadata"]
+        controller_status = next(
+            (
+                status
+                for status in item.get("status", {}).get("containerStatuses", [])
+                if status["name"] == "controller"
+            ),
+            None,
+        )
+        assert controller_status is not None, f'controller status missing for manager pod {metadata["name"]}'
+        instance = (metadata["name"], metadata["uid"], controller_status["restartCount"])
+        instances.append(instance)
+
+        proxy_path = (
+            f'/api/v1/namespaces/{MANAGER_NAMESPACE}/pods/{metadata["name"]}:8080/proxy/metrics'
+        )
+        metrics_text = kubectl("get", "--raw", proxy_path)
+        pod_counters = {}
+        for name, (metric_name, label_name, label_value) in QUOTA_METRIC_LABELS.items():
+            value = prometheus_counter_value(metrics_text, metric_name, label_name, label_value)
+            pod_counters[name] = value
+            counters[name] += value
+        instance_counters[instance] = pod_counters
+
+    return {
+        "instances": tuple(instances),
+        "counters": counters,
+        "instance_counters": instance_counters,
+    }
+
+
+def quota_metrics_instance_delta(before, after):
+    assert before["instances"] == after["instances"], (
+        "sandbox-manager pods changed while measuring quota metrics: "
+        f'before={before["instances"]}, after={after["instances"]}'
+    )
+    delta = {
+        instance: {
+            name: after["instance_counters"][instance][name] - before["instance_counters"][instance][name]
+            for name in QUOTA_METRIC_LABELS
+        }
+        for instance in before["instances"]
+    }
+    assert all(value >= 0 for counters in delta.values() for value in counters.values()), (
+        f"quota counters decreased: {delta}"
+    )
+    return delta
+
+
+def quota_metrics_delta(before, after):
+    instance_delta = quota_metrics_instance_delta(before, after)
+    return {
+        name: sum(counters[name] for counters in instance_delta.values())
+        for name in QUOTA_METRIC_LABELS
+    }
 
 
 def dump_quota_template_state():
@@ -388,19 +473,9 @@ def resume_sandbox(sbx):
     def attempt():
         try:
             if hasattr(sbx, "resume"):
-                try:
-                    box["sandbox"] = sbx.resume(request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
-                except TypeError as exc:
-                    if "request_timeout" not in str(exc):
-                        raise
-                    box["sandbox"] = sbx.resume()
+                box["sandbox"] = sbx.resume(request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
                 return
-            try:
-                box["sandbox"] = sbx.connect(timeout=6000, request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
-            except TypeError as exc:
-                if "request_timeout" not in str(exc):
-                    raise
-                box["sandbox"] = connect_sandbox(sbx, timeout=6000)
+            box["sandbox"] = connect_sandbox(sbx, timeout=6000)
         except Exception as exc:
             if is_transient_lifecycle_error(exc):
                 raise AssertionError(str(exc))
@@ -427,6 +502,96 @@ def force_delete_sandbox(sbx):
         wait_until(lambda: assert_sandbox_cr_gone(name), timeout=120)
     except Exception as exc:
         print(f"quota cleanup CR delete did not finish for {name}: {exc}")
+
+
+def cleanup_sandbox_wave(sandboxes):
+    for sbx in reversed(sandboxes):
+        try:
+            sbx.kill()
+        except Exception as exc:
+            print(f"quota retry kill fell back to kubectl for {getattr(sbx, 'sandbox_id', '<unknown>')}: {exc}")
+            force_delete_sandbox(sbx)
+    for sbx in sandboxes:
+        try:
+            wait_until(lambda sbx=sbx: assert_sandbox_gone(sbx), timeout=120)
+        except Exception as exc:
+            print(f"quota retry wait fell back to kubectl for {getattr(sbx, 'sandbox_id', '<unknown>')}: {exc}")
+            force_delete_sandbox(sbx)
+
+
+def recover_quota_admission_after_fail_open(
+    api_key,
+    template,
+    marker,
+    owned,
+    evidence_before,
+    evidence_after,
+    timeout=180,
+):
+    evidence_delta = quota_metrics_instance_delta(evidence_before, evidence_after)
+    targets = {
+        instance
+        for instance, counters in evidence_delta.items()
+        if counters["fail_open"] > 0
+    }
+    assert targets, f"fail-open recovery had no affected manager instance: {evidence_delta}"
+
+    admitted = []
+    baseline = evidence_after
+    deadline = time.time() + timeout
+    needs_cooldown = True
+    probe = 0
+    while True:
+        current = quota_metrics_snapshot()
+        recovery_delta = quota_metrics_instance_delta(baseline, current)
+        recovered = {
+            instance
+            for instance in targets
+            if recovery_delta[instance]["rejected"] > 0
+        }
+        if recovered == targets:
+            return admitted
+
+        remaining = deadline - time.time()
+        assert remaining > 0, (
+            "quota breaker recovery timed out; "
+            f"targets={targets}, recovered={recovered}, metric_delta={recovery_delta}"
+        )
+        if needs_cooldown:
+            assert remaining >= QUOTA_BREAKER_RECOVERY_WAIT_SECONDS, (
+                "quota breaker recovery lacked time for the configured cooldown; "
+                f"targets={targets}, recovered={recovered}, remaining={remaining:.1f}s"
+            )
+            # The state metric is a transition counter, not a gauge. Waiting past
+            # the configured 30s duration makes the next request a half-open probe;
+            # a subsequent rejected counter increase proves that pod reached Redis,
+            # closed the breaker, and is enforcing quota before another burst.
+            time.sleep(QUOTA_BREAKER_RECOVERY_WAIT_SECONDS)
+            needs_cooldown = False
+            continue
+
+        before = quota_metrics_snapshot()
+        try:
+            sbx = create_sandbox_with_key(api_key, template, f"{marker}-breaker-probe-{probe}")
+        except Exception as exc:
+            text = str(exc).lower()
+            assert "403" in text and "quota" in text, text
+            admitted_sbx = None
+        else:
+            admitted_sbx = track_sandbox(owned, sbx)
+            admitted.append(admitted_sbx)
+        probe += 1
+
+        after = quota_metrics_snapshot()
+        attempt_delta = quota_metrics_delta(before, after)
+        if admitted_sbx is not None:
+            assert attempt_delta["allowed"] + attempt_delta["fail_open"] >= 1, (
+                "quota recovery probe succeeded without an allowed or fail-open decision; "
+                f"metric_delta={attempt_delta}, sandbox={admitted_sbx.sandbox_id}"
+            )
+            needs_cooldown = attempt_delta["fail_open"] > 0
+        if not needs_cooldown:
+            time.sleep(1)
 
 
 def cleanup_quota_case(key_id, owned, marker=None):
@@ -501,29 +666,31 @@ def create_sandbox_eventually_allowed(api_key, template, marker, timeout=120):
 
 
 def assert_quota_eventually_rejected(api_key, template, marker, owned, timeout=120):
-    # Like assert_quota_create_rejected, but tolerant of a transient fail-open
-    # window. After a Redis outage the admission circuit breaker stays open for
-    # its cooldown (default 30s) and the first create within that window is
-    # admitted fail-open even though Redis is reachable again. Retry until a
-    # create is actually rejected. Any create that slips through is killed
-    # immediately so it neither leaks nor drains the warm pool across retries;
-    # if the kill fails it is tracked for the case-level cleanup instead.
-    def attempt():
-        try:
-            sbx = create_sandbox_with_key(api_key, template, marker)
-        except Exception as exc:
-            text = str(exc).lower()
-            assert "403" in text or "quota" in text, text
-            return
-        try:
-            sbx.kill()
-            wait_until(lambda: assert_sandbox_gone(sbx), timeout=120)
-        except Exception as exc:
-            track_sandbox(owned, sbx)
-            print(f"fail-open create cleanup deferred for {getattr(sbx, 'sandbox_id', '<unknown>')}: {exc}")
-        raise AssertionError("create still admitted; fail-open window not closed yet")
+    before = quota_metrics_snapshot()
+    try:
+        sbx = create_sandbox_with_key(api_key, template, marker)
+    except Exception as exc:
+        text = str(exc).lower()
+        assert "403" in text and "quota" in text, text
+        return
 
-    wait_until(attempt, timeout=timeout)
+    track_sandbox(owned, sbx)
+    after = quota_metrics_snapshot()
+    delta = quota_metrics_delta(before, after)
+    assert delta["fail_open"] >= 1, (
+        "quota create succeeded without fail-open evidence; "
+        f"metric_delta={delta}, sandbox={getattr(sbx, 'sandbox_id', '<unknown>')}"
+    )
+    probes = recover_quota_admission_after_fail_open(
+        api_key,
+        template,
+        marker,
+        owned,
+        before,
+        after,
+        timeout=timeout,
+    )
+    cleanup_sandbox_wave([sbx, *probes])
 
 
 def assert_redis_count(key_id, scope, expected):
@@ -961,28 +1128,59 @@ def test_concurrent_creates_do_not_exceed_count_limit(sandbox_context):
         # making the strict `successes == 3, quota_misses == 7` assertion flaky.
         wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=3), timeout=180)
 
-        def attempt(i):
-            try:
-                return ("ok", create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, f"{marker}-{i}"))
-            except Exception as exc:
-                text = str(exc).lower()
-                if "403" in text or "quota" in text:
-                    return ("quota", text)
-                return ("error", text)
+        def run_burst(burst):
+            def attempt(i):
+                try:
+                    return ("ok", create_sandbox_with_key(api_key, QUOTA_SMALL_TEMPLATE, f"{marker}-{burst}-{i}"))
+                except Exception as exc:
+                    text = str(exc).lower()
+                    if "403" in text and "quota" in text:
+                        return ("quota", text)
+                    return ("error", text)
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            results = [future.result() for future in as_completed([pool.submit(attempt, i) for i in range(10)])]
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                return [future.result() for future in as_completed([pool.submit(attempt, i) for i in range(10)])]
 
-        successes = [value for status, value in results if status == "ok"]
-        quota_misses = [value for status, value in results if status == "quota"]
-        unexpected = [value for status, value in results if status == "error"]
+        for burst in range(2):
+            before = quota_metrics_snapshot()
+            results = run_burst(burst)
+            after = quota_metrics_snapshot()
+            delta = quota_metrics_delta(before, after)
 
-        for sbx in successes:
-            track_sandbox(owned, sbx)
-            sandbox_context.add(sbx)
-        assert len(successes) == 3, results
-        assert len(quota_misses) == 7, results
-        assert not unexpected, unexpected
+            successes = [value for status, value in results if status == "ok"]
+            quota_misses = [value for status, value in results if status == "quota"]
+            unexpected = [value for status, value in results if status == "error"]
+            for sbx in successes:
+                track_sandbox(owned, sbx)
+
+            diagnostics = (
+                f"successes={len(successes)}, quota_misses={len(quota_misses)}, "
+                f"metric_delta={delta}, results={results}"
+            )
+            assert not unexpected, f"unexpected create errors: {unexpected}; {diagnostics}"
+            if len(successes) == 3 and len(quota_misses) == 7:
+                for sbx in successes:
+                    sandbox_context.add(sbx)
+                break
+
+            assert len(successes) > 3, f"concurrent quota result was not 3/7: {diagnostics}"
+            excess = len(successes) - 3
+            assert delta["fail_open"] >= excess, (
+                f"concurrent quota oversell lacked fail-open evidence for {excess} excess creates: {diagnostics}"
+            )
+            assert burst == 0, f"concurrent quota retry still oversold after proven fail-open: {diagnostics}"
+
+            probes = recover_quota_admission_after_fail_open(
+                api_key,
+                QUOTA_SMALL_TEMPLATE,
+                marker,
+                owned,
+                before,
+                after,
+            )
+            cleanup_sandbox_wave([*successes, *probes])
+            wait_until(lambda: assert_redis_count(created_id, "all", 0), timeout=120)
+            wait_until(lambda: assert_available_pool_sandbox_count(QUOTA_SMALL_TEMPLATE, minimum=3), timeout=180)
     finally:
         cleanup_quota_case(created_id, owned, marker)
 

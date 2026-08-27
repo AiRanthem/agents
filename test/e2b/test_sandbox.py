@@ -13,7 +13,7 @@ from e2b_code_interpreter import Sandbox, SandboxQuery, SandboxState
 
 import logging
 
-from utils import list_sandbox, connect_sandbox, run_code_sandbox, resolve_sandbox_cr
+from utils import SDK_REQUEST_TIMEOUT_SECONDS, list_sandbox, connect_sandbox, run_code_sandbox, resolve_sandbox_cr
 
 logger = logging.getLogger(__name__)
 
@@ -615,7 +615,7 @@ def test_never_timeout(sandbox_context, config):
     assert info.end_at == zero_time
     assert sbx.is_running() is False
 
-    sbx.connect(timeout=60)
+    connect_sandbox(sbx, timeout=60)
     info = sbx.get_info()
     assert info.end_at == zero_time
     assert sbx.is_running() is True
@@ -802,7 +802,11 @@ def test_concurrent_pause_resume_on_running_sandbox(sandbox_context, config):
 
     def do_resume():
         try:
-            sbx.connect()
+            # One-shot connect only. Do not switch this back to
+            # connect_sandbox(): that helper retries through SandboxIsPausing
+            # until pause finishes, then resumes, so the final state becomes
+            # RUNNING and this "pause wins" case fails.
+            sbx.connect(request_timeout=SDK_REQUEST_TIMEOUT_SECONDS)
         except Exception as e:
             if "409" in str(e) or "conflict" in str(e).lower():
                 logger.info("Concurrent resume got expected conflict: %s", e)
