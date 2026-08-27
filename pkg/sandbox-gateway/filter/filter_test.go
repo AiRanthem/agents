@@ -784,11 +784,15 @@ func TestFilterFactory(t *testing.T) {
 	assert.NotNil(t, sf.adapter)
 }
 
-// TestDecodeHeadersAccessTokenAuth tests access token authentication logic
+// TestDecodeHeadersAccessTokenAuth tests access token authentication logic for
+// routes that have not opted into JWT enforcement. Because EnableAuth and
+// EnableJWTAuth govern disjoint sets of routes, these routes must be
+// authenticated identically whether or not JWT mode is active.
 func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 	tests := []struct {
 		name                string
 		disableAuth         bool
+		enableJWTAuth       bool
 		useKruisePath       bool
 		routeAccessToken    string
 		requestToken        string
@@ -869,6 +873,49 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 			expectedStatusCode:  401,
 			expectedReplyDetail: "unauthorized",
 		},
+		{
+			// Migrating a UUID deployment to JWT must not drop the baseline.
+			name:             "JWT mode keeps the UUID baseline",
+			enableJWTAuth:    true,
+			routeAccessToken: "secret-token-123",
+			requestToken:     "secret-token-123",
+			setTokenHeader:   true,
+			expectedStatus:   api.Continue,
+			expectLocalReply: false,
+		},
+		{
+			name:                "JWT mode rejects a mismatched UUID token",
+			enableJWTAuth:       true,
+			routeAccessToken:    "secret-token-123",
+			requestToken:        "wrong-token",
+			setTokenHeader:      true,
+			expectedStatus:      api.LocalReply,
+			expectLocalReply:    true,
+			expectedStatusCode:  401,
+			expectedReplyDetail: "unauthorized",
+		},
+		{
+			// Migrating an unauthenticated deployment straight to JWT must not
+			// start validating traffic that was previously allowed through, even
+			// though every Sandbox carries a runtime access token annotation.
+			name:             "JWT mode without the baseline ignores a mismatched token",
+			disableAuth:      true,
+			enableJWTAuth:    true,
+			routeAccessToken: "secret-token-123",
+			requestToken:     "wrong-token",
+			setTokenHeader:   true,
+			expectedStatus:   api.Continue,
+			expectLocalReply: false,
+		},
+		{
+			name:             "JWT mode without the baseline allows a missing token",
+			disableAuth:      true,
+			enableJWTAuth:    true,
+			routeAccessToken: "secret-token-123",
+			setTokenHeader:   false,
+			expectedStatus:   api.Continue,
+			expectLocalReply: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -883,7 +930,15 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 
 			cfg := DefaultConfig()
 			cfg.EnableAuth = !tt.disableAuth
-			filter, mockCallbacks := newTestFilter(cfg)
+			cfg.EnableJWTAuth = tt.enableJWTAuth
+			var manager JWTAuthManager
+			if tt.enableJWTAuth {
+				// The manager exposes no verifier, so a regression that routed these
+				// requests through JWT verification would surface as a 503 instead of
+				// silently passing.
+				manager = &fakeJWTAuthManager{}
+			}
+			filter, mockCallbacks := newTestFilterWithDeps(cfg, defaultTestAdapter(), manager)
 
 			var header api.RequestHeaderMap
 			if tt.useKruisePath {
@@ -894,11 +949,17 @@ func TestDecodeHeadersAccessTokenAuth(t *testing.T) {
 			if tt.setTokenHeader {
 				header.Set("x-access-token", tt.requestToken)
 			}
+			header.Set(DefaultTrafficAccessTokenHeader, "unused-jwt")
 
 			status := filter.DecodeHeaders(header, true)
 
 			assert.Equal(t, tt.expectedStatus, status)
 			assert.Equal(t, tt.expectLocalReply, mockCallbacks.decoderCallbacks.sendLocalReplyCalled)
+			// JWT mode owns the traffic token header and strips the one a client sent
+			// for a non-opted-in route. With the capability off the gateway does not
+			// read that header, so it reaches the workload untouched.
+			_, trafficTokenPresent := header.Get(DefaultTrafficAccessTokenHeader)
+			assert.Equal(t, !tt.enableJWTAuth, trafficTokenPresent)
 			if tt.expectLocalReply {
 				assert.Equal(t, tt.expectedStatusCode, mockCallbacks.decoderCallbacks.replyStatusCode)
 				assert.Equal(t, tt.expectedReplyDetail, mockCallbacks.decoderCallbacks.replyDetails)
@@ -932,7 +993,7 @@ func TestDecodeHeadersJWTAuthentication(t *testing.T) {
 		skipRouteAuth    bool
 	}{
 		{
-			name:             "route without JWT requirement skips verification",
+			name:             "route without JWT requirement skips JWT verification",
 			managerState:     "missing",
 			requestJWT:       "unused-jwt",
 			expectStatus:     api.Continue,

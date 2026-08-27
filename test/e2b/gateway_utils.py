@@ -2,8 +2,52 @@
 
 import json
 import subprocess
+import time
+
+import requests
 
 from utils import resolve_sandbox_cr
+
+
+# The port agent-runtime listens on. agent-runtime authenticates x-access-token
+# on its own, so a rejection observed here cannot be attributed to the gateway.
+RUNTIME_PORT = 49983
+# A port served by the sandbox workload itself. Nothing behind it inspects
+# credentials, so a 200 carrying WORKLOAD_RESPONSE_BODY is positive proof that a
+# request traversed the gateway, and any 4xx/5xx can only have come from the
+# gateway. Kept distinct from the 8080 used by the WebSocket case so both
+# servers can coexist inside one sandbox.
+WORKLOAD_PORT = 8081
+WORKLOAD_RESPONSE_BODY = "gateway-workload-ok"
+TRAFFIC_ACCESS_TOKEN_HEADER = "E2B-Traffic-Access-Token"
+
+_WORKLOAD_SERVER_PATH = "/tmp/gateway_workload_server.py"
+_WORKLOAD_READY_PATH = "/tmp/gateway-workload-ready"
+_WORKLOAD_SERVER = f'''
+import http.server
+
+BODY = {WORKLOAD_RESPONSE_BODY!r}.encode()
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(BODY)))
+        self.end_headers()
+        self.wfile.write(BODY)
+
+    def log_message(self, *args):
+        pass
+
+
+server = http.server.HTTPServer(("0.0.0.0", {WORKLOAD_PORT}), Handler)
+# Binding already succeeded here, so the readiness marker cannot race ahead of
+# the listening socket.
+with open({_WORKLOAD_READY_PATH!r}, "w"):
+    pass
+server.serve_forever()
+'''
 
 
 def get_sandbox_resource(sandbox_id: str) -> dict:
@@ -30,3 +74,83 @@ def get_sandbox_access_token(sandbox_id: str) -> str:
 def get_sandbox_uid(sandbox_id: str) -> str:
     """Return the immutable Sandbox UID."""
     return get_sandbox_resource(sandbox_id)["metadata"]["uid"]
+
+
+def start_workload_server(sandbox) -> None:
+    """Serve WORKLOAD_RESPONSE_BODY on WORKLOAD_PORT inside the sandbox.
+
+    The caller must pass a client that can already reach the sandbox through the
+    gateway; for a JWT opt-in Sandbox that means a client carrying a valid
+    traffic token. Waiting on the readiness marker keeps the first gateway
+    request from racing the listener startup.
+    """
+    sandbox.files.write(_WORKLOAD_SERVER_PATH, _WORKLOAD_SERVER)
+    sandbox.commands.run(f"python3 {_WORKLOAD_SERVER_PATH}", background=True)
+    sandbox.commands.run(
+        f"for i in $(seq 1 100); do test -f {_WORKLOAD_READY_PATH} && exit 0; "
+        "sleep 0.1; done; exit 1"
+    )
+
+
+def gateway_request(
+    config,
+    sandbox_id,
+    runtime_access_token=None,
+    traffic_access_token=None,
+    port=RUNTIME_PORT,
+):
+    """Send a header-routed request through the gateway to one sandbox port."""
+    headers = {
+        "e2b-sandbox-id": sandbox_id,
+        "e2b-sandbox-port": str(port),
+    }
+    if runtime_access_token is not None:
+        headers["x-access-token"] = runtime_access_token
+    if traffic_access_token is not None:
+        headers[TRAFFIC_ACCESS_TOKEN_HEADER] = traffic_access_token
+    return requests.get(f"{config.gateway_url}/", headers=headers, timeout=10)
+
+
+def gateway_request_eventually(
+    config,
+    sandbox_id,
+    runtime_access_token=None,
+    traffic_access_token=None,
+    port=RUNTIME_PORT,
+    timeout=30,
+):
+    """Poll the gateway until the route stops reporting itself as unusable.
+
+    502 and 503 cover every state in which no usable route is installed yet: a
+    registry miss, a registry that is still starting, and a Sandbox whose
+    projected state is not running. That last case is what makes polling on
+    these two codes sufficient rather than arbitrary: a warm-pool Sandbox is
+    owned by its SandboxSet until it is claimed, which projects to Available (or
+    Creating) instead of Running, and the gateway rejects those with 502 before
+    authentication runs. Claiming clears the owner reference and writes the
+    runtime access token in a single update, so any other status proves the
+    route in effect is the post-claim one, with its access token and traffic-auth
+    flag already populated.
+    """
+    deadline = time.monotonic() + timeout
+    response = None
+    while time.monotonic() < deadline:
+        response = gateway_request(
+            config, sandbox_id, runtime_access_token, traffic_access_token, port
+        )
+        if response.status_code not in (502, 503):
+            return response
+        time.sleep(0.5)
+    raise AssertionError(
+        f"gateway route was not ready for {sandbox_id} on port {port}: "
+        f"{response.status_code if response is not None else 'no response'} "
+        f"{response.text if response is not None else ''}"
+    )
+
+
+def assert_workload_reached(response) -> None:
+    """Assert a response was produced by the workload, not by the gateway."""
+    assert response.status_code == 200, (
+        f"expected the workload's 200, got {response.status_code}: {response.text}"
+    )
+    assert response.text == WORKLOAD_RESPONSE_BODY, response.text

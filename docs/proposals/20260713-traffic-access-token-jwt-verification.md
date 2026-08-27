@@ -41,6 +41,8 @@ without the annotation decode `RequireTrafficAuth` as `false`.
 - Keep the request path offline after verifier initialization.
 - Fail closed when a route requires JWT authentication but the JWT capability or
   verifier is unavailable.
+- Keep authentication of routes that have not opted into JWT unchanged when the
+  JWT capability is enabled.
 - Preserve existing UUID authentication when JWT authentication is disabled.
 - Keep configuration and dependencies out of sandbox-manager's controller-only
   feature-gate package.
@@ -60,16 +62,30 @@ without the annotation decode `RequireTrafficAuth` as `false`.
 
 ## Behavioral Contract
 
-Gateway authentication has three valid process modes, combined with a
-route-scoped traffic-auth requirement:
+Gateway authentication has two independent process switches, combined with a
+route-scoped traffic-auth requirement. `enable-auth` governs the routes that
+have not opted in, and `enable-jwt-auth` governs the routes that have. The two
+switches are orthogonal and address disjoint sets of routes:
 
 | `enable-auth` | `enable-jwt-auth` | `RequireTrafficAuth=false` | `RequireTrafficAuth=true` |
 |---|---|---|---|
 | `false` | `false` | Authentication disabled. | Fail closed with `503`. |
 | `true` | `false` | Existing `x-access-token` UUID authentication. | Fail closed with `503`; do not fall back to UUID. |
-| `true` | `true` | Skip gateway authentication and remove the traffic-token header. | Verify the JWT using the traffic-token header. |
+| `false` | `true` | Authentication disabled; remove the traffic-token header. | Verify the JWT using the traffic-token header. |
+| `true` | `true` | Existing `x-access-token` UUID authentication; remove the traffic-token header. | Verify the JWT using the traffic-token header. |
 
-`enable-jwt-auth=true` with `enable-auth=false` is invalid configuration.
+The invariant behind the table is that enabling `enable-jwt-auth` never changes
+the `RequireTrafficAuth=false` column. This makes both upgrade paths compatible
+by construction. A deployment already on UUID keeps protecting its existing
+Sandboxes, which would otherwise lose all gateway protection. A deployment with
+authentication disabled keeps admitting its existing traffic, which would
+otherwise start receiving `401` because every Sandbox with an agent-runtime
+carries a generated runtime access token regardless of the gateway
+configuration.
+
+The traffic-token header is removed from every request whenever JWT mode is
+active. On a route that has not opted in the header carries no meaning, so it
+must not leak into the workload.
 
 `RequireTrafficAuth` is derived from the Sandbox annotation and propagated in
 the internal Route model. Only the exact lowercase value `"true"` enables it;
@@ -160,8 +176,8 @@ Envoy filter fields:
 
 | Field | Default | Description |
 |---|---|---|
-| `enable-auth` | `false` | Enables gateway authentication. |
-| `enable-jwt-auth` | `false` | Initializes the process-wide JWT capability. Requires `enable-auth`. |
+| `enable-auth` | `false` | Enables UUID authentication for routes that have not opted into JWT. |
+| `enable-jwt-auth` | `false` | Initializes the process-wide JWT capability. Independent of `enable-auth`. |
 | `traffic-access-token-header` | `e2b-traffic-access-token` | Header carrying the compact JWT. |
 
 Gateway environment variables:
@@ -227,8 +243,15 @@ pointed at the sandbox-gateway ServiceAccount.
 
 - Authentication remains disabled by default in the shipped ConfigMap.
 - Existing UUID mode has unchanged request and response behavior.
-- In JWT mode, routes without the opt-in annotation skip gateway UUID and JWT
-  validation. Operators must account for this when migrating from UUID mode.
+- In JWT mode, routes without the opt-in annotation are authenticated exactly as
+  they would be with JWT mode off. Upgrading from UUID mode keeps the UUID
+  baseline for existing Sandboxes, and upgrading from an unauthenticated
+  deployment keeps admitting existing traffic without validating
+  `x-access-token`.
+- Operators who want the UUID baseline while adopting JWT must keep or set
+  `enable-auth: true`. Turning `enable-auth` on for the first time is a
+  behavioral change for existing clients, independent of JWT, because they must
+  then send the Sandbox runtime access token.
 - Gateways must be upgraded before operators create annotated routes because old
   gateway versions ignore `RequireTrafficAuth`.
 - Sandbox-manager APIs and Sandbox claim/clone behavior are unchanged.
@@ -262,15 +285,25 @@ Unit tests cover:
   cancellation, idempotency, and concurrent readers.
 - Filter configuration, UUID compatibility, JWT success/failure, unavailable
   verifier, route mismatch, custom headers, and header removal.
+- The full switch matrix on routes that have not opted into JWT, covering that
+  JWT mode neither drops the UUID baseline nor introduces validation when
+  `enable-auth` is off.
 - Health and readiness handlers.
 
 The JWT E2E profile uses a local HTTPS OIDC discovery/JWKS provider and covers:
 
 - The in-cluster test issuer minting a token for the created Sandbox ID/UID.
-- An unannotated Sandbox route succeeding without a traffic JWT in JWT mode.
+- An unannotated Sandbox route still enforcing the UUID baseline in JWT mode,
+  succeeding with the Sandbox runtime access token and returning `401` for a
+  mismatched one.
 - A valid JWT and the Sandbox runtime access token succeeding together.
 - Missing, malformed, and expired JWTs returning `403`.
 - A token issued for Sandbox A being rejected for Sandbox B.
+
+A second JWT E2E profile keeps `enable-auth` off while `enable-jwt-auth` is on,
+covering the upgrade straight from an unauthenticated gateway. It asserts that an
+unannotated Sandbox route stays reachable with a mismatched or absent runtime
+access token, while the annotated route keeps enforcing JWT verification.
 
 ## Alternatives
 
@@ -292,4 +325,7 @@ verification is preferred for the initial implementation.
 - [x] 2026-07-15: Finalized the initial ID/UID-only binding and static JWKS scope.
 - [x] 2026-07-15: Added OIDC verifier, asynchronous manager, filter integration,
   readiness, RBAC, and unit/E2E coverage.
+- [x] 2026-08-25: Decoupled `enable-auth` and `enable-jwt-auth` so that enabling
+  the JWT capability never changes how routes without the opt-in annotation are
+  authenticated.
 - [ ] Community review and follow-up design for key/token rotation.

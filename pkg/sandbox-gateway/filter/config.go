@@ -55,10 +55,17 @@ type Config struct {
 	HostHeaderName string `json:"host-header-name,omitempty"`
 	// DefaultPort is the default port if not specified
 	DefaultPort string `json:"default-port,omitempty"`
-	// EnableAuth enables access token authentication when set to true.
-	// When disabled (default), the gateway skips token validation for backward compatibility.
+	// EnableAuth enables the UUID access-token baseline for routes that have not
+	// opted into JWT enforcement. When disabled (default), those routes skip token
+	// validation for backward compatibility.
 	EnableAuth bool `json:"enable-auth,omitempty"`
-	// EnableJWTAuth switches enabled gateway authentication from UUID to JWT.
+	// EnableJWTAuth initializes the process-wide JWT capability, which enforces
+	// JWT verification on the routes that opt in through the Sandbox annotation.
+	// It is independent of EnableAuth: the two switches govern disjoint sets of
+	// routes, so enabling JWT never changes how a non-opted-in route is
+	// authenticated. That keeps both migration paths compatible: a deployment
+	// already on UUID keeps its baseline, and a deployment with authentication
+	// off keeps letting existing traffic through.
 	EnableJWTAuth bool `json:"enable-jwt-auth,omitempty"`
 	// TrafficAccessTokenHeader is the request header carrying the traffic access JWT.
 	TrafficAccessTokenHeader string `json:"traffic-access-token-header,omitempty"`
@@ -79,9 +86,6 @@ func DefaultConfig() *Config {
 
 // Validate checks configuration validity
 func (c *Config) Validate() error {
-	if c.EnableJWTAuth && !c.EnableAuth {
-		return fmt.Errorf("enable-jwt-auth requires enable-auth")
-	}
 	headerName := c.GetTrafficAccessTokenHeader()
 	if !httpguts.ValidHeaderFieldName(headerName) || strings.HasPrefix(headerName, ":") {
 		return fmt.Errorf("traffic-access-token-header %q is not a valid HTTP header name", headerName)

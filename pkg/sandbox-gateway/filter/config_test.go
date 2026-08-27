@@ -189,7 +189,7 @@ func TestConfigValidateJWT(t *testing.T) {
 		expectError string
 	}{
 		{name: "JWT mode", cfg: Config{EnableAuth: true, EnableJWTAuth: true}},
-		{name: "JWT requires auth", cfg: Config{EnableJWTAuth: true}, expectError: "requires enable-auth"},
+		{name: "JWT without the UUID baseline", cfg: Config{EnableJWTAuth: true}},
 		{name: "custom header", cfg: Config{EnableAuth: true, EnableJWTAuth: true, TrafficAccessTokenHeader: "X-Custom-JWT"}},
 		{name: "invalid header", cfg: Config{EnableAuth: true, EnableJWTAuth: true, TrafficAccessTokenHeader: "bad header"}, expectError: "not a valid HTTP header"},
 		{name: "runtime token conflict", cfg: Config{EnableAuth: true, EnableJWTAuth: true, TrafficAccessTokenHeader: "X-Access-Token"}, expectError: "must differ"},
@@ -252,11 +252,12 @@ func TestConfigParserJWT(t *testing.T) {
 			expectHeader:     DefaultTrafficAccessTokenHeader,
 		},
 		{
-			name:         "JWT requires authentication",
-			values:       map[string]any{"enable-jwt-auth": true},
-			manager:      &fakeJWTAuthManager{},
-			expectError:  "requires enable-auth",
-			expectHeader: DefaultTrafficAccessTokenHeader,
+			name:             "JWT without the UUID baseline",
+			values:           map[string]any{"enable-jwt-auth": true},
+			manager:          &fakeJWTAuthManager{},
+			expectConfigured: []bool{true},
+			expectJWT:        true,
+			expectHeader:     DefaultTrafficAccessTokenHeader,
 		},
 		{
 			name:        "missing manager",

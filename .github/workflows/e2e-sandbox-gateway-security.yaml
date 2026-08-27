@@ -37,8 +37,19 @@ jobs:
             test_file: test/e2b/test_gateway_auth.py
           - name: JWT auth
             profile: jwt-auth
-            marker: jwt_auth
+            marker: jwt_auth and not jwt_auth_no_baseline
             test_file: test/e2b/test_gateway_jwt_auth.py
+            jwt: true
+            enable_auth: 'true'
+          # Covers upgrading straight from an unauthenticated gateway to JWT: the
+          # UUID baseline stays off, so routes without the opt-in annotation must
+          # keep admitting their existing traffic.
+          - name: JWT auth without UUID baseline
+            profile: jwt-auth-no-baseline
+            marker: jwt_auth_no_baseline
+            test_file: test/e2b/test_gateway_jwt_auth.py
+            jwt: true
+            enable_auth: 'false'
           - name: Runtime mTLS
             profile: runtime-mtls
             marker: runtime_mtls
@@ -130,7 +141,7 @@ jobs:
           docker rmi ${RUNTIME_MTLS_SERVER_IMG}
 
       - name: Build JWT OIDC test provider image
-        if: matrix.profile == 'jwt-auth'
+        if: matrix.jwt
         run: |
           docker build -t ${JWT_OIDC_PROVIDER_IMG} -f test/e2b/assets/jwt-oidc-provider/Dockerfile .
           kind load docker-image --name=${KIND_CLUSTER_NAME} ${JWT_OIDC_PROVIDER_IMG}
@@ -189,7 +200,7 @@ jobs:
             --from-file=ca.crt="$cert_dir/ca.crt"
 
       - name: Configure JWT OIDC test provider
-        if: matrix.profile == 'jwt-auth'
+        if: matrix.jwt
         run: |
           set -euo pipefail
           identity_dir="$(mktemp -d)"
@@ -238,9 +249,12 @@ jobs:
             kubectl rollout status deployment/sandbox-gateway \
               -n sandbox-system --timeout=5m
           fi
-          if [ "${{ matrix.profile }}" = "jwt-auth" ]; then
+          if [ "${{ matrix.jwt }}" = "true" ]; then
+            # enable-auth is patched independently of enable-jwt-auth so that both
+            # upgrade paths get covered. Enabling the JWT capability must not change
+            # how routes without the opt-in annotation are authenticated.
             kubectl get configmap envoy-config -n sandbox-system -o json \
-              | jq '.data["envoy.yaml"] |= sub("enable-auth: false"; "enable-auth: true") | .data["envoy.yaml"] |= sub("enable-jwt-auth: false"; "enable-jwt-auth: true")' \
+              | jq --arg auth '${{ matrix.enable_auth }}' '.data["envoy.yaml"] |= (sub("enable-auth: false"; "enable-auth: " + $auth) | sub("enable-jwt-auth: false"; "enable-jwt-auth: true"))' \
               | kubectl replace -f -
             kubectl set env deployment/sandbox-gateway -n sandbox-system \
               OIDC_DISCOVERY_URL=https://jwt-e2e-oidc-provider.sandbox-system.svc:8443/.well-known/openid-configuration \
@@ -259,7 +273,7 @@ jobs:
           if [ "${{ matrix.profile }}" = "runtime-mtls" ]; then
             export RUNTIME_MTLS_E2E=true
           fi
-          if [ "${{ matrix.profile }}" = "jwt-auth" ]; then
+          if [ "${{ matrix.jwt }}" = "true" ]; then
             export TRAFFIC_ACCESS_TOKEN_JWT_E2E=true
             export JWT_E2E_TOKEN_COMMAND="kubectl exec -n sandbox-system deployment/jwt-e2e-oidc-provider -- /jwt-oidc-provider issue"
           fi
