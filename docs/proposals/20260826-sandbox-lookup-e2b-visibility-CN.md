@@ -4,258 +4,371 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-26
-last-updated: 2026-08-26
-status: provisional
+last-updated: 2026-08-27
+status: implementable
 ---
 
 # Sandbox 查询与 E2B 可见性边界
 
 ## 摘要
 
-本提案将已领取 Sandbox 的查询与 E2B 生命周期可见性分开。
-`SandboxManager.GetSandbox` 根据 namespace 和 Sandbox ID 找到已领取的 Sandbox，确认它属于请求
-用户，然后返回现有的 `infra.Sandbox` 句柄。它不再接收预期 state 字符串，也不再读取
-`infra.Sandbox.GetState()`。
+本提案为一次 Sandbox 用户交付增加明确的持久化提交点，并将身份查询、交付可见性和现有 state
+准入分开。现有 `agents.kruise.io/lock` 作为本次交付的 epoch；新增的系统 annotation
+`agents.kruise.io/delivered-lock` 只有在 Create 的全部后处理成功后才写入相同 epoch。两者匹配
+表示本次交付已经完成，Create 只有在该提交成功后才返回成功。
 
-查询和所有权授权完成后，所有协议可见性均由 E2B 负责。List 和 Describe 使用同一套 E2B 公开
-投影：可见 Sandbox 只能报告为 `running` 或 `paused`，List state 条件匹配投影后的公开状态，所有
-可见性过滤都在分页之前完成。Running Phase 但尚未 Ready 的已领取 Sandbox 仍公开为 `running`；
-creating、已到期、正在终止、已删除、已完成和不支持的观测均隐藏。因此，对同一次观测，List 中的
-Sandbox 与 Describe 具有相同的可见性和公开状态。
+Create 的第一次持久化写仍负责领取或创建 Sandbox，但保持 delivery 不可见，并把 API 请求的绝对
+截止时间写入 `ShutdownTime`。E2B API 的统一最大请求时间为 10 分钟，该时间也是 delivery 的
+最大完成时间。后处理完成后，Create 使用带 resourceVersion 乐观锁的 Patch，在一次原子写中提交
+`delivered-lock` 并用从交付时刻计算的最终 `PauseTime` 和 `ShutdownTime` 替换临时值。Controller
+删除优先于交付提交；若 Sandbox 在提交前已因临时截止时间被删除，Create 返回 `504`，而不是
+报告成功。
 
-其他 endpoint 保持现有对外行为，继续应用各自的操作专用 state 规则。这是一次渐进式边界调整：
-`GetState()` 和 `metav1.Object` 继续保留在 `infra.Sandbox` 上，不增加正交的生命周期 Getter，也不
-重新设计更广泛的状态模型。
+`infra.Sandbox.GetVisibility()` 以当前 informer 对象计算 `(visible, reason)`。delivery 尚未
+提交、epoch 不匹配、`cleanup=true`、`ShutdownTime` 已到期、持久化删除已开始，或 Phase 为
+`Succeeded`、`Failed`、`Terminating` 时，`Visible=false`。所有 Sandbox-ID endpoint 都以
+Visible 为共同前提，再继续复用现有 `GetState()` 和各 endpoint 的操作准入。不存在的对象返回
+`404`；其他用户的对象也返回相同 `404` 以避免泄漏；属于当前用户但不可见或不允许操作的对象
+不返回 not-found，而使用上游 endpoint 已声明的 `401`、`400` 或 `409`。
+
+List 和 Describe 在 Visible 之后继续使用现有 state 语义，只公开 `running` 或 `paused`，并
+保留 `dead/RunningResourceClaimedButNotReady -> running` 的兼容映射。本提案不增加 `Healthy`
+Getter。现有 Phase 到 state 的映射和 `dead` state 均保持不变，并明确留给后续讨论。
 
 ## 背景
 
-当前 Manager 点查同时回答两个无关问题：
+现有领取和克隆流程在等待 Ready、初始化 runtime、处理凭证、执行 CSI mount 和创建 E2B
+TrafficPolicy 之前，就已经持久化 owner、Sandbox ID 和 lock。只凭 claimed 或 lock 判断公开存在，
+会让一次尚未完成、最终可能失败的交付提前出现在 List、Describe 或其他 Sandbox-ID 操作中。
 
-1. namespace 和 Sandbox ID 指定的已领取 Sandbox 是否存在，并且是否属于请求用户？
-2. 它的聚合 state 是否被当前 E2B endpoint 接受？
+另一方面，Manager 点查目前还会按调用方传入的 state 集合筛选对象。对象已经存在且属于当前用户，
+但因 Ready 波动、到期或状态转换不符合某个 endpoint 的集合时，筛选失败可能被映射成 `404`。
+Sandbox route 缓存也不能作为对象存在性的依据：route 缺失可能只是运行状态或投影结果，不能证明
+informer 中没有对应的已领取 Sandbox。
 
-第一个问题是后端中立的身份与授权问题。第二个问题是协议策略：Describe、Connect、Delete、
-Snapshot 等 E2B 操作对“可见”或“可用”的含义并不相同。把 E2B state 集合传给 Manager，会让通用
-查询合同依赖 API 专用状态名称，还会把 state 不匹配伪装成查询失败。
+这两个问题需要不同的事实：
 
-List 还存在另一处不一致。它先按原始聚合 state 过滤，再把 Sandbox 转换成 E2B 响应；Describe
-则先应用可见性规则，再把 Running 但未 Ready 的 Sandbox 从内部 `dead` 映射为公开 `running`。
-因此，同一个 Sandbox 可能被 Describe 返回，却从无 state 条件的 List 或 `state=running` 结果中
-消失。
+1. 查询回答指定 Sandbox ID 对应的已领取对象是否存在，以及它属于谁。
+2. delivery 提交回答该 epoch 是否已经完整交付。
+3. Visible 回答该交付现在是否仍处于 E2B 操作范围。
+4. 现有 state 和操作 capability 回答当前 endpoint 是否能够执行。
 
-[上游 E2B OpenAPI schema](https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml)只定义
-`running` 和 `paused` 两种公开 Sandbox 状态。内部 `dead` 等状态不能作为合法兜底。特别是，
-ShutdownTime 已经过期的 Sandbox 必须隐藏，不能携带内部状态返回。
+`pkg/utils.GetSandboxState` 是聚合兼容状态，不是持久化存在性。它会因删除、ShutdownTime 到期、
+终态 Phase 或 Running 但未 Ready 等不同原因返回 `dead`。因此，本提案既不把 `dead` 等同于
+对象不存在，也不再让 state 不匹配产生 not-found。
+
+[上游 E2B OpenAPI](https://github.com/e2b-dev/E2B/blob/f0facc5dbcf93067326745e1597b05311c0174ea/spec/openapi.yml)
+只允许 `running` 和 `paused` 作为公开 Sandbox state，并为 Create、Resume 和 Connect 声明了
+`504 Backend timeout`。本提案只使用每个 endpoint 已声明的 response，不扩展上游合同。
 
 ### 范围
 
-- 从 `SandboxManager.GetSandbox` 移除预期 state 输入和聚合 state 读取。
-- 保持 claimed 查询、namespace 与 Sandbox ID 匹配、所有权授权、查询错误分类和调用方提供查询
-  deadline 的现有合同。
-- 把每个 E2B 调用方现有的 state 准入移到 E2B 层，不改变该 endpoint 的对外行为。
-- 让 List 和 Describe 共用一套失败即隐藏的公开可见性与状态投影。
-- 要求 E2B List 使用的 Sandbox 选择结果只包含匹配 namespace 和 owner 的已领取 Sandbox。
-- 保持先认证、再验证所有权、最后判断 state 的顺序。
+- 将 Manager 的 Sandbox 点查收窄为 informer 中的 claimed 身份、namespace、Sandbox ID 和 owner
+  查询，不再接收或读取预期 state。
+- 为 Claim 和 Clone 共用的 Create 交付增加 epoch 匹配的持久化完成标记。
+- 为 `infra.Sandbox` 增加协议中立的 Visible 观测，并将其作为所有 Sandbox-ID endpoint 的共同
+  前提。
+- 统一 List、Describe 和其他 Sandbox-ID endpoint 的查询、所有权、Visible 与 state 判断顺序。
+- 为 E2B 业务请求设定一个集中定义的 10 分钟服务端硬上限，并在上游合同允许时映射为 `504`。
+- 保留 Controller 的 ShutdownTime 删除与 recycle 清理职责，但不让 Manager 的删除成功依赖
+  Controller 已经完成 recycle。
+- 原生 E2B 路径和定制前缀路径遵循相同合同。
 
 ### 非目标
 
-- 改变 `pkg/utils.GetSandboxState`、它的优先级、状态值或 reason 字符串。
-- 移除 `infra.Sandbox.GetState()`，或用正交的 readiness、pause、deadline、release 或 delivery
-  Getter 取代它。
-- 重新定义 Delete、Pause、Resume、Connect、Browser、Network、Set timeout、Snapshot 或
-  traffic-token 行为。
-- 改变 SandboxSet 或 SandboxClaim 行为，包括其中对 Manager 和 state 的使用。
-- 从 `infra.Sandbox` 移除 `metav1.Object`，或禁止上层通过该接口读取 Sandbox 语意。
-- 设计另一套 Infra 实现、迁移行为、陈旧数据兼容或完整的跨后端状态模型。
-- 改变 Sandbox ID 分配或现有的歧义 ID 查询行为。
+- 改变 `pkg/utils.GetSandboxState` 的优先级、state、reason 或现有 Phase 映射。
+- 在本提案中移除 `dead`，或增加 `Healthy`、readiness、pause transition 等新的状态维度。
+- 增加 `DeliveryDeadline` CR 字段；临时 delivery 截止时间复用 `ShutdownTime`。
+- 重新定义 gateway route、代理流量准入或 Controller 对 workload 健康度的判断。
+- 为 informer 延迟、时钟偏差或跨副本一致性增加协调协议。本提案以每个副本当前 informer 观测为准，
+  接受跨副本的短暂不一致。
+- 使用 APIReader List 或用 route Store 代替 informer Sandbox 查询。
+- 自动删除或回收处于 `Succeeded`、`Failed` 的 Sandbox。
+- 设计旧 delivery 数据迁移、lock-only 兼容兜底或另一种 Infra 后端。
+- 改变现有歧义 Sandbox ID 失败即隐藏的查询行为。
 
 ## 设计终态
 
 ### 职责边界
 
-查询、公开发现和操作准入是相互独立的决策：
-
 | 决策 | 责任方 | 合同 |
 |---|---|---|
-| 找到已领取 Sandbox | Infra | 匹配 namespace 和公开 Sandbox ID；区分不存在、歧义和无法确定的失败 |
-| 验证所有权 | Manager | 将请求用户与 `infra.Sandbox` 暴露的 owner metadata 比较 |
-| 隐藏后端诊断交付 | E2B | 完成不会泄露所有权的查询后，reserved-failed Sandbox 仍不可发现 |
-| 投影公开可见性与状态 | E2B List 和 Describe | 只返回 E2B 可见的 `running` 或 `paused` Sandbox |
-| 准入操作 | 对应 E2B endpoint 与 Infra capability | 应用 endpoint 兼容规则，再由操作执行权威校验 |
+| 认证请求 | E2B API | 验证调用方身份，不以 route 是否存在推断 Sandbox 是否存在 |
+| 查询已领取 Sandbox | Infra | 从 informer 匹配 namespace 和公开 Sandbox ID，区分不存在、歧义和内部失败 |
+| 验证所有权 | Manager | 使用 Sandbox owner metadata；不读取 state 或 Visible |
+| 持久化 delivery | Manager 与 Infra capability | 以 lock epoch 和条件 Patch 提交完整交付 |
+| 计算 Visible | Infra Sandbox | 从协议中立的持久化事实返回布尔值和稳定 reason |
+| 映射 HTTP 与 E2B state | E2B API | 先应用 Visible，再复用现有 state 和 endpoint 专用准入 |
+| 处理超时与 recycle | Sandbox Controller | 删除到期 Sandbox，完成 recycle 并清除上一 delivery 的数据 |
 
 ```mermaid
 flowchart LR
-    Request[E2B 请求] --> Manager[Manager GetSandbox]
-    Manager --> Infra[Infra claimed 查询]
-    Infra --> Owner[Manager 所有权授权]
-    Owner --> Policy[E2B endpoint 策略]
-    Policy --> Response[公开响应或操作]
+    Request[E2B Sandbox-ID 请求] --> Auth[认证]
+    Auth --> Lookup[Informer claimed 查询]
+    Lookup --> Owner[所有权授权]
+    Owner --> Visible[Visible 门槛]
+    Visible --> State[现有 state / 操作准入]
+    State --> Result[公开响应或操作]
 ```
 
-E2B model、HTTP status 和协议 state 集合都不进入 Manager 或 Infra。E2B 继续接收现有的中立
-`infra.Sandbox` 句柄，可以通过该接口读取 Sandbox 语意，但不能转换为或直接读取具体 Sandbox CR。
+Route Store 可以继续服务 gateway 和路由投影，但 route 缺失、`dead` route 或尚未同步的 route 都
+不能抢先把一个 informer 中存在的 Sandbox-ID 请求判为 not-found。
 
 ### Manager 点查合同
 
-`SandboxManager.GetSandbox` 接收 context、请求用户和中立的 Infra 查询选项，不再接收预期 state
-参数。它的成功结果只表示：
+`SandboxManager.GetSandbox` 接收 context、请求用户和协议中立的查询选项。成功结果只表示：
 
-> 与请求 namespace 和 Sandbox ID 匹配的已领取 Sandbox 存在，并且属于请求用户。
+> informer 中存在与 namespace 和 Sandbox ID 匹配的已领取 Sandbox，并且它属于请求用户。
 
-它不表示 Sandbox 仍然 live、健康、Ready、公开可见或可执行某项操作。
-
-查询保留以下规则：
+它不表示 Sandbox 已完成交付、仍然 Visible、健康、Ready 或允许当前操作。点查遵循以下规则：
 
 1. 空用户在查询前被拒绝。
-2. Infra 只找到与 namespace 和 Sandbox ID 匹配的已领取 Sandbox。
-3. 明确不存在继续映射为 Manager not-found。ID 歧义继续作为不透明的 not-found，同时保留诊断
-   cause。其他 Infra 失败继续映射为 internal error。
-4. Manager 只在查询成功后验证 owner metadata；不匹配继续返回 not-allowed。
-5. Manager 不读取、不记录、不筛选聚合 state 或 reason，直接返回 Sandbox。
+2. Infra 只选择 claimed 且匹配 namespace 与 Sandbox ID 的对象。
+3. 明确不存在映射为 Manager not-found；歧义 ID 对外同样隐藏为 not-found，但保留内部 cause；
+   其他查询失败映射为 internal error。
+4. Manager 在查询成功后验证 owner；不匹配返回 not-allowed。
+5. Manager 不读取、不记录、不筛选 `GetState()` 或 Visible reason，直接返回 `infra.Sandbox`。
 
-Infra 查询可能在 context 有效期间等待缓存收敛，因此调用方仍需提供 deadline。移除 state 校验
-不会削弱查询身份或所有权授权。
+认证和点查不能依赖本地 Route Store 的 owner 映射。E2B 在取得已授权 Sandbox 后才读取 Visible 和
+其他内部诊断，因此其他用户无法通过错误差异探测对象。
 
-### E2B 查询与操作策略
+### Delivery epoch 与提交标记
 
-Manager 返回属于请求用户的 Sandbox 后，E2B 应用 reserved-failed 隐藏和当前 endpoint 自己的
-state 规则。state 不匹配不再由 Manager 产生 health error；除下文明确规定的 List 和 Describe
-变化外，其他 endpoint 现有的 E2B status 类别、消息和信息披露边界保持不变。
+每次 Claim 或 Clone delivery 使用一个非空 lock string。该值已经唯一标识一次配额与领取尝试，本
+提案直接把它作为 delivery epoch，不再生成第二套 epoch。
 
-下表说明每个消费者为何需要生命周期信息。这些规则只描述本次增量中的 endpoint 合同，不定义新的
-全局 `claimed`、`live` 或 `visible` 概念。
-
-| 消费者 | 所需生命周期信息 | 本提案合同 |
-|---|---|---|
-| Describe | 公开可发现性与公开状态 | 使用 List/Describe 共享投影 |
-| List | 公开可发现性、公开状态和 metadata 条件 | 在过滤和分页前使用共享投影 |
-| Delete | 幂等清理准入 | 保持现有清理专用规则；不复用公开发现规则 |
-| Pause | 现有 API 兼容校验，随后执行权威 Pause 准入 | 保持现有对外行为；`Sandbox.Pause` 仍是权威判断 |
-| Resume | 现有 running-or-paused 查询兼容，随后执行权威 Resume 准入 | 保持现有对外行为；`Sandbox.Resume` 仍是权威判断 |
-| Connect | 区分已经 running 与 paused/resuming，并拒绝现有 non-live 场景 | 保持现有响应与 Resume 行为 |
-| Browser | 现有 live 查询兼容与实际 runtime 请求 | 保持现有行为 |
-| Network update | 现有 live 查询兼容与控制面变更 | 保持现有行为 |
-| Set timeout | 现有 running-only deadline 变更 | 保持现有行为 |
-| Create Snapshot | 现有 running-only Checkpoint 准入 | 保持现有行为 |
-| Traffic-token refresh | Route 所有权、traffic-auth 开关和现有 running-or-paused 准入 | 只适配无 state 的 GetSandbox 签名；保留 Manager 内的独立校验 |
-
-公开发现不能成为所有操作共用的准入条件。例如 Delete 是幂等清理 API，而 Connect 必须在返回已
-running Sandbox 与恢复 paused Sandbox 之间作出选择。Describe 可见性变化不能隐式改变这些操作。
-
-### List 与 Describe 共享投影
-
-List 和 Describe 计算同一套 E2B 投影，结果要么是公开状态，要么是“不可见”。该投影失败即隐藏：
-
-| `infra.Sandbox.GetState()` 返回的聚合观测 | E2B 投影 |
+| 持久化事实 | 含义 |
 |---|---|
-| `running` | 可见，公开为 `running` |
-| `paused` | 可见，公开为 `paused` |
-| `dead`，reason 为 `RunningResourceClaimedButNotReady` | 可见，公开为 `running` |
-| `creating` | 不可见 |
-| `dead`，reason 为 `ShutdownTimeReached` | 不可见 |
-| `dead`，reason 为 `ResourceSucceeded`、`ResourceFailed`、`ResourceTerminating` 或 `ResourceDeleted` | 不可见 |
-| 其他聚合 state 或不支持的 `dead` reason | 不可见 |
+| `agents.kruise.io/lock` | 当前 delivery epoch |
+| `agents.kruise.io/delivered-lock` | 已完成交付的 epoch；必须与 lock 完全相等 |
+| `agents.kruise.io/cleanup=true` | 当前 delivery 已提交清理，不可逆地结束 Visible |
+| `Spec.ShutdownTime` | delivery 期间的硬截止时间，交付后则是正常生命周期截止时间 |
+| `Spec.PauseTime` | 只在交付完成时提交的正常 auto-pause 截止时间 |
 
-失败即隐藏可以防止新增内部 state 或 reason 在明确公开语意之前泄露到 E2B 响应。唯一的特殊映射是
-现有的 Running 但未 Ready 场景：后端 Phase 仍表示同一次用户交付，Describe 已经把它公开为
-`running`。
+`delivered-lock` 是系统拥有的 annotation，不能由 E2B metadata 输入设置。仅有 claimed、owner、
+Sandbox ID 或 lock 都不表示 delivery 已完成。
 
-投影结果同时包含可见性和公开状态。同一次请求内，过滤与响应转换复用该结果，而不是分别计算
-可见性与状态。这样，ShutdownTime 等时间边界不会先通过可见性校验，随后又在同一个响应中产生
-非法 `dead`。当 Sandbox 并发变化时，本提案不承诺不同请求之间使用同一快照。
+#### 第一次持久化写：领取但不交付
 
-#### Describe
+Claim 的 Update/Create 和 Clone 的 Create 在同一次持久化写中：
 
-Describe 先完成 claimed、namespace、Sandbox ID 和 owner 安全查询。reserved-failed 或不可见结果
-返回 not found；可见结果严格使用共享投影产生的公开状态。
+- 写入本次 lock epoch、owner、claimed 身份和 Sandbox ID；
+- 删除来自上一 delivery 的 `delivered-lock` 和 `cleanup`；
+- 将 `PauseTime` 置空；
+- 将本次 API 请求的绝对截止时间写入 `ShutdownTime`；
+- 保持 `Visible=false`。
 
-因此，即使到期 Sandbox CR 仍存在并保留 claimed 身份，Describe 也返回 not found。Describe 永远
-不会返回 `dead`、`creating`、`available` 或其他内部状态。
+同一 epoch 的内部重试不得把该临时 `ShutdownTime` 向后延长。只有开始新的 delivery、生成新的
+lock epoch 时，才能建立新的 10 分钟截止时间。
 
-#### List
+#### 后处理与最终交付
 
-E2B List 使用的选择结果在合同上只包含匹配请求 namespace 和 owner 的已领取 Sandbox。claimed 是
-Infra 提供的选择不变量，不由 E2B 解释具体 label，也不需要增加 `IsClaimed()` Getter。
+Create 的 delivery 完成条件包括成功返回前所需的全部工作：等待 Sandbox Ready、runtime 初始化、
+交付所需的凭证与 token 处理、CSI mount、安全规则和网络配置，以及需要时创建 TrafficPolicy。任一
+步骤失败，都不能写入 `delivered-lock` 或返回成功。
 
-对于每个选择出的 Sandbox，List：
+全部后处理完成后，Create 对同一 Sandbox 执行一次带 resourceVersion 乐观锁的条件 Patch。该提交
+要求对象仍是同一 epoch、没有开始删除或 cleanup，并在一次原子写中：
 
-1. 隐藏 reserved-failed 和不可见结果；
-2. 用投影后的 E2B 状态匹配请求中的 `state`；
-3. 应用现有 metadata 条件；
-4. 对剩余结果分页。
+- 写入 `delivered-lock = lock`；
+- 把临时 `ShutdownTime` 替换为从实际交付时刻计算的最终生命周期值；
+- 写入对应的最终 `PauseTime`；
+- 对 never-timeout delivery 清除临时 `ShutdownTime`，并按请求保持最终 deadline 为空。
 
-未提供 state 条件时，两种公开状态都可返回。`state=running` 包含 Running 但未 Ready 的 Sandbox，
-因为其公开投影是 `running`；`state=paused` 只包含投影为 `paused` 的结果。List 不接受内部状态名称。
+Create 只在该 Patch 成功后返回 `201`。最终 Patch 不得忽略 resourceVersion 后覆盖 Controller 或
+其他并发写入；冲突、对象删除、epoch 改变或 context 到期都表示本次 delivery 未提交。临时
+deadline 导致的删除或请求到期按下文返回 `504`；无法分类为该超时的条件冲突或持久化失败使用
+Create 已声明的 `500`，不得返回 `201` 或 `404`。
 
-可见性、公开 state 过滤和 metadata 过滤全部先于分页。因此，page limit 与 next token 描述的是
-公开可见且匹配条件的结果集，而不是原始后端对象。
+#### Controller 删除优先
 
-对于同一个已领取、owner 匹配、ID 唯一并且观测相同的 Sandbox：
+临时 `ShutdownTime` 到期后，Controller 可以直接删除尚未交付的 Sandbox，不需要识别额外的
+DeliveryDeadline。若 Controller 在最终 Patch 前成功删除对象，Patch 必须失败，Create 以 Manager
+`ErrorTimeout` 返回 `504`，公开 message 为：
 
-- 当且仅当它在应用 metadata 条件和分页前符合无 state 条件 List 时，Describe 才成功。
-- Describe 返回的 state 与 List 返回的 state 相同。
-- 使用该返回 state 过滤 List 时会包含它。
+> sandbox creation timed out; the sandbox was deleted before it became available
 
-### Infra 接口范围
+API 不把该失败伪装成 `404`，也不返回一个未提交的 Sandbox。Controller 对 `Succeeded` 和
+`Failed` Phase 保持现有行为：它们可以不因 ShutdownTime 自动删除，但始终 `Visible=false`。
 
-本次增量不需要增加 `infra.Sandbox` Getter：
+### 统一 API 请求上限
 
-- claimed 状态由点查与 List 选择合同保证，`IsClaimed()` 会重复查询语意。
-- 现有 `GetState()` 提供 E2B 兼容与共享公开投影暂时需要的聚合观测。
-- Pause 与 Resume 已经以操作 capability 形式存在，其实现执行权威校验。
-- 现有 timeout、route、request、checkpoint、network 和 metadata 方法已经提供其他 endpoint 所需
-  信息。
-- `metav1.Object` 继续嵌入，可以继续通过 `infra.Sandbox` 暴露 metadata。
+E2B API 层使用一个集中定义的 `MaxAPIRequestDuration = 10m` 作为业务请求的服务端硬上限。每个
+请求在入口建立一个绝对 deadline；已有更早 deadline 时使用更早值，内部步骤不得逐段重新获得完整
+10 分钟。
 
-`IsVisible()` 或 `IsLive()` Getter 会把 E2B 策略编码进协议中立的 Infra 接口。当后续提案移除另一个
-`GetState()` 消费者时，`IsReady()` 或结构化 pause 状态可能有用；但本次从 Manager 移除 state
-过滤并统一 List/Describe 不需要它们。
+- Create 使用该 deadline 作为 delivery timeout 和第一次写入的临时 `ShutdownTime`。
+- Resume 与 Connect 从请求 context 继承同一上限，Manager 和 Infra 不依赖 API 常量。
+- 已有更短的操作级 timeout 继续生效。
+- health、Prometheus metrics 和进程 shutdown 不属于该业务请求上限。
 
-### 不变量与失败行为
+Create、Resume 和 Connect 的硬超时映射为其 OpenAPI 已声明的 `504`。其他 endpoint 若未声明
+`504`，硬超时映射为已声明的 `500`，不增加新的 response code。
 
-- Manager 点查成功只表示 claimed 身份与所有权，不表示生命周期准入。
-- Manager 不接受 E2B state 名称，`GetSandbox` 永远不调用 `GetState()`。
-- 认证先于所有权授权；所有权授权先于任何依赖 state 的 E2B 判断或诊断信息披露。
-- List 和 Describe 只返回 `running` 或 `paused`。
-- List 和 Describe 共用一套失败即隐藏的投影，包括 Running-but-not-Ready 特例和到期隐藏。
-- List 在分页前过滤投影后的公开状态。
-- 其他 endpoint 不继承 List/Describe 可见性，保持现有公开行为。
-- 上层只通过 `infra.Sandbox` 读取 Sandbox 语意，不直接依赖具体 Sandbox CR。
-- Infra 选择继续使用 informer；本设计不引入 APIReader List。
+### Visible 合同
+
+`infra.Sandbox.GetVisibility()` 返回 `(visible bool, reason string)`。它只读取当前
+`infra.Sandbox` 已携带的 informer 观测和当前时间，不执行 Kubernetes 读写。调用方按照下列
+优先级取得唯一 reason：
+
+| 优先级 | 条件 | Visible | reason |
+|---:|---|---:|---|
+| 1 | `DeletionTimestamp` 已设置 | false | `DeletionStarted` |
+| 2 | `agents.kruise.io/cleanup` 精确等于 `"true"` | false | `CleanupCommitted` |
+| 3 | 当前时间已越过非空 `ShutdownTime` | false | `ShutdownTimeReached` |
+| 4 | Phase 为 `Succeeded` | false | `ResourceSucceeded` |
+| 5 | Phase 为 `Failed` | false | `ResourceFailed` |
+| 6 | Phase 为 `Terminating` | false | `ResourceTerminating` |
+| 7 | lock 缺失或为空 | false | `DeliveryEpochMissing` |
+| 8 | delivered-lock 缺失或为空 | false | `DeliveryNotCommitted` |
+| 9 | delivered-lock 与 lock 不相等 | false | `DeliveryEpochMismatch` |
+| 10 | 以上条件均不成立 | true | `Delivered` |
+
+`cleanup-enabled` 不参与计算；它只表示 Controller 是否支持 recycle。任何受信任内部写入一旦提交
+`cleanup=true`，当前 delivery 就立即且不可逆地结束 Visible，无论 Controller 是否启用、开始或
+完成 recycle。其他 cleanup 值不结束 Visible。
+
+Ready、`PauseTime` 和其他 Phase 不参与 Visible。Visible reason 只用于授权后的结构化日志和内部
+审计，不进入公开 response，也不得记录 lock 或 delivered-lock 的实际值。每个 Sandbox-ID endpoint
+在所有权授权后记录一次结果；List 逐对象过滤时不产生逐对象日志。
+
+### E2B 查询、state 与操作
+
+所有 Sandbox-ID endpoint 使用相同的判断顺序：
+
+1. 认证调用方；
+2. 从 informer 查询 claimed Sandbox；
+3. 验证 owner；
+4. 要求 `Visible=true`；
+5. 复用现有 `GetState()` 或 endpoint capability 完成操作专用准入。
+
+Visible 是共同前提，但不是新的 state，也不替代操作权威校验。Pause、Resume、Connect、Network、
+Set timeout、Snapshot、Browser、traffic-token refresh 和 Delete 都保留各自现有的 state 或
+capability 规则。
+
+#### List 与 Describe
+
+对于 `Visible=true` 的 Sandbox，List 和 Describe 继续使用现有聚合 state：
+
+| `GetState()` 结果 | E2B 读取结果 |
+|---|---|
+| `running` | 公开为 `running` |
+| `paused` | 公开为 `paused` |
+| `dead`，reason 为 `RunningResourceClaimedButNotReady` | 兼容映射为 `running` |
+| `creating` | 不支持 |
+| 其他 `dead` reason、其他 state 或未知值 | 不支持 |
+
+在同一次观测中，由 Visibility 已经排除的到期、删除、cleanup 和终态对象不会作为公开 state 返回。
+若并发或时间边界使 `GetState()` 随后返回其他 `dead`，同样按不支持处理。
+
+现有 `GetState()` 会把 `Resuming`、`Upgrading` 等非 Running、非终态 claimed Phase 归为
+`paused`。本提案暂时接受并保持该行为，不增加额外特判。
+
+Describe 对属于当前用户但 `Visible=false` 或 state 不支持的对象返回 `401`，永远不返回
+`dead`、`creating` 或其他内部 state。List 在 state、metadata 过滤和分页之前排除
+`Visible=false` 与不支持的结果；随后按投影后的 `running` 或 `paused` 过滤，确保 page limit
+和 next token 只描述公开结果集。
+
+#### Delete 与 recycle
+
+Delete 也要求 `Visible=true`。对于可 recycle 的 Running Sandbox，Manager 成功写入
+`cleanup=true` 即表示删除请求已被接受，并立即结束当前 delivery 的 Visible；Manager 不等待
+Controller 完成 recycle，也不以其完成作为释放 API 响应的条件。
+
+若 recycle trigger 写入失败，现有 Kill fallback 仍可执行。Kill 成功发起持久化删除后，
+`DeletionTimestamp` 使 Visible 结束；对象从 informer 消失后，后续查询才成为实际 not-found。
+
+Controller 成功 recycle 时清除上一 delivery 的 lock、delivered-lock、owner、Sandbox ID、
+claim-scoped metadata、`PauseTime`、`ShutdownTime` 和 TrafficPolicy，然后才把 CR 返回池中。
+这些清理防止下一次 Claim 继承旧 epoch，但 Manager 的删除语义不依赖清理是否完成。下一次交付
+必须使用新的 lock，并重新完成 delivery commit。claimed 身份和旧 Sandbox ID 被清除后，即使可
+复用 CR 仍在 informer 中，旧 delivery 的后续查询也属于实际不存在。
+
+### HTTP 错误与信息披露
+
+所有原生和定制 Sandbox-ID endpoint 使用以下公共分类：
+
+| 条件 | HTTP status | 公开语义 |
+|---|---:|---|
+| API key 无效或缺失 | 401 | 认证失败 |
+| informer 中没有匹配的 claimed Sandbox | 404 | 实际不存在 |
+| 多个 claimed Sandbox 匹配同一 ID | 404 | 失败即隐藏歧义，不选择任一对象 |
+| Sandbox 存在但 owner 不匹配 | 404 | 与不存在使用相同响应，避免泄漏 |
+| Sandbox 属于当前用户但 `Visible=false` | 401 | 当前 delivery 不允许操作；不是 not-found |
+| Visible 但 Pause、Resume、Connect 或 Network state 冲突 | 409 | endpoint 已声明的冲突 |
+| Visible 但 Snapshot state 不允许 | 400 | endpoint 已声明的 bad request |
+| Visible 但 Describe、Set timeout、Browser、traffic-token 或其他无 400/409 的操作不允许 | 401 | endpoint 已声明的拒绝 |
+| informer 查询无法确定或内部失败 | 500 | 服务端失败，不降级为 404 |
+| Create 最终 delivery commit 因非超时冲突或持久化失败 | 500 | Create 已声明的服务端失败 |
+| Create、Resume 或 Connect 达到服务端硬上限 | 504 | Backend timeout |
+| 其他 endpoint 达到服务端硬上限 | 500 | 该 endpoint 已声明的服务端错误 |
+
+除“实际不存在”“歧义 ID 失败即隐藏”和“隐藏其他 owner”外，任何 state、Ready、Visible、route、
+cleanup、到期或 delivery 失败都不得产生 `404`。这三种情况必须使用相同公开 message；当前 owner
+的 Visible reason、state reason 和歧义 cause 只写入内部日志。
+
+### 不变量
+
+- Create 在 delivery commit 成功前绝不返回成功，List 和 Sandbox-ID endpoint 也不返回该 delivery。
+- `delivered-lock == lock` 只证明当前 epoch 已交付；上一 epoch 的 marker 不能使新 delivery
+  Visible。
+- `cleanup=true`、ShutdownTime 到期、删除开始和三个明确终态都会结束 Visible。
+- 一个 informer 中仍存在且属于当前用户的 Sandbox，不会仅因 state 或 Visible 失败返回 not-found。
+- 所有操作先满足 Visible，再执行现有 state 或 capability 准入。
+- Manager 点查不接受 E2B state，也不读取 `GetState()`。
+- List 与 Describe 只公开 `running` 和 `paused`，并在分页前过滤。
+- 最终 delivery Patch 不能覆盖 Controller 赢得的删除或更新。
+- 单个请求最多获得一次 10 分钟预算；内部重试不会重置该预算。
+- 读取只使用 informer；不同副本可以在短时间内给出不同结果。
+
+### 兼容性边界
+
+缺少 delivered-lock 的 lock-only Sandbox 按 `DeliveryNotCommitted` 处理，不提供推测性交付兜底。
+这是一条失败即隐藏的安全边界：本提案不根据 creation time、现有 state 或 Ready 猜测旧对象是否
+已经完成交付，也不定义历史对象迁移。
 
 ## 备选方案
 
-### 在 Manager 中保留预期 state
+### 增加 Healthy Getter
 
-这会继续混合职责，并让后端中立查询依赖 E2B state 词汇。
+Health 会把 Ready 波动、状态转换和 E2B 可读策略混成另一个布尔值，并且仍不能产生公开
+`running` 或 `paused`。本提案保持 Visible 与现有 state 的简单组合。
 
-### 把当前 state 集合复制成新的全局 E2B 可见性规则
+### 在第一次 lock 写入时直接标记已交付
 
-同一规则无法同时表达公开发现、幂等清理、runtime 访问、Resume 行为和 Checkpoint 准入，只会在另一
-层继续保留原有混淆。
+这会让 Ready、runtime、凭证、CSI 或 TrafficPolicy 后处理失败的 Sandbox 提前可见，无法满足
+Create 成功与公开交付一致的合同。
 
-### 继续按原始聚合 state 过滤 List
+### 增加 DeliveryDeadline 字段
 
-这会让 Running 但未 Ready 的 Sandbox 可被 Describe 查询，却无法出现在 `state=running` List 中；
-响应转换也可能与过滤结果不一致。
+单独字段会扩大 CRD 合同，而 `ShutdownTime` 已能为不可见 delivery 提供 Controller 删除上限，
+最终 Patch 又会把它替换成正常生命周期 deadline。
 
-### 现在增加正交生命周期 Getter
+### 等待 Controller 完成 recycle 才结束 Visible
 
-readiness、pause 转换、到期、release 和 workload capability 是更大状态重构中的有用维度。在另一个
-当前消费者真正需要它们之前就增加这些 Getter，会扩大本次增量，并产生尚无跨实现需求的接口合同。
+这会把 API 删除成功依赖异步 Controller 收敛。以 `cleanup=true` 作为不可逆提交点可以立即结束
+当前 delivery，同时仍允许 Controller 在后台完成资源清理。
 
-### 把 E2B 可见性放进 Infra
+### 在 Manager 点查中继续筛选 state
 
-这会要求 Infra 理解 E2B 公开状态和发现策略，破坏后端中立边界。
+这会继续把存在性与操作准入混合，并使属于当前用户的现有对象因 state 不匹配产生 not-found。
 
 ## 风险
 
-- 后续 Manager 调用方可能把查询成功误解为 live Sandbox。查询结果已经明确限制为 claimed 身份与
-  所有权；每个 use case 必须自行负责后续准入。
-- 新增内部状态可能暂时从 List 和 Describe 隐藏。这是刻意的失败即隐藏行为，直到其 E2B 投影得到
-  明确定义。
-- 迁移现有 endpoint 校验时可能意外改变 status 或消息优先级。除明确规定的 List 和 Describe 变化
-  外，当前对外行为属于规范合同。
-- List 与 Describe 在两个并发请求中仍可能因观测到不同后端版本或时间而不同。保证只适用于相同
-  观测，不跨时间成立。
-- `GetState()` 仍是 E2B 中的聚合兼容依赖。本提案只收窄一个边界，不宣称完成更广泛的状态拆解。
+- 带 resourceVersion 的最终 delivery Patch 可能在后处理已经完成后仍因并发写冲突而失败。这是
+  Controller 与并发生命周期写优先于 Create 成功的刻意取舍。
+- `Succeeded`、`Failed` Sandbox 可以持久存在且对 E2B 不可见，并可能继续占用现有资源或配额；
+  本提案不增加 janitor，也不保证 ShutdownTime 删除这些终态对象。
+- Visible 依赖本地时间与 informer 观测。时钟偏差和副本缓存进度可能导致短暂差异，本提案明确接受。
+- 新增 marker 失败即隐藏；没有 delivered-lock 的历史或部分写入对象不会自动恢复为 Visible。
+- 当前聚合 state 会把多个转换 Phase 公开为 `paused`，并将多种事实压缩为 `dead`。本提案保持
+  该兼容行为，因此不能把 state reason 当作完整生命周期模型。
+- Gateway route 仍有自己的投影与同步生命周期。Sandbox-ID API 不再以 route 缺失判定不存在，但
+  本提案不保证 API Visible 与流量可达性完全相同。
+
+## 后续讨论
+
+以下问题已明确推迟，不阻塞本提案，也不改变其 implementable 状态：
+
+- 重新评估 `Resuming`、`Upgrading` 等非 Running Phase 被统一映射为 `paused` 的现有行为。
+- 移除 `dead` state，并为当前依赖 `dead` 及其 reason 的消费者设计新的中立语义。
