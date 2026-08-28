@@ -153,6 +153,7 @@ func TestNewController(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sc := NewController(tt.opts)
 			require.NotNil(t, sc)
+			sc.registerRoutes()
 
 			assert.Equal(t, tt.opts.Domain, sc.domain)
 			assert.Equal(t, tt.opts.MaxTimeout, sc.maxTimeout)
@@ -174,19 +175,18 @@ func TestNewController(t *testing.T) {
 				h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 				return rec.Code
 			}
+			// /health always stays on the control API listener.
+			assert.Equal(t, http.StatusOK, status(sc.mux, "/health"))
+			assert.Equal(t, http.StatusOK, status(sc.mux, "/kruise/api/health"))
 			if tt.opts.MetricsPort > 0 && tt.opts.MetricsPort != tt.opts.Port {
 				require.NotNil(t, sc.metricsServer)
 				assert.Equal(t, fmt.Sprintf(":%d", tt.opts.MetricsPort), sc.metricsServer.Addr)
-				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/health"))
-				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/kruise/api/health"))
 				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/metrics"))
-				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/health"))
-				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/kruise/api/health"))
 				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/metrics"))
+				assert.Equal(t, http.StatusNotFound, status(sc.metricsServer.Handler, "/health"))
+				assert.Equal(t, http.StatusNotFound, status(sc.metricsServer.Handler, "/kruise/api/health"))
 			} else {
 				assert.Nil(t, sc.metricsServer)
-				assert.Equal(t, http.StatusOK, status(sc.mux, "/health"))
-				assert.Equal(t, http.StatusOK, status(sc.mux, "/kruise/api/health"))
 				assert.Equal(t, http.StatusOK, status(sc.mux, "/metrics"))
 			}
 		})
@@ -444,11 +444,11 @@ func TestControllerRunStartsDedicatedObservabilityListener(t *testing.T) {
 		return resp.StatusCode
 	}
 
-	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/health"))
-	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/kruise/api/health"))
+	assert.Equal(t, http.StatusOK, status(controlAddr, "/health"))
+	assert.Equal(t, http.StatusOK, status(controlAddr, "/kruise/api/health"))
 	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/metrics"))
-	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/health"))
-	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/kruise/api/health"))
+	assert.Equal(t, http.StatusNotFound, status(observabilityAddr, "/health"))
+	assert.Equal(t, http.StatusNotFound, status(observabilityAddr, "/kruise/api/health"))
 	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/metrics"))
 	assert.Equal(t, http.StatusMethodNotAllowed, status(controlAddr, "/sandboxes"))
 	assert.Equal(t, http.StatusNotFound, status(observabilityAddr, "/sandboxes"))

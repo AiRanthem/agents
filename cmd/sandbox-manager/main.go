@@ -119,7 +119,7 @@ func main() {
 	// Register server configuration flags
 	pflag.IntVar(&port, "port", 8080, "The port the server listens on")
 	pflag.IntVar(&metricsPort, "metrics-port", 0,
-		"Port for /metrics and /health; 0 or the same value as --port reuses the control API listener")
+		"Port for /metrics; 0 or the same value as --port reuses the control API listener")
 	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (required when --e2b-enable-auth is true)")
 	pflag.BoolVar(&e2bEnableAuth, "e2b-enable-auth", true, "Enable E2B authentication")
 	pflag.StringVar(&domain, "e2b-domain", "",
