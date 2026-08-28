@@ -82,13 +82,17 @@ func RegisterE2BRoute[T any](mux *http.ServeMux, method, path string, handler we
 }
 
 func registerObservabilityRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, err := fmt.Fprintf(w, "OK")
 		if err != nil {
 			klog.ErrorS(err, "Failed to write health check response")
 		}
-	})
+	}
+	mux.HandleFunc("GET /health", healthHandler)
+	// Also register under the /kruise/api prefix so requests routed through
+	// the sandbox-gateway (which forwards /kruise/api/* to the manager) work.
+	mux.HandleFunc("GET "+adapters.CustomPrefix+"/api/health", healthHandler)
 
 	// Prometheus metrics endpoint for exporting metrics
 	mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))

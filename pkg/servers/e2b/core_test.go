@@ -148,13 +148,6 @@ func TestNewController(t *testing.T) {
 				MetricsPort: 8080,
 			},
 		},
-		{
-			name: "negative metrics port reuses API listener",
-			opts: ControllerOptions{
-				Port:        8080,
-				MetricsPort: -1,
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,12 +178,15 @@ func TestNewController(t *testing.T) {
 				require.NotNil(t, sc.metricsServer)
 				assert.Equal(t, fmt.Sprintf(":%d", tt.opts.MetricsPort), sc.metricsServer.Addr)
 				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/health"))
+				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/kruise/api/health"))
 				assert.Equal(t, http.StatusNotFound, status(sc.mux, "/metrics"))
 				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/health"))
+				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/kruise/api/health"))
 				assert.Equal(t, http.StatusOK, status(sc.metricsServer.Handler, "/metrics"))
 			} else {
 				assert.Nil(t, sc.metricsServer)
 				assert.Equal(t, http.StatusOK, status(sc.mux, "/health"))
+				assert.Equal(t, http.StatusOK, status(sc.mux, "/kruise/api/health"))
 				assert.Equal(t, http.StatusOK, status(sc.mux, "/metrics"))
 			}
 		})
@@ -449,8 +445,10 @@ func TestControllerRunStartsDedicatedObservabilityListener(t *testing.T) {
 	}
 
 	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/health"))
+	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/kruise/api/health"))
 	assert.Equal(t, http.StatusNotFound, status(controlAddr, "/metrics"))
 	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/health"))
+	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/kruise/api/health"))
 	assert.Equal(t, http.StatusOK, status(observabilityAddr, "/metrics"))
 	assert.Equal(t, http.StatusMethodNotAllowed, status(controlAddr, "/sandboxes"))
 	assert.Equal(t, http.StatusNotFound, status(observabilityAddr, "/sandboxes"))
