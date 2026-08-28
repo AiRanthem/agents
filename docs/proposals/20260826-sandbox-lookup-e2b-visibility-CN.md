@@ -19,17 +19,18 @@ status: implementable
 
 Create 的第一次持久化写仍负责领取或创建 Sandbox，但保持 delivery 不可见，并把 API 请求的绝对
 截止时间写入 `ShutdownTime`。E2B API 的统一最大请求时间为 10 分钟，该时间也是 delivery 的
-最大完成时间。后处理完成后，Create 使用带 resourceVersion 乐观锁的 Patch，在一次原子写中提交
-`delivered-lock` 并用从交付时刻计算的最终 `PauseTime` 和 `ShutdownTime` 替换临时值。Controller
-删除优先于交付提交；若 Sandbox 在提交前已因临时截止时间被删除，Create 返回 `504`，而不是
-报告成功。
+最大完成时间。后处理完成后，E2B API 调用 Manager 提交 delivery；Manager 通过 Infra 的
+resourceVersion 条件 Patch，在一次原子写中提交 `delivered-lock`，并用从交付时刻计算的最终
+`PauseTime` 和 `ShutdownTime` 替换临时值。Controller 删除优先于交付提交；若 Sandbox 在提交前
+已因临时截止时间被删除，Create 返回 `504`，而不是报告成功。
 
-`infra.Sandbox.GetVisibility()` 以当前 informer 对象计算 `(visible, reason)`。delivery 尚未
+`infra.Sandbox.GetVisibility()` 以当前 Sandbox 观测计算 `(visible, reason)`。delivery 尚未
 提交、epoch 不匹配、`cleanup=true`、`ShutdownTime` 已到期、持久化删除已开始，或 Phase 为
 `Succeeded`、`Failed`、`Terminating` 时，`Visible=false`。所有 Sandbox-ID endpoint 都以
-Visible 为共同前提，再继续复用现有 `GetState()` 和各 endpoint 的操作准入。不存在的对象返回
-`404`；其他用户的对象也返回相同 `404` 以避免泄漏；属于当前用户但不可见或不允许操作的对象
-不返回 not-found，而使用上游 endpoint 已声明的 `401`、`400` 或 `409`。
+Visible 为共同前提，再继续复用现有 `GetState()` 和各 endpoint 的操作准入。`401` 与 `404` 的
+边界由信息披露决定：请求本身没有动作权限且结论与任何 Sandbox 是否存在无关时返回 `401`；实际
+不存在、ID 歧义或 owner 不匹配时返回相同 `404`。属于当前用户但不可见或不允许操作的对象不返回
+not-found，而使用上游 endpoint 已声明的 `401`、`400` 或 `409`。
 
 List 和 Describe 在 Visible 之后继续使用现有 state 语义，只公开 `running` 或 `paused`，并
 保留 `dead/RunningResourceClaimedButNotReady -> running` 的兼容映射。本提案不增加 `Healthy`
@@ -61,6 +62,13 @@ informer 中没有对应的已领取 Sandbox。
 只允许 `running` 和 `paused` 作为公开 Sandbox state，并为 Create、Resume 和 Connect 声明了
 `504 Backend timeout`。本提案只使用每个 endpoint 已声明的 response，不扩展上游合同。
 
+本提案区分两类授权拒绝。**无权**表示调用方对动作本身没有权限，例如 team-scoped API key 请求
+admin-only 动作；只要该判断不读取目标对象，并对任意 Sandbox ID 都给出相同结果，它不会额外透露
+对象存在性，可以使用 `401`。**越权**表示调用方本可执行该动作，但目标属于其他用户；若它与实际
+不存在返回不同响应，就会确认该 ID 存在。所有 Sandbox-ID owner mismatch 因此固定使用 `404`。
+同 owner 对象的 Visible 或 state 准入失败不属于这两类：调用方已经有权知道自己的对象存在，按
+endpoint 的既有 response 表达即可。
+
 ### 范围
 
 - 将 Manager 的 Sandbox 点查收窄为 informer 中的 claimed 身份、namespace、Sandbox ID 和 owner
@@ -68,7 +76,8 @@ informer 中没有对应的已领取 Sandbox。
 - 为 Claim 和 Clone 共用的 Create 交付增加 epoch 匹配的持久化完成标记。
 - 为 `infra.Sandbox` 增加协议中立的 Visible 观测，并将其作为所有 Sandbox-ID endpoint 的共同
   前提。
-- 统一 List、Describe 和其他 Sandbox-ID endpoint 的查询、所有权、Visible 与 state 判断顺序。
+- 统一 List、Describe 和其他 Sandbox-ID endpoint 的动作权限、查询、所有权、Visible 与 state
+  判断顺序，并以是否披露对象存在性作为 `401` 与 `404` 的边界。
 - 为 E2B 业务请求设定一个集中定义的 10 分钟服务端硬上限，并在上游合同允许时映射为 `504`。
 - 保留 Controller 的 ShutdownTime 删除与 recycle 清理职责，但不让 Manager 的删除成功依赖
   Controller 已经完成 recycle。
@@ -83,6 +92,8 @@ informer 中没有对应的已领取 Sandbox。
 - 为 informer 延迟、时钟偏差或跨副本一致性增加协调协议。本提案以每个副本当前 informer 观测为准，
   接受跨副本的短暂不一致。
 - 使用 APIReader List 或用 route Store 代替 informer Sandbox 查询。
+- 改变 Infra 点查已有的 route polling hint 或 APIReader Get freshness fallback；它们不能成为
+  Sandbox 存在性或 owner 的权威，但是否保留其内部刷新机制不属于本提案。
 - 自动删除或回收处于 `Succeeded`、`Failed` 的 Sandbox。
 - 设计旧 delivery 数据迁移、lock-only 兼容兜底或另一种 Infra 后端。
 - 改变现有歧义 Sandbox ID 失败即隐藏的查询行为。
@@ -94,8 +105,9 @@ informer 中没有对应的已领取 Sandbox。
 | 决策 | 责任方 | 合同 |
 |---|---|---|
 | 认证请求 | E2B API | 验证调用方身份，不以 route 是否存在推断 Sandbox 是否存在 |
+| 验证动作权限 | E2B API | 在 endpoint 需要时作与目标对象无关的权限判断；拒绝时使用 `401` |
 | 查询已领取 Sandbox | Infra | 从 informer 匹配 namespace 和公开 Sandbox ID，区分不存在、歧义和内部失败 |
-| 验证所有权 | Manager | 使用 Sandbox owner metadata；不读取 state 或 Visible |
+| 验证所有权 | Manager | 使用 Sandbox owner metadata；不读取 state 或 Visible；API 将 mismatch 隐藏为 `404` |
 | 持久化 delivery | Manager 与 Infra capability | 以 lock epoch 和条件 Patch 提交完整交付 |
 | 计算 Visible | Infra Sandbox | 从协议中立的持久化事实返回布尔值和稳定 reason |
 | 映射 HTTP 与 E2B state | E2B API | 先应用 Visible，再复用现有 state 和 endpoint 专用准入 |
@@ -104,15 +116,18 @@ informer 中没有对应的已领取 Sandbox。
 ```mermaid
 flowchart LR
     Request[E2B Sandbox-ID 请求] --> Auth[认证]
-    Auth --> Lookup[Informer claimed 查询]
+    Auth --> Permission[动作权限（如有）]
+    Permission --> Lookup[Informer claimed 查询]
     Lookup --> Owner[所有权授权]
     Owner --> Visible[Visible 门槛]
     Visible --> State[现有 state / 操作准入]
     State --> Result[公开响应或操作]
 ```
 
-Route Store 可以继续服务 gateway 和路由投影，但 route 缺失、`dead` route 或尚未同步的 route 都
-不能抢先把一个 informer 中存在的 Sandbox-ID 请求判为 not-found。
+Sandbox-ID 认证中间件只认证调用方，不再通过本地 Route Store 预判 Sandbox 是否存在或验证 owner；
+所有 Sandbox-ID handler 都由共同的 claimed lookup 与 owner 检查承接该职责。Route Store 可以继续
+服务 gateway 和路由投影，但 route 缺失、`dead` route 或尚未同步的 route 都不能抢先把一个
+Sandbox-ID 请求判为 not-found。
 
 ### Manager 点查合同
 
@@ -126,11 +141,14 @@ Route Store 可以继续服务 gateway 和路由投影，但 route 缺失、`dea
 2. Infra 只选择 claimed 且匹配 namespace 与 Sandbox ID 的对象。
 3. 明确不存在映射为 Manager not-found；歧义 ID 对外同样隐藏为 not-found，但保留内部 cause；
    其他查询失败映射为 internal error。
-4. Manager 在查询成功后验证 owner；不匹配返回 not-allowed。
+4. Manager 在查询成功后验证 owner；不匹配返回内部 not-allowed，E2B API 将其与实际不存在映射为
+   相同 `404`。
 5. Manager 不读取、不记录、不筛选 `GetState()` 或 Visible reason，直接返回 `infra.Sandbox`。
 
 认证和点查不能依赖本地 Route Store 的 owner 映射。E2B 在取得已授权 Sandbox 后才读取 Visible 和
-其他内部诊断，因此其他用户无法通过错误差异探测对象。
+其他内部诊断，因此其他用户无法通过错误差异探测对象。动作权限检查若存在，必须只依赖调用方、
+endpoint 和不读取 Sandbox 的请求事实；一旦需要解析目标对象，就属于 owner 或操作准入，不能用
+前置 `401` 绕过隐藏规则。
 
 ### Delivery epoch 与提交标记
 
@@ -167,8 +185,10 @@ Create 的 delivery 完成条件包括成功返回前所需的全部工作：等
 交付所需的凭证与 token 处理、CSI mount、安全规则和网络配置，以及需要时创建 TrafficPolicy。任一
 步骤失败，都不能写入 `delivered-lock` 或返回成功。
 
-全部后处理完成后，Create 对同一 Sandbox 执行一次带 resourceVersion 乐观锁的条件 Patch。该提交
-要求对象仍是同一 epoch、没有开始删除或 cleanup，并在一次原子写中：
+全部后处理完成后，E2B API 调用 Manager 的 delivery-commit use case；Manager 再通过协议中立的
+Infra capability 对同一 Sandbox 执行带 resourceVersion 乐观锁的条件 Patch。TrafficPolicy 仍是
+Create 成功前的 API 层后处理，不下移到 Manager 或 Infra；API 也不直接写 Sandbox CR。该提交要求
+对象仍是同一 epoch、没有开始删除或 cleanup，并在一次原子写中：
 
 - 写入 `delivered-lock = lock`；
 - 把临时 `ShutdownTime` 替换为从实际交付时刻计算的最终生命周期值；
@@ -179,6 +199,10 @@ Create 只在该 Patch 成功后返回 `201`。最终 Patch 不得忽略 resourc
 其他并发写入；冲突、对象删除、epoch 改变或 context 到期都表示本次 delivery 未提交。临时
 deadline 导致的删除或请求到期按下文返回 `504`；无法分类为该超时的条件冲突或持久化失败使用
 Create 已声明的 `500`，不得返回 `201` 或 `404`。
+
+Create 失败后为排障保留的 reserved-failed Sandbox 不具有特殊的存在性语义。它没有成功提交本次
+delivery，因 Phase 或缺少匹配 marker 得到 `Visible=false`；reserved-failed label 本身不得再触发
+`404`。
 
 #### Controller 删除优先
 
@@ -200,6 +224,8 @@ E2B API 层使用一个集中定义的 `MaxAPIRequestDuration = 10m` 作为业�
 - Create 使用该 deadline 作为 delivery timeout 和第一次写入的临时 `ShutdownTime`。
 - Resume 与 Connect 从请求 context 继承同一上限，Manager 和 Infra 不依赖 API 常量。
 - 已有更短的操作级 timeout 继续生效。
+- 客户端扩展指定的更长阶段 timeout 以及用于表示服务端不设阶段上限的内部值，都不能把整个请求
+  延长到 10 分钟以后。
 - health、Prometheus metrics 和进程 shutdown 不属于该业务请求上限。
 
 Create、Resume 和 Connect 的硬超时映射为其 OpenAPI 已声明的 `504`。其他 endpoint 若未声明
@@ -208,8 +234,8 @@ Create、Resume 和 Connect 的硬超时映射为其 OpenAPI 已声明的 `504`�
 ### Visible 合同
 
 `infra.Sandbox.GetVisibility()` 返回 `(visible bool, reason string)`。它只读取当前
-`infra.Sandbox` 已携带的 informer 观测和当前时间，不执行 Kubernetes 读写。调用方按照下列
-优先级取得唯一 reason：
+`infra.Sandbox` 已携带的单次 Sandbox 观测和当前时间，不执行 Kubernetes 读写。点查内部如何取得
+或刷新该观测保持现状；Visible 不发起第二次读取。调用方按照下列优先级取得唯一 reason：
 
 | 优先级 | 条件 | Visible | reason |
 |---:|---|---:|---|
@@ -237,14 +263,48 @@ Ready、`PauseTime` 和其他 Phase 不参与 Visible。Visible reason 只用于
 所有 Sandbox-ID endpoint 使用相同的判断顺序：
 
 1. 认证调用方；
-2. 从 informer 查询 claimed Sandbox；
-3. 验证 owner；
-4. 要求 `Visible=true`；
-5. 复用现有 `GetState()` 或 endpoint capability 完成操作专用准入。
+2. endpoint 如有动作级权限，先作与 Sandbox 存在性无关的检查；
+3. 从 informer-backed Infra 点查 claimed Sandbox；
+4. 验证 owner；
+5. 要求 `Visible=true`；
+6. 复用现有 `GetState()` 或 endpoint capability 完成操作专用准入。
 
 Visible 是共同前提，但不是新的 state，也不替代操作权威校验。Pause、Resume、Connect、Network、
 Set timeout、Snapshot、Browser、traffic-token refresh 和 Delete 都保留各自现有的 state 或
 capability 规则。
+
+不读取 Sandbox 的语法校验可以在点查前完成，因为其响应不随 ID 是否存在而变化。动作权限拒绝也
+必须满足该条件；否则必须先完成 lookup 和 owner 隐藏，再读取 Visible 或操作事实。
+
+#### 操作准入矩阵
+
+下表定义 owner 已匹配且 `Visible=true` 之后的额外条件。拒绝码只使用相应 endpoint 已声明的
+response：
+
+| Endpoint | Visible 后的准入条件 | 条件不满足 |
+|---|---|---:|
+| Describe | List/Describe 公共 state 投影有结果 | `401` |
+| Delete | 聚合 state 为 `running`、`paused` 或 `dead` | `401` |
+| Pause | Infra 的 pausable capability 允许 | `409` |
+| Resume | 聚合 state 为 `running` 或 `paused`，且 Infra 的 resumable capability 允许 | `409` |
+| Connect | 聚合 state 为 `running` 或 `paused`；`paused` 路径还要求 Infra resumable | `409` |
+| Network | 聚合 state 为 `running` 或 `paused` | `409` |
+| Set timeout | 聚合 state 为 `running` | `401` |
+| Snapshot | 聚合 state 为 `running` | `400` |
+| Browser | 聚合 state 为 `running` 或 `paused` | `401` |
+| traffic-token refresh | 聚合 state 为 `running` 或 `paused`，且 Sandbox 要求 traffic auth | `409` |
+
+因此，`dead/RunningResourceClaimedButNotReady` 在 Describe 中兼容投影为 `running`，可以 Delete；
+Pause、Resume、Connect、Network 和 traffic-token refresh 返回 `409`，Set timeout 与 Browser 返回
+`401`，Snapshot 返回 `400`，均不返回 `404`。
+
+traffic-token 在初次授权后、实际签发前保留一次新的 Infra Sandbox 校验，以防 recycle/reclaim
+竞态。该校验再次按 owner、Visible、state、`RequireTrafficAuth` 的顺序执行：owner 已变化返回隐藏
+`404`，同 owner 但 Visible 已结束返回 `401`，state 或 capability 冲突返回 `409`。这里的 route
+是从该次 Sandbox 观测投影出的 capability，不是本地 Route Store 的存在性或 owner 权威。
+
+Pause、Resume 和 Connect 只操作已经 Visible 的当前 delivery，不建立新的 epoch，也不修改 lock
+或 delivered-lock。
 
 #### List 与 Describe
 
@@ -278,6 +338,11 @@ Controller 完成 recycle，也不以其完成作为释放 API 响应的条件�
 若 recycle trigger 写入失败，现有 Kill fallback 仍可执行。Kill 成功发起持久化删除后，
 `DeletionTimestamp` 使 Visible 结束；对象从 informer 消失后，后续查询才成为实际 not-found。
 
+第一次成功提交 `cleanup=true` 或成功发起持久化删除的 Delete 返回 `204`。此后只要同 owner 对象
+仍能被点查，但已经因 cleanup 或 `DeletionTimestamp` 得到 `Visible=false`，重试 Delete 返回
+`401`；旧 Sandbox ID 从点查结果消失后返回 `404`。其他 owner 从始至终返回同样的隐藏 `404`。
+因此，`204` 只确认本次删除已被接受，不把之后的不可见或实际不存在继续折叠成幂等成功。
+
 Controller 成功 recycle 时清除上一 delivery 的 lock、delivered-lock、owner、Sandbox ID、
 claim-scoped metadata、`PauseTime`、`ShutdownTime` 和 TrafficPolicy，然后才把 CR 返回池中。
 这些清理防止下一次 Claim 继承旧 epoch，但 Manager 的删除语义不依赖清理是否完成。下一次交付
@@ -286,26 +351,31 @@ claim-scoped metadata、`PauseTime`、`ShutdownTime` 和 TrafficPolicy，然后�
 
 ### HTTP 错误与信息披露
 
+`401` 与 `404` 不按“是否发生授权失败”机械划分，而按响应是否会额外确认目标对象存在来划分。
 所有原生和定制 Sandbox-ID endpoint 使用以下公共分类：
 
 | 条件 | HTTP status | 公开语义 |
 |---|---:|---|
 | API key 无效或缺失 | 401 | 认证失败 |
-| informer 中没有匹配的 claimed Sandbox | 404 | 实际不存在 |
+| 调用方对动作本身无权，且判断与任何 Sandbox 是否存在无关 | 401 | 明确拒绝该动作，不透露对象事实 |
+| claimed 点查没有匹配的 Sandbox | 404 | 实际不存在 |
 | 多个 claimed Sandbox 匹配同一 ID | 404 | 失败即隐藏歧义，不选择任一对象 |
-| Sandbox 存在但 owner 不匹配 | 404 | 与不存在使用相同响应，避免泄漏 |
+| Sandbox 存在但 owner 不匹配，即对象级越权 | 404 | 与不存在使用相同响应，避免确认该 ID 存在 |
 | Sandbox 属于当前用户但 `Visible=false` | 401 | 当前 delivery 不允许操作；不是 not-found |
-| Visible 但 Pause、Resume、Connect 或 Network state 冲突 | 409 | endpoint 已声明的冲突 |
+| Visible 但 Pause、Resume、Connect、Network 或 traffic-token 准入冲突 | 409 | endpoint 已声明的冲突 |
 | Visible 但 Snapshot state 不允许 | 400 | endpoint 已声明的 bad request |
-| Visible 但 Describe、Set timeout、Browser、traffic-token 或其他无 400/409 的操作不允许 | 401 | endpoint 已声明的拒绝 |
-| informer 查询无法确定或内部失败 | 500 | 服务端失败，不降级为 404 |
+| Visible 但 Describe、Delete、Set timeout、Browser 或其他无 400/409 的操作不允许 | 401 | endpoint 已声明的拒绝 |
+| claimed 点查无法确定或内部失败 | 500 | 服务端失败，不降级为 404 |
 | Create 最终 delivery commit 因非超时冲突或持久化失败 | 500 | Create 已声明的服务端失败 |
 | Create、Resume 或 Connect 达到服务端硬上限 | 504 | Backend timeout |
 | 其他 endpoint 达到服务端硬上限 | 500 | 该 endpoint 已声明的服务端错误 |
 
-除“实际不存在”“歧义 ID 失败即隐藏”和“隐藏其他 owner”外，任何 state、Ready、Visible、route、
-cleanup、到期或 delivery 失败都不得产生 `404`。这三种情况必须使用相同公开 message；当前 owner
-的 Visible reason、state reason 和歧义 cause 只写入内部日志。
+原则上，对象级越权只有在响应对存在和不存在完全相同时才可使用 `401`；本提案的 Sandbox-ID 请求
+无法满足该条件，因此 owner mismatch 固定为 `404`。除“实际不存在”“歧义 ID 失败即隐藏”和
+“隐藏其他 owner”外，任何 state、Ready、Visible、route、cleanup、到期或 delivery 失败都不得产生
+`404`。这三种 `404` 使用相同 status、公开 message 和 response shape，且不附加 Sandbox resource
+context 或 metadata；动作级无权的 `401` message 也不包含 Sandbox 事实。当前 owner 的 Visible
+reason、state reason 和歧义 cause 只写入内部日志。
 
 ### 不变量
 
@@ -314,18 +384,31 @@ cleanup、到期或 delivery 失败都不得产生 `404`。这三种情况必须
   Visible。
 - `cleanup=true`、ShutdownTime 到期、删除开始和三个明确终态都会结束 Visible。
 - 一个 informer 中仍存在且属于当前用户的 Sandbox，不会仅因 state 或 Visible 失败返回 not-found。
+- 动作级无权只有在判断不读取目标 Sandbox、因而不泄漏其存在性时才返回 `401`；owner mismatch
+  始终与不存在返回相同 `404`。
 - 所有操作先满足 Visible，再执行现有 state 或 capability 准入。
 - Manager 点查不接受 E2B state，也不读取 `GetState()`。
 - List 与 Describe 只公开 `running` 和 `paused`，并在分页前过滤。
 - 最终 delivery Patch 不能覆盖 Controller 赢得的删除或更新。
 - 单个请求最多获得一次 10 分钟预算；内部重试不会重置该预算。
-- 读取只使用 informer；不同副本可以在短时间内给出不同结果。
+- 每个判断使用点查返回的一次 Sandbox 观测；Visible 不另行读取。Infra 既有 freshness 机制保持
+  不变，不同副本可以在短时间内给出不同结果。
 
 ### 兼容性边界
 
 缺少 delivered-lock 的 lock-only Sandbox 按 `DeliveryNotCommitted` 处理，不提供推测性交付兜底。
 这是一条失败即隐藏的安全边界：本提案不根据 creation time、现有 state 或 Ready 猜测旧对象是否
 已经完成交付，也不定义历史对象迁移。
+
+正常生命周期的 timeout 从 delivery commit 的实际时刻开始计算，而不是从首次领取写入开始；因此
+交付后可用时长保持请求值，Sandbox 从首次领取到最终结束的总时长可能增加。任何更长的客户端阶段
+timeout 都仍受单个 10 分钟 API 硬上限约束。
+
+上游 [JavaScript SDK](https://github.com/e2b-dev/E2B/blob/f0facc5dbcf93067326745e1597b05311c0174ea/packages/js-sdk/src/api/index.ts#L24-L29)
+和 [Python SDK](https://github.com/e2b-dev/E2B/blob/f0facc5dbcf93067326745e1597b05311c0174ea/packages/python-sdk/e2b/api/__init__.py#L151-L155)
+都会把 `401` 分类为 authentication exception。由于本提案不扩展 endpoint response 集合，同 owner
+的 Visible 拒绝、动作级无权以及没有 `400`/`409` 可用的 state 拒绝仍复用 `401`；SDK 的异常类型
+可能不够精确，这是已接受的兼容性代价，公开 message 也不得以泄漏对象事实来弥补该限制。
 
 ## 备选方案
 
