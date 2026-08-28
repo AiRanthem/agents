@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -282,8 +281,12 @@ func (r *Reconciler) scaleDown(ctx context.Context, count int, sbs *agentsv1alph
 		return err
 	}
 
+	lessByScaleDownPriority := func(i, j *agentsv1alpha1.Sandbox) bool {
+		return compareScaleDownPriority(i, j) < 0
+	}
+
 	// Phase 1: Delete old revision sandboxes first
-	oldToDelete := oldCandidates[:min(count, len(oldCandidates))]
+	oldToDelete := findOldestSandboxes(oldCandidates, count, lessByScaleDownPriority)
 	var totalSuccesses int
 	successes, err := utils.DoItSlowlyWithInputs(oldToDelete, initialBatchSize, deleteFunc)
 	totalSuccesses += successes
@@ -299,8 +302,7 @@ func (r *Reconciler) scaleDown(ctx context.Context, count int, sbs *agentsv1alph
 
 	// Phase 2: Delete updated revision sandboxes if more needed.
 	// Priority: Pending > Recycled (recycledCount desc) > Running-NotReady > Available fresh.
-	slices.SortFunc(updatedCandidates, compareScaleDownPriority)
-	updatedToDelete := updatedCandidates[:min(remaining, len(updatedCandidates))]
+	updatedToDelete := findOldestSandboxes(updatedCandidates, remaining, lessByScaleDownPriority)
 	successes, err = utils.DoItSlowlyWithInputs(updatedToDelete, initialBatchSize, deleteFunc)
 	totalSuccesses += successes
 	if err != nil {

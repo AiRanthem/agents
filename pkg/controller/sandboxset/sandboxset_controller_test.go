@@ -814,7 +814,7 @@ func TestReconcile_ScaleDown_RecycledFirst(t *testing.T) {
 	assert.Equal(t, "fresh-0", sandboxes.Items[0].Name, "recycled sandbox should be deleted first, fresh one kept")
 }
 
-func TestReconcile_ScaleDown_Priority(t *testing.T) {
+func testReconcileScaleDownPriorityHelper(t *testing.T, useUpdatedHash bool) {
 	utestutils.InitLogOutput()
 	ctx := context.Background()
 	k8sClient := NewClient()
@@ -830,8 +830,15 @@ func TestReconcile_ScaleDown_Priority(t *testing.T) {
 
 	spec, err := reconciler.buildSandboxTemplateSpec(ctx, sbs)
 	require.NoError(t, err)
-	hash, err := computeRevisionHash(spec)
+	updatedHash, err := computeRevisionHash(spec)
 	require.NoError(t, err)
+
+	var hash string
+	if useUpdatedHash {
+		hash = updatedHash
+	} else {
+		hash = "old-hash"
+	}
 
 	ownerRef := []metav1.OwnerReference{*metav1.NewControllerRef(sbs, v1alpha1.SandboxSetControllerKind)}
 
@@ -886,6 +893,14 @@ func TestReconcile_ScaleDown_Priority(t *testing.T) {
 	assert.NoError(t, k8sClient.List(ctx, sandboxes))
 	require.Len(t, sandboxes.Items, 1)
 	assert.Equal(t, "fresh-0", sandboxes.Items[0].Name, "pending, recycled, and not-ready should be deleted; fresh available kept")
+}
+
+func TestReconcile_ScaleDown_Priority(t *testing.T) {
+	testReconcileScaleDownPriorityHelper(t, true)
+}
+
+func TestReconcile_ScaleDown_OldCandidates_Priority(t *testing.T) {
+	testReconcileScaleDownPriorityHelper(t, false)
 }
 
 func TestCompareScaleDownPriority(t *testing.T) {
