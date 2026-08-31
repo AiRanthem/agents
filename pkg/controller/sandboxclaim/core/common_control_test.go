@@ -35,6 +35,7 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/agent-runtime/storages"
+	"github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/cachetest"
 	"github.com/openkruise/agents/pkg/features"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
@@ -599,7 +600,7 @@ func TestCommonControl_EnsureClaimClaiming_ClaimedGreaterThanZero(t *testing.T) 
 	assert.Equal(t, int32(1), newStatus.ClaimedReplicas, "ClaimedReplicas should be 1")
 }
 
-func TestCommonControl_EnsureClaimClaiming_CPUResizeFeatureGatePrecondition(t *testing.T) {
+func TestCommonControl_EnsureClaimClaiming_ResourceResizeFeatureGatePrecondition(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = agentsv1alpha1.AddToScheme(scheme)
 
@@ -615,7 +616,7 @@ func TestCommonControl_EnsureClaimClaiming_CPUResizeFeatureGatePrecondition(t *t
 				Replicas:     int32Ptr(1),
 				InplaceUpdate: &agentsv1alpha1.SandboxClaimInplaceUpdateOptions{
 					Resources: &agentsv1alpha1.SandboxClaimInplaceUpdateResourcesOptions{
-						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+						Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
 					},
 				},
 			},
@@ -694,6 +695,151 @@ func TestCommonControl_EnsureClaimClaiming_CPUResizeFeatureGatePrecondition(t *t
 		assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseClaiming, newStatus.Phase)
 		assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
 	})
+}
+
+func TestCommonControl_EnsureClaimClaiming_ResizeIncompatibleSandboxRetries(t *testing.T) {
+	claim := &agentsv1alpha1.SandboxClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-claim-resize-downscale",
+			Namespace: "default",
+			UID:       types.UID("test-uid-resize-downscale"),
+		},
+		Spec: agentsv1alpha1.SandboxClaimSpec{
+			TemplateName: "test-template",
+			Replicas:     int32Ptr(1),
+			InplaceUpdate: &agentsv1alpha1.SandboxClaimInplaceUpdateOptions{
+				Resources: &agentsv1alpha1.SandboxClaimInplaceUpdateResourcesOptions{
+					Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
+				},
+			},
+		},
+	}
+	sandboxSet := &agentsv1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default"},
+	}
+	provider, fakeClient, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+
+	// The only warm sandbox runs 256Mi, so a 128Mi claim is a downscale: every
+	// candidate is incompatible and the claim must keep retrying.
+	warm := &agentsv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "warm-sbx",
+			Namespace:         "default",
+			Labels:            map[string]string{agentsv1alpha1.LabelSandboxTemplate: "test-template"},
+			Annotations:       map[string]string{},
+			CreationTimestamp: metav1.Now(),
+			OwnerReferences:   []metav1.OwnerReference{*metav1.NewControllerRef(sandboxSet, agentsv1alpha1.SandboxSetControllerKind)},
+		},
+		Spec: agentsv1alpha1.SandboxSpec{
+			EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+				Template: &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{
+							Name: "main",
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+							},
+						}},
+					},
+				},
+			},
+		},
+		Status: agentsv1alpha1.SandboxStatus{
+			Phase:      agentsv1alpha1.SandboxRunning,
+			Conditions: []metav1.Condition{{Type: string(agentsv1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}},
+			PodInfo:    agentsv1alpha1.PodInfo{PodIP: "1.2.3.4"},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), warm))
+	require.NoError(t, fakeClient.Status().Update(t.Context(), warm))
+	require.Eventually(t, func() bool {
+		objs, err := provider.ListSandboxesInPool(t.Context(), cache.ListSandboxesInPoolOptions{Pool: "test-template"})
+		return err == nil && len(objs) == 1
+	}, 200*time.Millisecond, 5*time.Millisecond)
+
+	newStatus := &agentsv1alpha1.SandboxClaimStatus{Phase: agentsv1alpha1.SandboxClaimPhaseClaiming}
+	control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), provider, nil)
+
+	strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
+		Claim:      claim,
+		SandboxSet: sandboxSet,
+		NewStatus:  newStatus,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, RequeueAfter(ClaimRetryInterval), strategy)
+	assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseClaiming, newStatus.Phase)
+	assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
+	// The sandbox must stay in the pool, untouched by the failed attempt.
+	got := &agentsv1alpha1.Sandbox{}
+	require.NoError(t, fakeClient.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "warm-sbx"}, got))
+	assert.Empty(t, got.Annotations[agentsv1alpha1.AnnotationOwner])
+}
+
+func TestCommonControl_EnsureClaimClaiming_InvalidInplaceUpdateResourcesFailsFast(t *testing.T) {
+	sandboxSet := &agentsv1alpha1.SandboxSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default"},
+	}
+
+	tests := []struct {
+		name      string
+		requests  corev1.ResourceList
+		limits    corev1.ResourceList
+		expectMsg string
+	}{
+		{
+			name:      "cpu request exceeding limit",
+			requests:  corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			limits:    corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+			expectMsg: "must not exceed limit",
+		},
+		{
+			name:      "unsupported resource",
+			requests:  corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")},
+			expectMsg: "not supported for in-place resize",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache, fakeClient, err := cachetest.NewTestCache(t)
+			require.NoError(t, err)
+
+			claim := &agentsv1alpha1.SandboxClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-claim-invalid-resize",
+					Namespace: "default",
+					UID:       types.UID("test-uid-invalid-resize"),
+				},
+				Spec: agentsv1alpha1.SandboxClaimSpec{
+					TemplateName: "test-template",
+					Replicas:     int32Ptr(1),
+					InplaceUpdate: &agentsv1alpha1.SandboxClaimInplaceUpdateOptions{
+						Resources: &agentsv1alpha1.SandboxClaimInplaceUpdateResourcesOptions{
+							Requests: tt.requests,
+							Limits:   tt.limits,
+						},
+					},
+				},
+			}
+			newStatus := &agentsv1alpha1.SandboxClaimStatus{Phase: agentsv1alpha1.SandboxClaimPhaseClaiming}
+			control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
+
+			strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
+				Claim:      claim,
+				SandboxSet: sandboxSet,
+				NewStatus:  newStatus,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, NoRequeue(), strategy)
+			assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseCompleted, newStatus.Phase)
+			assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
+			assert.Contains(t, newStatus.Message, tt.expectMsg)
+			cond := GetClaimCondition(newStatus, string(agentsv1alpha1.SandboxClaimConditionCompleted))
+			require.NotNil(t, cond)
+			assert.Equal(t, "InvalidInplaceUpdateResources", cond.Reason)
+		})
+	}
 }
 
 func TestCommonControl_EnsureClaimCompleted(t *testing.T) {
@@ -1093,16 +1239,22 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			name: "claim with inplaceUpdate resources",
 			claim: &agentsv1alpha1.SandboxClaim{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-claim-cpu-resize",
+					Name:      "test-claim-resource-resize",
 					Namespace: "default",
-					UID:       "test-uid-cpu-resize",
+					UID:       "test-uid-resource-resize",
 				},
 				Spec: agentsv1alpha1.SandboxClaimSpec{
 					TemplateName: "test-template",
 					InplaceUpdate: &agentsv1alpha1.SandboxClaimInplaceUpdateOptions{
 						Resources: &agentsv1alpha1.SandboxClaimInplaceUpdateResourcesOptions{
-							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-							Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("500m"),
+								corev1.ResourceMemory: resource.MustParse("512Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("500m"),
+								corev1.ResourceMemory: resource.MustParse("1Gi"),
+							},
 						},
 					},
 				},
@@ -1121,6 +1273,10 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				reqCPU := opts.InplaceUpdate.Resources.Requests[corev1.ResourceCPU]
 				if reqCPU.String() != "500m" {
 					t.Errorf("InplaceUpdate.Resources.Requests[cpu] = %v, want 500m", reqCPU.String())
+				}
+				reqMemory := opts.InplaceUpdate.Resources.Requests[corev1.ResourceMemory]
+				if reqMemory.String() != "512Mi" {
+					t.Errorf("InplaceUpdate.Resources.Requests[memory] = %v, want 512Mi", reqMemory.String())
 				}
 			},
 		},

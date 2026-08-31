@@ -144,6 +144,23 @@ func (c *commonControl) EnsureClaimClaiming(ctx context.Context, args ClaimArgs)
 		}
 	}
 
+	// Step 7.1: Validate the inplace update request up front so invalid input
+	// fails fast with an accurate reason instead of spinning until
+	// ClaimTimeout with a misleading NoAvailableSandboxes event. Only
+	// sandbox-independent rules are checked here; revision-dependent checks
+	// (memory downscale, QoS class change) run per candidate in
+	// sandboxcr.preCheckCandidate.
+	if claim.Spec.InplaceUpdate != nil && claim.Spec.InplaceUpdate.Resources != nil {
+		res := claim.Spec.InplaceUpdate.Resources
+		if err := sandboxcr.ValidateResizeResources(res.Requests, res.Limits); err != nil {
+			msg := err.Error()
+			log.Info(msg)
+			c.recorder.Event(claim, "Warning", "InvalidInplaceUpdateResources", msg)
+			TransitionToCompleted(args.NewStatus, "InvalidInplaceUpdateResources", msg)
+			return NoRequeue(), nil
+		}
+	}
+
 	// Step 8: Calculate batch size
 	remaining := desiredReplicas - currentCount
 	batchSize := min(int(remaining), MaxClaimBatchSize)
