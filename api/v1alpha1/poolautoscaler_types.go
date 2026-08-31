@@ -129,10 +129,12 @@ type CapacityScalingRules struct {
 	// a scale in this direction is allowed. This is a cooldown model: the first scale
 	// action is immediate, subsequent actions must wait for the window to elapse since
 	// the most recent scale action (in either direction).
-	// Must be >= 0 and <= 3600 (one hour).
-	// Defaults: scale up: 0, scale down: 300.
+	// Must be >= 60 and <= 3600 (one hour) when set.
+	// Scale-up defaults to 60 seconds when omitted and is normalized at runtime to at
+	// least the process-wide Sandbox Pending timeout plus 10 seconds.
+	// Scale-down defaults to 300 seconds when omitted.
 	// +optional
-	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Minimum=60
 	// +kubebuilder:validation:Maximum=3600
 	StabilizationWindowSeconds *int32 `json:"stabilizationWindowSeconds,omitempty"`
 }

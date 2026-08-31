@@ -21,7 +21,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"math"
 	"reflect"
 	"time"
 
@@ -31,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -62,13 +60,14 @@ var (
 	controllerKind       = agentsv1alpha1.GroupVersion.WithKind("SandboxSet")
 )
 
-func Add(mgr manager.Manager) error {
+func Add(mgr manager.Manager, sbxMaxPendingTimeout time.Duration) error {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.SandboxSetGate) || !discovery.DiscoverGVK(controllerKind) {
 		return nil
 	}
 	err := (&Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		sbxMaxPendingTimeout: sbxMaxPendingTimeout,
 	}).SetupWithManager(mgr)
 	if err != nil {
 		return err
@@ -80,9 +79,10 @@ func Add(mgr manager.Manager) error {
 // Reconciler reconciles a Sandbox object
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
-	Codec    runtime.Codec
+	Scheme               *runtime.Scheme
+	Recorder             record.EventRecorder
+	Codec                runtime.Codec
+	sbxMaxPendingTimeout time.Duration
 }
 
 const (
@@ -141,9 +141,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	var requeueAfter time.Duration
 	scaleUpSatisfied, dirtyScaleUp, scaleUpTimeoutAfter := scaleExpectationSatisfied(ctx, scaleUpExpectation, controllerKey)
 	scaleDownSatisfied, _, scaleDownTimeoutAfter := scaleExpectationSatisfied(ctx, scaleDownExpectation, controllerKey)
-	requeueAfter = min(scaleUpTimeoutAfter, scaleDownTimeoutAfter)
 
 	calculateSandboxSetStatusFromGroup(ctx, newStatus, groups, dirtyScaleUp)
+	scalingLimitedTimeoutAfter := r.calculateScalingLimited(ctx, sbs, newStatus, groups, time.Now())
+	requeueAfter = minimumPositiveDuration(scaleUpTimeoutAfter, scaleDownTimeoutAfter, scalingLimitedTimeoutAfter)
 	// Set selector in status for scale subresource
 	if newStatus.Selector == "" {
 		selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
@@ -162,7 +163,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	var allErrors error
 	// Step 1: perform scale
 	start := time.Now()
-	delta := calculateScaleDelta(sbs, newStatus)
+	delta := calculateScaleDelta(ctx, sbs, newStatus)
 	log.Info("performing scale", "expect", sbs.Spec.Replicas, "actual", newStatus.Replicas,
 		"available", newStatus.AvailableReplicas, "delta", delta)
 	if delta > 0 {
@@ -343,33 +344,34 @@ func compareScaleDownPriority(a, b *agentsv1alpha1.Sandbox) int {
 	return a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time)
 }
 
-// calculateScaleDelta calculates the delta for scaling, considering MaxUnavailable limit.
-// Returns positive value for scale up, negative for scale down, 0 for no scaling needed.
-func calculateScaleDelta(sbs *agentsv1alpha1.SandboxSet, newStatus *agentsv1alpha1.SandboxSetStatus) int {
+// calculateScaleDelta calculates the delta for scaling, considering the
+// MaxUnavailable limit. Returns a positive value for scale up, negative for
+// scale down, 0 for no scaling needed.
+//
+// The unavailable budget is charged against every non-Available sandbox
+// (Replicas - AvailableReplicas), matching Deployment/DaemonSet semantics.
+// The ScalingLimited condition in scaling_limited.go uses a stricter startup
+// budget (failed + pending-timeout) for independent accounting.
+func calculateScaleDelta(ctx context.Context, sbs *agentsv1alpha1.SandboxSet, newStatus *agentsv1alpha1.SandboxSetStatus) int {
 	delta := int(sbs.Spec.Replicas - newStatus.Replicas)
 	// scale down
 	if delta <= 0 {
 		return delta
 	}
 
-	// apply maxUnavailable limit only for scale up
-	scaleMaxUnavailable := math.MaxInt
-	if sbs.Spec.ScaleStrategy.MaxUnavailable != nil {
-		scaleMaxUnavailable, _ = intstrutil.GetScaledValueFromIntOrPercent(
-			intstrutil.ValueOrDefault(sbs.Spec.ScaleStrategy.MaxUnavailable, intstrutil.FromInt32(math.MaxInt32)),
-			int(sbs.Spec.Replicas),
-			true)
-		// subtract sandboxes that are currently being creating
-		scaleMaxUnavailable -= int(newStatus.Replicas - newStatus.AvailableReplicas)
-	}
-	// ignore negative values
-	if scaleMaxUnavailable < 0 {
-		scaleMaxUnavailable = 0
-	}
-	// delta cannot exceed scaleMaxUnavailable
-	if delta > scaleMaxUnavailable {
-		delta = scaleMaxUnavailable
-	}
+	// Apply maxUnavailable only to physical scale-up execution. The percentage
+	// base is Spec.Replicas so an empty pool can still ramp up at the configured
+	// rate; the startup-budget condition in scaling_limited.go uses observed
+	// replicas separately for its own accounting.
+	scaleMaxUnavailable := resolveMaxUnavailable(ctx, sbs.Spec.ScaleStrategy.MaxUnavailable, sbs.Spec.Replicas)
+	// Subtract sandboxes that are currently unavailable (creating or otherwise
+	// not yet Available). This keeps the scale-up delta consistent with the
+	// standard replicas-minus-available definition of "unavailable".
+	scaleMaxUnavailable -= int(newStatus.Replicas - newStatus.AvailableReplicas)
+	// Ignore negative values.
+	scaleMaxUnavailable = max(scaleMaxUnavailable, 0)
+	// Delta cannot exceed maxUnavailable headroom.
+	delta = min(delta, scaleMaxUnavailable)
 
 	return delta
 }

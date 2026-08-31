@@ -76,6 +76,13 @@ const (
 	SandboxStateDead      = "dead"
 )
 
+// Reason values reported alongside SandboxState* by utils.GetSandboxState.
+// Exported so downstream controllers can match on them without repeating the
+// hard-coded string literal.
+const (
+	SandboxStateReasonResourcePending = "ResourcePending"
+)
+
 var SandboxSetControllerKind = GroupVersion.WithKind("SandboxSet")
 
 // SandboxSetSpec defines the desired state of SandboxSet
@@ -113,10 +120,17 @@ type SandboxSetSpec struct {
 
 // SandboxSetScaleStrategy defines strategies for sandboxes scale.
 type SandboxSetScaleStrategy struct {
-	// The maximum number of sandboxes that can be unavailable for scaled sandboxes.
-	// This field can control the changes rate of replicas for SandboxSet so as to minimize the impact for users' service.
-	// The scale will fail if the number of unavailable sandboxes were greater than this MaxUnavailable at scaling up.
-	// MaxUnavailable works only when scaling up.
+	// MaxUnavailable caps the number of unavailable sandboxes during scale-up.
+	// It can be an absolute number (ex: 5) or a percentage of desired pods
+	// (ex: 10%); percentages are rounded up. Every non-Available sandbox counts
+	// against the physical scale-up budget. If unset or invalid, the controller
+	// uses the base (equivalent to 100%, i.e. no cap).
+	//
+	// The ScalingLimited condition uses the same resolved value as a separate
+	// startup budget and becomes True with reason StartupBudgetExhausted when
+	// definitive startup failures plus pending-timeout sandboxes exhaust it.
+	// Scale-down is unaffected.
+	// MaxUnavailable works only for scale-up.
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }
 
@@ -137,6 +151,14 @@ type SandboxSetUpdateStrategy struct {
 	// +optional
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }
+
+// SandboxSetConditionType is a valid value for SandboxSet conditions.
+type SandboxSetConditionType string
+
+const (
+	// SandboxSetConditionScalingLimited indicates whether startup blockers exhaust the scale-up budget.
+	SandboxSetConditionScalingLimited SandboxSetConditionType = "ScalingLimited"
+)
 
 // SandboxSetStatus defines the observed state of SandboxSet.
 type SandboxSetStatus struct {

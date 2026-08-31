@@ -99,15 +99,23 @@ func newPoolAutoscaler(name, namespace, sbsName string, maxReplicas int32, capac
 func newSandboxSet(name, namespace string, specReplicas, statusReplicas, availableReplicas int32) *agentsv1alpha1.SandboxSet {
 	return &agentsv1alpha1.SandboxSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:       name,
+			Namespace:  namespace,
+			Generation: 1,
 		},
 		Spec: agentsv1alpha1.SandboxSetSpec{
 			Replicas: specReplicas,
 		},
 		Status: agentsv1alpha1.SandboxSetStatus{
-			Replicas:          statusReplicas,
-			AvailableReplicas: availableReplicas,
+			ObservedGeneration: 1,
+			Replicas:           statusReplicas,
+			AvailableReplicas:  availableReplicas,
+			Conditions: []metav1.Condition{{
+				Type:               string(agentsv1alpha1.SandboxSetConditionScalingLimited),
+				Status:             metav1.ConditionFalse,
+				ObservedGeneration: 1,
+				Reason:             "StartupBudgetAvailable",
+			}},
 		},
 	}
 }
@@ -133,6 +141,7 @@ func TestReconcile(t *testing.T) {
 		// expectScalingActiveStatus, when non-empty, overrides the expected
 		// ScalingActive status (defaults to ConditionFalse).
 		expectScalingActiveStatus metav1.ConditionStatus
+		expectEventReason         string
 	}{
 		{
 			name:        "PoolAutoscaler not found - returns nil",
@@ -210,6 +219,95 @@ func TestReconcile(t *testing.T) {
 			// capacity policy is genuinely driving scaling, so ScalingActive is True.
 			expectScalingActiveReason: "ValidPolicy",
 			expectScalingActiveStatus: metav1.ConditionTrue,
+		},
+		{
+			name: "scale up blocked by SandboxSet ScalingLimited",
+			objs: []client.Object{
+				newPoolAutoscaler("test-pa", "default", "test-sbs", 20,
+					&agentsv1alpha1.CapacityPolicy{
+						TargetAvailable: intstr.FromInt32(10),
+						Tolerance:       intOrStrPtr(intstr.FromInt32(2)),
+					}),
+				func() *agentsv1alpha1.SandboxSet {
+					sbs := newSandboxSet("test-sbs", "default", 5, 5, 5)
+					sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+					sbs.Status.Conditions[0].Reason = "StartupBudgetExhausted"
+					return sbs
+				}(),
+			},
+			setupMonitors: func(r *Reconciler) {
+				now := time.Now()
+				interval := time.Duration(samplingIntervalSeconds) * time.Second
+				monitor := &capacityMonitor{targetRef: "test-sbs", lastSampleAt: now}
+				for i := observationWindowSeconds / samplingIntervalSeconds; i > 0; i-- {
+					monitor.samples = append(monitor.samples, sample{
+						timestamp:      now.Add(-time.Duration(i-1) * interval),
+						available:      5,
+						statusReplicas: 5,
+					})
+				}
+				r.monitors[types.NamespacedName{Namespace: "default", Name: "test-pa"}] = monitor
+			},
+			req:               ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-pa", Namespace: "default"}},
+			expectError:       "",
+			expectSBSReplicas: int32Ptr(5),
+			expectDesired:     int32Ptr(5),
+			expectEventReason: "ScaleBlocked",
+		},
+		{
+			name: "cron scale up bypasses stabilization window",
+			objs: []client.Object{
+				func() *agentsv1alpha1.PoolAutoscaler {
+					pa := newPoolAutoscaler("test-pa", "default", "test-sbs", 20,
+						&agentsv1alpha1.CapacityPolicy{
+							TargetAvailable: intstr.FromInt32(10),
+							ScaleUp: &agentsv1alpha1.CapacityScalingRules{
+								StabilizationWindowSeconds: int32Ptr(300),
+							},
+						})
+					pa.Spec.CronPolicies = []agentsv1alpha1.CronScalingPolicy{{
+						Name:           "scale-up",
+						Schedule:       "* * * * *",
+						TargetReplicas: 10,
+					}}
+					return pa
+				}(),
+				newSandboxSet("test-sbs", "default", 5, 5, 5),
+			},
+			setupMonitors: func(r *Reconciler) {
+				r.monitors[types.NamespacedName{Namespace: "default", Name: "test-pa"}] = &capacityMonitor{
+					targetRef:     "test-sbs",
+					lastScaleUpAt: time.Now(),
+				}
+			},
+			req:               ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-pa", Namespace: "default"}},
+			expectError:       "",
+			expectSBSReplicas: int32Ptr(10),
+			expectDesired:     int32Ptr(10),
+		},
+		{
+			name: "cron scale up remains blocked by SandboxSet ScalingLimited",
+			objs: []client.Object{
+				func() *agentsv1alpha1.PoolAutoscaler {
+					pa := newPoolAutoscaler("test-pa", "default", "test-sbs", 20, nil)
+					pa.Spec.CronPolicies = []agentsv1alpha1.CronScalingPolicy{{
+						Name:           "scale-up",
+						Schedule:       "* * * * *",
+						TargetReplicas: 10,
+					}}
+					return pa
+				}(),
+				func() *agentsv1alpha1.SandboxSet {
+					sbs := newSandboxSet("test-sbs", "default", 5, 5, 5)
+					sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+					sbs.Status.Conditions[0].Reason = "StartupBudgetExhausted"
+					return sbs
+				}(),
+			},
+			req:               ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-pa", Namespace: "default"}},
+			expectError:       "",
+			expectSBSReplicas: int32Ptr(5),
+			expectDesired:     int32Ptr(5),
 		},
 		{
 			name: "scale down - available above upper watermark",
@@ -334,7 +432,188 @@ func TestReconcile(t *testing.T) {
 			if tt.expectError == "" && tt.expectSBSReplicas != nil {
 				assert.True(t, result.RequeueAfter > 0, "expected requeue for normal reconcile")
 			}
+
+			if tt.expectEventReason != "" {
+				recorder := r.recorder.(*record.FakeRecorder)
+				select {
+				case event := <-recorder.Events:
+					assert.Contains(t, event, tt.expectEventReason)
+				default:
+					t.Fatalf("expected event with reason %q", tt.expectEventReason)
+				}
+			}
 		})
+	}
+}
+
+func TestSandboxSetAllowsScaleUp(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(*agentsv1alpha1.SandboxSet)
+		expectOpen bool
+	}{
+		{name: "current false condition allows scale up", expectOpen: true},
+		{
+			name: "missing condition allows scale up",
+			mutate: func(sbs *agentsv1alpha1.SandboxSet) {
+				sbs.Status.Conditions = nil
+			},
+			expectOpen: true,
+		},
+		{
+			name: "unknown condition allows scale up",
+			mutate: func(sbs *agentsv1alpha1.SandboxSet) {
+				sbs.Status.Conditions[0].Status = metav1.ConditionUnknown
+			},
+			expectOpen: true,
+		},
+		{
+			name: "true condition against current generation blocks scale up",
+			mutate: func(sbs *agentsv1alpha1.SandboxSet) {
+				sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+			},
+		},
+		{
+			name: "true condition with stale condition generation allows scale up",
+			mutate: func(sbs *agentsv1alpha1.SandboxSet) {
+				sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+				sbs.Status.Conditions[0].ObservedGeneration = 0
+			},
+			expectOpen: true,
+		},
+		{
+			name: "true condition with stale status observed generation allows scale up",
+			mutate: func(sbs *agentsv1alpha1.SandboxSet) {
+				sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+				sbs.Status.ObservedGeneration = 0
+			},
+			expectOpen: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sbs := newSandboxSet("test-sbs", "default", 10, 10, 10)
+			if tt.mutate != nil {
+				tt.mutate(sbs)
+			}
+			open, _ := sandboxSetAllowsScaleUp(sbs)
+			assert.Equal(t, tt.expectOpen, open)
+		})
+	}
+}
+
+func TestReportScaleBlockedDeduplicatesEvents(t *testing.T) {
+	reconciler := newTestReconciler()
+	pa := newPoolAutoscaler("test-pa", "default", "test-sbs", 20, nil)
+	pa.UID = types.UID("pa-uid-1")
+	sbs := newSandboxSet("test-sbs", "default", 5, 5, 5)
+	sbs.UID = types.UID("sbs-uid-1")
+	sbs.Status.Conditions[0].Status = metav1.ConditionTrue
+	sbs.Status.Conditions[0].Reason = "StartupBudgetExhausted"
+
+	reconciler.reportScaleBlocked(pa, sbs, "blocked")
+	recorder := reconciler.recorder.(*record.FakeRecorder)
+	select {
+	case event := <-recorder.Events:
+		assert.Contains(t, event, "ScaleBlocked")
+	default:
+		t.Fatal("expected initial ScaleBlocked event")
+	}
+
+	reconciler.reportScaleBlocked(pa, sbs, "blocked")
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("unexpected duplicate event: %s", event)
+	default:
+	}
+
+	// A new blocked episode is signalled by Reason (or generation) changing;
+	// the raw LastTransitionTime is not part of the dedupe key because it
+	// mirrors Status transitions that already flip Reason.
+	sbs.Status.Conditions[0].Reason = "StartupBudgetExhaustedAgain"
+	reconciler.reportScaleBlocked(pa, sbs, "blocked again")
+	select {
+	case event := <-recorder.Events:
+		assert.Contains(t, event, "ScaleBlocked")
+	default:
+		t.Fatal("expected event for a new blocked episode")
+	}
+
+	pa.UID = types.UID("pa-uid-2")
+	reconciler.reportScaleBlocked(pa, sbs, "blocked after recreation")
+	select {
+	case event := <-recorder.Events:
+		assert.Contains(t, event, "ScaleBlocked")
+	default:
+		t.Fatal("expected event for recreated PoolAutoscaler")
+	}
+}
+
+// TestReportScaleBlocked_NoConditionNoEvent guards the "fail-open" policy:
+// when SandboxSet does not expose a ScalingLimited condition at all, the
+// reporter must stay silent so upgrades and first-time reconciles do not
+// surface a spurious ScaleBlocked event.
+func TestReportScaleBlocked_NoConditionNoEvent(t *testing.T) {
+	reconciler := newTestReconciler()
+	pa := newPoolAutoscaler("test-pa", "default", "test-sbs", 20, nil)
+	pa.UID = types.UID("pa-uid-1")
+	sbs := newSandboxSet("test-sbs", "default", 5, 5, 5)
+	sbs.Status.Conditions = nil
+
+	reconciler.reportScaleBlocked(pa, sbs, "should be ignored")
+
+	recorder := reconciler.recorder.(*record.FakeRecorder)
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("unexpected event when no ScalingLimited condition is present: %s", event)
+	default:
+	}
+
+	// The report state must also stay empty so a later allowed->blocked flip
+	// still emits an event once a condition materializes.
+	if _, ok := reconciler.scaleBlockedReported.Load(client.ObjectKeyFromObject(pa).String()); ok {
+		t.Fatal("scaleBlockedReported must not be populated when no condition is present")
+	}
+}
+
+// TestReconcile_ClearsScaleBlockedOnAllowed asserts the Reconcile path that
+// clears any recorded ScaleBlocked report as soon as SandboxSet allows
+// scale-up again. A stale entry would otherwise suppress the next legitimate
+// blocked episode.
+func TestReconcile_ClearsScaleBlockedOnAllowed(t *testing.T) {
+	pa := newPoolAutoscaler("test-pa", "default", "test-sbs", 20,
+		&agentsv1alpha1.CapacityPolicy{
+			TargetAvailable: intstr.FromInt32(10),
+			Tolerance:       intOrStrPtr(intstr.FromInt32(2)),
+		})
+	sbs := newSandboxSet("test-sbs", "default", 5, 5, 5)
+	r := newTestReconciler(pa, sbs)
+
+	key := client.ObjectKeyFromObject(pa).String()
+	r.scaleBlockedReported.Store(key, scaleBlockedReport{conditionReason: "stale"})
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: pa.Namespace, Name: pa.Name},
+	})
+	assert.NoError(t, err)
+	if _, ok := r.scaleBlockedReported.Load(key); ok {
+		t.Fatal("scaleBlockedReported must be cleared once SandboxSet allows scale-up")
+	}
+}
+
+// TestReconcile_ClearsScaleBlockedOnNotFound asserts the Reconcile path that
+// evicts a stored ScaleBlocked report when the PoolAutoscaler itself has been
+// deleted, so a recreated object with the same name gets a fresh episode.
+func TestReconcile_ClearsScaleBlockedOnNotFound(t *testing.T) {
+	r := newTestReconciler()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "test-pa"}}
+	r.scaleBlockedReported.Store(req.NamespacedName.String(), scaleBlockedReport{conditionReason: "stale"})
+
+	_, err := r.Reconcile(context.Background(), req)
+	assert.NoError(t, err)
+	if _, ok := r.scaleBlockedReported.Load(req.NamespacedName.String()); ok {
+		t.Fatal("scaleBlockedReported must be cleared on NotFound")
 	}
 }
 
@@ -899,14 +1178,14 @@ func TestSandboxSetToPoolAutoscaler(t *testing.T) {
 func TestAdd(t *testing.T) {
 	t.Run("returns nil when feature gate is disabled", func(t *testing.T) {
 		featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PoolAutoscalerGate, false)
-		err := Add(nil)
+		err := Add(nil, time.Minute)
 		assert.NoError(t, err)
 	})
 
 	t.Run("returns nil when discovery is not available", func(t *testing.T) {
 		// No generic client set in tests, so discovery.DiscoverGVK returns false.
 		// Feature gate is enabled by default.
-		err := Add(nil)
+		err := Add(nil, time.Minute)
 		assert.NoError(t, err)
 	})
 }

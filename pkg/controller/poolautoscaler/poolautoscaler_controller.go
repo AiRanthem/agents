@@ -24,7 +24,9 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -51,6 +53,15 @@ func init() {
 		"Sampling interval in seconds for PoolAutoscaler capacity monitoring. "+
 			"Controls how frequently (available, statusReplicas) samples are collected.")
 }
+
+// defaultScaleUpStabilization and defaultScaleDownStabilization are the
+// controller-side fallbacks used when a PoolAutoscaler omits
+// StabilizationWindowSeconds. The webhook rejects explicit values below 60s,
+// so these defaults align with the minimum admissible configuration.
+const (
+	defaultScaleUpStabilization   = 60 * time.Second
+	defaultScaleDownStabilization = 300 * time.Second
+)
 
 var (
 	concurrentReconciles = 1
@@ -87,15 +98,16 @@ func validateObservationParameters() {
 }
 
 // Add creates a new PoolAutoscaler Controller and adds it to the Manager.
-func Add(mgr manager.Manager) error {
+func Add(mgr manager.Manager, sbxMaxPendingTimeout time.Duration) error {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.PoolAutoscalerGate) || !discovery.DiscoverGVK(controllerKind) {
 		return nil
 	}
 	validateObservationParameters()
 	r := &Reconciler{
-		Client:   mgr.GetClient(),
-		recorder: mgr.GetEventRecorderFor("pool-autoscaler-controller"),
-		monitors: make(map[types.NamespacedName]*capacityMonitor),
+		Client:               mgr.GetClient(),
+		recorder:             mgr.GetEventRecorderFor("pool-autoscaler-controller"),
+		monitors:             make(map[types.NamespacedName]*capacityMonitor),
+		sbxMaxPendingTimeout: sbxMaxPendingTimeout,
 	}
 	err := r.SetupWithManager(mgr)
 	if err != nil {
@@ -108,9 +120,18 @@ func Add(mgr manager.Manager) error {
 // Reconciler reconciles a PoolAutoscaler object.
 type Reconciler struct {
 	client.Client
-	recorder record.EventRecorder
-	mu       sync.Mutex
-	monitors map[types.NamespacedName]*capacityMonitor
+	recorder             record.EventRecorder
+	mu                   sync.Mutex
+	monitors             map[types.NamespacedName]*capacityMonitor
+	sbxMaxPendingTimeout time.Duration
+	scaleBlockedReported sync.Map
+}
+
+type scaleBlockedReport struct {
+	poolAutoscalerUID types.UID
+	sandboxSetUID     types.UID
+	generation        int64
+	conditionReason   string
 }
 
 func (r *Reconciler) SetupWithManager(mgr manager.Manager) error {
@@ -163,6 +184,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.Get(ctx, req.NamespacedName, pa); err != nil {
 		if errors.IsNotFound(err) {
 			r.deleteMonitor(req.NamespacedName)
+			r.scaleBlockedReported.Delete(req.NamespacedName.String())
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -292,8 +314,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	reason := result.reason
 
-	// Cron-triggered scaling bypasses the stabilization window — cron represents
-	// an explicit user intent for a specific replica count at a specific time.
+	// Cron-triggered scaling bypasses the stabilization window because it
+	// represents explicit user intent for a specific replica count at a specific time.
 	var cooldownRemaining time.Duration
 	if result.source != sourceCron {
 		var blocked bool
@@ -306,6 +328,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				"Scaling %s/%s blocked by stabilization window (cooldown remaining: %s)",
 				pa.Namespace, pa.Spec.ScaleTargetRef.Name, cooldownRemaining.Round(time.Second))
 		}
+	}
+
+	// Only an explicit ScalingLimited=True condition from SandboxSet blocks
+	// further scale-up. Missing, stale, or Unknown conditions fail open so
+	// upgrades and first-time reconciles do not stall scale-ups.
+	allowed, gateReason := sandboxSetAllowsScaleUp(sbs)
+	if allowed {
+		r.scaleBlockedReported.Delete(client.ObjectKeyFromObject(pa).String())
+	} else if desiredReplicas > specReplicas {
+		desiredReplicas = specReplicas
+		limited, limitReason = false, ""
+		reason = gateReason
+		klog.FromContext(ctx).Info("scale-up suppressed by SandboxSet startup budget",
+			"sandboxSet", sbs.Name, "reason", gateReason)
+		r.reportScaleBlocked(pa, sbs, gateReason)
 	}
 
 	// Compare against spec (what we previously told SandboxSet), not status
@@ -355,6 +392,48 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		requeueAfter = cooldownRemaining
 	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *Reconciler) reportScaleBlocked(pa *agentsv1alpha1.PoolAutoscaler, sbs *agentsv1alpha1.SandboxSet, reason string) {
+	condition := apiMeta.FindStatusCondition(sbs.Status.Conditions, string(agentsv1alpha1.SandboxSetConditionScalingLimited))
+	if condition == nil {
+		return
+	}
+	report := scaleBlockedReport{
+		poolAutoscalerUID: pa.UID,
+		sandboxSetUID:     sbs.UID,
+		generation:        sbs.Generation,
+		conditionReason:   condition.Reason,
+	}
+	key := client.ObjectKeyFromObject(pa).String()
+	if previous, ok := r.scaleBlockedReported.Load(key); ok && previous == report {
+		return
+	}
+	r.scaleBlockedReported.Store(key, report)
+	r.recorder.Eventf(pa, corev1.EventTypeNormal, "ScaleBlocked",
+		"Scaling %s/%s blocked: %s", pa.Namespace, pa.Spec.ScaleTargetRef.Name, reason)
+}
+
+// sandboxSetAllowsScaleUp reports whether SandboxSet is currently allowing
+// further scale-up. The gate is fail-open: only an explicit
+// ScalingLimited=True condition observed against the current generation blocks
+// scaling. A missing, stale, or Unknown condition is treated as no signal and
+// leaves scale-up untouched.
+func sandboxSetAllowsScaleUp(sbs *agentsv1alpha1.SandboxSet) (bool, string) {
+	condition := apiMeta.FindStatusCondition(sbs.Status.Conditions, string(agentsv1alpha1.SandboxSetConditionScalingLimited))
+	if condition == nil {
+		return true, ""
+	}
+	if condition.Status != metav1.ConditionTrue {
+		return true, ""
+	}
+	if condition.ObservedGeneration != sbs.Generation || sbs.Status.ObservedGeneration < sbs.Generation {
+		// The controller reports the budget as exhausted, but the report is
+		// against an older generation. Treat as no current signal and let
+		// scale-up proceed until the SandboxSet controller catches up.
+		return true, ""
+	}
+	return false, fmt.Sprintf("scaling blocked by SandboxSet ScalingLimited condition (reason=%s)", condition.Reason)
 }
 
 // findConflictingAutoscaler checks whether another PoolAutoscaler in the same
