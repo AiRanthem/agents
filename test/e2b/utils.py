@@ -1,5 +1,6 @@
 """Utility functions and fixtures for E2B tests."""
 import json
+import re
 import subprocess
 import time
 from typing import List, Optional
@@ -226,6 +227,30 @@ def _force_kill_remaining_sandboxes(test_namespace: str):
         logger.warning("Force-kill failed: %s", e)
 
 
+def _dump_manager_logs():
+    """Best-effort dump of sandbox-manager logs for failure diagnosis."""
+    logger.info("=== Sandbox Manager Logs ===")
+    try:
+        kubectl("logs", "-n", "sandbox-system", "-l", "app.kubernetes.io/name=sandbox-manager", "--tail=100")
+    except Exception:
+        logger.warning("(failed to fetch sandbox-manager logs)")
+
+
+def _is_transient_api_error(exc: Exception) -> bool:
+    """Whether an E2B API error looks transient and is worth retrying.
+
+    The SDK surfaces HTTP errors as exceptions whose message starts with the
+    status code (e.g. "504: b''"), with no structured status attribute, so
+    the code is parsed from the message. 5xx responses (e.g. a brief 504 from
+    the envoy ext_proc path right after deployment) are transient; 4xx and
+    unknown errors are surfaced immediately.
+    """
+    match = re.match(r"^\s*(\d{3})\b", str(exc))
+    if match:
+        return int(match.group(1)) >= 500
+    return isinstance(exc, (ConnectionError, TimeoutError))
+
+
 @pytest.fixture(autouse=True)
 def wait_for_sandbox(config):
     """BeforeEach: Wait for sandbox cleanup, then check warm pool Ready count.
@@ -244,19 +269,26 @@ def wait_for_sandbox(config):
     timeout = config.sandbox_cleanup_timeout
     interval = 2
     start_time = time.time()
+    last_list_error: Optional[Exception] = None
 
     # Phase 1: Wait for sandboxes to be cleaned up naturally
     while time.time() - start_time < timeout:
         try:
             sandboxes = list_sandbox(namespace=config.test_namespace)
         except Exception as e:
+            # Transient gateway errors (e.g. 504 during warm-up bursts) can
+            # appear briefly right after deployment; retry within the cleanup
+            # window instead of failing the whole run on a single hiccup.
+            if _is_transient_api_error(e):
+                logger.warning(
+                    "list_sandbox() hit a transient error, retrying: %s", e)
+                last_list_error = e
+                time.sleep(interval)
+                continue
             logger.error("list_sandbox() failed: %s", e)
-            logger.info("=== Sandbox Manager Logs ===")
-            try:
-                kubectl("logs", "-n", "sandbox-system", "-l", "app.kubernetes.io/name=sandbox-manager", "--tail=100")
-            except Exception:
-                logger.warning("(failed to fetch sandbox-manager logs)")
+            _dump_manager_logs()
             raise
+        last_list_error = None
         if len(sandboxes) == 0:
             logger.debug("No sandboxes running, proceeding to check Ready conditions")
             break
@@ -264,6 +296,14 @@ def wait_for_sandbox(config):
         time.sleep(interval)
 
     else:
+        if last_list_error is not None:
+            # The listing never succeeded within the window; surface the last
+            # error instead of attempting a force-kill on a broken API path.
+            logger.error(
+                "list_sandbox() kept failing until the cleanup timeout: %s",
+                last_list_error)
+            _dump_manager_logs()
+            raise last_list_error
         # Phase 2: Timeout — force-kill remaining sandboxes instead of failing
         _force_kill_remaining_sandboxes(config.test_namespace)
         time.sleep(5)

@@ -65,6 +65,11 @@ data:
                           grpc_service:
                             envoy_grpc:
                               cluster_name: ext_proc_cluster
+                          # The ext-proc server (sandbox-manager) answers from memory in
+                          # milliseconds, but the default per-message timeout (200ms) is
+                          # too tight when the manager pod is CPU-throttled during
+                          # startup or sandbox-creation bursts, causing flaky 504s.
+                          message_timeout: 5s
                           processing_mode:
                             request_header_mode: SEND
                             response_header_mode: SEND
