@@ -193,6 +193,7 @@ type SandboxReconciler struct {
 	checkpointControl *core.CheckpointControl
 	metricsCleanup    Enqueuer
 	recorder          record.EventRecorder
+	messageRegexCache compiledMessageRegexCache
 }
 
 // +kubebuilder:rbac:groups=agents.kruise.io,resources=sandboxes,verbs=get;list;watch;create;update;patch;delete
@@ -409,6 +410,21 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (cr
 	if newStatus.Phase != phaseBefore {
 		klog.FromContext(ctx).Info("Sandbox phase finished", "sandbox", klog.KObj(box), "phase", string(phaseBefore), "nextPhase", string(newStatus.Phase))
 	}
+
+	// Handle auto-pause policy (probe-driven pause/resume decisions).
+	// Evaluated after calculateStatus and Ensure* so that probe conditions
+	// synced in the current reconcile cycle are available. Phase transitions
+	// triggered by Spec.Paused patching take effect in the next reconcile.
+	if autoPauseTakesOver(box) {
+		autoPauseRequeue, err := r.handleAutoPause(ctx, box, newStatus)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if autoPauseRequeue > 0 && (requeueAfter == 0 || autoPauseRequeue < requeueAfter) {
+			requeueAfter = autoPauseRequeue
+		}
+	}
+
 	return ctrl.Result{RequeueAfter: requeueAfter}, r.updateSandboxStatus(ctx, *newStatus, box)
 }
 
@@ -447,9 +463,9 @@ func (r *SandboxReconciler) preparePausedPhase(ctx context.Context, args core.En
 
 // finalizeResumePhase performs the common cleanup once a resume succeeds,
 // mirroring preparePausedPhase on the pause side: it drops the Paused
-// condition, which was kept through Resuming, so the next pause cycle starts
-// fresh, and removes the finalizer added when the sandbox entered the paused
-// phase.
+// condition, which was kept through Resuming, and the probe state left behind
+// by the pod the pause deleted, so the next pause cycle starts fresh. It also
+// removes the finalizer added when the sandbox entered the paused phase.
 //
 // Finalizer removal is best-effort: a failure is logged but does not block
 // the resume, because EnsureSandboxTerminated removes the finalizer as a
@@ -457,6 +473,7 @@ func (r *SandboxReconciler) preparePausedPhase(ctx context.Context, args core.En
 func (r *SandboxReconciler) finalizeResumePhase(ctx context.Context, args core.EnsureFuncArgs) {
 	box, newStatus := args.Box, args.NewStatus
 	utils.RemoveSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused))
+	resetProbeDrivenState(newStatus)
 	if !controllerutil.ContainsFinalizer(box, core.SandboxFinalizer) {
 		return
 	}
@@ -918,8 +935,14 @@ func (r *SandboxReconciler) checkTimers(ctx context.Context, box *agentsv1alpha1
 	if done, err := r.handleShutdownTimeout(ctx, box, now); done {
 		return ctrl.Result{}, true, err
 	}
-	if result, done, err := r.handlePauseTimeout(ctx, box, now); done {
-		return result, true, err
+	if box.Spec.PauseTime != nil && !box.Spec.Paused {
+		// The one-shot PauseTime deadline and an AutoPausePolicy pause rule both
+		// stay in force; whichever comes due first pauses the sandbox. They only
+		// ever move Spec.Paused in the same direction, and a pause performed here
+		// ends the reconcile, so the probe-driven loop cannot write behind it.
+		if result, done, err := r.handlePauseTimeout(ctx, box, now); done {
+			return result, true, err
+		}
 	}
 	return ctrl.Result{RequeueAfter: r.calcTimeoutRequeue(box, now)}, false, nil
 }
@@ -972,19 +995,17 @@ func (r *SandboxReconciler) handleShutdownTimeout(ctx context.Context, box *agen
 	if box.Spec.ShutdownTime == nil || !box.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	if !box.Spec.ShutdownTime.Before(&now) {
+	if box.Spec.ShutdownTime.After(now.Time) {
 		return false, nil
 	}
 
-	// When the paused-retention annotation is present, the sandbox has not
-	// yet paused, AND PauseTime has already been reached, skip deletion:
-	// handlePauseTimeout will fire in this same reconcile, pause the sandbox,
-	// and extend ShutdownTime.
-	// We only skip when pauseTimeReached so that handlePauseTimeout can
-	// actually act in the same loop. If PauseTime is nil or still in the
-	// future, we must proceed with deletion.
+	// When paused retention is managed by the one-shot PauseTime path, allow a
+	// due pause to run before deletion so it can extend ShutdownTime. This
+	// deferral is bounded because handlePauseTimeout executes in the same
+	// reconcile, whether or not an AutoPausePolicy is also configured.
 	if _, hasRetention := box.Annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration]; hasRetention &&
 		!box.Spec.Paused &&
+		box.Spec.PauseTime != nil &&
 		pauseTimeReached(box.Spec.PauseTime, now) {
 		return false, nil
 	}

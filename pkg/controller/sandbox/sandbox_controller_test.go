@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1524,9 +1525,9 @@ func TestSandboxReconciler_preparePausedPhase(t *testing.T) {
 }
 
 // TestSandboxReconciler_finalizeResumePhase verifies the common resume
-// finalization: the Paused condition is dropped from the status while other
-// conditions are preserved, and the pause finalizer is removed from the
-// sandbox when present.
+// finalization: the Paused condition and the stale probe state left by the
+// deleted pod are dropped from the status while other conditions are
+// preserved, and the pause finalizer is removed from the sandbox when present.
 func TestSandboxReconciler_finalizeResumePhase(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, clientgoscheme.AddToScheme(scheme))
@@ -1558,6 +1559,10 @@ func TestSandboxReconciler_finalizeResumePhase(t *testing.T) {
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(box).Build()
 			reconciler := &SandboxReconciler{Client: fakeClient}
 
+			// The probe conditions and schedules carry pre-pause values: the
+			// idle message and the elapsed timestamps would re-pause the sandbox
+			// immediately unless the resume clears them.
+			stale := metav1.NewTime(time.Now().Add(-time.Hour))
 			newStatus := &agentsv1alpha1.SandboxStatus{
 				Phase: agentsv1alpha1.SandboxResuming,
 				Conditions: []metav1.Condition{
@@ -1573,6 +1578,24 @@ func TestSandboxReconciler_finalizeResumePhase(t *testing.T) {
 						Reason:             agentsv1alpha1.SandboxResumeReasonResumePod,
 						LastTransitionTime: metav1.Now(),
 					},
+					{
+						Type:               agentsv1alpha1.ProbeConditionPrefix + "Active",
+						Status:             metav1.ConditionTrue,
+						Reason:             agentsv1alpha1.ProbeReasonSucceeded,
+						Message:            "inactive",
+						LastTransitionTime: stale,
+					},
+					{
+						Type:               agentsv1alpha1.ProbeConditionPrefix + "Cron",
+						Status:             metav1.ConditionTrue,
+						Reason:             agentsv1alpha1.ProbeReasonSucceeded,
+						Message:            "1787926485",
+						LastTransitionTime: stale,
+					},
+				},
+				Schedules: []agentsv1alpha1.Schedule{
+					{Reason: agentsv1alpha1.ScheduleReasonProbedIdle, NextPauseTime: &stale},
+					{Reason: agentsv1alpha1.ScheduleReasonProbedSchedule, NextResumeTime: &stale},
 				},
 			}
 
@@ -1580,6 +1603,16 @@ func TestSandboxReconciler_finalizeResumePhase(t *testing.T) {
 
 			assert.Nil(t, utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused)), "expected Paused condition to be removed")
 			assert.NotNil(t, utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionResumed)), "expected Resumed condition to be preserved")
+			assert.Nil(t, utils.GetSandboxCondition(newStatus, agentsv1alpha1.ProbeConditionPrefix+"Active"), "expected stale Active probe condition to be removed")
+			assert.Nil(t, utils.GetSandboxCondition(newStatus, agentsv1alpha1.ProbeConditionPrefix+"Cron"), "expected stale Cron probe condition to be removed")
+			// The entries have to survive so the status patch still carries the
+			// schedules field: an emptied slice is omitted by omitempty and JSON
+			// Merge Patch would leave the stale times in etcd.
+			require.Len(t, newStatus.Schedules, 2, "expected probe-driven schedule entries to be preserved")
+			for _, sched := range newStatus.Schedules {
+				assert.Nil(t, sched.NextPauseTime, "expected stale pause time to be cleared for %q", sched.Reason)
+				assert.Nil(t, sched.NextResumeTime, "expected stale resume time to be cleared for %q", sched.Reason)
+			}
 
 			updated := &agentsv1alpha1.Sandbox{}
 			require.NoError(t, fakeClient.Get(context.Background(), types.NamespacedName{Namespace: box.Namespace, Name: box.Name}, updated))
@@ -1668,29 +1701,72 @@ func TestSandboxReconciler_CheckTimers(t *testing.T) {
 	tests := []struct {
 		name          string
 		reuseReason   string
+		phase         agentsv1alpha1.SandboxPhase
+		shutdownTime  *metav1.Time
+		autoPause     bool
+		resumeOnly    bool
+		gateEnabled   bool
 		expectDone    bool
 		expectDeleted bool
+		expectPatch   int
 	}{
 		{
-			name:        "reuse in progress skips expired pause and shutdown timers",
-			reuseReason: agentsv1alpha1.SandboxRecyclingReasonStarted,
+			name:         "reuse in progress skips expired pause and shutdown timers",
+			reuseReason:  agentsv1alpha1.SandboxRecyclingReasonStarted,
+			phase:        agentsv1alpha1.SandboxRecycling,
+			shutdownTime: &past,
 		},
 		{
 			name:          "reuse failed allows expired shutdown deletion",
 			reuseReason:   agentsv1alpha1.SandboxRecyclingReasonFailed,
+			phase:         agentsv1alpha1.SandboxRecycling,
+			shutdownTime:  &past,
 			expectDone:    true,
 			expectDeleted: true,
 		},
 		{
 			name:          "reuse timeout allows expired shutdown deletion",
 			reuseReason:   agentsv1alpha1.SandboxRecyclingReasonTimeout,
+			phase:         agentsv1alpha1.SandboxRecycling,
+			shutdownTime:  &past,
 			expectDone:    true,
 			expectDeleted: true,
+		},
+		{
+			// PauseTime and an AutoPausePolicy pause rule both stay in force, so the
+			// one-shot deadline its owner asked for is still honoured. Whichever comes
+			// due first pauses the sandbox.
+			name:        "active auto-pause policy keeps the expired PauseTime timer",
+			phase:       agentsv1alpha1.SandboxRunning,
+			autoPause:   true,
+			gateEnabled: true,
+			expectDone:  true,
+			expectPatch: 1,
+		},
+		{
+			// With the gate off handleAutoPause never runs at all, so PauseTime is
+			// the only thing left that can pause the sandbox.
+			name:        "auto-pause gate disabled keeps the PauseTime timer",
+			phase:       agentsv1alpha1.SandboxRunning,
+			autoPause:   true,
+			expectDone:  true,
+			expectPatch: 1,
+		},
+		{
+			// Nothing in a resume-only policy ever pauses, so PauseTime carries the
+			// pause decision on its own here.
+			name:        "resume-only auto-pause policy keeps the PauseTime timer",
+			phase:       agentsv1alpha1.SandboxRunning,
+			resumeOnly:  true,
+			gateEnabled: true,
+			expectDone:  true,
+			expectPatch: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.AutoPauseControllerGate, tt.gateEnabled)
 			box := &agentsv1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:            "reuse-timer-sandbox",
@@ -1699,18 +1775,34 @@ func TestSandboxReconciler_CheckTimers(t *testing.T) {
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
 					PauseTime:    &past,
-					ShutdownTime: &past,
+					ShutdownTime: tt.shutdownTime,
 				},
 				Status: agentsv1alpha1.SandboxStatus{
-					Phase: agentsv1alpha1.SandboxRecycling,
-					Conditions: []metav1.Condition{
-						{
-							Type:   string(agentsv1alpha1.SandboxConditionRecycling),
-							Status: metav1.ConditionFalse,
-							Reason: tt.reuseReason,
-						},
-					},
+					Phase: tt.phase,
 				},
+			}
+			if tt.reuseReason != "" {
+				box.Status.Conditions = []metav1.Condition{
+					{
+						Type:   string(agentsv1alpha1.SandboxConditionRecycling),
+						Status: metav1.ConditionFalse,
+						Reason: tt.reuseReason,
+					},
+				}
+			}
+			if tt.autoPause {
+				box.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Pause: &agentsv1alpha1.PausePolicy{
+						WhenProbedIdleState: &agentsv1alpha1.ProbedIdleStateRule{Probe: "activity"},
+					},
+				}
+			}
+			if tt.resumeOnly {
+				box.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Resume: &agentsv1alpha1.ResumePolicy{
+						WhenProbedScheduleTime: &agentsv1alpha1.ProbedScheduleTimeRule{Probe: "resume"},
+					},
+				}
 			}
 
 			deleteCalls := 0
@@ -1741,7 +1833,7 @@ func TestSandboxReconciler_CheckTimers(t *testing.T) {
 			} else {
 				assert.Equal(t, 0, deleteCalls)
 			}
-			assert.Equal(t, 0, patchCalls)
+			assert.Equal(t, tt.expectPatch, patchCalls)
 		})
 	}
 }
@@ -1762,6 +1854,8 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 		shutdownTime  *metav1.Time
 		pauseTime     *metav1.Time
 		paused        bool
+		autoPause     bool
+		gateEnabled   bool
 		annotations   map[string]string
 		deletingAt    *metav1.Time
 		expectDone    bool
@@ -1775,8 +1869,10 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			shutdownTime: &future,
 		},
 		{
-			name:         "exact shutdown time skips handling",
-			shutdownTime: &exact,
+			name:          "exact shutdown time deletes",
+			shutdownTime:  &exact,
+			expectDone:    true,
+			expectDeleted: true,
 		},
 		{
 			name:          "past shutdown time without annotation deletes",
@@ -1827,10 +1923,93 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 			expectDone:    true,
 			expectDeleted: true,
 		},
+		{
+			// The deferral opens only for a pause that is already due. An active
+			// auto-pause policy does not change that: PauseTime is still enforced
+			// alongside it, and this one is not due yet.
+			name:         "past shutdown time with annotation and active auto-pause policy deletes",
+			shutdownTime: &past,
+			pauseTime:    &future,
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+			},
+			autoPause:     true,
+			gateEnabled:   true,
+			expectDone:    true,
+			expectDeleted: true,
+		},
+		{
+			// A due PauseTime runs in this same reconcile even with an active policy,
+			// so the deferral stays bounded and the pause gets its chance to extend
+			// ShutdownTime by the retention window.
+			name:         "past shutdown time with annotation, active auto-pause policy and due pause time lets pause run",
+			shutdownTime: &past,
+			pauseTime:    &exact,
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+			},
+			autoPause:   true,
+			gateEnabled: true,
+		},
+		{
+			// A nil PauseTime means ShutdownTime is the caller's own hard lifetime
+			// bound rather than a value derived from an upcoming pause. Deferring to
+			// the idle probe here would be unbounded: a sandbox the probe never
+			// reports idle would outlive the timeout its owner asked for.
+			name:         "past shutdown time with annotation, auto-pause policy and nil pause time deletes",
+			shutdownTime: &past,
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+			},
+			autoPause:     true,
+			gateEnabled:   true,
+			expectDone:    true,
+			expectDeleted: true,
+		},
+		{
+			// With the gate off handleAutoPause never runs, so there is no probe
+			// decision to wait for and no future pause to extend ShutdownTime.
+			name:         "past shutdown time with auto-pause policy but gate disabled deletes",
+			shutdownTime: &past,
+			pauseTime:    &future,
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+			},
+			autoPause:     true,
+			expectDone:    true,
+			expectDeleted: true,
+		},
+		{
+			// The deferral is bounded by the annotation: without it there is no
+			// retention window to protect, so an expired ShutdownTime still deletes.
+			name:          "past shutdown time with active auto-pause policy but no annotation deletes",
+			shutdownTime:  &past,
+			pauseTime:     &future,
+			autoPause:     true,
+			gateEnabled:   true,
+			expectDone:    true,
+			expectDeleted: true,
+		},
+		{
+			// Once paused, auto-pause has already extended ShutdownTime by the
+			// retention duration, so an expired one means the window really elapsed.
+			name:         "past shutdown time with annotation, auto-pause policy and paused sandbox deletes",
+			shutdownTime: &past,
+			pauseTime:    &future,
+			paused:       true,
+			autoPause:    true,
+			gateEnabled:  true,
+			annotations: map[string]string{
+				agentsv1alpha1.AnnotationReservePausedSandboxDuration: timeout.ReservePausedSandboxDurationForeverValue,
+			},
+			expectDone:    true,
+			expectDeleted: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.AutoPauseControllerGate, tt.gateEnabled)
 			deleteCalls := 0
 			cli := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
 				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
@@ -1851,6 +2030,13 @@ func TestSandboxReconciler_HandleShutdownTimeout(t *testing.T) {
 					PauseTime:    tt.pauseTime,
 					ShutdownTime: tt.shutdownTime,
 				},
+			}
+			if tt.autoPause {
+				box.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Pause: &agentsv1alpha1.PausePolicy{
+						WhenProbedIdleState: &agentsv1alpha1.ProbedIdleStateRule{Probe: "activity"},
+					},
+				}
 			}
 
 			done, err := reconciler.handleShutdownTimeout(context.Background(), box, now)

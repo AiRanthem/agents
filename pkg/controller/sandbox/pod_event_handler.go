@@ -19,6 +19,7 @@ package sandbox
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/workqueue"
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/controller/sandbox/core"
 	"github.com/openkruise/agents/pkg/features"
 	"github.com/openkruise/agents/pkg/utils"
@@ -130,7 +132,43 @@ func isActivePodUpdate(oldObj, newObj *corev1.Pod) bool {
 	if oldObj.Status.Resize != newObj.Status.Resize {
 		return true
 	}
+	// Detect changes to probe conditions (agents.kruise.io/*) written by
+	// agent-runtime via PodProbeMarker Serverless protocol. This ensures the
+	// sandbox controller is reconciled when probe results change.
+	if hasProbeConditionChanged(&oldObj.Status, &newObj.Status) {
+		return true
+	}
 	return false
+}
+
+// hasProbeConditionChanged returns true if any condition with type prefixed
+// by agents.kruise.io/ has been added, modified or removed between old and new
+// pod status.
+func hasProbeConditionChanged(oldStatus, newStatus *corev1.PodStatus) bool {
+	prefix := agentsv1alpha1.ProbeConditionPrefix
+	oldConds := make(map[string]corev1.PodCondition)
+	for _, c := range oldStatus.Conditions {
+		if strings.HasPrefix(string(c.Type), prefix) {
+			oldConds[string(c.Type)] = c
+		}
+	}
+	var newCount int
+	for _, c := range newStatus.Conditions {
+		if !strings.HasPrefix(string(c.Type), prefix) {
+			continue
+		}
+		newCount++
+		old, exists := oldConds[string(c.Type)]
+		if !exists || old.Status != c.Status || old.Reason != c.Reason || old.Message != c.Message {
+			return true
+		}
+	}
+	// A removal leaves every surviving condition untouched, so the loop above
+	// cannot see it. syncConditions mirrors probe conditions onto the Sandbox and
+	// drops the ones that disappeared, which needs a reconcile of its own:
+	// otherwise the sandbox keeps deciding on a probe the pod no longer reports
+	// until some unrelated event arrives.
+	return newCount != len(oldConds)
 }
 
 // isPodConditionEqual compares two PodConditions by Status, Reason, and Message fields.

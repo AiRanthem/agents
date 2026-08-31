@@ -1632,3 +1632,79 @@ func TestSandboxPodEventHandler_Delete(t *testing.T) {
 		})
 	}
 }
+
+func TestIsActivePodUpdate_ProbeConditions(t *testing.T) {
+	probeCondType := corev1.PodConditionType("agents.kruise.io/activity")
+	tests := []struct {
+		name     string
+		oldPod   *corev1.Pod
+		newPod   *corev1.Pod
+		expected bool
+	}{
+		{
+			name: "probe condition changed - status changed",
+			oldPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: probeCondType, Status: corev1.ConditionTrue, Reason: "Active", Message: "agent is active"},
+					},
+				},
+			},
+			newPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: probeCondType, Status: corev1.ConditionFalse, Reason: "Idle", Message: "agent is idle"},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "probe condition unchanged",
+			oldPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: probeCondType, Status: corev1.ConditionTrue, Reason: "Active", Message: "agent is active"},
+					},
+				},
+			},
+			newPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: probeCondType, Status: corev1.ConditionTrue, Reason: "Active", Message: "agent is active"},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "probe condition removed",
+			oldPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: probeCondType, Status: corev1.ConditionTrue, Reason: "Active", Message: "agent is active"},
+					},
+				},
+			},
+			newPod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase:      corev1.PodRunning,
+					Conditions: []corev1.PodCondition{},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isActivePodUpdate(tt.oldPod, tt.newPod)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
