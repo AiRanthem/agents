@@ -1366,10 +1366,21 @@ def test_redis_data_loss_rebuilds_from_live_crs_and_reenforces(sandbox_context):
         wait_until(lambda: assert_redis_count(created_id, "all", 2), timeout=120)
 
         try:
-            redis_cli("DEL", quota_live_key(created_id))
-            redis_cli("DEL", quota_sum_key(created_id, "sandbox.count"))
-            redis_cli("DEL", quota_sum_key(created_id, "limits.cpu"))
-            redis_cli("DEL", quota_sum_key(created_id, "limits.memory"))
+            # Delete all quota keys atomically in a single redis-cli call.
+            # Sequential DELs (one kubectl exec each) leave multi-hundred-ms gaps
+            # during which the anti-drift driver can re-acquire the live entries
+            # and rewrite the sums; the later sum DELs then leave q:live intact
+            # but q:sum empty, a state anti-drift never repairs because it only
+            # diffs observed sandboxes against q:live entries. Real Redis data
+            # loss is atomic, and the co-write invariant (live + sums written by
+            # one Lua script) assumes they are lost together.
+            redis_cli(
+                "DEL",
+                quota_live_key(created_id),
+                quota_sum_key(created_id, "sandbox.count"),
+                quota_sum_key(created_id, "limits.cpu"),
+                quota_sum_key(created_id, "limits.memory"),
+            )
 
             wait_until(lambda: assert_redis_count(created_id, "all", 2), timeout=240)
             assert_quota_http_create_rejected(api_key, QUOTA_SMALL_TEMPLATE, marker)
