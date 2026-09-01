@@ -85,6 +85,8 @@ func TestCalculateScalingLimited(t *testing.T) {
 		expectReason         string
 		expectMessage        string
 		expectRequeue        bool
+		expectFailed         int
+		expectTimedOut       int
 	}{
 		{
 			name:             "blockers below budget keep gate open",
@@ -93,6 +95,7 @@ func TestCalculateScalingLimited(t *testing.T) {
 			expectStatus:     metav1.ConditionFalse,
 			expectReason:     scalingLimitedReasonBudgetAvailable,
 			expectMessage:    "Timeout=1, Failed=0",
+			expectTimedOut:   1,
 		},
 		{
 			name:           "timeout exhausts budget",
@@ -101,6 +104,7 @@ func TestCalculateScalingLimited(t *testing.T) {
 			expectStatus:   metav1.ConditionTrue,
 			expectReason:   scalingLimitedReasonBudgetExhausted,
 			expectMessage:  "Timeout=1, Failed=0",
+			expectTimedOut: 1,
 		},
 		{
 			name:           "failed and timeout are aggregated",
@@ -109,9 +113,11 @@ func TestCalculateScalingLimited(t *testing.T) {
 				newPending("timeout", 61*time.Second),
 				newFailed("failed", agentsv1alpha1.SandboxReadyReasonStartContainerFailed),
 			}},
-			expectStatus:  metav1.ConditionTrue,
-			expectReason:  scalingLimitedReasonBudgetExhausted,
-			expectMessage: "Timeout=1, Failed=1",
+			expectStatus:   metav1.ConditionTrue,
+			expectReason:   scalingLimitedReasonBudgetExhausted,
+			expectMessage:  "Timeout=1, Failed=1",
+			expectFailed:   1,
+			expectTimedOut: 1,
 		},
 		{
 			name:           "pod create failure exhausts budget",
@@ -122,6 +128,7 @@ func TestCalculateScalingLimited(t *testing.T) {
 			expectStatus:  metav1.ConditionTrue,
 			expectReason:  scalingLimitedReasonBudgetExhausted,
 			expectMessage: "Timeout=0, Failed=1",
+			expectFailed:  1,
 		},
 		{
 			name:                 "configured pending timeout is used",
@@ -131,6 +138,7 @@ func TestCalculateScalingLimited(t *testing.T) {
 			expectStatus:         metav1.ConditionTrue,
 			expectReason:         scalingLimitedReasonBudgetExhausted,
 			expectMessage:        "Timeout=1, Failed=0",
+			expectTimedOut:       1,
 		},
 		{
 			name:           "pending before timeout schedules requeue",
@@ -165,7 +173,7 @@ func TestCalculateScalingLimited(t *testing.T) {
 			}
 			status := &agentsv1alpha1.SandboxSetStatus{Replicas: statusReplicas}
 
-			requeueAfter := r.calculateScalingLimited(context.Background(), sbs, status, tt.groups, now)
+			blockers, requeueAfter := r.calculateScalingLimited(context.Background(), sbs, status, tt.groups, now)
 			condition := apiMeta.FindStatusCondition(status.Conditions, string(agentsv1alpha1.SandboxSetConditionScalingLimited))
 			require.NotNil(t, condition)
 			assert.Equal(t, tt.expectStatus, condition.Status)
@@ -173,6 +181,8 @@ func TestCalculateScalingLimited(t *testing.T) {
 			assert.Equal(t, int64(3), condition.ObservedGeneration)
 			assert.Contains(t, condition.Message, tt.expectMessage)
 			assert.Equal(t, tt.expectRequeue, requeueAfter > 0)
+			assert.Equal(t, tt.expectFailed, blockers.Failed, "failed count")
+			assert.Equal(t, tt.expectTimedOut, blockers.TimedOut, "timed-out count")
 		})
 	}
 }

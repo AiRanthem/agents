@@ -136,16 +136,23 @@ type SandboxSetSpec struct {
 
 // SandboxSetScaleStrategy defines strategies for sandboxes scale.
 type SandboxSetScaleStrategy struct {
-	// MaxUnavailable caps the number of unavailable sandboxes during scale-up.
-	// It can be an absolute number (ex: 5) or a percentage of desired pods
-	// (ex: 10%); percentages are rounded up. Every non-Available sandbox counts
-	// against the physical scale-up budget. If unset or invalid, the controller
-	// uses the base (equivalent to 100%, i.e. no cap).
+	// MaxUnavailable caps concurrent physical scale-up operations and serves as
+	// the startup budget for the ScalingLimited condition. It can be an absolute
+	// number (ex: 5) or a percentage of desired pods (ex: 10%); percentages are
+	// rounded up against spec.replicas. If unset or invalid, the controller uses
+	// the base (equivalent to 100%, i.e. no cap). Scale-down is unaffected.
 	//
-	// The ScalingLimited condition uses the same resolved value as a separate
-	// startup budget and becomes True with reason StartupBudgetExhausted when
-	// definitive startup failures plus pending-timeout sandboxes exhaust it.
-	// Scale-down is unaffected.
+	// The physical scale-up budget is charged by startup blockers: sandboxes
+	// whose Ready condition is False with reason PodCreateFailed or
+	// StartContainerFailed, sandboxes stuck in Creating/ResourcePending past the
+	// configured --max-pending-timeout, and sandbox creations that have been
+	// issued but are not yet observed by the controller (they release their slot
+	// once observed as healthy Creating sandboxes). Healthy observed Creating
+	// sandboxes do NOT count against the budget.
+	//
+	// The ScalingLimited condition becomes True with reason
+	// StartupBudgetExhausted when failed plus pending-timeout sandboxes exhaust
+	// the resolved startup budget.
 	// MaxUnavailable works only for scale-up.
 	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
 }

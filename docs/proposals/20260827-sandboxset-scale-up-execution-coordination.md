@@ -180,21 +180,12 @@ Only `ScalingLimited` is persisted as an aggregate condition.
 
 ### SandboxSet Creation Limit
 
-SandboxSet limits new creations using the standard unavailable replica count:
+SandboxSet limits new creations using a startup-failure budget rather than the standard
+unavailable replica count. Only sandboxes that are genuinely blocking startup occupy the
+scale-up budget:
 
 ```text
-unavailable = status.replicas - status.availableReplicas
-```
-
-Every non-Available Sandbox, including healthy in-flight creations and `dirtyCreate`, occupies the
-scale-up budget until it becomes Available. Existing expectation accounting continues to govern
-outstanding create RPCs.
-
-`ScalingLimited` uses a separate, stricter startup-blocker count:
-
-```text
-blockedStartups = countStartupBlocked(groups, maxPendingTimeout, now)
-                = failed + timeout
+charged = failed + timeout + dirtyCreate
 ```
 
 `failed` counts Sandboxes with `Ready=False` and reason `PodCreateFailed` or
@@ -205,16 +196,25 @@ least five restarts as failed. The monotonic restart count detects repeated fail
 of whether the sampled container state is `CrashLoopBackOff` or briefly `Running`. Other transient
 Waiting reasons do not cause an immediate failure. `timeout` counts Sandboxes still in `Creating`
 with reason `ResourcePending` whose `creationTimestamp + maxPendingTimeout` has already elapsed.
+`dirtyCreate` counts create requests recorded by the expectation cache but not yet observed by the
+informer; each releases its slot as soon as the cache observes the created Sandbox.
+
+Healthy observed Creating sandboxes do NOT count against the physical scale-up budget, so a
+healthy pool ramps at full pace.
+
+`ScalingLimited` uses the same resolved value as the startup budget and becomes True when
+`failed + timeout` exhausts it; `dirtyCreate` is excluded because it reflects informer lag
+rather than a startup failure.
 
 SandboxSet resolves `spec.scaleStrategy.maxUnavailable` solely to limit physical create operations.
-An absent or invalid value falls back to `100%` (no cap; equivalent to `spec.replicas`). Absolute values are used directly; percentages are
-rounded up and resolved against `spec.replicas` so headroom is derived from the declared target
-rather than the momentary observed pool size:
+An absent or invalid value falls back to `100%` (no cap; equivalent to `spec.replicas`). Absolute
+values are used directly; percentages are rounded up and resolved against `spec.replicas` so
+headroom is derived from the declared target rather than the momentary observed pool size:
 
 ```text
 maxConcurrent = resolve(spec.scaleStrategy.maxUnavailable,
                         spec.replicas, default=100%)
-createHeadroom = max(maxConcurrent - unavailable, 0)
+createHeadroom = max(maxConcurrent - charged, 0)
 ```
 
 SandboxSet creates toward `spec.replicas` while `createHeadroom > 0`. Reaching the limit stops new
@@ -341,9 +341,9 @@ the current observed pool size as its diagnostic budget; only an entirely blocke
 limits another target increase. `startupBudget` is always at least one.
 
 A single failed or timed-out Sandbox therefore does not block another target increase while another
-startup slot remains. `dirtyCreate` still governs outstanding create-request concurrency through the
-existing expectation accounting, but it is not an observed Sandbox and does not contribute to
-`blocked` or to the per-reconcile creation delta.
+startup slot remains. `dirtyCreate` is not an observed Sandbox and does not contribute to `blocked`,
+but it does charge the per-reconcile creation delta: unobserved create requests occupy startup
+slots until the informer observes them, which keeps creation conservative across informer lag.
 
 `ScalingLimited=True` does not delete or replace Sandboxes and does not stop SandboxSet from
 reconciling its already-declared target within `maxUnavailable`. It prevents PoolAutoscaler from

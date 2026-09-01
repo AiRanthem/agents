@@ -36,23 +36,45 @@ const (
 	scalingLimitedReasonBudgetAvailable = "StartupBudgetAvailable"
 	scalingLimitedReasonBudgetExhausted = "StartupBudgetExhausted"
 	eventScalingLimited                 = "ScalingLimited"
+
+	defaultMaxPendingTimeout = 50 * time.Second
 )
 
+// startupBlockers holds the counts that occupy the scale-up startup budget.
+type startupBlockers struct {
+	Failed   int
+	TimedOut int
+	// DirtyCreates are sandbox creations issued but not yet observed by the
+	// cache. countStartupBlocked leaves it zero; Reconcile fills it from the
+	// scale-up expectation. It charges the scale-up budget but is excluded
+	// from the ScalingLimited condition, which reports observed failures only.
+	DirtyCreates int
+}
+
+// total returns everything that charges the scale-up budget: observed startup
+// failures plus unobserved in-flight creations.
+func (b startupBlockers) total() int {
+	return b.Failed + b.TimedOut + b.DirtyCreates
+}
+
 // calculateScalingLimited updates the ScalingLimited condition on newStatus
-// and returns the earliest next-deadline requeue. maxUnavailable is validated
-// by the admission webhook, so intstr resolution errors are not expected here
-// and callers do not need to handle them.
+// and returns the counted startup blockers plus the earliest next-deadline
+// requeue. maxUnavailable is validated by the admission webhook, so intstr
+// resolution errors are not expected here and callers do not need to handle
+// them.
 func (r *Reconciler) calculateScalingLimited(
 	ctx context.Context,
 	sbs *agentsv1alpha1.SandboxSet,
 	status *agentsv1alpha1.SandboxSetStatus,
 	groups GroupedSandboxes,
 	now time.Time,
-) time.Duration {
-	failed, timedOut, nextDeadline := countStartupBlocked(groups, r.sbxMaxPendingTimeout, now)
+) (startupBlockers, time.Duration) {
+	blockers, nextDeadline := countStartupBlocked(groups, r.sbxMaxPendingTimeout, now)
 
 	startupBudget := resolveStartupBudget(ctx, sbs.Spec.ScaleStrategy.MaxUnavailable, status.Replicas)
-	blocked := failed + timedOut
+	// The condition reports observed startup failures only; dirty creates are
+	// charged in calculateScaleDelta after Reconcile fills them in.
+	blocked := blockers.Failed + blockers.TimedOut
 	limited := blocked >= startupBudget
 	reason := scalingLimitedReasonBudgetAvailable
 	conditionStatus := metav1.ConditionFalse
@@ -67,29 +89,35 @@ func (r *Reconciler) calculateScalingLimited(
 		Status:             conditionStatus,
 		ObservedGeneration: sbs.Generation,
 		Reason:             reason,
-		Message:            fmt.Sprintf("%d of %d startup slots are blocked: Timeout=%d, Failed=%d", blocked, startupBudget, timedOut, failed),
+		Message:            fmt.Sprintf("%d of %d startup slots are blocked: Timeout=%d, Failed=%d", blocked, startupBudget, blockers.TimedOut, blockers.Failed),
 	})
 	if limited && (previous == nil || previous.Status != metav1.ConditionTrue) {
 		r.Recorder.Eventf(sbs, corev1.EventTypeWarning, eventScalingLimited,
-			"SandboxSet startup budget is exhausted: Timeout=%d, Failed=%d, Budget=%d", timedOut, failed, startupBudget)
+			"SandboxSet startup budget is exhausted: Timeout=%d, Failed=%d, Budget=%d", blockers.TimedOut, blockers.Failed, startupBudget)
 	}
 
 	if nextDeadline.IsZero() {
-		return 0
+		return blockers, 0
 	}
-	return max(nextDeadline.Sub(now), 0)
+	return blockers, max(nextDeadline.Sub(now), 0)
 }
 
-// countStartupBlocked returns the number of sandboxes that occupy the startup
+// countStartupBlocked returns the observed sandboxes that occupy the startup
 // budget: those whose Ready condition reports a definitive startup failure,
 // and those still stuck in Creating/ResourcePending past sbxMaxPendingTimeout. It
 // also reports the earliest future deadline among still-pending sandboxes so
 // the caller can requeue at the right time. This drives the ScalingLimited
-// condition; scale-up delta uses replicas-minus-available separately.
-func countStartupBlocked(groups GroupedSandboxes, sbxMaxPendingTimeout time.Duration, now time.Time) (failed, timedOut int, nextDeadline time.Time) {
+// condition; the scale-up delta additionally charges dirty creates, which
+// Reconcile fills into startupBlockers.DirtyCreates after this call.
+func countStartupBlocked(groups GroupedSandboxes, sbxMaxPendingTimeout time.Duration, now time.Time) (startupBlockers, time.Time) {
+	if sbxMaxPendingTimeout <= 0 {
+		sbxMaxPendingTimeout = defaultMaxPendingTimeout
+	}
+	var blockers startupBlockers
+	var nextDeadline time.Time
 	for _, sandbox := range groups.Creating {
 		if isStartupFailure(sandbox) {
-			failed++
+			blockers.Failed++
 			continue
 		}
 		state, reason := utils.GetSandboxState(sandbox)
@@ -98,12 +126,12 @@ func countStartupBlocked(groups GroupedSandboxes, sbxMaxPendingTimeout time.Dura
 		}
 		deadline := sandbox.CreationTimestamp.Add(sbxMaxPendingTimeout)
 		if !now.Before(deadline) {
-			timedOut++
+			blockers.TimedOut++
 		} else if nextDeadline.IsZero() || deadline.Before(nextDeadline) {
 			nextDeadline = deadline
 		}
 	}
-	return failed, timedOut, nextDeadline
+	return blockers, nextDeadline
 }
 
 func isStartupFailure(sandbox *agentsv1alpha1.Sandbox) bool {

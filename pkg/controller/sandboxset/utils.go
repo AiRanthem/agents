@@ -88,47 +88,6 @@ func calculateSandboxSetStatusFromGroup(ctx context.Context, newStatus *agentsv1
 		"creating", len(groups.Creating), "dirtyCreating", len(dirtyScaleUp[expectations.Create]))
 }
 
-/* Just Reserved for SandboxAutoScaler
-func calculateExpectPoolSize(ctx context.Context, total, unused int32, sbs *agentsv1alpha1.SandboxSet) (int32, error) {
-	log := klog.FromContext(ctx).V(utils.DebugLogLevel)
-	if sbs.Spec.MaxReplicas == sbs.Spec.MinReplicas {
-		return sbs.Spec.MinReplicas, nil // optimize
-	}
-	actualWaterMark := int(total - unused)
-	highWaterMark, err := intstr.GetScaledValueFromIntOrPercent(sbs.Spec.HighWaterMark, int(total), false)
-	if err != nil {
-		return 0, err
-	}
-	lowWaterMark, err := intstr.GetScaledValueFromIntOrPercent(sbs.Spec.LowWaterMark, int(total), true)
-	if err != nil {
-		return 0, err
-	}
-	expectTotal := total
-	if actualWaterMark > highWaterMark {
-		// should scale up
-		expectScaleUp := int32(actualWaterMark - highWaterMark)
-		unusedAfterScaleUp := unused + expectScaleUp
-		actualScaleUp := expectScaleUp
-		if unusedAfterScaleUp > sbs.Spec.Replicas {
-			actualScaleUp = max(0, expectScaleUp-unusedAfterScaleUp-sbs.Spec.Replicas) // just in case
-		}
-		log.Info("actual scale up calculated", "actualScaleUp", actualScaleUp, "expectScaleUp", expectScaleUp,
-			"unusedAfterScaleUp", unusedAfterScaleUp, "maxUnused", sbs.Spec.Replicas, "highWaterMark", highWaterMark, "lowWaterMark", lowWaterMark)
-		expectTotal = total + actualScaleUp
-	}
-	if actualWaterMark < lowWaterMark {
-		// should scale down
-		expectTotal = total + int32(actualWaterMark-lowWaterMark)
-	}
-	// limit
-	expectTotal = min(expectTotal, sbs.Spec.MaxReplicas)
-	expectTotal = max(expectTotal, sbs.Spec.MinReplicas)
-	log.Info("expect pool size calculated", "expectTotal", expectTotal, "oldTotal", total,
-		"highWaterMark", highWaterMark, "lowWaterMark", lowWaterMark, "actualWaterMark", actualWaterMark)
-	return expectTotal, nil
-}
-*/
-
 func clearAndInitInnerKeys(m map[string]string) map[string]string {
 	if m == nil {
 		return map[string]string{}
