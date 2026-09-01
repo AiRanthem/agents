@@ -42,10 +42,9 @@ import (
 // Controller handles sandbox-related operations
 type Controller struct {
 	// E2B API surface
-	maxTimeout            int
-	minResumeTimeoutValue int
-	domain                string
-	keyCfg                *keys.Config
+	maxTimeout int
+	domain     string
+	keyCfg     *keys.Config
 
 	// mgrOpts is handed to the sandbox-manager builder unchanged. It also carries
 	// the system namespace the API handlers fall back to, so it is the single
@@ -78,9 +77,6 @@ type ControllerOptions struct {
 	Port int
 	// MaxTimeout is the E2B maximum sandbox timeout in seconds.
 	MaxTimeout int
-	// MinResumeTimeout is the floor, in seconds, applied to the timeout carried
-	// by the E2B connect API.
-	MinResumeTimeout int
 	// KeyConfig configures API key storage. Nil disables E2B authentication.
 	KeyConfig *keys.Config
 
@@ -99,7 +95,6 @@ func NewController(opts ControllerOptions) *Controller {
 		domain:                opts.Domain,
 		adapter:               adapters.DefaultAdapterFactory(opts.Port),
 		maxTimeout:            opts.MaxTimeout,
-		minResumeTimeoutValue: opts.MinResumeTimeout,
 		keyCfg:                opts.KeyConfig,
 		mgrOpts:               opts.Manager,
 		runtimeTLSBundle:      opts.RuntimeTLSBundle,

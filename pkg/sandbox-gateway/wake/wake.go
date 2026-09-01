@@ -19,10 +19,10 @@ package wake
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,6 +35,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
@@ -77,25 +78,33 @@ func (w *Waker) SandboxUIDMatches(ctx context.Context, namespace, name string, u
 	cli := w.cache.GetClient()
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
+		if !errors.IsNotFound(err) {
+			klog.FromContext(ctx).Error(err, "read sandbox for stale-route UID check",
+				"sandbox", klog.KRef(namespace, name))
+		}
 		return false
 	}
 	return sbx.UID == uid
 }
 
-// HasWakeAnnotation checks the informer cache for the wake-on-traffic annotation.
-// This is a fallback for when the gateway controller's route registry hasn't
-// yet synced the annotation change. Returns false if the waker is nil or the
-// sandbox cannot be read from cache.
-func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) bool {
+// WakeEnabled checks the informer cache for the wake-on-ingress-traffic
+// resume rule on the sandbox spec. This is a fallback for when the gateway
+// controller's route registry hasn't yet synced the spec change. Returns
+// false if the waker is nil or the sandbox cannot be read from cache.
+func (w *Waker) WakeEnabled(ctx context.Context, namespace, name string) bool {
 	if w == nil {
 		return false
 	}
 	cli := w.cache.GetClient()
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
+		if !errors.IsNotFound(err) {
+			klog.FromContext(ctx).Error(err, "read sandbox for wake-enabled check",
+				"sandbox", klog.KRef(namespace, name))
+		}
 		return false
 	}
-	return sbx.GetAnnotations()[agentsv1alpha1.AnnotationWakeOnTraffic] == agentsv1alpha1.True
+	return utils.WakeOnIngressTrafficEnabled(&sbx)
 }
 
 // Wake resumes a paused sandbox by delegating to sandboxcr.Sandbox.Resume().
@@ -104,35 +113,16 @@ func (w *Waker) HasWakeAnnotation(ctx context.Context, namespace, name string) b
 // Resume itself provides first-writer-wins dedup via retryUpdate.
 //
 // The caller derives the wake deadline itself (the filter wraps a detached
-// context with Config.GetWakeTimeoutSeconds()); Wake does not wrap ctx
-// again. defaultWakeTimeout is only the fallback timeout used when the
-// sandbox carries no wake-timeout-seconds annotation, and must be positive.
-func (w *Waker) Wake(ctx context.Context, namespace, name string, defaultWakeTimeout time.Duration) error {
-	if defaultWakeTimeout <= 0 {
-		return fmt.Errorf("wake default timeout must be positive, got %v", defaultWakeTimeout)
-	}
-	return w.wakeInternal(ctx, namespace, name, defaultWakeTimeout)
-}
-
-// wakeInternal performs the actual wake work: reads annotations from cache,
-// calls sandbox.Resume, and syncs the route.
-func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaultWakeTimeout time.Duration) error {
+// context with Config.GetWakeTimeoutSeconds()); Wake does not wrap ctx again.
+func (w *Waker) Wake(ctx context.Context, namespace, name string) error {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KRef(namespace, name))
 
 	cli := w.cache.GetClient()
 
-	// Read sandbox from informer cache (fast) to get annotations.
+	// Read sandbox from informer cache (fast) to resolve the wake rule.
 	var sbx agentsv1alpha1.Sandbox
 	if err := cli.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &sbx); err != nil {
 		return err
-	}
-
-	// Determine wake timeout: prefer annotation, fall back to filter default.
-	wakeTimeout := defaultWakeTimeout
-	if timeoutStr := sbx.Annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds]; timeoutStr != "" {
-		if secs, err := strconv.Atoi(timeoutStr); err == nil && secs > 0 {
-			wakeTimeout = time.Duration(secs) * time.Second
-		}
 	}
 
 	// Reuse the existing sandbox-manager connect Resume implementation.
@@ -142,37 +132,42 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 	sandbox := sandboxcr.AsSandbox(&sbx, w.cache)
 
 	// Determine the sandbox timeout mode, mirroring ParseTimeout in the
-	// E2B connect path. This ensures we only set PauseTime for auto-pause
+	// E2B connect path. This ensures we only touch deadlines of auto-pause
 	// sandboxes and never convert never-timeout or shutdown-only sandboxes
 	// into auto-pause mode.
 	autoPause := sbx.Spec.PauseTime != nil
 	hasDeadline := autoPause || sbx.Spec.ShutdownTime != nil
 
 	var opts infra.ResumeOptions
-	if hasDeadline && autoPause && wakeTimeout > 0 {
-		// Auto-pause sandbox: set a fresh PauseTime so the sandbox has
-		// running time before its next auto-pause. ShutdownTime is set
-		// directly to the "forever" retention horizon (now + 100 years):
-		// traffic woke the sandbox, so it must not be auto-deleted by a
-		// stale or soon-to-expire retained ShutdownTime; the next pause
-		// recomputes ShutdownTime from the paused-retention policy. Without
-		// a ShutdownTime here, setTimeout() inside Resume would nil it out.
-		//
-		// The create API allows wake timeouts as short as 30s; reuse the same
-		// Resume timeout floor the E2B Connect/Resume paths apply so the
-		// fresh PauseTime cannot expire while the sandbox is still resuming
-		// (the controller checks PauseTime before Resume handling and would
-		// re-pause it mid-resume).
-		requestedSeconds := int(wakeTimeout / time.Second)
-		effectiveSeconds := timeout.ApplyResumeTimeoutFloor(requestedSeconds, timeout.DefaultMinResumeTimeoutSeconds)
-		if effectiveSeconds != requestedSeconds {
-			log.Info("wake timeout floor applied",
-				"requestedSeconds", requestedSeconds,
-				"effectiveSeconds", effectiveSeconds)
-		}
+	if hasDeadline && autoPause {
+		// Auto-pause sandbox: ShutdownTime is set directly to the "forever"
+		// retention horizon (now + 100 years): traffic woke the sandbox, so
+		// it must not be auto-deleted by a stale or soon-to-expire retained
+		// ShutdownTime; the next pause recomputes ShutdownTime from the
+		// paused-retention policy. Without a ShutdownTime here, setTimeout()
+		// inside Resume would nil it out.
 		opts.Timeout = &timeout.Options{
-			PauseTime:    time.Now().Add(time.Duration(effectiveSeconds) * time.Second),
 			ShutdownTime: time.Now().Add(timeout.ForeverReservePausedSandboxDuration),
+		}
+		// Re-arm auto-pause only when the wake rule carries a positive
+		// PauseTimeout; the rule is never defaulted. Without it the stale
+		// PauseTime is cleared so the controller does not re-pause
+		// immediately, and the sandbox keeps running until it is paused or
+		// deleted again.
+		if pauseTimeout := utils.WakeOnIngressTrafficPauseTimeout(&sbx); pauseTimeout > 0 {
+			// The create API allows wake timeouts as short as 30s; reuse the
+			// same Resume timeout floor the E2B Connect/Resume paths apply so
+			// the fresh PauseTime cannot expire while the sandbox is still
+			// resuming (the controller checks PauseTime before Resume handling
+			// and would re-pause it mid-resume).
+			requestedSeconds := int(pauseTimeout / time.Second)
+			effectiveSeconds := timeout.ApplyResumeTimeoutFloor(requestedSeconds, timeout.DefaultMinResumeTimeoutSeconds)
+			if effectiveSeconds != requestedSeconds {
+				log.Info("wake timeout floor applied",
+					"requestedSeconds", requestedSeconds,
+					"effectiveSeconds", effectiveSeconds)
+			}
+			opts.Timeout.PauseTime = time.Now().Add(time.Duration(effectiveSeconds) * time.Second)
 		}
 	}
 	// For never-timeout sandboxes (no PauseTime, no ShutdownTime) and
@@ -180,8 +175,8 @@ func (w *Waker) wakeInternal(ctx context.Context, namespace, name string, defaul
 	// setting a timeout. This preserves never-timeout semantics and avoids
 	// injecting a PauseTime that would convert a shutdown-only sandbox into
 	// auto-pause mode.
-	log.Info("waking sandbox via traffic", "wakeTimeout", wakeTimeout,
-		"autoPause", autoPause, "hasDeadline", hasDeadline)
+	log.Info("waking sandbox via traffic", "autoPause", autoPause,
+		"hasDeadline", hasDeadline, "rearmPauseTime", opts.Timeout != nil && !opts.Timeout.PauseTime.IsZero())
 	if err := sandbox.Resume(ctx, opts); err != nil {
 		return err
 	}

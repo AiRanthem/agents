@@ -271,6 +271,24 @@ func TestSandboxTemplateValidatingHandler_Handle(t *testing.T) {
 			expectAllow: true,
 		},
 		{
+			name: "Valid ingress traffic autoPausePolicy without probes",
+			sandboxTemplate: &v1alpha1.SandboxTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sbt",
+					Namespace: "default",
+				},
+				Spec: v1alpha1.SandboxTemplateSpec{
+					Template: minimalPodTemplate(),
+					AutoPausePolicy: &v1alpha1.AutoPausePolicy{
+						Resume: &v1alpha1.ResumePolicy{
+							OnIngressTraffic: &v1alpha1.IngressTrafficRule{},
+						},
+					},
+				},
+			},
+			expectAllow: true,
+		},
+		{
 			name: "Invalid probe - duplicate name",
 			sandboxTemplate: &v1alpha1.SandboxTemplate{
 				ObjectMeta: metav1.ObjectMeta{

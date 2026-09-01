@@ -657,6 +657,16 @@ func TestValidateProbeConfiguration(t *testing.T) {
 			expectCondition:    metav1.ConditionTrue,
 		},
 		{
+			name: "ingress traffic resume rule without probes",
+			spec: agentsv1alpha1.SandboxSpec{AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{
+				Resume: &agentsv1alpha1.ResumePolicy{
+					OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+				},
+			}},
+			expectProbesUsable: true,
+			expectCondition:    metav1.ConditionTrue,
+		},
+		{
 			name: "invalid probe handler",
 			spec: agentsv1alpha1.SandboxSpec{Probes: []agentsv1alpha1.Probe{{
 				Name:  "activity",
@@ -686,7 +696,7 @@ func TestValidateProbeConfiguration(t *testing.T) {
 			spec:               agentsv1alpha1.SandboxSpec{Probes: validProbes, AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{}},
 			expectProbesUsable: true,
 			expectCondition:    metav1.ConditionFalse,
-			expectMessage:      "at least one of pause.whenProbedIdleState or resume.whenProbedScheduleTime is required",
+			expectMessage:      "at least one of pause.whenProbedIdleState, resume.whenProbedScheduleTime, or resume.onIngressTraffic is required",
 		},
 	}
 

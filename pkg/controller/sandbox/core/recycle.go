@@ -326,7 +326,7 @@ func (r *SandboxRecycleControl) handleRecycleGracePeriod(ctx context.Context, ar
 		return r.config.GracePeriod - elapsed, nil
 	}
 
-	if err := r.resetMetadataForPool(ctx, box, sbs); err != nil {
+	if err := r.resetSandboxForPool(ctx, box, sbs); err != nil {
 		return 0, &RetriableError{Err: err}
 	}
 
@@ -401,12 +401,32 @@ func (r *SandboxRecycleControl) handleRecycleFailed(ctx context.Context, box *ag
 	return retainDuration, nil
 }
 
-func (r *SandboxRecycleControl) resetMetadataForPool(ctx context.Context, box *agentsv1alpha1.Sandbox, sbs *agentsv1alpha1.SandboxSet) error {
+func (r *SandboxRecycleControl) resetSandboxForPool(ctx context.Context, box *agentsv1alpha1.Sandbox, sbs *agentsv1alpha1.SandboxSet) error {
 	patch := client.MergeFrom(box.DeepCopy())
 
 	// Part 1: Reset fixed claim metadata
 	box.Spec.ShutdownTime = nil
 	box.Spec.PauseTime = nil
+	// Probes and AutoPausePolicy are declared by the SandboxSet spec (and by
+	// extension the update revision). Restore them verbatim so a recycled
+	// pool sandbox is byte-identical to a freshly-created one: any per-tenant
+	// wake rule written by the E2B create path is overwritten, and any
+	// probe-driven rules from the template survive intact. Deep-copy to
+	// guard against mutating the SandboxSet informer cache during the patch.
+	if sbs.Spec.Probes != nil {
+		probes := make([]agentsv1alpha1.Probe, len(sbs.Spec.Probes))
+		for i := range sbs.Spec.Probes {
+			sbs.Spec.Probes[i].DeepCopyInto(&probes[i])
+		}
+		box.Spec.Probes = probes
+	} else {
+		box.Spec.Probes = nil
+	}
+	if sbs.Spec.AutoPausePolicy != nil {
+		box.Spec.AutoPausePolicy = sbs.Spec.AutoPausePolicy.DeepCopy()
+	} else {
+		box.Spec.AutoPausePolicy = nil
+	}
 	box.OwnerReferences = []metav1.OwnerReference{
 		*metav1.NewControllerRef(sbs, agentsv1alpha1.SandboxSetControllerKind),
 	}

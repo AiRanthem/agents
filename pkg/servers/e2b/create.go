@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -414,12 +413,6 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	// The wake policy is decided solely by the current request. A claimed CR
-	// may still carry wake annotations from a previous delivery; drop them
-	// before merging the request metadata so stale values never leak into
-	// this delivery (an explicit value in request.Metadata below still wins).
-	delete(annotations, agentsv1alpha1.AnnotationWakeOnTraffic)
-	delete(annotations, agentsv1alpha1.AnnotationWakeTimeoutSeconds)
 	annotations[agentsv1alpha1.AnnotationReservePausedSandboxDuration] = request.Extensions.ReservePausedSandboxDuration
 	for k, v := range request.Metadata {
 		annotations[k] = v
@@ -436,22 +429,19 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 		annotations[models.ExtensionKeyReturnPodIP] = agentsv1alpha1.True
 	}
 	if request.AutoResume.Enabled {
-		annotations[agentsv1alpha1.AnnotationWakeOnTraffic] = agentsv1alpha1.True
-		// The wake timeout only feeds the fresh PauseTime that the gateway
-		// wake path writes for auto-pause sandboxes; shutdown-only
-		// sandboxes never carry a PauseTime, so remove the annotation to
-		// avoid misleading metadata.
+		// The re-armed pause timeout only feeds the fresh PauseTime that the
+		// gateway wake path writes for auto-pause sandboxes; shutdown-only
+		// and never-timeout sandboxes never carry a PauseTime, so leave it
+		// unset for them: their wakes must not re-arm auto-pause.
+		var pauseTimeout time.Duration
 		if request.AutoPause && !request.Extensions.NeverTimeout && request.Timeout > 0 {
-			if _, exists := annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds]; !exists {
-				annotations[agentsv1alpha1.AnnotationWakeTimeoutSeconds] = strconv.Itoa(request.Timeout)
-			}
-		} else {
-			delete(annotations, agentsv1alpha1.AnnotationWakeTimeoutSeconds)
+			pauseTimeout = time.Duration(request.Timeout) * time.Second
 		}
+		sbx.EnableWakeOnIngressTraffic(pauseTimeout)
 	} else {
-		// autoResume disabled: a wake timeout without wake-on-traffic is
-		// meaningless, so drop any explicit metadata override too.
-		delete(annotations, agentsv1alpha1.AnnotationWakeTimeoutSeconds)
+		// Called on both branches so a claimed CR that still holds a
+		// previous delivery's rule is reset even if its recycle was skipped.
+		sbx.ClearWakeOnIngressTraffic()
 	}
 	sbx.SetAnnotations(annotations)
 

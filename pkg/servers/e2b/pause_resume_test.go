@@ -1353,7 +1353,7 @@ func assertFinalDeadline(t *testing.T, final *agentsv1alpha1.Sandbox, autoPause 
 // + atomic-placeholder scenarios: below-floor / above-floor / never-timeout
 // for paused sandboxes, plus the running case where the floor must not fire.
 func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
-	const minResume = 120
+	const minResume = timeoututils.DefaultMinResumeTimeoutSeconds
 	templateName := "test-template-floor-connect"
 	user := adminTestUser()
 
@@ -1446,7 +1446,7 @@ func TestConnectSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
 // handler. Non-paused cases are omitted (legacy returns 409). Status code
 // is StatusNoContent.
 func TestResumeSandbox_ResumeFloorAndPlaceholder(t *testing.T) {
-	const minResume = 120
+	const minResume = timeoututils.DefaultMinResumeTimeoutSeconds
 	templateName := "test-template-floor-resume"
 	user := adminTestUser()
 

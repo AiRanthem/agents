@@ -213,12 +213,12 @@ func (sc *Controller) getEffectivePauseTimeSeconds(log klog.Logger, requested in
 	if !paused || !hasDeadline {
 		return requested
 	}
-	effective := timeout.ApplyResumeTimeoutFloor(requested, sc.minResumeTimeoutValue)
+	effective := timeout.ApplyResumeTimeoutFloor(requested, timeout.DefaultMinResumeTimeoutSeconds)
 	if effective != requested {
 		log.Info("connect-on-paused timeout floor applied",
 			"requestedSeconds", requested,
 			"effectiveSeconds", effective,
-			"reason", "request shorter than --e2b-min-resume-timeout")
+			"reason", "request shorter than DefaultMinResumeTimeoutSeconds")
 	}
 	return effective
 }

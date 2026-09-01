@@ -59,9 +59,9 @@ type TrafficAccessToken struct {
 }
 
 // SandboxAutoResumeConfig mirrors the E2B API's autoResume field.
-// When Enabled is true, the sandbox is annotated with
-// agents.kruise.io/wake-on-traffic so the sandbox-gateway will auto-resume
-// it on incoming traffic after it is paused.
+// When Enabled is true, the sandbox declares
+// spec.autoPausePolicy.resume.onIngressTraffic so the sandbox-gateway
+// will auto-resume it on incoming traffic after it is paused.
 type SandboxAutoResumeConfig struct {
 	Enabled bool `json:"enabled"`
 }

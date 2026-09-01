@@ -25,7 +25,7 @@ import (
 // DefaultMinResumeTimeoutSeconds floors the timeout carried by a Resume of a
 // paused sandbox (E2B Connect/Resume and gateway wake-on-traffic), so the
 // freshly written deadline cannot expire while the sandbox is still resuming.
-// The E2B floor is tunable via --e2b-min-resume-timeout.
+// Both paths use this value; there is no operator-tunable override.
 const DefaultMinResumeTimeoutSeconds = 300
 
 // ApplyResumeTimeoutFloor raises requested to at least floor, so a short

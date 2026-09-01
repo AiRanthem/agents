@@ -25,21 +25,19 @@ import (
 
 func TestValidateE2BTimeoutFlags(t *testing.T) {
 	cases := []struct {
-		name             string
-		minResumeTimeout int
-		maxTimeout       int
-		expectError      string
+		name        string
+		maxTimeout  int
+		expectError string
 	}{
-		{name: "ok-default", minResumeTimeout: 300, maxTimeout: 2592000, expectError: ""},
-		{name: "ok-equal", minResumeTimeout: 60, maxTimeout: 60, expectError: ""},
-		{name: "zero-min", minResumeTimeout: 0, maxTimeout: 2592000, expectError: "--e2b-min-resume-timeout must be greater than 0"},
-		{name: "negative-min", minResumeTimeout: -1, maxTimeout: 2592000, expectError: "--e2b-min-resume-timeout must be greater than 0"},
-		{name: "min-exceeds-max", minResumeTimeout: 120, maxTimeout: 60, expectError: "must not exceed --e2b-max-timeout"},
+		{name: "ok-default", maxTimeout: 2592000, expectError: ""},
+		{name: "ok-small", maxTimeout: 60, expectError: ""},
+		{name: "zero", maxTimeout: 0, expectError: "--e2b-max-timeout must be greater than 0"},
+		{name: "negative", maxTimeout: -1, expectError: "--e2b-max-timeout must be greater than 0"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateE2BTimeoutFlags(tc.minResumeTimeout, tc.maxTimeout)
+			err := validateE2BTimeoutFlags(tc.maxTimeout)
 			if tc.expectError == "" {
 				require.NoError(t, err)
 			} else {

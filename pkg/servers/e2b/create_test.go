@@ -51,6 +51,7 @@ import (
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
+	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/csiutils"
 )
 
@@ -990,14 +991,17 @@ func TestParseCreateSandboxRequest(t *testing.T) {
 
 func TestBasicSandboxCreateModifier(t *testing.T) {
 	tests := []struct {
-		name                string
-		request             models.NewSandboxRequest
-		initialAnnotations  map[string]string
-		initialLabels       map[string]string
-		maxTimeout          int
-		expectAnnotations   map[string]string
-		expectNoAnnotations []string
-		expectLabels        map[string]string
+		name                   string
+		request                models.NewSandboxRequest
+		initialAnnotations     map[string]string
+		initialLabels          map[string]string
+		initialWakeRule        *agentsv1alpha1.IngressTrafficRule
+		maxTimeout             int
+		expectAnnotations      map[string]string
+		expectNoAnnotations    []string
+		expectLabels           map[string]string
+		expectWakeRule         bool
+		expectWakePauseTimeout time.Duration
 	}{
 		{
 			name: "metadata propagated to annotations",
@@ -1034,116 +1038,99 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			expectLabels: map[string]string{"env": "test"},
 		},
 		{
-			name: "autoResume enabled sets wake annotations",
+			// Auto-pause sandboxes get the request timeout as the wake rule's
+			// PauseTimeout, so a traffic wake re-arms auto-pause with it.
+			name: "autoResume enabled sets wake rule with request timeout",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoPause:  true,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
 			},
-			maxTimeout: 3600,
-			expectAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "300",
-			},
+			maxTimeout:             3600,
+			expectWakeRule:         true,
+			expectWakePauseTimeout: 300 * time.Second,
 		},
 		{
-			name: "autoResume enabled preserves explicit wake timeout annotation",
+			// Never-timeout sandboxes never carry a PauseTime, so the wake
+			// rule gets no PauseTimeout and a wake must not re-arm auto-pause.
+			name: "autoResume enabled never-timeout sets wake rule without pause timeout",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoPause:  true,
-				Metadata: map[string]string{
-					agentsv1alpha1.AnnotationWakeTimeoutSeconds: "180",
-				},
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
+				Extensions: models.NewSandboxRequestExtension{NeverTimeout: true},
 			},
-			maxTimeout: 3600,
-			expectAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "180",
-			},
+			maxTimeout:     3600,
+			expectWakeRule: true,
 		},
 		{
-			// A recycled CR can still carry the wake timeout of delivery A;
-			// delivery B's request decides the policy, so the stale value is
-			// replaced by the current request timeout.
-			name: "autoResume enabled overwrites stale inherited wake timeout",
+			// A recycled CR can still carry the wake rule of delivery A;
+			// delivery B's request decides the policy, so the stale rule is
+			// replaced by a new rule carrying B's request timeout.
+			name: "autoResume enabled replaces stale inherited wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoPause:  true,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
 			},
-			initialAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "999",
+			initialWakeRule: &agentsv1alpha1.IngressTrafficRule{
+				PauseTimeout: &metav1.Duration{Duration: 999 * time.Second},
 			},
-			maxTimeout: 3600,
-			expectAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "300",
-			},
+			maxTimeout:             3600,
+			expectWakeRule:         true,
+			expectWakePauseTimeout: 300 * time.Second,
 		},
 		{
-			// Shutdown-only lifecycle: the wake timeout only feeds the
-			// fresh PauseTime of auto-pause sandboxes, so the annotation
-			// would be misleading metadata.
-			name: "autoResume enabled without auto-pause skips wake timeout annotation",
+			// Shutdown-only lifecycle: the wake rule applies regardless; the
+			// gateway never injects a PauseTime into non-auto-pause sandboxes,
+			// so the rule gets no PauseTimeout.
+			name: "autoResume enabled without auto-pause sets wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoPause:  false,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: true},
 			},
-			initialAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "999",
+			initialWakeRule: &agentsv1alpha1.IngressTrafficRule{
+				PauseTimeout: &metav1.Duration{Duration: 999 * time.Second},
 			},
-			maxTimeout: 3600,
-			expectAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
-			},
-			expectNoAnnotations: []string{agentsv1alpha1.AnnotationWakeTimeoutSeconds},
+			maxTimeout:     3600,
+			expectWakeRule: true,
 		},
 		{
-			name: "autoResume disabled does not set wake-on-traffic annotation",
+			name: "autoResume disabled clears wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: false},
 			},
-			maxTimeout:          3600,
-			expectNoAnnotations: []string{agentsv1alpha1.AnnotationWakeOnTraffic},
+			maxTimeout: 3600,
 		},
 		{
-			// Delivery A enabled autoResume; the CR was recycled and
-			// claimed by delivery B without autoResume. Both inherited
-			// wake annotations must be dropped so B cannot be woken by
-			// traffic.
-			name: "autoResume disabled clears inherited wake annotations",
+			// Delivery A enabled autoResume; the CR was recycled and claimed
+			// by delivery B without autoResume. The inherited wake rule must
+			// be cleared so B cannot be woken by traffic.
+			name: "autoResume disabled clears inherited wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 				AutoResume: models.SandboxAutoResumeConfig{Enabled: false},
 			},
-			initialAnnotations: map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic:      agentsv1alpha1.True,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds: "300",
+			initialWakeRule: &agentsv1alpha1.IngressTrafficRule{
+				PauseTimeout: &metav1.Duration{Duration: 300 * time.Second},
 			},
 			maxTimeout: 3600,
-			expectNoAnnotations: []string{
-				agentsv1alpha1.AnnotationWakeOnTraffic,
-				agentsv1alpha1.AnnotationWakeTimeoutSeconds,
-			},
 		},
 		{
-			name: "autoResume absent does not set wake-on-traffic annotation",
+			name: "autoResume absent clears wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
 			},
-			maxTimeout:          3600,
-			expectNoAnnotations: []string{agentsv1alpha1.AnnotationWakeOnTraffic},
+			maxTimeout: 3600,
 		},
 	}
 
@@ -1158,6 +1145,13 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 						Labels:      tt.initialLabels,
 					},
 				},
+			}
+			if tt.initialWakeRule != nil {
+				mockSbx.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Resume: &agentsv1alpha1.ResumePolicy{
+						OnIngressTraffic: tt.initialWakeRule,
+					},
+				}
 			}
 
 			c := &Controller{maxTimeout: tt.maxTimeout}
@@ -1179,6 +1173,12 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 				got, ok := labels[k]
 				assert.True(t, ok, "expected label %q to exist", k)
 				assert.Equal(t, v, got, "label %q value mismatch", k)
+			}
+
+			assert.Equal(t, tt.expectWakeRule, utils.WakeOnIngressTrafficEnabled(mockSbx.Sandbox))
+			if tt.expectWakeRule {
+				assert.Equal(t, tt.expectWakePauseTimeout, utils.WakeOnIngressTrafficPauseTimeout(mockSbx.Sandbox),
+					"the wake rule PauseTimeout must reflect the caller-provided value")
 			}
 		})
 	}

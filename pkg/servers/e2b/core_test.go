@@ -58,7 +58,6 @@ import (
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 	"github.com/openkruise/agents/pkg/utils/testutils"
-	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 var TestServerPort = 9999
@@ -85,11 +84,11 @@ func CreateSandboxWithStatus(t *testing.T, c ctrlclient.Client, sbx *agentsv1alp
 }
 
 func Setup(t *testing.T) (*Controller, ctrlclient.Client, func()) {
-	return SetupWithMinResumeTimeout(t, timeout.DefaultMinResumeTimeoutSeconds)
+	return setupWithQuota(t, nil)
 }
 
 func SetupWithQuota(t *testing.T, enforcer sandboxmanager.QuotaEnforcer) (*Controller, ctrlclient.Client, func()) {
-	return setupWithMinResumeTimeoutAndQuota(t, timeout.DefaultMinResumeTimeoutSeconds, enforcer)
+	return setupWithQuota(t, enforcer)
 }
 
 func refreshKeyStorageForTest(t *testing.T, controller *Controller) {
@@ -125,7 +124,6 @@ func TestNewController(t *testing.T) {
 				Domain:           "example.com",
 				Port:             8080,
 				MaxTimeout:       3600,
-				MinResumeTimeout: 30,
 				KeyConfig:        keyCfg,
 				Manager:          mgrOpts,
 				RuntimeTLSBundle: bundle,
@@ -143,7 +141,6 @@ func TestNewController(t *testing.T) {
 
 			assert.Equal(t, tt.opts.Domain, sc.domain)
 			assert.Equal(t, tt.opts.MaxTimeout, sc.maxTimeout)
-			assert.Equal(t, tt.opts.MinResumeTimeout, sc.minResumeTimeoutValue)
 			assert.Equal(t, tt.opts.KeyConfig, sc.keyCfg)
 			assert.Equal(t, tt.opts.RuntimeTLSBundle, sc.runtimeTLSBundle)
 			// The manager options are handed to the sandbox-manager builder
@@ -159,11 +156,11 @@ func TestNewController(t *testing.T) {
 	}
 }
 
-func SetupWithMinResumeTimeout(t *testing.T, minResumeTimeout int) (*Controller, ctrlclient.Client, func()) {
-	return setupWithMinResumeTimeoutAndQuota(t, minResumeTimeout, nil)
+func SetupWithMinResumeTimeout(t *testing.T, _ int) (*Controller, ctrlclient.Client, func()) {
+	return setupWithQuota(t, nil)
 }
 
-func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quotaEnforcer sandboxmanager.QuotaEnforcer) (*Controller, ctrlclient.Client, func()) {
+func setupWithQuota(t *testing.T, quotaEnforcer sandboxmanager.QuotaEnforcer) (*Controller, ctrlclient.Client, func()) {
 	testutils.InitLogOutput()
 	namespace := "sandbox-system"
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -184,7 +181,6 @@ func setupWithMinResumeTimeoutAndQuota(t *testing.T, minResumeTimeout int, quota
 		Domain:           "example.com",
 		Port:             TestServerPort,
 		MaxTimeout:       models.DefaultMaxTimeout,
-		MinResumeTimeout: minResumeTimeout,
 		KeyConfig: &keys.Config{
 			Mode:      keys.StorageModeSecret,
 			Namespace: namespace,

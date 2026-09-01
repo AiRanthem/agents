@@ -78,8 +78,8 @@ func autoPauseTakesOver(box *agentsv1alpha1.Sandbox) bool {
 	return utilfeature.DefaultFeatureGate.Enabled(features.AutoPauseControllerGate) && hasActiveAutoPausePolicy(box)
 }
 
-// hasActiveAutoPausePolicy returns true when Spec.AutoPausePolicy is non-nil
-// and at least one of Pause / Resume is configured.
+// hasActiveAutoPausePolicy returns true when the policy has a probe-driven rule.
+// Resume.OnIngressTraffic is gateway-executed, so it does not activate this loop.
 func hasActiveAutoPausePolicy(box *agentsv1alpha1.Sandbox) bool {
 	policy := box.Spec.AutoPausePolicy
 	if policy == nil {

@@ -161,14 +161,13 @@ func (f *sandboxFilter) DecodeHeaders(header api.RequestHeaderMap, endStream boo
 			// processing. wakeAndContinue will call Continue or
 			// SendLocalReply when the wake completes.
 			//
-			// This context carries the sole wake deadline; Wake receives
-			// waitTimeout only as the annotation-fallback default.
+			// This context carries the sole wake deadline.
 			waitTimeout := time.Duration(f.config.GetWakeTimeoutSeconds()) * time.Second
 			ctx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 			f.mu.Lock()
 			f.cancel = cancel
 			f.mu.Unlock()
-			go f.wakeAndContinue(ctx, waker, route.Namespace, route.Name, sandboxID, sandboxPort, waitTimeout)
+			go f.wakeAndContinue(ctx, waker, route.Namespace, route.Name, sandboxID, sandboxPort)
 			return api.Running
 		}
 		// Not running and not wakeable -> 502 (existing behavior)
@@ -303,8 +302,10 @@ func (f *sandboxFilter) verifierUnavailable(sandboxID string) api.StatusType {
 // by traffic. Returns true only when wake-on-traffic is enabled, the sandbox
 // is Paused, the waker is initialized, the route carries a full ObjectKey,
 // the informer still holds a sandbox with the route's UID (stale-route
-// fence), and either the route registry already has WakeOnTraffic set or the
-// annotation fallback check succeeds.
+// fence), and either the route registry already has WakeOnTraffic set or
+// WakeEnabled reads the spec directly from the informer cache (covering the
+// window between a spec patch and the gateway controller reconciling the
+// change into the route registry).
 func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.Waker) bool {
 	if route.State != agentsv1alpha1.SandboxStatePaused {
 		return false
@@ -336,10 +337,10 @@ func (f *sandboxFilter) shouldWakeSandbox(route sandboxroute.Route, waker *wake.
 	if route.WakeOnTraffic {
 		return true
 	}
-	// HasWakeAnnotation is a fallback that reads the informer cache
-	// directly, covering the window between kubectl annotate and the
-	// gateway controller reconciling the change into the route registry.
-	return waker.HasWakeAnnotation(context.Background(), key.Namespace, key.Name)
+	// WakeEnabled is a fallback that reads the informer cache directly,
+	// covering the window between a spec patch and the gateway controller
+	// reconciling the change into the route registry.
+	return waker.WakeEnabled(context.Background(), key.Namespace, key.Name)
 }
 
 // wakeAndContinue runs the wake operation asynchronously. On success it sets
@@ -351,7 +352,6 @@ func (f *sandboxFilter) wakeAndContinue(
 	waker *wake.Waker,
 	namespace, name, sandboxID string,
 	sandboxPort int,
-	waitTimeout time.Duration,
 ) {
 	log := logger.With(zap.String("sandboxID", sandboxID))
 
@@ -365,7 +365,7 @@ func (f *sandboxFilter) wakeAndContinue(
 		}
 	}()
 
-	err := waker.Wake(ctx, namespace, name, waitTimeout)
+	err := waker.Wake(ctx, namespace, name)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// Filter was destroyed; do nothing.

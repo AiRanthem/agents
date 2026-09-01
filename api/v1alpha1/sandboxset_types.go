@@ -24,12 +24,12 @@ import (
 // AnnotationsClearedOnRecycle lists all annotation keys that are removed from a
 // sandbox when it is successfully recycled and returned to the pool. When adding
 // a new annotation that should be cleared during recycle, append it here to avoid
-// missing the recycle in resetMetadataForPool.
+// missing the recycle in resetSandboxForPool.
 //
 // Note: AnnotationUpdatedMetadataInClaim is handled separately because it is
 // consumed before deletion to determine user-specified metadata keys.
 // Annotations from other packages (e.g. identity.AgentKeyTokenRefreshStatus)
-// are handled individually in resetMetadataForPool.
+// are handled individually in resetSandboxForPool.
 var AnnotationsClearedOnRecycle = []string{
 	AnnotationClaimTime,
 	AnnotationLock,
@@ -47,8 +47,6 @@ var AnnotationsClearedOnRecycle = []string{
 	// (header injections, blocks); leaking it across a claim would apply one
 	// tenant's rules — potentially carrying credentials — to another.
 	AnnotationSecurityRules,
-	AnnotationWakeOnTraffic,
-	AnnotationWakeTimeoutSeconds,
 }
 
 // InternalKeysPreservedOnCreation lists internal keys (with the InternalPrefix)
@@ -115,10 +113,12 @@ type SandboxSetSpec struct {
 	Probes []Probe `json:"probes,omitempty"`
 
 	// AutoPausePolicy defines the pause/resume decision rules for sandboxes
-	// created from this SandboxSet. Its rules reference probes by name, so it is
-	// normally set together with spec.probes. It is copied verbatim onto each
-	// created Sandbox and is part of the update revision hash, so changing it
-	// triggers a rolling update of already-created pool sandboxes.
+	// created from this SandboxSet. Probe-driven rules reference probes by
+	// name (so they are normally set together with spec.probes); the
+	// OnIngressTraffic resume rule is event-driven and does not require a
+	// probe. The policy is copied verbatim onto each created Sandbox and is
+	// part of the update revision hash, so changing it triggers a rolling
+	// update of already-created pool sandboxes.
 	// +optional
 	AutoPausePolicy *AutoPausePolicy `json:"autoPausePolicy,omitempty"`
 

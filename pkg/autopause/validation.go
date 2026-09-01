@@ -148,15 +148,17 @@ func ValidateAutoPausePolicy(policy *agentsv1alpha1.AutoPausePolicy, probes []ag
 		pauseRule = policy.Pause.WhenProbedIdleState
 	}
 	var resumeRule *agentsv1alpha1.ProbedScheduleTimeRule
+	var ingressTrafficRule *agentsv1alpha1.IngressTrafficRule
 	if policy.Resume != nil {
 		resumeRule = policy.Resume.WhenProbedScheduleTime
+		ingressTrafficRule = policy.Resume.OnIngressTraffic
 	}
 	// A policy carrying no rule at all can never fire. Setting it is almost
 	// always a mistake, and accepting it hides that mistake behind a healthy
 	// ProbeValid condition.
-	if pauseRule == nil && resumeRule == nil {
+	if pauseRule == nil && resumeRule == nil && ingressTrafficRule == nil {
 		return append(allErrs, field.Required(fldPath,
-			"at least one of pause.whenProbedIdleState or resume.whenProbedScheduleTime is required"))
+			"at least one of pause.whenProbedIdleState, resume.whenProbedScheduleTime, or resume.onIngressTraffic is required"))
 	}
 
 	defined := make(map[string]struct{}, len(probes))

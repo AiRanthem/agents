@@ -197,7 +197,7 @@ func TestValidateAutoPausePolicy(t *testing.T) {
 			probes:      probes,
 			wantErrs:    1,
 			wantFields:  []string{"spec.autoPausePolicy"},
-			wantMessage: "at least one of pause.whenProbedIdleState or resume.whenProbedScheduleTime is required",
+			wantMessage: "at least one of pause.whenProbedIdleState, resume.whenProbedScheduleTime, or resume.onIngressTraffic is required",
 		},
 		{
 			name: "policy with empty pause and resume sections carries no rule",
@@ -208,7 +208,7 @@ func TestValidateAutoPausePolicy(t *testing.T) {
 			probes:      probes,
 			wantErrs:    1,
 			wantFields:  []string{"spec.autoPausePolicy"},
-			wantMessage: "at least one of pause.whenProbedIdleState or resume.whenProbedScheduleTime is required",
+			wantMessage: "at least one of pause.whenProbedIdleState, resume.whenProbedScheduleTime, or resume.onIngressTraffic is required",
 		},
 		{
 			name: "valid pause and resume rules",
@@ -238,6 +238,14 @@ func TestValidateAutoPausePolicy(t *testing.T) {
 				},
 			},
 			probes: probes,
+		},
+		{
+			name: "ingress traffic resume rule without probes",
+			policy: &agentsv1alpha1.AutoPausePolicy{
+				Resume: &agentsv1alpha1.ResumePolicy{
+					OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+				},
+			},
 		},
 		{
 			name: "pause rule references undefined probe",

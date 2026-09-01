@@ -16,9 +16,8 @@ GATEWAY_URL = "http://localhost:80"
 # A 200 here confirms the port-forward and Envoy are both alive.
 _HEALTH_PATH = "/kruise/api/health"
 
-# Annotation keys used by the wake-on-traffic feature.
-_ANN_WAKE_ON_TRAFFIC = "agents.kruise.io/wake-on-traffic"
-_ANN_WAKE_TIMEOUT_SECONDS = "agents.kruise.io/wake-timeout-seconds"
+# Spec path of the wake-on-traffic rule.
+_WAKE_RULE_PATH = ("spec", "autoPausePolicy", "resume", "onIngressTraffic")
 
 # e2b-code-interpreter 2.4.x predates the `lifecycle={"on_timeout": "pause"}`
 # parameter, so auto-pause cannot be requested through that SDK.
@@ -60,6 +59,16 @@ def _get_sandbox_cr(sbx: Sandbox) -> dict:
 def _get_sandbox_annotations(sbx: Sandbox) -> dict:
     """Fetch the annotations of a Sandbox CR via kubectl."""
     return _get_sandbox_cr(sbx).get("metadata", {}).get("annotations", {})
+
+
+def _get_wake_rule(sbx: Sandbox) -> dict | None:
+    """Fetch spec.autoPausePolicy.resume.onIngressTraffic of the CR."""
+    node = _get_sandbox_cr(sbx)
+    for key in _WAKE_RULE_PATH:
+        if not isinstance(node, dict) or key not in node:
+            return None
+        node = node[key]
+    return node
 
 
 def _wait_sandbox_fully_paused(sbx: Sandbox, budget_sec: int = 120):
@@ -128,10 +137,11 @@ def _send_single_wake_request(headers: dict, timeout_sec: int = 180) -> requests
 def test_wake_on_traffic(sandbox_context):
     """Traffic to a paused sandbox with wake-on-traffic should resume it."""
     # Step 1: Create sandbox with auto-pause and auto-resume enabled.
-    # auto_resume=True causes the API to set the wake-on-traffic annotation
-    # automatically at sandbox creation time (no kubectl annotate needed).
-    # Use a longer timeout (120s) to give enough time for the auto-pause wait
-    # and the wake test to complete before ShutdownTime triggers deletion.
+    # auto_resume=True causes the API to set the wake-on-ingress-traffic
+    # spec rule automatically at sandbox creation time (no kubectl patch
+    # needed). Use a longer timeout (120s) to give enough time for the
+    # auto-pause wait and the wake test to complete before ShutdownTime
+    # triggers deletion.
     sbx: Sandbox = sandbox_context.add(Sandbox.create(
         template="code-interpreter",
         timeout=120,
@@ -143,19 +153,19 @@ def test_wake_on_traffic(sandbox_context):
     print(f"sandbox-id: {sandbox_id}")
     assert sbx.get_info().state == SandboxState.RUNNING
 
-    # Step 2: Verify wake annotations were set by the API.
-    annotations = _get_sandbox_annotations(sbx)
-    assert annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
-        f"autoResume=true should set wake-on-traffic annotation, got: {annotations}"
+    # Step 2: Verify the wake rule was written to the spec by the API.
+    # Auto-pause sandboxes get the request timeout as the rule's
+    # pauseTimeout, so a traffic wake re-arms auto-pause with it.
+    wake_rule = _get_wake_rule(sbx)
+    assert wake_rule is not None, (
+        "autoResume=true should set spec.autoPausePolicy.resume.onIngressTraffic, "
+        f"got CR spec: {_get_sandbox_cr(sbx).get('spec', {})}"
     )
-    wake_timeout_ann = annotations.get(_ANN_WAKE_TIMEOUT_SECONDS)
-    assert wake_timeout_ann == "120", (
-        f"autoResume=true should set wake-timeout-seconds annotation, got: {annotations}"
+    # metav1.Duration marshals 120s as "2m0s"; accept both renderings.
+    assert wake_rule.get("pauseTimeout") in ("120s", "2m0s"), (
+        f"autoResume=true should set pauseTimeout from the request timeout, got: {wake_rule}"
     )
-    print(
-        "wake annotations verified: "
-        f"wake-on-traffic=true, wake-timeout-seconds={wake_timeout_ann}"
-    )
+    print(f"wake rule verified: {wake_rule}")
 
     # Step 3: Wait for auto-pause.
     # The sandbox timeout is 120s, but the E2B SDK's auto-pause is triggered
@@ -187,7 +197,7 @@ def test_wake_on_traffic(sandbox_context):
     )
 
     # Step 5: Send a single request through the gateway (triggers wake).
-    # The wake-on-traffic annotation was set by the API (autoResume=true),
+    # The wake-on-ingress-traffic rule was set by the API (autoResume=true),
     # so the gateway registry already has WakeOnTraffic=true.
     #
     # The access token is required by the agent-runtime sidecar inside
@@ -242,14 +252,11 @@ def test_wake_on_traffic(sandbox_context):
     )
     print(f"wake-on-traffic succeeded: {sandbox_id} is running")
 
-    # Step 8: Verify wake-on-traffic annotation persists after wake.
-    # The Resume operation should preserve the wake annotations (they are
-    # part of the sandbox metadata, not stripped by Resume).
-    post_wake_annotations = _get_sandbox_annotations(sbx)
-    assert post_wake_annotations.get(_ANN_WAKE_ON_TRAFFIC) == "true", (
-        f"wake-on-traffic annotation should persist after wake, got: {post_wake_annotations}"
+    # Step 8: Verify the wake rule persists after wake.
+    # The Resume operation re-arms the pause timeout but must not strip the
+    # wake rule from the spec.
+    post_wake_rule = _get_wake_rule(sbx)
+    assert post_wake_rule is not None, (
+        f"the wake rule should persist after wake, got CR spec: {_get_sandbox_cr(sbx).get('spec', {})}"
     )
-    assert post_wake_annotations.get(_ANN_WAKE_TIMEOUT_SECONDS) == wake_timeout_ann, (
-        f"wake-timeout-seconds annotation should persist after wake, got: {post_wake_annotations}"
-    )
-    print(f"post-wake annotations verified: {post_wake_annotations}")
+    print(f"post-wake wake rule verified: {post_wake_rule}")

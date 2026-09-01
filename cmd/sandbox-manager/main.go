@@ -44,7 +44,6 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
 	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
-	"github.com/openkruise/agents/pkg/utils/timeout"
 )
 
 const (
@@ -54,18 +53,11 @@ const (
 	QuotaRedisPasswordEnvVar = "QUOTA_REDIS_PASSWORD"
 )
 
-// validateE2BTimeoutFlags rejects misconfigurations that would either
-// (a) make floor enforcement no-op or pathological (min <= 0), or
-// (b) push effectiveTimeout past the user-facing maxTimeout ceiling.
-func validateE2BTimeoutFlags(minResumeTimeout, maxTimeout int) error {
-	if minResumeTimeout <= 0 {
-		return fmt.Errorf("--e2b-min-resume-timeout must be greater than 0, got %d", minResumeTimeout)
-	}
-	if minResumeTimeout > maxTimeout {
-		return fmt.Errorf(
-			"--e2b-min-resume-timeout (%d) must not exceed --e2b-max-timeout (%d); "+
-				"otherwise floor enforcement could bump a valid request past the API ceiling",
-			minResumeTimeout, maxTimeout)
+// validateE2BTimeoutFlags rejects a non-positive E2B max timeout, which would
+// make every request violate the API ceiling.
+func validateE2BTimeoutFlags(maxTimeout int) error {
+	if maxTimeout <= 0 {
+		return fmt.Errorf("--e2b-max-timeout must be greater than 0, got %d", maxTimeout)
 	}
 	return nil
 }
@@ -83,7 +75,6 @@ func main() {
 	var e2bMaxTimeout int
 	var enableShortSandboxID bool
 	var shortSandboxIDPrefix string
-	var e2bMinResumeTimeout int
 	var sysNs string
 	var peerSelector string
 	var sandboxNamespace string
@@ -131,9 +122,6 @@ func main() {
 			"at most 50 characters (validated at startup: prefix plus the 13-character short ID must fit a 63-character Kubernetes label value); "+
 			"with Native E2B dynamic domains (<port>-<sandbox-id>.<domain>) keep the prefix at 44 characters or fewer so the DNS label stays valid; during mixed-version rollout keep it at 37 characters or fewer; the customized path is not subject to this DNS limit; "+
 			"use the same value on every sandbox-manager replica")
-	pflag.IntVar(&e2bMinResumeTimeout, "e2b-min-resume-timeout", timeout.DefaultMinResumeTimeoutSeconds,
-		"Minimum value (seconds) for the timeout parameter carried by the E2B connect API; "+
-			"timeout values below this floor will be raised to this value.")
 	pflag.StringVar(&sysNs, "system-namespace", utils.DefaultSandboxDeployNamespace, "The namespace where the sandbox manager is running (required)")
 	pflag.StringVar(&peerSelector, "peer-selector", "", "Peer selector for sandbox manager (required)")
 	pflag.StringVar(&sandboxNamespace, "sandbox-namespace", "", "Namespace to filter sandbox-related custom resources (Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy). Defaults to all.")
@@ -206,12 +194,8 @@ func main() {
 		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
 	}
 
-	// Validate positive values
-	if e2bMaxTimeout <= 0 {
-		klog.Fatalf("--e2b-max-timeout must be greater than 0")
-	}
-
-	if err := validateE2BTimeoutFlags(e2bMinResumeTimeout, e2bMaxTimeout); err != nil {
+	// Validate timeout flags.
+	if err := validateE2BTimeoutFlags(e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
 	}
 	if quotaRedisOperationTimeout <= 0 {
@@ -321,11 +305,10 @@ func main() {
 	}
 
 	sandboxController := e2b.NewController(e2b.ControllerOptions{
-		Domain:           domain,
-		Port:             port,
-		MaxTimeout:       e2bMaxTimeout,
-		MinResumeTimeout: e2bMinResumeTimeout,
-		KeyConfig:        keyCfg,
+		Domain:     domain,
+		Port:       port,
+		MaxTimeout: e2bMaxTimeout,
+		KeyConfig:  keyCfg,
 		Manager: config.SandboxManagerOptions{
 			SystemNamespace:       sysNs,
 			PeerSelector:          peerSelector,

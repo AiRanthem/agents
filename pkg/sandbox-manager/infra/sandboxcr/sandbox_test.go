@@ -1192,6 +1192,112 @@ func getTimeFromMetaTime(t *metav1.Time) time.Time {
 	return t.Time
 }
 
+func TestSandbox_WakeOnIngressTraffic(t *testing.T) {
+	wakeRule := func(timeout time.Duration) *v1alpha1.IngressTrafficRule {
+		rule := &v1alpha1.IngressTrafficRule{}
+		if timeout > 0 {
+			rule.PauseTimeout = &metav1.Duration{Duration: timeout}
+		}
+		return rule
+	}
+
+	t.Run("Enable", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			initial      *v1alpha1.AutoPausePolicy
+			pauseTimeout time.Duration
+			expectPolicy *v1alpha1.AutoPausePolicy
+		}{
+			{
+				name: "on empty spec",
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+				},
+			},
+			{
+				name:         "with pause timeout writes it into the rule",
+				pauseTimeout: 10 * time.Minute,
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
+				},
+			},
+			{
+				name: "replaces stale rule without keeping its pause timeout",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(999 * time.Second)},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+					Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
+				}}
+
+				s.EnableWakeOnIngressTraffic(tt.pauseTimeout)
+
+				assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
+			})
+		}
+	})
+
+	t.Run("Clear", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			initial      *v1alpha1.AutoPausePolicy
+			expectPolicy *v1alpha1.AutoPausePolicy
+		}{
+			{
+				name:         "on empty spec is a no-op",
+				expectPolicy: nil,
+			},
+			{
+				name: "clears wake rule and prunes empty parents",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(10 * time.Minute)},
+				},
+				expectPolicy: nil,
+			},
+			{
+				name: "keeps probed resume rule",
+				initial: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{
+						WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{},
+						OnIngressTraffic:       wakeRule(10 * time.Minute),
+					},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Resume: &v1alpha1.ResumePolicy{WhenProbedScheduleTime: &v1alpha1.ProbedScheduleTimeRule{}},
+				},
+			},
+			{
+				name: "keeps pause policy",
+				initial: &v1alpha1.AutoPausePolicy{
+					Pause:  &v1alpha1.PausePolicy{},
+					Resume: &v1alpha1.ResumePolicy{OnIngressTraffic: wakeRule(0)},
+				},
+				expectPolicy: &v1alpha1.AutoPausePolicy{
+					Pause: &v1alpha1.PausePolicy{},
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := &Sandbox{Sandbox: &v1alpha1.Sandbox{
+					Spec: v1alpha1.SandboxSpec{AutoPausePolicy: tt.initial},
+				}}
+
+				s.ClearWakeOnIngressTraffic()
+
+				assert.Equal(t, tt.expectPolicy, s.Sandbox.Spec.AutoPausePolicy)
+			})
+		}
+	})
+}
+
 func TestSandbox_GetClaimTime(t *testing.T) {
 	now := time.Now()
 	claimTimeString := now.Format(time.RFC3339)

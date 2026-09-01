@@ -328,6 +328,16 @@ type Sandbox interface {
 	SetPodAnnotations(annotations map[string]string)
 	GetPodAnnotations() map[string]string
 	SetTimeout(opts timeout.Options)
+	// EnableWakeOnIngressTraffic arms the wake-on-ingress-traffic resume rule
+	// on the sandbox spec. A positive pauseTimeout becomes the rule's
+	// PauseTimeout so a traffic wake re-arms auto-pause with it; a
+	// non-positive pauseTimeout leaves PauseTimeout unset and the wake does
+	// not re-arm auto-pause.
+	EnableWakeOnIngressTraffic(pauseTimeout time.Duration)
+	// ClearWakeOnIngressTraffic removes the wake-on-ingress-traffic resume
+	// rule and prunes now-empty parent policy nodes so a pooled spec stays
+	// byte-identical to a fresh one.
+	ClearWakeOnIngressTraffic()
 	SaveTimeoutWithPolicy(ctx context.Context, opts SaveTimeoutOptions, policy timeout.UpdatePolicy) (TimeoutUpdateResult, error)
 	GetTimeout() timeout.Options
 	GetClaimTime() (time.Time, error)

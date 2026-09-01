@@ -177,19 +177,18 @@ func TestRouteFromSandboxDerivation(t *testing.T) {
 			expectID: "ns--name",
 		},
 		{
-			name: "wake-on-traffic requires exact true",
-			sandbox: newSandbox(nil, map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: agentsv1alpha1.True,
-			}),
+			name: "wake-on-traffic from spec rule",
+			sandbox: func() *agentsv1alpha1.Sandbox {
+				sandbox := newSandbox(nil, nil)
+				sandbox.Spec.AutoPausePolicy = &agentsv1alpha1.AutoPausePolicy{
+					Resume: &agentsv1alpha1.ResumePolicy{
+						OnIngressTraffic: &agentsv1alpha1.IngressTrafficRule{},
+					},
+				}
+				return sandbox
+			}(),
 			expectID:   "ns--name",
 			expectWake: true,
-		},
-		{
-			name: "wake-on-traffic non-true value is ignored",
-			sandbox: newSandbox(nil, map[string]string{
-				agentsv1alpha1.AnnotationWakeOnTraffic: "True",
-			}),
-			expectID: "ns--name",
 		},
 		{
 			name: "empty IP normalizes to creating",
