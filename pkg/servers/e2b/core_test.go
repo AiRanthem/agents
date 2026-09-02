@@ -215,9 +215,9 @@ func setupWithQuota(t *testing.T, quotaEnforcer sandboxmanager.QuotaEnforcer) (*
 	ctrlMgrOpts := opts
 	ctrlMgrOpts.PeerSelector = "component=sandbox-manager"
 	controller := NewController(ControllerOptions{
-		Domain:           "example.com",
-		Port:             TestServerPort,
-		MaxTimeout:       models.DefaultMaxTimeout,
+		Domain:     "example.com",
+		Port:       TestServerPort,
+		MaxTimeout: models.DefaultMaxTimeout,
 		KeyConfig: &keys.Config{
 			Mode:      keys.StorageModeSecret,
 			Namespace: namespace,

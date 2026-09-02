@@ -62,12 +62,19 @@ func validateE2BTimeoutFlags(maxTimeout int) error {
 	return nil
 }
 
-func validateMetricsPort(metricsPort int) error {
+// validateMetricsPort rejects invalid metrics ports and dedicated listener collisions with memberlist.
+func validateMetricsPort(metricsPort, controlPort, memberlistBindPort int) error {
 	if metricsPort == 0 {
 		return nil
 	}
 	if metricsPort < 1 || metricsPort > 65535 {
 		return fmt.Errorf("--metrics-port must be 0 or a valid TCP port in the range 1-65535, got %d", metricsPort)
+	}
+	if memberlistBindPort <= 0 {
+		memberlistBindPort = config.DefaultMemberlistBindPort
+	}
+	if metricsPort != controlPort && metricsPort == memberlistBindPort {
+		return fmt.Errorf("--metrics-port (%d) must differ from --memberlist-bind-port (%d) when using a dedicated metrics listener", metricsPort, memberlistBindPort)
 	}
 	return nil
 }
@@ -211,7 +218,7 @@ func main() {
 	if err := validateE2BTimeoutFlags(e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
 	}
-	if err := validateMetricsPort(metricsPort); err != nil {
+	if err := validateMetricsPort(metricsPort, port, memberlistBindPort); err != nil {
 		klog.Fatalf("invalid metrics-port flag: %v", err)
 	}
 	if quotaRedisOperationTimeout <= 0 {

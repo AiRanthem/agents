@@ -98,13 +98,13 @@ type ControllerOptions struct {
 // NewController creates a new E2B Controller from opts.
 func NewController(opts ControllerOptions) *Controller {
 	sc := &Controller{
-		mux:                   http.NewServeMux(),
-		domain:                opts.Domain,
-		adapter:               adapters.DefaultAdapterFactory(opts.Port),
-		maxTimeout:            opts.MaxTimeout,
-		keyCfg:                opts.KeyConfig,
-		mgrOpts:               opts.Manager,
-		runtimeTLSBundle:      opts.RuntimeTLSBundle,
+		mux:              http.NewServeMux(),
+		domain:           opts.Domain,
+		adapter:          adapters.DefaultAdapterFactory(opts.Port),
+		maxTimeout:       opts.MaxTimeout,
+		keyCfg:           opts.KeyConfig,
+		mgrOpts:          opts.Manager,
+		runtimeTLSBundle: opts.RuntimeTLSBundle,
 	}
 
 	sc.server = &http.Server{
@@ -227,9 +227,8 @@ func (sc *Controller) Run() (context.Context, error) {
 func serveMetrics(server *http.Server) {
 	klog.InfoS("Starting metrics server", "address", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		// Health and metrics live only on this listener once a dedicated port is
-		// configured, so a bind failure is a fatal misconfiguration, matching the
-		// control API listener.
+		// Metrics live only on this listener once a dedicated port is configured,
+		// so a bind failure is a fatal misconfiguration, matching the control API listener.
 		klog.Fatalf("metrics HTTP server failed to start: %v", err)
 	}
 }
