@@ -18,7 +18,6 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"sort"
@@ -627,74 +626,86 @@ func TestServer_Process(t *testing.T) {
 	}
 }
 
-func TestServerRunReturnsBindFailureSynchronously(t *testing.T) {
-	grpcAddr := network.ListenAddress("", consts.ExtProcPort)
-	occupied, err := net.Listen("tcp", grpcAddr)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := occupied.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Errorf("close occupied listener: %v", err)
-		}
-	})
-
-	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
-	err = server.Run()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "listen for envoy ext-proc")
-	assert.Nil(t, server.httpLis)
-	assert.Nil(t, server.grpcLis)
-
-	routeListener, err := net.Listen("tcp", network.ListenAddress("", refresh.DefaultPort))
-	require.NoError(t, err, "failed gRPC bind must close the HTTP listener")
-	require.NoError(t, routeListener.Close())
-}
-
-func TestServer_Run_Stop(t *testing.T) {
-	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
-	require.NoError(t, server.Run())
-	require.NotNil(t, server.httpLis)
-	require.NotNil(t, server.grpcLis)
-
-	server.Stop(t.Context())
-
-	for _, addr := range []string{
-		network.ListenAddress("", refresh.DefaultPort),
-		network.ListenAddress("", consts.ExtProcPort),
-	} {
-		listener, err := net.Listen("tcp", addr)
-		require.NoError(t, err, "Stop must release %s", addr)
-		require.NoError(t, listener.Close())
+func TestServerRunLifecycle(t *testing.T) {
+	tests := []struct {
+		name         string
+		options      config.SandboxManagerOptions
+		occupyGRPC   bool
+		stopFirst    bool
+		wantRunErr   string
+		wantStarted  bool
+		wantGRPC     bool
+		wantReleased []string
+	}{
+		{
+			name:         "ext-proc bind failure returns synchronously",
+			options:      config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000},
+			occupyGRPC:   true,
+			wantRunErr:   "listen for envoy ext-proc",
+			wantReleased: []string{network.ListenAddress("", refresh.DefaultPort)},
+		},
+		{
+			name:         "run then stop releases both listeners",
+			options:      config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000},
+			wantStarted:  true,
+			wantGRPC:     true,
+			wantReleased: []string{network.ListenAddress("", refresh.DefaultPort), network.ListenAddress("", consts.ExtProcPort)},
+		},
+		{
+			name:         "grpc listener skipped when ext-proc disabled",
+			options:      config.SandboxManagerOptions{DisableEnvoyExtProc: true},
+			occupyGRPC:   true,
+			wantStarted:  true,
+			wantReleased: []string{network.ListenAddress("", refresh.DefaultPort)},
+		},
+		{
+			name:       "stop before run prevents late start",
+			options:    config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000},
+			stopFirst:  true,
+			wantRunErr: "proxy server is stopped",
+		},
 	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.occupyGRPC {
+				occupied, err := net.Listen("tcp", network.ListenAddress("", consts.ExtProcPort))
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = occupied.Close() })
+			}
 
-func TestServerRunSkipsGRPCWhenExtProcDisabled(t *testing.T) {
-	occupied, err := net.Listen("tcp", network.ListenAddress("", consts.ExtProcPort))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if err := occupied.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			t.Errorf("close occupied listener: %v", err)
-		}
-	})
+			server := NewServer(tt.options)
+			if tt.stopFirst {
+				server.Stop(t.Context())
+			}
 
-	server := NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true})
-	require.NoError(t, server.Run())
-	require.NotNil(t, server.httpLis)
-	assert.Nil(t, server.grpcLis)
-	assert.Nil(t, server.grpcSrv)
-
-	server.Stop(t.Context())
-
-	listener, err := net.Listen("tcp", network.ListenAddress("", refresh.DefaultPort))
-	require.NoError(t, err, "Stop must release HTTP listener")
-	require.NoError(t, listener.Close())
-}
-
-func TestServerStopBeforeRunPreventsLateStart(t *testing.T) {
-	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
-	server.Stop(t.Context())
-
-	err := server.Run()
-	assert.ErrorContains(t, err, "proxy server is stopped")
-	assert.Nil(t, server.httpSrv)
-	assert.Nil(t, server.grpcSrv)
+			err := server.Run()
+			if tt.wantRunErr != "" {
+				require.Error(t, err)
+				assert.ErrorContains(t, err, tt.wantRunErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if tt.wantStarted {
+				require.NotNil(t, server.httpLis)
+				require.NotNil(t, server.httpSrv)
+			} else {
+				assert.Nil(t, server.httpLis)
+				assert.Nil(t, server.httpSrv)
+			}
+			if tt.wantGRPC {
+				require.NotNil(t, server.grpcLis)
+			} else {
+				assert.Nil(t, server.grpcLis)
+				assert.Nil(t, server.grpcSrv)
+			}
+			if tt.wantStarted {
+				server.Stop(t.Context())
+			}
+			for _, addr := range tt.wantReleased {
+				listener, err := net.Listen("tcp", addr)
+				require.NoError(t, err, "listener on %s must be released", addr)
+				require.NoError(t, listener.Close())
+			}
+		})
+	}
 }

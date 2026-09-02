@@ -33,8 +33,6 @@ func TestListenAddress(t *testing.T) {
 	}{
 		{name: "empty host listens on all addresses", port: 8080, want: ":8080"},
 		{name: "configured host", host: "10.0.0.2", port: 8080, want: "10.0.0.2:8080"},
-		{name: "empty host on peer route port", port: 7789, want: ":7789"},
-		{name: "configured host on peer route port", host: "10.0.0.2", port: 7789, want: "10.0.0.2:7789"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -43,16 +41,27 @@ func TestListenAddress(t *testing.T) {
 	}
 }
 
-func TestResolveNetworkInterfaceAddressEmpty(t *testing.T) {
-	address, err := ResolveNetworkInterfaceAddress("")
-	require.NoError(t, err)
-	assert.Empty(t, address)
-}
-
-func TestResolveNetworkInterfaceAddressMissing(t *testing.T) {
-	_, err := ResolveNetworkInterfaceAddress("definitely-missing-o1-interface")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "find network interface")
+func TestResolveNetworkInterfaceAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		iface   string
+		wantErr string
+	}{
+		{name: "empty interface name resolves to empty address"},
+		{name: "missing interface fails", iface: "definitely-missing-o1-interface", wantErr: "find network interface"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			address, err := ResolveNetworkInterfaceAddress(tt.iface)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Empty(t, address)
+		})
+	}
 }
 
 func TestChooseInterfaceAddress(t *testing.T) {

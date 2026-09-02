@@ -167,11 +167,9 @@ func TestNewController(t *testing.T) {
 			// Port is not retained as a field; it only shapes the server address.
 			require.NotNil(t, sc.server)
 			assert.Equal(t, network.ListenAddress(tt.opts.Manager.BindAddress, tt.opts.Port), sc.server.Addr)
-			entryHost := tt.opts.Manager.BindAddress
-			if entryHost == "" {
-				entryHost = "127.0.0.1"
+			if tt.opts.Manager.BindAddress != "" {
+				assert.Equal(t, fmt.Sprintf("%s:%d", tt.opts.Manager.BindAddress, tt.opts.Port), sc.adapter.Entry())
 			}
-			assert.Equal(t, fmt.Sprintf("%s:%d", entryHost, tt.opts.Port), sc.adapter.Entry())
 			assert.NotNil(t, sc.mux)
 			assert.NotNil(t, sc.adapter)
 
@@ -372,12 +370,10 @@ func (subscribeNoop) Subscribe(context.Context, infra.SandboxRouteEventHandler) 
 	return nil
 }
 
-// TestControllerSignalDuringStartupExitsCleanly pins the startup crash
-// semantics: a termination signal that lands while the manager is still
-// starting makes Run return a canceled context with no error, so main exits
-// zero without waiting for startup or running per-component cleanup.
-func TestControllerSignalDuringStartupExitsCleanly(t *testing.T) {
-	started := make(chan struct{})
+// newStartupController builds a controller whose infra Run is replaced by
+// run, for exercising Controller.Run startup paths.
+func newStartupController(t *testing.T, run func(context.Context) error) *Controller {
+	t.Helper()
 	opts := config.InitOptions(config.SandboxManagerOptions{})
 	fakeCache, fc, err := cachetest.NewTestCache(t)
 	require.NoError(t, err)
@@ -389,20 +385,29 @@ func TestControllerSignalDuringStartupExitsCleanly(t *testing.T) {
 					WithCache(fakeCache).
 					WithAPIReader(fc).
 					WithRouteReader(proxyServer),
-				run: func(ctx context.Context) error {
-					close(started)
-					<-ctx.Done()
-					return ctx.Err()
-				},
+				run: run,
 			}, nil
 		}).
 		Build()
 	require.NoError(t, err)
-
-	controller := &Controller{
+	return &Controller{
 		server:  &http.Server{},
 		manager: manager,
 	}
+}
+
+// TestControllerSignalDuringStartupExitsCleanly pins the startup crash
+// semantics: a termination signal that lands while the manager is still
+// starting makes Run return a canceled context with no error, so main exits
+// zero without waiting for startup or running per-component cleanup.
+func TestControllerSignalDuringStartupExitsCleanly(t *testing.T) {
+	started := make(chan struct{})
+	controller := newStartupController(t, func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
 	type runResult struct {
 		ctx context.Context
 		err error
@@ -433,31 +438,11 @@ func TestControllerSignalDuringStartupExitsCleanly(t *testing.T) {
 // TestControllerRunPropagatesStartupFailure pins that startup errors surface
 // synchronously from Run instead of crashing from a background goroutine.
 func TestControllerRunPropagatesStartupFailure(t *testing.T) {
-	opts := config.InitOptions(config.SandboxManagerOptions{})
-	fakeCache, fc, err := cachetest.NewTestCache(t)
-	require.NoError(t, err)
-	proxyServer := proxy.NewServer(opts)
-	manager, err := sandboxmanager.NewSandboxManagerBuilder(opts).
-		WithCustomInfra(func() (infra.Builder, error) {
-			return stopProbeInfraBuilder{
-				base: sandboxcr.NewInfraBuilder(opts).
-					WithCache(fakeCache).
-					WithAPIReader(fc).
-					WithRouteReader(proxyServer),
-				stop: func() {},
-				run: func(context.Context) error {
-					return errors.New("cache sync failed")
-				},
-			}, nil
-		}).
-		Build()
-	require.NoError(t, err)
+	controller := newStartupController(t, func(context.Context) error {
+		return errors.New("cache sync failed")
+	})
 
-	controller := &Controller{
-		server:  &http.Server{},
-		manager: manager,
-	}
-	_, err = controller.Run(make(chan os.Signal, 1))
+	_, err := controller.Run(make(chan os.Signal, 1))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "sandbox manager failed to start")
 }

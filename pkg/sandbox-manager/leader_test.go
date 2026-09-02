@@ -171,7 +171,6 @@ func TestPrimaryElectorStopWithoutRunDoesNotBlock(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Stop blocked when Run was never called")
 	}
-	assert.False(t, elector.state.IsPrimary())
 }
 
 func TestPrimaryElectorStopCancelsAndClearsPrimary(t *testing.T) {

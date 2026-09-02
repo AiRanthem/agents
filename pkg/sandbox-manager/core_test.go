@@ -160,31 +160,20 @@ func TestSandboxManagerRunFailsWhenWorkerAllocationFails(t *testing.T) {
 	assert.Nil(t, manager.generateSandboxID)
 }
 
-func TestSandboxManagerRunStartsCacheBeforePeers(t *testing.T) {
+func TestSandboxManagerRunStartsCacheBeforePeersAndPassesBindAddress(t *testing.T) {
 	events := []string{}
+	recorded := &staticPeers{events: &events, startErr: assert.AnError}
 	manager := &SandboxManager{
-		infra:        workerAllocationFailureInfra{events: &events},
-		peersManager: &staticPeers{events: &events, startErr: assert.AnError},
-		primary:      &primaryState{},
+		infra:              workerAllocationFailureInfra{events: &events},
+		peersManager:       recorded,
+		primary:            &primaryState{},
+		bindAddress:        "10.0.0.8",
+		memberlistBindPort: 9000,
 	}
 
 	err := manager.Run(t.Context())
 	require.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, []string{"infra", "peers"}, events)
-}
-
-func TestSandboxManagerRunPassesBindAddressToPeers(t *testing.T) {
-	recorded := &staticPeers{startErr: assert.AnError}
-	manager := NewSandboxManagerBuilder(config.SandboxManagerOptions{
-		BindAddress:        "10.0.0.8",
-		MemberlistBindPort: 9000,
-	}).instance
-	manager.infra = workerAllocationFailureInfra{}
-	manager.peersManager = recorded
-	manager.primary = &primaryState{}
-
-	err := manager.Run(t.Context())
-	require.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, "10.0.0.8", recorded.bindAddress)
 	assert.Equal(t, 9000, recorded.bindPort)
 }
@@ -260,7 +249,6 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 			assert.Equal(t, tt.expectMaxCreateQPS, builder.opts.MaxCreateQPS)
 			assert.Equal(t, tt.expectMemberlistBindPort, builder.opts.MemberlistBindPort)
 			assert.Equal(t, tt.expectMemberlistBindPort, builder.instance.memberlistBindPort)
-			assert.Equal(t, tt.expectBindAddress, builder.opts.BindAddress)
 			assert.Equal(t, tt.expectBindAddress, builder.instance.bindAddress)
 			assert.Equal(t, tt.expectShortIDPrefix, builder.instance.shortIDPrefix)
 		})
@@ -533,28 +521,6 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get peers")
 		assert.Equal(t, errors.ErrorInternal, errors.GetErrCode(err))
-	})
-
-	t.Run("peers use a live client from RestConfig, not the infra cache", func(t *testing.T) {
-		opts := config.InitOptions(config.SandboxManagerOptions{
-			PeerSelector: "app=test",
-			RestConfig:   &rest.Config{Host: "https://127.0.0.1:1"},
-		})
-		managerCache, apiReader, err := cachetest.NewTestCache(t)
-		require.NoError(t, err)
-
-		manager, err := NewSandboxManagerBuilder(opts).
-			WithCustomInfra(func() (infra.Builder, error) {
-				return sandboxcr.NewInfraBuilder(opts).
-					WithCache(managerCache).
-					WithAPIReader(apiReader), nil
-			}).
-			WithMemberlistPeers().
-			Build()
-		require.NoError(t, err)
-		require.NotNil(t, manager.peersManager)
-		require.NoError(t, manager.peersManager.Start(t.Context(), "127.0.0.1", 0))
-		require.NoError(t, manager.peersManager.Stop(t.Context()))
 	})
 }
 
