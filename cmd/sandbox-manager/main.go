@@ -51,9 +51,9 @@ import (
 // and the data keys of the Secret referenced by --secret-config. The two sources
 // are intentionally spelled the same so operators can move a value between them.
 const (
-	E2BAdminKeySecretKey        = "E2B_ADMIN_KEY"
-	E2BKeyStorageDSNSecretKey   = "E2B_KEY_STORAGE_DSN"
-	E2BKeyHashPepperSecretKey   = "E2B_KEY_HASH_PEPPER"
+	E2BAdminKeySecretKey        = "E2B_ADMIN_KEY"       // #nosec G101 -- env-var/Secret data key name, not a credential
+	E2BKeyStorageDSNSecretKey   = "E2B_KEY_STORAGE_DSN" // #nosec G101 -- env-var/Secret data key name, not a credential
+	E2BKeyHashPepperSecretKey   = "E2B_KEY_HASH_PEPPER" // #nosec G101 -- env-var/Secret data key name, not a credential
 	QuotaRedisUsernameSecretKey = "QUOTA_REDIS_USERNAME"
 	QuotaRedisPasswordSecretKey = "QUOTA_REDIS_PASSWORD"
 )
