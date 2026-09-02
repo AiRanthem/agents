@@ -4,13 +4,16 @@
 resources:
 - bases/agents.kruise.io_checkpoints.yaml
 - bases/agents.kruise.io_commits.yaml
+- bases/agents.kruise.io_globalsecurityprofiles.yaml
+- bases/agents.kruise.io_globaltrafficpolicies.yaml
+- bases/agents.kruise.io_poolautoscalers.yaml
+- bases/agents.kruise.io_sandboxclaims.yaml
 - bases/agents.kruise.io_sandboxes.yaml
 - bases/agents.kruise.io_sandboxsets.yaml
-- bases/agents.kruise.io_sandboxclaims.yaml
 - bases/agents.kruise.io_sandboxtemplates.yaml
 - bases/agents.kruise.io_sandboxupdateops.yaml
+- bases/agents.kruise.io_securityprofiles.yaml
 - bases/agents.kruise.io_trafficpolicies.yaml
-- bases/agents.kruise.io_poolautoscalers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
