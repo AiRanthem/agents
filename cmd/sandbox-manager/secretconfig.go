@@ -51,10 +51,10 @@ const secretConfigLoadTimeout = 30 * time.Second
 func parseSecretConfig(data map[string][]byte) (secretConfig, error) {
 	for _, key := range []string{
 		E2BAdminKeySecretKey,
-		E2BKeyStorageDSNEnvVar,
-		E2BKeyHashPepperEnvVar,
-		QuotaRedisUsernameEnvVar,
-		QuotaRedisPasswordEnvVar,
+		E2BKeyStorageDSNSecretKey,
+		E2BKeyHashPepperSecretKey,
+		QuotaRedisUsernameSecretKey,
+		QuotaRedisPasswordSecretKey,
 	} {
 		if _, ok := data[key]; !ok {
 			return secretConfig{}, fmt.Errorf("missing required key %q", key)
@@ -62,10 +62,10 @@ func parseSecretConfig(data map[string][]byte) (secretConfig, error) {
 	}
 	return secretConfig{
 		AdminKey:      string(data[E2BAdminKeySecretKey]),
-		KeyStorageDSN: strings.TrimSpace(string(data[E2BKeyStorageDSNEnvVar])),
-		KeyHashPepper: strings.TrimSpace(string(data[E2BKeyHashPepperEnvVar])),
-		RedisUsername: strings.TrimSpace(string(data[QuotaRedisUsernameEnvVar])),
-		RedisPassword: strings.TrimSpace(string(data[QuotaRedisPasswordEnvVar])),
+		KeyStorageDSN: strings.TrimSpace(string(data[E2BKeyStorageDSNSecretKey])),
+		KeyHashPepper: strings.TrimSpace(string(data[E2BKeyHashPepperSecretKey])),
+		RedisUsername: strings.TrimSpace(string(data[QuotaRedisUsernameSecretKey])),
+		RedisPassword: strings.TrimSpace(string(data[QuotaRedisPasswordSecretKey])),
 	}, nil
 }
 

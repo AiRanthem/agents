@@ -29,11 +29,11 @@ import (
 
 func fullSecretData() map[string][]byte {
 	return map[string][]byte{
-		E2BAdminKeySecretKey:     []byte("admin"),
-		E2BKeyStorageDSNEnvVar:   []byte("dsn"),
-		E2BKeyHashPepperEnvVar:   []byte("pepper"),
-		QuotaRedisUsernameEnvVar: []byte("user"),
-		QuotaRedisPasswordEnvVar: []byte("pass"),
+		E2BAdminKeySecretKey:        []byte("admin"),
+		E2BKeyStorageDSNSecretKey:   []byte("dsn"),
+		E2BKeyHashPepperSecretKey:   []byte("pepper"),
+		QuotaRedisUsernameSecretKey: []byte("user"),
+		QuotaRedisPasswordSecretKey: []byte("pass"),
 	}
 }
 
@@ -56,7 +56,7 @@ func TestParseSecretConfig(t *testing.T) {
 	}{
 		{
 			name: "all-empty-ok",
-			data: map[string][]byte{E2BAdminKeySecretKey: {}, E2BKeyStorageDSNEnvVar: {}, E2BKeyHashPepperEnvVar: {}, QuotaRedisUsernameEnvVar: {}, QuotaRedisPasswordEnvVar: {}},
+			data: map[string][]byte{E2BAdminKeySecretKey: {}, E2BKeyStorageDSNSecretKey: {}, E2BKeyHashPepperSecretKey: {}, QuotaRedisUsernameSecretKey: {}, QuotaRedisPasswordSecretKey: {}},
 		},
 		{
 			name:        "missing-key",
@@ -70,7 +70,7 @@ func TestParseSecretConfig(t *testing.T) {
 		},
 		{
 			name: "admin-not-trimmed-others-trimmed",
-			data: map[string][]byte{E2BAdminKeySecretKey: []byte(" x "), E2BKeyStorageDSNEnvVar: []byte("  d  "), E2BKeyHashPepperEnvVar: []byte("\tp\n"), QuotaRedisUsernameEnvVar: []byte(" u "), QuotaRedisPasswordEnvVar: []byte(" w ")},
+			data: map[string][]byte{E2BAdminKeySecretKey: []byte(" x "), E2BKeyStorageDSNSecretKey: []byte("  d  "), E2BKeyHashPepperSecretKey: []byte("\tp\n"), QuotaRedisUsernameSecretKey: []byte(" u "), QuotaRedisPasswordSecretKey: []byte(" w ")},
 			want: secretConfig{AdminKey: " x ", KeyStorageDSN: "d", KeyHashPepper: "p", RedisUsername: "u", RedisPassword: "w"},
 		},
 	}
@@ -128,11 +128,11 @@ func TestLoadSecretConfig(t *testing.T) {
 	})
 	t.Run("missing-key-wrapped-with-ref", func(t *testing.T) {
 		data := fullSecretData()
-		delete(data, E2BKeyHashPepperEnvVar)
+		delete(data, E2BKeyHashPepperSecretKey)
 		c := fake.NewClientBuilder().WithObjects(secretWith(data)).Build()
 		_, err := loadSecretConfig(c, "ns/cfg", "sys")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), E2BKeyHashPepperEnvVar)
+		assert.Contains(t, err.Error(), E2BKeyHashPepperSecretKey)
 		assert.Contains(t, err.Error(), "ns/cfg")
 	})
 }
@@ -143,7 +143,7 @@ func TestSecretConfigErrorsDoNotLeakValues(t *testing.T) {
 	for k := range data {
 		data[k] = []byte(sentinel)
 	}
-	delete(data, E2BKeyStorageDSNEnvVar)
+	delete(data, E2BKeyStorageDSNSecretKey)
 	_, err := parseSecretConfig(data)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), sentinel)

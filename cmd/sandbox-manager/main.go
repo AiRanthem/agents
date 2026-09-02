@@ -48,11 +48,11 @@ import (
 )
 
 const (
-	E2BAdminKeySecretKey     = "E2B_ADMIN_KEY"
-	E2BKeyStorageDSNEnvVar   = "E2B_KEY_STORAGE_DSN"
-	E2BKeyHashPepperEnvVar   = "E2B_KEY_HASH_PEPPER"
-	QuotaRedisUsernameEnvVar = "QUOTA_REDIS_USERNAME"
-	QuotaRedisPasswordEnvVar = "QUOTA_REDIS_PASSWORD"
+	E2BAdminKeySecretKey        = "E2B_ADMIN_KEY"
+	E2BKeyStorageDSNSecretKey   = "E2B_KEY_STORAGE_DSN"
+	E2BKeyHashPepperSecretKey   = "E2B_KEY_HASH_PEPPER"
+	QuotaRedisUsernameSecretKey = "QUOTA_REDIS_USERNAME"
+	QuotaRedisPasswordSecretKey = "QUOTA_REDIS_PASSWORD"
 )
 
 // validateE2BTimeoutFlags rejects a non-positive E2B max timeout, which would
@@ -179,8 +179,8 @@ func main() {
 	pflag.IntVar(&memberlistBindPort, "memberlist-bind-port", 7946, "Port for memberlist gossip (default 7946)")
 	pflag.StringVar(&e2bKeyStorage, "e2b-key-storage", "secret",
 		"Storage backend for E2B API keys. Valid values: 'secret' (K8s Secret, default), 'mysql' (MySQL via GORM). "+
-			"When --e2b-key-storage=mysql and auth is enabled, both the MySQL DSN (env "+E2BKeyStorageDSNEnvVar+
-			") and the HMAC key-hash pepper (env "+E2BKeyHashPepperEnvVar+") are required; secret mode does not use either.")
+			"When --e2b-key-storage=mysql and auth is enabled, both the MySQL DSN (env "+E2BKeyStorageDSNSecretKey+
+			") and the HMAC key-hash pepper (env "+E2BKeyHashPepperSecretKey+") are required; secret mode does not use either.")
 	pflag.BoolVar(&e2bKeyStorageDisableAutoMigrate, "e2b-key-storage-disable-schema-auto-update", false,
 		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team/key bootstrap still runs")
 	pflag.StringVar(&quotaRedisAddr, "quota-redis-addr", "", "Redis address for sandbox-manager quota enforcement. Empty disables enforcement and fails open.")
@@ -196,8 +196,8 @@ func main() {
 	pflag.DurationVar(&trafficTokenMinValidity, "traffic-access-token-min-validity", config.DefaultTrafficAccessTokenMinValidity, "Minimum allowed traffic access token validity.")
 	pflag.DurationVar(&trafficTokenMaxValidity, "traffic-access-token-max-validity", config.DefaultTrafficAccessTokenMaxValidity, "Maximum allowed traffic access token validity.")
 	pflag.StringVar(&secretConfigRef, "secret-config", "",
-		"name or namespace/name of the Secret that provides the five secret values "+E2BAdminKeySecretKey+", "+E2BKeyStorageDSNEnvVar+", "+
-			E2BKeyHashPepperEnvVar+", "+QuotaRedisUsernameEnvVar+", "+QuotaRedisPasswordEnvVar+". "+
+		"name or namespace/name of the Secret that provides the five secret values "+E2BAdminKeySecretKey+", "+E2BKeyStorageDSNSecretKey+", "+
+			E2BKeyHashPepperSecretKey+", "+QuotaRedisUsernameSecretKey+", "+QuotaRedisPasswordSecretKey+". "+
 			"When the namespace is omitted, --system-namespace is used. "+
 			"When set, the Secret is read once at startup and overrides those values (all five keys must be present); "+
 			"changes take effect only on restart. Leave it empty to keep flag and env values.")
@@ -275,10 +275,10 @@ func main() {
 		klog.Fatalf("--kube-client-burst must be greater than 0")
 	}
 
-	e2bKeyStorageDSN := strings.TrimSpace(os.Getenv(E2BKeyStorageDSNEnvVar))
-	e2bKeyStoragePepper := strings.TrimSpace(os.Getenv(E2BKeyHashPepperEnvVar))
-	quotaRedisUsername := strings.TrimSpace(os.Getenv(QuotaRedisUsernameEnvVar))
-	quotaRedisPassword := strings.TrimSpace(os.Getenv(QuotaRedisPasswordEnvVar))
+	e2bKeyStorageDSN := strings.TrimSpace(os.Getenv(E2BKeyStorageDSNSecretKey))
+	e2bKeyStoragePepper := strings.TrimSpace(os.Getenv(E2BKeyHashPepperSecretKey))
+	quotaRedisUsername := strings.TrimSpace(os.Getenv(QuotaRedisUsernameSecretKey))
+	quotaRedisPassword := strings.TrimSpace(os.Getenv(QuotaRedisPasswordSecretKey))
 
 	clientConfig, err := clients.NewRestConfig(float32(kubeClientQPS), kubeClientBurst)
 	if err != nil {
@@ -306,7 +306,7 @@ func main() {
 	quotaRedisPassword = secretSettings.RedisPassword
 
 	if e2bEnableAuth && e2bAdminKey == "" {
-		klog.Fatalf("--e2b-admin-key is required when --e2b-enable-auth is true")
+		klog.Fatalf("E2B admin key is required when --e2b-enable-auth is true; provide it via --e2b-admin-key or the %q secret key", E2BAdminKeySecretKey)
 	}
 
 	quotaOpts := config.QuotaOptions{
