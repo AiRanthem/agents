@@ -935,11 +935,6 @@ func (c *erroringClaimedSandboxCache) GetClaimedSandbox(context.Context, infraca
 	return nil, c.err
 }
 
-func TestSandboxManager_Debug(t *testing.T) {
-	manager, _ := setupTestManager(t)
-	manager.GetDebugInfo()
-}
-
 func TestSandboxManager_PauseSandbox(t *testing.T) {
 	testutils.InitLogOutput()
 

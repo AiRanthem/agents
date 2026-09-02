@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -58,6 +59,7 @@ type Controller struct {
 	// fields
 	mux             *http.ServeMux
 	server          *http.Server
+	metricsServer   *http.Server
 	stop            chan os.Signal
 	cache           cache.Provider
 	storageRegistry storages.VolumeMountProviderRegistry
@@ -75,6 +77,11 @@ type ControllerOptions struct {
 	Domain string
 	// Port is the port the E2B HTTP server listens on.
 	Port int
+	// MetricsPort is the port for GET /metrics. 0 or the same value as Port
+	// serves it on the control API listener; any other positive port starts a
+	// dedicated observability listener. Negative values are invalid and
+	// rejected by startup validation.
+	MetricsPort int
 	// MaxTimeout is the E2B maximum sandbox timeout in seconds.
 	MaxTimeout int
 	// KeyConfig configures API key storage. Nil disables E2B authentication.
@@ -91,19 +98,31 @@ type ControllerOptions struct {
 // NewController creates a new E2B Controller from opts.
 func NewController(opts ControllerOptions) *Controller {
 	sc := &Controller{
-		mux:                   http.NewServeMux(),
-		domain:                opts.Domain,
-		adapter:               adapters.DefaultAdapterFactory(opts.Port),
-		maxTimeout:            opts.MaxTimeout,
-		keyCfg:                opts.KeyConfig,
-		mgrOpts:               opts.Manager,
-		runtimeTLSBundle:      opts.RuntimeTLSBundle,
+		mux:              http.NewServeMux(),
+		domain:           opts.Domain,
+		adapter:          adapters.DefaultAdapterFactory(opts.Port),
+		maxTimeout:       opts.MaxTimeout,
+		keyCfg:           opts.KeyConfig,
+		mgrOpts:          opts.Manager,
+		runtimeTLSBundle: opts.RuntimeTLSBundle,
 	}
 
 	sc.server = &http.Server{
 		Addr:              fmt.Sprintf(":%d", opts.Port),
 		Handler:           sc.mux,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	if opts.MetricsPort > 0 && opts.MetricsPort != opts.Port {
+		metricsMux := http.NewServeMux()
+		registerObservabilityRoutes(metricsMux)
+		sc.metricsServer = &http.Server{
+			Addr:              fmt.Sprintf(":%d", opts.MetricsPort),
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+	} else {
+		registerObservabilityRoutes(sc.mux)
 	}
 
 	return sc
@@ -187,6 +206,9 @@ func (sc *Controller) Run() (context.Context, error) {
 			klog.Fatalf("HTTP server failed to start: %v", err)
 		}
 	}()
+	if sc.metricsServer != nil {
+		go serveMetrics(sc.metricsServer)
+	}
 
 	// stopper
 	go func() {
@@ -202,16 +224,40 @@ func (sc *Controller) Run() (context.Context, error) {
 	return ctx, nil
 }
 
+func serveMetrics(server *http.Server) {
+	klog.InfoS("Starting metrics server", "address", server.Addr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Metrics live only on this listener once a dedicated port is configured,
+		// so a bind failure is a fatal misconfiguration, matching the control API listener.
+		klog.Fatalf("metrics HTTP server failed to start: %v", err)
+	}
+}
+
+func shutdownHTTPServer(ctx context.Context, srv *http.Server, msg string) {
+	if srv == nil {
+		return
+	}
+	if err := srv.Shutdown(ctx); err != nil {
+		klog.ErrorS(err, msg)
+	}
+}
+
 func (sc *Controller) shutdown(ctx context.Context, cancel context.CancelFunc) {
 	log := klog.FromContext(ctx)
 	log.Info("Shutting down server...")
 	defer cancel()
 
-	if sc.server != nil {
-		if err := sc.server.Shutdown(ctx); err != nil {
-			klog.ErrorS(err, "HTTP server forced to shutdown")
-		}
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		shutdownHTTPServer(ctx, sc.server, "HTTP server forced to shutdown")
+	}()
+	go func() {
+		defer wg.Done()
+		shutdownHTTPServer(ctx, sc.metricsServer, "metrics HTTP server forced to shutdown")
+	}()
+	wg.Wait()
 	if sc.manager != nil {
 		sc.manager.Stop(ctx)
 	}

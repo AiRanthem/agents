@@ -51,9 +51,6 @@ func (sc *Controller) registerRoutes() {
 	// the sandbox-gateway (which forwards /kruise/api/* to the manager) work.
 	sc.mux.HandleFunc("GET "+adapters.CustomPrefix+"/api/health", healthHandler)
 
-	// Prometheus metrics endpoint for exporting metrics
-	sc.mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
-
 	// Sandbox management endpoints
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes", sc.CreateSandbox, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/v2/sandboxes", sc.ListSandboxes, sc.CheckApiKey)
@@ -71,7 +68,6 @@ func (sc *Controller) registerRoutes() {
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/templates/{templateID}", sc.GetTemplate, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodDelete, "/templates/{templateID}", sc.DeleteTemplate, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodGet, "/browser/{sandboxID}/json/version", sc.BrowserUse, sc.CheckApiKey)
-	RegisterE2BRoute(sc.mux, http.MethodGet, "/debug", sc.Debug, sc.CheckApiKey)
 
 	// Volume management endpoints
 	// Temporarily disabled.
@@ -95,6 +91,11 @@ func RegisterE2BRoute[T any](mux *http.ServeMux, method, path string, handler we
 	web.RegisterRoute(mux, method, path, handler, middlewares...)
 	// Customized E2B API
 	web.RegisterRoute(mux, method, adapters.CustomPrefix+"/api"+path, handler, middlewares...)
+}
+
+func registerObservabilityRoutes(mux *http.ServeMux) {
+	// Prometheus metrics endpoint for exporting metrics
+	mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 }
 
 // AnonymousUser owns resources created while authentication is disabled. Reusing AdminKeyID

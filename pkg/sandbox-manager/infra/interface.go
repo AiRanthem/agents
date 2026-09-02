@@ -279,7 +279,6 @@ type Infrastructure interface {
 	HasCheckpoint(ctx context.Context, opts HasCheckpointOptions) bool
 	GetCache() cache.Provider // Get the CacheProvider for the infra
 	GetSandboxRouteSource() SandboxRouteSource
-	LoadDebugInfo() map[string]any
 	SelectSandboxes(ctx context.Context, opts SelectSandboxesOptions) ([]Sandbox, error)
 	// GetSandbox looks up a claimed sandbox. Implementations may poll or fall
 	// back while ctx is live; callers must pass a context with a deadline.

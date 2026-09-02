@@ -297,7 +297,6 @@ column is a hint, not authority (handlers have moved between files in recent ref
 | Get template | GET | `/templates/{id}` | `GetTemplate` | `templates.go` |
 | Delete template | DELETE | `/templates/{id}` | `DeleteTemplate` | `templates.go` |
 | Browser version | GET | `/browser/{id}/json/version` | `BrowserUse` | grep |
-| Debug | GET | `/debug` | `Debug` | grep |
 | List teams | GET | `/teams` | `ListTeams` | `api_key.go` |
 | List API keys | GET | `/api-keys` | `ListAPIKeys` | `api_key.go` |
 | Create API key | POST | `/api-keys` | `CreateAPIKey` | `api_key.go` |
