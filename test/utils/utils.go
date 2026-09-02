@@ -133,6 +133,25 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
+// isSafeExecName reports whether name is safe to use as the executable
+// argument of exec.Command. It rejects shell metacharacters, path
+// traversal references, and any path separator so that values sourced from
+// environment variables cannot escape the intended binary invocation.
+func isSafeExecName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.ContainsAny(name, " \t\n\r;|&$`'\"\\") {
+		return false
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 // LoadImageToKindClusterWithName loads a local docker image to the kind cluster
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
@@ -142,9 +161,14 @@ func LoadImageToKindClusterWithName(name string) error {
 	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
+		if !isSafeExecName(v) {
+			return fmt.Errorf("refusing to use unsafe KIND binary name: %q", v)
+		}
 		kindBinary = v
 	}
-	cmd := exec.Command(kindBinary, kindOptions...) // #nosec G204 -- test utility with controlled args
+	// #nosec G204 -- kindBinary validated by isSafeExecName above (rejects shell
+	// metacharacters and '..' segments); default falls back to the constant.
+	cmd := exec.Command(kindBinary, kindOptions...)
 	_, err := Run(cmd)
 	return err
 }
