@@ -148,3 +148,52 @@ func TestSecretConfigErrorsDoNotLeakValues(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), sentinel)
 }
+
+func TestResolveSecretSettings(t *testing.T) {
+	current := secretConfig{
+		AdminKey:      "flag-admin",
+		KeyStorageDSN: "flag-dsn",
+		KeyHashPepper: "flag-pepper",
+		RedisUsername: "flag-user",
+		RedisPassword: "flag-pass",
+	}
+
+	t.Run("empty-ref-passthrough", func(t *testing.T) {
+		got, err := resolveSecretSettings(nil, "", "sys", current)
+		require.NoError(t, err)
+		assert.Equal(t, current, got)
+	})
+
+	t.Run("secret-overlays-current", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(secretWith(fullSecretData())).Build()
+		got, err := resolveSecretSettings(c, "ns/cfg", "sys", current)
+		require.NoError(t, err)
+		assert.Equal(t, secretConfig{
+			AdminKey:      "admin",
+			KeyStorageDSN: "dsn",
+			KeyHashPepper: "pepper",
+			RedisUsername: "user",
+			RedisPassword: "pass",
+		}, got)
+	})
+
+	t.Run("empty-secret-values-overlay-current", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(secretWith(map[string][]byte{
+			E2BAdminKeySecretKey:        {},
+			E2BKeyStorageDSNSecretKey:   {},
+			E2BKeyHashPepperSecretKey:   {},
+			QuotaRedisUsernameSecretKey: {},
+			QuotaRedisPasswordSecretKey: {},
+		})).Build()
+		got, err := resolveSecretSettings(c, "ns/cfg", "sys", current)
+		require.NoError(t, err)
+		assert.Equal(t, secretConfig{}, got)
+	})
+
+	t.Run("load-error-wraps-ref", func(t *testing.T) {
+		c := fake.NewClientBuilder().Build()
+		_, err := resolveSecretSettings(c, "ns/cfg", "sys", current)
+		require.Error(t, err)
+		assert.True(t, apierrors.IsNotFound(err))
+	})
+}

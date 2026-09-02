@@ -47,6 +47,9 @@ import (
 	utilruntime "github.com/openkruise/agents/pkg/utils/runtime"
 )
 
+// These identifiers name both the process environment variables read at startup
+// and the data keys of the Secret referenced by --secret-config. The two sources
+// are intentionally spelled the same so operators can move a value between them.
 const (
 	E2BAdminKeySecretKey        = "E2B_ADMIN_KEY"
 	E2BKeyStorageDSNSecretKey   = "E2B_KEY_STORAGE_DSN"
@@ -82,6 +85,8 @@ func validateMetricsPort(metricsPort, controlPort, memberlistBindPort int) error
 }
 
 // newStartupSecretClient builds a client only when startup needs to read Secrets.
+// It returns a nil Reader exactly when no startup Secret is referenced; callers
+// must not pass a non-empty ref to resolveSecretSettings with a nil reader.
 func newStartupSecretClient(clientConfig *rest.Config, runtimeClientCertSecret, secretConfigRef string) (ctrlclient.Client, error) {
 	if runtimeClientCertSecret == "" && secretConfigRef == "" {
 		return nil, nil
@@ -180,7 +185,8 @@ func main() {
 	pflag.StringVar(&e2bKeyStorage, "e2b-key-storage", "secret",
 		"Storage backend for E2B API keys. Valid values: 'secret' (K8s Secret, default), 'mysql' (MySQL via GORM). "+
 			"When --e2b-key-storage=mysql and auth is enabled, both the MySQL DSN (env "+E2BKeyStorageDSNSecretKey+
-			") and the HMAC key-hash pepper (env "+E2BKeyHashPepperSecretKey+") are required; secret mode does not use either.")
+			" or the corresponding key of the Secret named by --secret-config) and the HMAC key-hash pepper (env "+
+			E2BKeyHashPepperSecretKey+" or the corresponding key of that Secret) are required; secret mode does not use either.")
 	pflag.BoolVar(&e2bKeyStorageDisableAutoMigrate, "e2b-key-storage-disable-schema-auto-update", false,
 		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team/key bootstrap still runs")
 	pflag.StringVar(&quotaRedisAddr, "quota-redis-addr", "", "Redis address for sandbox-manager quota enforcement. Empty disables enforcement and fails open.")
@@ -306,7 +312,7 @@ func main() {
 	quotaRedisPassword = secretSettings.RedisPassword
 
 	if e2bEnableAuth && e2bAdminKey == "" {
-		klog.Fatalf("E2B admin key is required when --e2b-enable-auth is true; provide it via --e2b-admin-key or the %q secret key", E2BAdminKeySecretKey)
+		klog.Fatalf("E2B admin key is required when --e2b-enable-auth is true; provide it via --e2b-admin-key or the %q key of the Secret named by --secret-config", E2BAdminKeySecretKey)
 	}
 
 	quotaOpts := config.QuotaOptions{
