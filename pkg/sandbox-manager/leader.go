@@ -232,6 +232,12 @@ func (e *primaryElector) Stop(ctx context.Context) {
 		return
 	}
 
+	// If Run never started, close done here so Stop does not wait on a
+	// goroutine that will never exist. runOnce makes this exclusive with Run.
+	e.runOnce.Do(func() {
+		close(e.done)
+	})
+
 	select {
 	case <-e.done:
 	case <-ctx.Done():

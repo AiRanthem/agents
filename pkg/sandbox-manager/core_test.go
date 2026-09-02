@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/rest"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
@@ -71,10 +72,14 @@ type failingSandboxRouteSource struct {
 
 type workerAllocationFailureInfra struct {
 	infra.Infrastructure
-	cache infracache.Provider
+	cache  infracache.Provider
+	events *[]string
 }
 
-func (workerAllocationFailureInfra) Run(context.Context) error {
+func (i workerAllocationFailureInfra) Run(context.Context) error {
+	if i.events != nil {
+		*i.events = append(*i.events, "infra")
+	}
 	return nil
 }
 
@@ -155,6 +160,50 @@ func TestSandboxManagerRunFailsWhenWorkerAllocationFails(t *testing.T) {
 	assert.Nil(t, manager.generateSandboxID)
 }
 
+func TestSandboxManagerRunStartsCacheBeforePeers(t *testing.T) {
+	events := []string{}
+	manager := &SandboxManager{
+		infra:        workerAllocationFailureInfra{events: &events},
+		peersManager: &staticPeers{events: &events, startErr: assert.AnError},
+		primary:      &primaryState{},
+	}
+
+	err := manager.Run(t.Context())
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"infra", "peers"}, events)
+}
+
+func TestSandboxManagerRunPassesBindAddressToPeers(t *testing.T) {
+	recorded := &staticPeers{startErr: assert.AnError}
+	manager := NewSandboxManagerBuilder(config.SandboxManagerOptions{
+		BindAddress:        "10.0.0.8",
+		MemberlistBindPort: 9000,
+	}).instance
+	manager.infra = workerAllocationFailureInfra{}
+	manager.peersManager = recorded
+	manager.primary = &primaryState{}
+
+	err := manager.Run(t.Context())
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, "10.0.0.8", recorded.bindAddress)
+	assert.Equal(t, 9000, recorded.bindPort)
+}
+
+func TestSandboxManagerRunPropagatesProxyStartupFailure(t *testing.T) {
+	proxyServer := proxy.NewServer(config.SandboxManagerOptions{})
+	proxyServer.Stop(t.Context())
+	manager := &SandboxManager{
+		infra:       workerAllocationFailureInfra{},
+		proxy:       proxyServer,
+		routeSource: failingSandboxRouteSource{},
+		primary:     &primaryState{},
+	}
+
+	err := manager.Run(t.Context())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to start proxy")
+}
+
 func TestNewSandboxManagerBuilder(t *testing.T) {
 	tests := []struct {
 		name                     string
@@ -164,6 +213,7 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 		expectExtProcConcurrency uint32
 		expectMaxCreateQPS       int
 		expectMemberlistBindPort int
+		expectBindAddress        string
 		expectShortIDPrefix      string
 	}{
 		{
@@ -179,6 +229,7 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 			name: "custom options should be preserved",
 			opts: config.SandboxManagerOptions{
 				SystemNamespace:       "custom-namespace",
+				BindAddress:           "10.0.0.8",
 				MaxClaimWorkers:       20,
 				ExtProcMaxConcurrency: 200,
 				MaxCreateQPS:          50,
@@ -186,6 +237,7 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 				ShortSandboxIDPrefix:  "prod-",
 			},
 			expectSystemNamespace:    "custom-namespace",
+			expectBindAddress:        "10.0.0.8",
 			expectMaxClaimWorkers:    20,
 			expectExtProcConcurrency: 200,
 			expectMaxCreateQPS:       50,
@@ -207,6 +259,9 @@ func TestNewSandboxManagerBuilder(t *testing.T) {
 			assert.Equal(t, tt.expectExtProcConcurrency, builder.opts.ExtProcMaxConcurrency)
 			assert.Equal(t, tt.expectMaxCreateQPS, builder.opts.MaxCreateQPS)
 			assert.Equal(t, tt.expectMemberlistBindPort, builder.opts.MemberlistBindPort)
+			assert.Equal(t, tt.expectMemberlistBindPort, builder.instance.memberlistBindPort)
+			assert.Equal(t, tt.expectBindAddress, builder.opts.BindAddress)
+			assert.Equal(t, tt.expectBindAddress, builder.instance.bindAddress)
 			assert.Equal(t, tt.expectShortIDPrefix, builder.instance.shortIDPrefix)
 		})
 	}
@@ -306,6 +361,12 @@ func TestSandboxManagerBuilder_WithMemberlistPeers(t *testing.T) {
 			expectError:      "",
 			expectNodePrefix: peers.NodePrefixSandboxManager,
 		},
+		{
+			name:         "missing rest config should return error",
+			hostname:     "test-host",
+			peerSelector: "app=sandbox-manager",
+			expectError:  "rest config is required for peer discovery",
+		},
 	}
 
 	for _, tt := range tests {
@@ -317,6 +378,9 @@ func TestSandboxManagerBuilder_WithMemberlistPeers(t *testing.T) {
 			opts := config.SandboxManagerOptions{
 				PeerSelector:    tt.peerSelector,
 				SystemNamespace: "test-namespace",
+			}
+			if tt.expectError == "" {
+				opts.RestConfig = &rest.Config{Host: "https://127.0.0.1:1"}
 			}
 
 			builder := NewSandboxManagerBuilder(opts).
@@ -347,7 +411,7 @@ func TestSandboxManagerBuilder_WithMemberlistPeers(t *testing.T) {
 }
 
 func TestSandboxManagerBuilder_WithRequestAdapter(t *testing.T) {
-	adapter := adapters.NewE2BAdapter(0)
+	adapter := adapters.NewE2BAdapter(0, "")
 	builder := NewSandboxManagerBuilder(config.SandboxManagerOptions{}).
 		WithRequestAdapter(adapter)
 	assert.Same(t, adapter, builder.requestAdapter, "requestAdapter should be set")
@@ -362,7 +426,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 
 		builder := NewSandboxManagerBuilder(opts).
 			WithCustomInfra(withTestInfra(t, opts)).
-			WithRequestAdapter(adapters.NewE2BAdapter(0))
+			WithRequestAdapter(adapters.NewE2BAdapter(0, ""))
 
 		manager, err := builder.Build()
 		require.NoError(t, err)
@@ -380,6 +444,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 			SystemNamespace:  "test-namespace",
 			SandboxNamespace: "default",
 			PeerSelector:     "app=test",
+			RestConfig:       &rest.Config{Host: "https://127.0.0.1:1"},
 		}
 
 		builder := NewSandboxManagerBuilder(opts).
@@ -460,7 +525,7 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 
 		builder := NewSandboxManagerBuilder(opts).
 			WithCustomInfra(withTestInfra(t, opts)).
-			WithCustomPeers(func(args NewPeerArgs) (peers.Peers, error) {
+			WithCustomPeers(func() (peers.Peers, error) {
 				return nil, assert.AnError
 			})
 
@@ -469,12 +534,35 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 		assert.Contains(t, err.Error(), "failed to get peers")
 		assert.Equal(t, errors.ErrorInternal, errors.GetErrCode(err))
 	})
+
+	t.Run("peers use a live client from RestConfig, not the infra cache", func(t *testing.T) {
+		opts := config.InitOptions(config.SandboxManagerOptions{
+			PeerSelector: "app=test",
+			RestConfig:   &rest.Config{Host: "https://127.0.0.1:1"},
+		})
+		managerCache, apiReader, err := cachetest.NewTestCache(t)
+		require.NoError(t, err)
+
+		manager, err := NewSandboxManagerBuilder(opts).
+			WithCustomInfra(func() (infra.Builder, error) {
+				return sandboxcr.NewInfraBuilder(opts).
+					WithCache(managerCache).
+					WithAPIReader(apiReader), nil
+			}).
+			WithMemberlistPeers().
+			Build()
+		require.NoError(t, err)
+		require.NotNil(t, manager.peersManager)
+		require.NoError(t, manager.peersManager.Start(t.Context(), "127.0.0.1", 0))
+		require.NoError(t, manager.peersManager.Stop(t.Context()))
+	})
 }
 
 func TestSandboxManagerBuilder_Chaining(t *testing.T) {
 	opts := config.SandboxManagerOptions{
 		SystemNamespace: "test-namespace",
 		PeerSelector:    "app=test",
+		RestConfig:      &rest.Config{Host: "https://127.0.0.1:1"},
 	}
 
 	t.Setenv("HOSTNAME", "test-host-chain")
@@ -485,7 +573,7 @@ func TestSandboxManagerBuilder_Chaining(t *testing.T) {
 	assert.Same(t, builder, builder.WithSandboxInfra())
 	assert.Same(t, builder, builder.WithCustomInfra(withTestInfra(t, opts)))
 	assert.Same(t, builder, builder.WithMemberlistPeers())
-	assert.Same(t, builder, builder.WithRequestAdapter(adapters.NewE2BAdapter(0)))
+	assert.Same(t, builder, builder.WithRequestAdapter(adapters.NewE2BAdapter(0, "")))
 
 	// The fully chained builder must still build.
 	manager, err := builder.Build()

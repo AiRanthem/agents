@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-24
-last-updated: 2026-08-24
+last-updated: 2026-08-26
 status: implementable
 ---
 
@@ -18,9 +18,11 @@ network address for the control API, peer route service, memberlist, and the
 local return entry used by non-Sandbox proxy requests. When it is empty, the
 existing non-hosted network behavior is preserved.
 
-Peer discovery uses the existing controller-runtime cache, scoped to the system
-namespace and peer label selector. Sandbox Manager starts and synchronizes that
-cache before memberlist is created. After memberlist begins listening, seed
+Peer discovery lists selector-matching Pods through a live, uncached Kubernetes
+client built from the process `rest.Config`. Sandbox Manager and Sandbox Gateway
+share that bounded listing contract: namespace and selector are required at
+startup, each retry cycle performs at most one List while unjoined, and listing
+stops after a successful join. After memberlist begins listening, seed
 discovery and joining run in the background with retry. Shutdown stops new
 discovery and retries; an active join returns under its network deadlines. A
 once-only stop transition gives one lifecycle owner responsibility for Leave
@@ -36,9 +38,9 @@ reachable through one protocol but isolated through another.
 
 Peer Pods also start and stop independently. A one-time Kubernetes list or a
 single synchronous join turns ordinary startup ordering into permanent
-isolation. Reliable discovery therefore requires a filtered, synchronized
-local view of eligible Pods and a retrying join lifecycle that is independent
-of API readiness.
+isolation. Reliable discovery therefore retries a namespace- and
+selector-scoped live Pod list until a join succeeds, then hands membership to
+memberlist. That retry is independent of API readiness.
 
 ## Target Design
 
@@ -76,29 +78,39 @@ flowchart LR
     Resolve --> Return[Non-Sandbox proxy return entry]
 ```
 
-### Scoped peer cache
+### Bounded peer listing
 
-Sandbox Manager reuses its existing controller-runtime cache and Kubernetes
-configuration. It does not create another client or cache for peer discovery.
-The Pod informer is restricted by both of these required inputs:
+Sandbox Manager assembly builds an uncached controller-runtime client from the
+same `rest.Config` already supplied to the process. It does not add a Pod
+informer to the shared sandbox cache, and it does not list through
+`APIReader`. Peer code receives that client as a reader; it does not import or
+read the cache, and it does not read through Infra.
+
+Listing is restricted by both of these required inputs:
 
 - a non-empty system namespace; and
 - a non-empty, syntactically valid peer label selector.
 
-Invalid or absent scope is a startup error rather than an unfiltered Pod watch.
-The Pod informer is registered before the cache starts, and memberlist is not
-created until the cache has synchronized. All peer Pod lists then use the
-informer-backed client; peer discovery never uses `APIReader.List`.
+Invalid or absent scope is a startup error rather than an unfiltered Pod list.
+Sandbox Manager also requires a non-nil `rest.Config` so assembly can build the
+live client.
 
-This contract applies to Sandbox Manager. Sandbox Gateway keeps its existing
-Kubernetes reader and does not gain a second informer as part of this proposal,
-but it shares the retrying join and shutdown lifecycle described below. Gateway
-connects that lifecycle to its real process stop signal rather than a permanent
-background context.
+Sandbox Manager and Sandbox Gateway share this listing contract. Gateway builds
+the same kind of live client from in-cluster configuration. While unjoined,
+each retry cycle performs at most one live Pod list and stops listing after a
+successful join. API availability therefore affects peer convergence, not
+control-API or Gateway readiness. Both otherwise share the retrying join and
+shutdown lifecycle described below.
+
+The Gateway is loaded into Envoy as a Go shared library. Its peer server
+registers for process `SIGTERM`, invokes the shared once-only stop path, restores
+the host process's original signal handling, and relays `SIGTERM` to the process
+after that stop attempt returns. Forced termination can still cut this
+best-effort cleanup short under the crash behavior described below.
 
 ### Trusted seed addresses
 
-Each cached, selector-matching Pod can contribute at most one seed:
+Each listed, selector-matching Pod can contribute at most one seed:
 
 - Without a `memberlist-url` annotation, the seed is the Pod's `status.podIP`
   plus the configured memberlist port.
@@ -126,7 +138,7 @@ seed in the same memberlist call.
 Memberlist begins listening before seed discovery starts. Sandbox Manager then
 runs the following lifecycle in the background:
 
-1. List eligible peer Pods from the synchronized cache and derive trusted seed
+1. List eligible peer Pods from the API server and derive trusted seed
    addresses.
 2. Try seeds individually in stable order.
 3. Stop discovery after any join reports `joined > 0`.
@@ -153,9 +165,8 @@ not part of this proposal.
 
 ```mermaid
 flowchart LR
-    Cache[Scoped Pod informer] -->|synchronized| Listener[Memberlist listening]
-    Listener --> Worker[Background join worker]
-    Worker --> List[List cached peer Pods]
+    Listener[Memberlist listening] --> Worker[Background join worker]
+    Worker --> List[List peer Pods from APIServer]
     List --> Seeds[Validate, deduplicate, and sort seeds]
     Seeds --> Join[Join one seed]
     Join -->|joined > 0| Done[Memberlist maintains membership]
@@ -171,9 +182,9 @@ flowchart LR
 ### Startup and shutdown boundary
 
 Startup fails before serving requests when the selected interface, resolved
-address, namespace, selector, informer synchronization, or memberlist listener
-is invalid. The initial seed set and join result are deliberately not startup
-requirements.
+address, namespace, selector, peer client, control API listener,
+peer route listener, or memberlist listener is invalid. The initial seed set
+and join result are deliberately not startup requirements.
 
 Each peer instance establishes one lifecycle owner when memberlist starts. That
 owner remains until cleanup finishes, including after seed discovery succeeds.
@@ -181,9 +192,15 @@ The first explicit stop request or parent-context cancellation activates that
 owner's cleanup with once-only semantics and cancels the peer lifecycle context.
 Concurrent or later stop requests observe the same completion and result rather
 than starting another leave or shutdown sequence. A caller's wait deadline does
-not transfer cleanup ownership or create a competing close path. The same
-contract covers a stop racing with startup and a startup that initialized only
-some components.
+not transfer cleanup ownership or create a competing close path. Stop may race
+memberlist Start; Start then observes the
+stopped state and returns without creating a second cleanup path. Cleanup
+remains safe when startup initialized only some components.
+
+Sandbox cache synchronization completes before the process serves requests.
+The process stop handler is installed before that wait, so SIGTERM or Ctrl+C
+runs the same Stop path. A forced kill during synchronization is the crash
+model described below.
 
 The lifecycle owner prevents new discovery work, allows an in-flight join to
 return under the network-deadline boundary described above, and then attempts
@@ -218,8 +235,8 @@ and `KUBECONFIG` continue to supply the user-cluster Kubernetes client.
 Network address resolution, process peer discovery, and peer lifecycle belong
 to the Manager layer because they coordinate Sandbox Manager processes rather
 than implement a Sandbox backend. Command entrypoints only accept the flag and
-assemble these capabilities. API protocol behavior and Infra backend behavior
-remain unchanged.
+assemble these capabilities, including constructing the live peer client from
+`rest.Config`. API protocol behavior and Infra backend behavior remain unchanged.
 
 The following are outside this proposal:
 
@@ -230,10 +247,22 @@ The following are outside this proposal:
 - an informer refactor for Sandbox Gateway;
 - IPv6, address hot reload, or periodic seed reconciliation.
 
+No RBAC change is required for Sandbox Manager: its existing Pod permissions
+already include `get`, `list`, and `watch`. Peer discovery treats listed Pods as
+read-only objects and never mutates them.
+
+Deployment changes remain outside this proposal, but hosted activation depends
+on them. Kubernetes TCP probes without an explicit host target the Pod IP; when
+the control API and peer route bind only to a different user-interface address,
+those probes cannot reach the listeners and can restart the Pod. Hosted rollout
+configuration must make the `8080` and `7789` probes reach the selected user
+address before enabling `--network-interface`.
+
 ## Risks
 
-- The additional Pod informer consumes cache and watch resources. Namespace and
-  label filtering bound that cost to peer Pods for one Sandbox Manager scope.
+- Live Pod listing during retry depends on APIServer availability. Namespace and
+  label filtering bound each list to the peer Pods for one Sandbox Manager
+  scope, and listing stops after the first successful join.
 - A canceled process can remain in a memberlist join across multiple 10-second
   network-deadline windows. An immediate-cancellation requirement has a defined
   transport-based upgrade path.
@@ -248,11 +277,13 @@ The following are outside this proposal:
 
 ## Alternatives
 
-- Direct, uncached Pod listing is rejected because it bypasses the shared
-  informer cache and makes API availability part of every retry.
-- A separate peer cache or Kubernetes client is rejected because the existing
-  cache already owns the same user-cluster connection and synchronization
-  lifecycle.
+- A shared Pod informer on the sandbox cache is rejected because seed discovery
+  lists a handful of process Pods until join succeeds, then stops. A
+  process-lifetime watch expands cache filters, startup registration, and tests,
+  and makes memberlist wait on informer sync.
+- Listing through the manager `APIReader` is rejected. That reader is the
+  cache-bypass Get fallback, not a substitute for informers. Assembly constructs
+  a dedicated uncached client from `rest.Config`, matching Gateway.
 - Picking the first address from a multi-address interface is rejected because
   address ordering is not a stable network identity.
 - Trusting an arbitrary `memberlist-url` host is rejected because Pod metadata

@@ -17,10 +17,77 @@ limitations under the License.
 package network
 
 import (
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestListenAddress(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		port int
+		want string
+	}{
+		{name: "empty host listens on all addresses", port: 8080, want: ":8080"},
+		{name: "configured host", host: "10.0.0.2", port: 8080, want: "10.0.0.2:8080"},
+		{name: "empty host on peer route port", port: 7789, want: ":7789"},
+		{name: "configured host on peer route port", host: "10.0.0.2", port: 7789, want: "10.0.0.2:7789"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ListenAddress(tt.host, tt.port))
+		})
+	}
+}
+
+func TestResolveNetworkInterfaceAddressEmpty(t *testing.T) {
+	address, err := ResolveNetworkInterfaceAddress("")
+	require.NoError(t, err)
+	assert.Empty(t, address)
+}
+
+func TestResolveNetworkInterfaceAddressMissing(t *testing.T) {
+	_, err := ResolveNetworkInterfaceAddress("definitely-missing-o1-interface")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "find network interface")
+}
+
+func TestChooseInterfaceAddress(t *testing.T) {
+	addr := func(value string) net.Addr {
+		ip, ipNet, err := net.ParseCIDR(value)
+		require.NoError(t, err)
+		ipNet.IP = ip
+		return ipNet
+	}
+	tests := []struct {
+		name      string
+		flags     net.Flags
+		addrs     []net.Addr
+		want      string
+		wantError string
+	}{
+		{name: "down interface", addrs: []net.Addr{addr("10.0.0.2/24")}, wantError: "is down"},
+		{name: "no address", flags: net.FlagUp, wantError: "has no global-unicast IPv4"},
+		{name: "loopback and IPv6 are excluded", flags: net.FlagUp, addrs: []net.Addr{addr("127.0.0.1/8"), addr("2001:db8::1/64")}, wantError: "has no global-unicast IPv4"},
+		{name: "multiple IPv4 addresses", flags: net.FlagUp, addrs: []net.Addr{addr("10.0.0.2/24"), addr("192.168.1.2/24")}, wantError: "has multiple global-unicast IPv4"},
+		{name: "one IPv4 among ignored addresses", flags: net.FlagUp, addrs: []net.Addr{addr("127.0.0.1/8"), addr("10.0.0.2/24"), addr("2001:db8::1/64")}, want: "10.0.0.2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := chooseInterfaceAddress("user0", tt.flags, tt.addrs)
+			if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
 
 func TestIsCIDROrIP(t *testing.T) {
 	tests := []struct {

@@ -18,14 +18,91 @@ package peers
 
 import (
 	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/memberlist"
+	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
+
+func interceptList(list func(context.Context, ctrlclient.ObjectList, ...ctrlclient.ListOption) error) ctrlclient.Client {
+	return interceptor.NewClient(fake.NewClientBuilder().Build(), interceptor.Funcs{
+		List: func(ctx context.Context, _ ctrlclient.WithWatch, obj ctrlclient.ObjectList, opts ...ctrlclient.ListOption) error {
+			return list(ctx, obj, opts...)
+		},
+	})
+}
+
+type fakeMemberlistHandle struct {
+	join          func([]string) (int, error)
+	leaveErr      error
+	shutdownErr   error
+	leaveCalls    atomic.Int32
+	shutdownCalls atomic.Int32
+	mu            sync.Mutex
+	calls         []string
+}
+
+func (f *fakeMemberlistHandle) Join(seeds []string) (int, error) {
+	f.record("join")
+	if f.join != nil {
+		return f.join(seeds)
+	}
+	return 0, nil
+}
+
+func (f *fakeMemberlistHandle) Leave(time.Duration) error {
+	f.record("leave")
+	f.leaveCalls.Add(1)
+	return f.leaveErr
+}
+
+func (f *fakeMemberlistHandle) Shutdown() error {
+	f.record("shutdown")
+	f.shutdownCalls.Add(1)
+	return f.shutdownErr
+}
+
+func (*fakeMemberlistHandle) Members() []*memberlist.Node { return nil }
+
+func (*fakeMemberlistHandle) LocalNode() *memberlist.Node {
+	return &memberlist.Node{Addr: net.ParseIP("127.0.0.1")}
+}
+
+func (f *fakeMemberlistHandle) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
+
+func (f *fakeMemberlistHandle) recordedCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func startFakeLifecycle(ctx context.Context, reader ctrlclient.Reader, handle memberlistHandle, retry time.Duration) *MemberlistPeers {
+	lifecycleContext, cancel := context.WithCancel(ctx)
+	peer := NewMemberlistPeers(reader, "test-node", Namespace, LabelSelector)
+	peer.list = handle
+	peer.lifecycleCancel = cancel
+	peer.lifecycleDone = make(chan error, 1)
+	peer.retryInterval = retry
+	go peer.runLifecycle(lifecycleContext, labels.SelectorFromSet(labels.Set{LabelSelectorKey: LabelSelectorValue}), 7946, "127.0.0.1:7946")
+	return peer
+}
 
 // TestMemberlistPeers_Start_Stop tests basic start and stop functionality
 func TestMemberlistPeers_Start_Stop(t *testing.T) {
@@ -34,9 +111,9 @@ func TestMemberlistPeers_Start_Stop(t *testing.T) {
 	peer, port, err := CreateTestPeer(ctx, fc, "test-node-1")
 	require.NoError(t, err)
 
-	err = peer.Start(ctx, port)
+	err = peer.Start(ctx, "127.0.0.1", port)
 	require.NoError(t, err)
-	assert.True(t, peer.started.Load())
+	assert.NotNil(t, peer.list)
 
 	// Verify LocalAddr and LocalPort
 	assert.NotNil(t, peer.LocalAddr())
@@ -51,26 +128,32 @@ func TestMemberlistPeers_Start_Stop(t *testing.T) {
 	assert.Len(t, members, 1)
 	assert.Equal(t, "test-node-1", members[0].Name)
 
-	err = peer.Stop()
+	err = peer.Stop(ctx)
 	require.NoError(t, err)
-	assert.False(t, peer.started.Load())
 }
 
-// TestMemberlistPeers_Start_Twice tests that starting twice should return an error
-func TestMemberlistPeers_Start_Twice(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := context.Background()
-	peer, port, err := CreateTestPeer(ctx, fc, "test-node-2")
+func TestMemberlistPeersStartDoesNotWaitForDiscovery(t *testing.T) {
+	t.Setenv("POD_IP", "127.0.0.1")
+	listStarted := make(chan struct{})
+	reader := interceptList(func(ctx context.Context, _ ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+		close(listStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	port, err := getFreePort()
 	require.NoError(t, err)
+	parent, cancel := context.WithCancel(t.Context())
+	peer := NewMemberlistPeers(reader, "non-blocking-node", Namespace, LabelSelector)
 
-	err = peer.Start(ctx, port)
-	require.NoError(t, err)
-
-	err = peer.Start(ctx, port)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "already started")
-
-	_ = peer.Stop()
+	require.NoError(t, peer.Start(parent, "", port))
+	assert.Equal(t, "127.0.0.1", peer.LocalAddr().String())
+	select {
+	case <-listStarted:
+	case <-time.After(time.Second):
+		t.Fatal("background discovery did not start")
+	}
+	cancel()
+	require.NoError(t, peer.Stop(t.Context()))
 }
 
 // TestMemberlistPeers_Stop_NotStarted tests that stopping when not started does not return an error
@@ -78,8 +161,19 @@ func TestMemberlistPeers_Stop_NotStarted(t *testing.T) {
 	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
 	peer := NewMemberlistPeers(fc, "test-node-not-started", Namespace, LabelSelector)
 
-	err := peer.Stop()
-	assert.NoError(t, err)
+	assert.NoError(t, peer.Stop(t.Context()))
+}
+
+// TestMemberlistPeers_StartAfterStopFails tests that a Stop arriving before
+// Start prevents the memberlist from ever starting.
+func TestMemberlistPeers_StartAfterStopFails(t *testing.T) {
+	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
+	peer, port, err := CreateTestPeer(t.Context(), fc, "stopped-before-start")
+	require.NoError(t, err)
+
+	require.NoError(t, peer.Stop(t.Context()))
+	assert.ErrorContains(t, peer.Start(t.Context(), "127.0.0.1", port), "stopped")
+	assert.Nil(t, peer.list)
 }
 
 // TestMemberlistPeers_ThreeNodes_Join tests three-node join and discovery
@@ -96,19 +190,19 @@ func TestMemberlistPeers_ThreeNodes_Join(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start first node (seed node)
-	err = peer1.Start(ctx, port1)
+	err = peer1.Start(ctx, "127.0.0.1", port1)
 	require.NoError(t, err)
-	defer func() { _ = peer1.Stop() }()
+	defer func() { _ = peer1.Stop(ctx) }()
 
 	// Start second node, join first
-	err = peer2.Start(ctx, port2)
+	err = peer2.Start(ctx, "127.0.0.1", port2)
 	require.NoError(t, err)
-	defer func() { _ = peer2.Stop() }()
+	defer func() { _ = peer2.Stop(ctx) }()
 
 	// Start third node, join first two
-	err = peer3.Start(ctx, port3)
+	err = peer3.Start(ctx, "127.0.0.1", port3)
 	require.NoError(t, err)
-	defer func() { _ = peer3.Stop() }()
+	defer func() { _ = peer3.Stop(ctx) }()
 
 	// Wait for gossip propagation
 	assert.Eventually(t, func() bool {
@@ -137,82 +231,6 @@ func TestMemberlistPeers_ThreeNodes_Join(t *testing.T) {
 	assert.True(t, peerNames["node-3"], "peer1 should discover node-3")
 }
 
-// TestMemberlistPeers_WaitForPeers tests waiting for peers functionality
-func TestMemberlistPeers_WaitForPeers(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := t.Context()
-
-	peer1, port1, err := CreateTestPeer(ctx, fc, "wait-node-1")
-	require.NoError(t, err)
-	peer2, port2, err := CreateTestPeer(ctx, fc, "wait-node-2")
-	require.NoError(t, err)
-
-	// Start first node
-	err = peer1.Start(ctx, port1)
-	require.NoError(t, err)
-	defer func() { _ = peer1.Stop() }()
-
-	// Start second node asynchronously (delay 200ms)
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		_ = peer2.Start(ctx, port2)
-	}()
-	defer func() { _ = peer2.Stop() }()
-
-	// Wait for at least 1 peer
-	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	err = peer1.WaitForPeers(waitCtx, 1)
-	assert.NoError(t, err)
-
-	// Verify peer was indeed discovered
-	assert.Len(t, peer1.GetPeers(), 1)
-}
-
-// TestMemberlistPeers_WaitForPeers_Timeout tests waiting timeout
-func TestMemberlistPeers_WaitForPeers_Timeout(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := t.Context()
-	peer, port, err := CreateTestPeer(ctx, fc, "timeout-node")
-	require.NoError(t, err)
-
-	err = peer.Start(ctx, port)
-	require.NoError(t, err)
-	defer func() { _ = peer.Stop() }()
-
-	// Set very short timeout
-	waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-
-	// Wait for 1 peer, should timeout
-	err = peer.WaitForPeers(waitCtx, 1)
-	assert.Error(t, err)
-	assert.Equal(t, context.DeadlineExceeded, err)
-}
-
-// TestMemberlistPeers_WaitForPeers_Stopped tests that WaitForPeers returns error after stopped
-func TestMemberlistPeers_WaitForPeers_Stopped(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := t.Context()
-	peer, port, err := CreateTestPeer(ctx, fc, "stopped-node")
-	require.NoError(t, err)
-
-	err = peer.Start(ctx, port)
-	require.NoError(t, err)
-
-	// Stop asynchronously
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		_ = peer.Stop()
-	}()
-
-	// Wait should return stopped error
-	err = peer.WaitForPeers(ctx, 1)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "stopped")
-}
-
 // TestMemberlistPeers_NodeLeave tests that node is removed from peers list after leaving
 func TestMemberlistPeers_NodeLeave(t *testing.T) {
 	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
@@ -224,11 +242,11 @@ func TestMemberlistPeers_NodeLeave(t *testing.T) {
 	require.NoError(t, err)
 
 	// Start two nodes
-	err = peer1.Start(ctx, port1)
+	err = peer1.Start(ctx, "127.0.0.1", port1)
 	require.NoError(t, err)
-	defer func() { _ = peer1.Stop() }()
+	defer func() { _ = peer1.Stop(ctx) }()
 
-	err = peer2.Start(ctx, port2)
+	err = peer2.Start(ctx, "127.0.0.1", port2)
 	require.NoError(t, err)
 
 	// Wait for peer2 to be discovered
@@ -237,7 +255,7 @@ func TestMemberlistPeers_NodeLeave(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Gracefully stop peer2
-	err = peer2.Stop()
+	err = peer2.Stop(ctx)
 	require.NoError(t, err)
 
 	// Wait for peer2 to be removed from peer1's list
@@ -265,9 +283,242 @@ func TestMemberlistPeers_Join_PartialFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Try to join a non-existent node and seed node
-	err = peer.Start(ctx, port)
+	err = peer.Start(ctx, "127.0.0.1", port)
 	require.NoError(t, err) // Should not fail because single node operation is allowed
-	defer func() { _ = peer.Stop() }()
+	defer func() { _ = peer.Stop(ctx) }()
 
-	assert.True(t, peer.started.Load())
+	assert.NotNil(t, peer.list)
+}
+
+func TestTrustedSeedAddresses(t *testing.T) {
+	pod := func(name, ip, annotation string) v1.Pod {
+		annotations := map[string]string{}
+		if annotation != "" {
+			annotations[agentsv1alpha1.AnnotationMemberlistURL] = annotation
+		}
+		return v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: annotations},
+			Status:     v1.PodStatus{PodIP: ip, Phase: v1.PodFailed},
+		}
+	}
+	pods := []v1.Pod{
+		pod("default", "10.0.0.3", ""),
+		pod("custom-port", "10.0.0.2", "10.0.0.2:9000"),
+		pod("redirect", "10.0.0.4", "10.0.0.99:9000"),
+		pod("hostname", "10.0.0.6", "evil.example:9000"),
+		pod("invalid-ip", "not-an-ip", ""),
+		pod("invalid-port", "10.0.0.5", "10.0.0.5:70000"),
+		pod("self", "127.0.0.1", "127.0.0.1:7946"),
+		pod("duplicate", "10.0.0.3", ""),
+	}
+
+	assert.Equal(t, []string{"10.0.0.2:9000", "10.0.0.3:7946"}, trustedSeedAddresses(pods, "127.0.0.1:7946", 7946))
+}
+
+func TestMemberlistPeersSeedListUsesNamespaceAndSelector(t *testing.T) {
+	peerLabels := map[string]string{LabelSelectorKey: LabelSelectorValue}
+	matching := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "matching", Namespace: Namespace, Labels: peerLabels},
+		Status:     v1.PodStatus{PodIP: "10.0.0.2"},
+	}
+	otherNamespace := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-ns", Namespace: "other", Labels: peerLabels},
+		Status:     v1.PodStatus{PodIP: "10.0.0.3"},
+	}
+	otherLabel := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-label", Namespace: Namespace, Labels: map[string]string{"app": "other"}},
+		Status:     v1.PodStatus{PodIP: "10.0.0.4"},
+	}
+	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).WithObjects(matching, otherNamespace, otherLabel).Build()
+
+	var mu sync.Mutex
+	var listOpts []ctrlclient.ListOptions
+	reader := interceptor.NewClient(fc, interceptor.Funcs{
+		List: func(ctx context.Context, c ctrlclient.WithWatch, list ctrlclient.ObjectList, opts ...ctrlclient.ListOption) error {
+			applied := ctrlclient.ListOptions{}
+			for _, opt := range opts {
+				opt.ApplyToList(&applied)
+			}
+			mu.Lock()
+			listOpts = append(listOpts, applied)
+			mu.Unlock()
+			return c.List(ctx, list, opts...)
+		},
+	})
+	var joined []string
+	handle := &fakeMemberlistHandle{join: func(seeds []string) (int, error) {
+		mu.Lock()
+		joined = append(joined, seeds...)
+		mu.Unlock()
+		return 1, nil
+	}}
+	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(joined) > 0
+	}, time.Second, time.Millisecond)
+	require.NoError(t, peer.Stop(t.Context()))
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, listOpts)
+	assert.Equal(t, Namespace, listOpts[0].Namespace)
+	require.NotNil(t, listOpts[0].LabelSelector)
+	assert.Equal(t, LabelSelector, listOpts[0].LabelSelector.String())
+	assert.Equal(t, []string{"10.0.0.2:7946"}, joined)
+}
+
+func TestMemberlistPeersRetriesUntilJoinSucceeds(t *testing.T) {
+	var listCalls atomic.Int32
+	reader := interceptList(func(_ context.Context, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+		call := listCalls.Add(1)
+		if call == 1 {
+			return assert.AnError
+		}
+		pods := list.(*v1.PodList)
+		if call > 2 {
+			pods.Items = []v1.Pod{{Status: v1.PodStatus{PodIP: "10.0.0.2"}}}
+		}
+		return nil
+	})
+	var joinCalls atomic.Int32
+	handle := &fakeMemberlistHandle{join: func(seeds []string) (int, error) {
+		assert.Equal(t, []string{"10.0.0.2:7946"}, seeds)
+		if joinCalls.Add(1) == 1 {
+			return 0, assert.AnError
+		}
+		return 1, nil
+	}}
+	peer := startFakeLifecycle(t.Context(), reader, handle, 5*time.Millisecond)
+
+	require.Eventually(t, func() bool { return listCalls.Load() >= 4 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return joinCalls.Load() == 2 }, time.Second, time.Millisecond)
+	listCount := listCalls.Load()
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, listCount, listCalls.Load(), "successful join must stop Kubernetes discovery")
+	require.NoError(t, peer.Stop(t.Context()))
+	assert.Equal(t, []string{"join", "join", "leave", "shutdown"}, handle.recordedCalls())
+}
+
+func TestMemberlistPeersJoinsSeedsIndividuallyInStableOrder(t *testing.T) {
+	reader := interceptList(func(_ context.Context, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+		list.(*v1.PodList).Items = []v1.Pod{
+			{Status: v1.PodStatus{PodIP: "10.0.0.3"}},
+			{Status: v1.PodStatus{PodIP: "10.0.0.2"}},
+		}
+		return nil
+	})
+	var mu sync.Mutex
+	var attempted []string
+	handle := &fakeMemberlistHandle{join: func(seeds []string) (int, error) {
+		if len(seeds) != 1 {
+			t.Errorf("Join seeds = %v, want exactly one seed", seeds)
+			return 0, assert.AnError
+		}
+		mu.Lock()
+		attempted = append(attempted, seeds[0])
+		count := len(attempted)
+		mu.Unlock()
+		if count == 1 {
+			return 0, assert.AnError
+		}
+		return 1, nil
+	}}
+	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(attempted) == 2
+	}, time.Second, time.Millisecond)
+	require.NoError(t, peer.Stop(t.Context()))
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"10.0.0.2:7946", "10.0.0.3:7946"}, attempted)
+}
+
+func TestMemberlistPeersStopWaitsForActiveJoin(t *testing.T) {
+	joinStarted := make(chan struct{})
+	releaseJoin := make(chan struct{})
+	reader := interceptList(func(_ context.Context, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+		list.(*v1.PodList).Items = []v1.Pod{{Status: v1.PodStatus{PodIP: "10.0.0.2"}}}
+		return nil
+	})
+	handle := &fakeMemberlistHandle{join: func([]string) (int, error) {
+		close(joinStarted)
+		<-releaseJoin
+		return 0, nil
+	}}
+	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
+	<-joinStarted
+
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- peer.Stop(t.Context()) }()
+	assert.Never(t, func() bool { return handle.leaveCalls.Load() != 0 }, 20*time.Millisecond, time.Millisecond)
+	close(releaseJoin)
+	require.NoError(t, <-stopResult)
+	assert.Equal(t, []string{"join", "leave", "shutdown"}, handle.recordedCalls())
+}
+
+func TestMemberlistPeersStopDeadlineDoesNotTakeCleanupOwnership(t *testing.T) {
+	joinStarted := make(chan struct{})
+	releaseJoin := make(chan struct{})
+	reader := interceptList(func(_ context.Context, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
+		list.(*v1.PodList).Items = []v1.Pod{{Status: v1.PodStatus{PodIP: "10.0.0.2"}}}
+		return nil
+	})
+	handle := &fakeMemberlistHandle{join: func([]string) (int, error) {
+		close(joinStarted)
+		<-releaseJoin
+		return 0, nil
+	}}
+	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
+	<-joinStarted
+
+	waitCtx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	assert.ErrorIs(t, peer.Stop(waitCtx), context.DeadlineExceeded)
+	assert.Zero(t, handle.leaveCalls.Load())
+	close(releaseJoin)
+	select {
+	case err := <-peer.lifecycleDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle cleanup did not finish")
+	}
+	assert.EqualValues(t, 1, handle.leaveCalls.Load())
+	assert.EqualValues(t, 1, handle.shutdownCalls.Load())
+}
+
+func TestMemberlistPeersStopReturnsCleanupError(t *testing.T) {
+	leaveErr := errors.New("leave failed")
+	reader := interceptList(func(context.Context, ctrlclient.ObjectList, ...ctrlclient.ListOption) error {
+		return nil
+	})
+	handle := &fakeMemberlistHandle{leaveErr: leaveErr}
+	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
+
+	err := peer.Stop(t.Context())
+	assert.ErrorIs(t, err, leaveErr)
+	assert.EqualValues(t, 1, handle.leaveCalls.Load())
+	assert.EqualValues(t, 1, handle.shutdownCalls.Load(), "Leave failure must not skip Shutdown")
+	assert.Equal(t, []string{"leave", "shutdown"}, handle.recordedCalls())
+}
+
+func TestMemberlistPeersParentCancellationOwnsCleanup(t *testing.T) {
+	parent, cancel := context.WithCancel(t.Context())
+	reader := interceptList(func(context.Context, ctrlclient.ObjectList, ...ctrlclient.ListOption) error {
+		return nil
+	})
+	handle := &fakeMemberlistHandle{}
+	peer := startFakeLifecycle(parent, reader, handle, time.Hour)
+	cancel()
+
+	require.Eventually(t, func() bool {
+		return handle.leaveCalls.Load() == 1
+	}, time.Second, time.Millisecond, "parent cancellation must trigger cleanup")
+	require.NoError(t, peer.Stop(t.Context()))
+	assert.Equal(t, []string{"leave", "shutdown"}, handle.recordedCalls())
 }

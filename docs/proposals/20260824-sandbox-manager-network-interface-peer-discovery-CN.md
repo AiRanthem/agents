@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-24
-last-updated: 2026-08-24
+last-updated: 2026-08-26
 status: implementable
 ---
 
@@ -17,11 +17,13 @@ Sandbox Manager 增加可选参数 `--network-interface`。设置该参数后，
 非 Sandbox 代理请求本地回送入口共同使用的用户侧地址。参数为空时，保留原有
 非托管网络行为。
 
-Peer 发现复用现有 controller-runtime 缓存，并按系统命名空间和 peer 标签选择器
-限制范围。Sandbox Manager 在创建 memberlist 前启动并同步缓存。memberlist 开始
-监听后，种子发现和加入在后台持续重试。关闭时停止新的发现和重试，正在进行的加入
-按其网络 deadline 返回。Once 退出状态把 Leave 和 Shutdown 交给唯一的生命周期
-所有者，避免并发清理路径；短暂找不到 peer 不会阻塞控制 API。
+Peer 发现通过进程已有的 `rest.Config` 构造无 cache 的 Kubernetes 客户端，列出
+匹配选择器的 Pod。Sandbox Manager 与 Sandbox Gateway 共用这份有界 List 契约：
+启动时必须提供命名空间和选择器；尚未加入时每个重试周期最多 List 一次；加入
+成功后停止 List。memberlist 开始监听后，种子发现和加入在后台持续重试。关闭时
+停止新的发现和重试，正在进行的加入按其网络 deadline 返回。Once 退出状态把
+Leave 和 Shutdown 交给唯一的生命周期所有者，避免并发清理路径；短暂找不到
+peer 不会阻塞控制 API。
 
 ## 背景
 
@@ -30,8 +32,9 @@ Peer 发现复用现有 controller-runtime 缓存，并按系统命名空间和 
 一个协议上可达、在另一个协议上却与集群隔离。
 
 各个 peer Pod 也会独立启动和停止。一次性的 Kubernetes 列表读取或单次同步加入
-会把正常的启动先后顺序变成永久隔离。因此，可靠发现需要一份经过过滤且已同步的
-本地 Pod 视图，以及一套不影响 API 就绪状态的后台重试生命周期。
+会把正常的启动先后顺序变成永久隔离。因此，可靠发现按命名空间和标签选择器
+对 APIServer 做有界的实时 List，并持续重试直到加入成功，随后把成员关系交给
+memberlist。这套重试不影响 API 就绪状态。
 
 ## 设计终态
 
@@ -64,26 +67,33 @@ flowchart LR
     Resolve --> Return[非 Sandbox 代理回送入口]
 ```
 
-### 限定范围的 Peer 缓存
+### 有界的 Peer 直连列表
 
-Sandbox Manager 复用现有 controller-runtime 缓存和 Kubernetes 配置，不为 peer
-发现新建客户端或缓存。Pod informer 必须同时具备以下两个输入：
+Sandbox Manager 在装配时用进程已有的 `rest.Config` 构造无 cache 的
+controller-runtime 客户端。它不向共享 sandbox 缓存增加 Pod informer，也不通过
+`APIReader` 做 List。peer 代码只接收该 reader，不导入、不读取 cache，也不经
+Infra 读取。
+
+List 必须同时具备以下输入：
 
 - 非空的系统命名空间；
 - 非空且语法合法的 peer 标签选择器。
 
-范围缺失或无效时直接启动失败，不能退化成不带过滤条件的 Pod watch。Pod
-informer 在缓存启动前完成注册，缓存同步完成后才能创建 memberlist。此后的 peer
-Pod 列表读取全部使用 informer-backed client；peer 发现绝不使用
-`APIReader.List`。
+范围缺失或无效时直接启动失败，不能退化成不带过滤条件的 Pod 列表。Sandbox
+Manager 还要求非空的 `rest.Config`，以便装配层构造直连客户端。
 
-上述契约适用于 Sandbox Manager。Sandbox Gateway 在本提案中保留现有 Kubernetes
-reader，不增加第二套 informer，但复用下文的加入重试和关闭生命周期。Gateway
-必须把该生命周期接入真实的进程退出信号，不能使用永久的 background context。
+Sandbox Manager 与 Sandbox Gateway 共用这份 List 契约。Gateway 用 in-cluster
+配置构造同类直连客户端。尚未加入时，每个重试周期最多实时 List 一次 Pod，加入
+成功后停止 List。因此 APIServer 可用性只影响 peer 收敛，不影响控制 API 或
+Gateway readiness。除此之外，两者复用下文的加入重试和关闭生命周期。
+
+Gateway 以 Go shared library 形式加载到 Envoy 进程中。它的 peer server 注册进程
+`SIGTERM`，调用共享的 Once 退出路径；退出尝试返回后，恢复宿主进程原有的信号处理，
+再把 `SIGTERM` 转发给进程。强制终止仍可能按下文 crash 模型打断这项尽力清理。
 
 ### 可信的种子地址
 
-缓存中每个匹配选择器的 Pod 最多提供一个种子地址：
+每次列出的、匹配选择器的 Pod 最多提供一个种子地址：
 
 - 没有 `memberlist-url` 注解时，地址由 Pod 的 `status.podIP` 和已配置的
   memberlist 端口组成。
@@ -107,7 +117,7 @@ Pod 的 Ready 状态和 Phase 不参与种子过滤。它们不能准确表达 m
 
 memberlist 先开始监听，随后 Sandbox Manager 在后台执行以下生命周期：
 
-1. 从已同步缓存列出符合条件的 peer Pod，并生成可信的种子地址。
+1. 从 APIServer 列出符合条件的 peer Pod，并生成可信的种子地址。
 2. 按稳定顺序逐个尝试种子。
 3. 任意一次加入返回 `joined > 0` 后，停止发现。
 4. 列表读取失败、没有种子或所有加入均失败时，等待 10 秒后重试。
@@ -128,9 +138,8 @@ context 的 memberlist transport，同时完整保留 memberlist 的动态端口
 
 ```mermaid
 flowchart LR
-    Cache[限定范围的 Pod informer] -->|已同步| Listener[Memberlist 开始监听]
-    Listener --> Worker[后台加入任务]
-    Worker --> List[从缓存列出 Peer Pod]
+    Listener[Memberlist 开始监听] --> Worker[后台加入任务]
+    Worker --> List[从 APIServer 列出 Peer Pod]
     List --> Seeds[校验、去重并排序种子]
     Seeds --> Join[加入一个种子]
     Join -->|joined > 0| Done[Memberlist 维护成员关系]
@@ -145,15 +154,20 @@ flowchart LR
 
 ### 启动与关闭边界
 
-指定网卡、解析地址、命名空间、选择器、informer 同步或 memberlist listener 无效
-时，进程必须在开始提供请求前启动失败。初始种子集合和加入结果不是启动条件。
+指定网卡、解析地址、命名空间、选择器、peer 客户端、控制 API listener、peer 路由
+listener 或 memberlist listener 无效时，进程必须在开始提供请求前启动失败。初始种子
+集合和加入结果不是启动条件。
 
 每个 peer 实例在 memberlist 启动时建立唯一的生命周期所有者。即使种子发现已经
 成功，该所有者也会保留到清理结束。第一次显式退出请求或父 context 取消以 Once
 语义激活该所有者的清理，并取消 peer 生命周期 context；并发或后续退出请求只等待
 并获取同一份完成状态和结果，不能再次启动 leave 或 shutdown。单个调用者等待超时
-不会转移清理所有权，也不会产生另一条并发关闭路径。退出与启动并发、启动只完成
-部分组件初始化时同样遵循该契约。
+不会转移清理所有权，也不会产生另一条并发关闭路径。Stop 可能与
+memberlist Start 并发；Start 观察到已停止状态后返回，不能再开辟第二条清理路径。
+启动只完成部分组件初始化时，清理过程仍然必须安全。
+
+sandbox 缓存同步在对外提供请求之前完成。进程停机处理在该等待之前安装，因此
+SIGTERM 或 Ctrl+C 走同一条 Stop 路径。同步过程中的强制杀死适用下文 crash 模型。
 
 生命周期所有者停止新的发现工作，允许进行中的加入按上文网络 deadline 边界返回，
 随后先尽力执行 `Leave`，再执行 `Shutdown`。`Leave` 的上限为五秒；即使它失败，
@@ -183,7 +197,8 @@ quorum 或鉴权来源。失效成员只允许增加有界的单 peer fanout 延
 
 网络地址解析、进程 peer 发现和 peer 生命周期用于协调 Sandbox Manager 进程，
 不属于 Sandbox 后端能力，因此归 Manager 层负责。命令入口只接收参数并组装这些
-能力。API 协议行为和 Infra 后端行为保持不变。
+能力，包括用 `rest.Config` 构造直连的 peer 客户端。API 协议行为和 Infra 后端行为保持
+不变。
 
 以下内容不属于本提案：
 
@@ -194,10 +209,19 @@ quorum 或鉴权来源。失效成员只允许增加有界的单 peer fanout 延
 - Sandbox Gateway 的 informer 重构；
 - IPv6、地址热更新或周期性种子协调。
 
+Sandbox Manager 无需修改 RBAC：现有 Pod 权限已经包含 `get`、`list` 和 `watch`。
+peer 发现把列出的 Pod 当作只读对象，绝不修改它们。
+
+Deployment 改动仍不属于本提案，但它是托管模式启用的前置依赖。Kubernetes TCP
+probe 未显式设置 host 时会探测 Pod IP；如果控制 API 和 peer route 只绑定到另一枚
+用户网卡地址，probe 将无法到达 listener，并可能导致 Pod 反复重启。托管编排必须
+先让 `8080` 和 `7789` probe 能够访问选中的用户侧地址，再启用
+`--network-interface`。
+
 ## 风险
 
-- 新增 Pod informer 会消耗缓存和 watch 资源。命名空间和标签过滤把成本限制在单个
-  Sandbox Manager 范围内的 peer Pod。
+- 重试期间的实时 Pod List 依赖 APIServer 可用性。命名空间和标签过滤把每次 List
+  限制在单个 Sandbox Manager 范围内的 peer Pod，并且第一次成功加入后停止 List。
 - 进程取消后，一次 memberlist 加入可能跨越多个 10 秒网络 deadline 窗口。若要求
   立即取消，则具有清晰的 transport 升级路径。
 - 强制终止可能跳过 Leave，并暂时留下失效成员。memberlist 故障检测会将其剔除；
@@ -209,10 +233,12 @@ quorum 或鉴权来源。失效成员只允许增加有界的单 peer fanout 延
 
 ## 备选方案
 
-- 不采用绕过缓存的 Pod 直接列表读取，因为它绕开共享 informer 缓存，并使每次重试
-  都依赖 APIServer 可用性。
-- 不为 peer 新建独立缓存或 Kubernetes 客户端，因为现有缓存已经管理同一用户集群
-  的连接和同步生命周期。
+- 不在共享 sandbox 缓存上增加 Pod informer。种子发现只在加入成功前列出少量进程
+  Pod，随后停止；进程级 watch 会扩大缓存过滤、启动注册和测试面，还会让
+  memberlist 等待 informer 同步。
+- 不通过 Manager 的 `APIReader` 做 List。该 reader 是 cache 旁路的 Get 回退路径，
+  不是 informer 的替代品。装配层用 `rest.Config` 构造独立的无 cache 客户端，与
+  Gateway 对齐。
 - 不从多地址网卡中选择“第一枚”地址，因为地址顺序不是稳定的网络身份。
 - 不信任 `memberlist-url` 中的任意主机，因为 Pod 元数据不能把 peer 流量重定向到
   所选 Pod 身份之外。

@@ -18,23 +18,28 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"sort"
 	"testing"
-	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	types "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
+	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	"github.com/openkruise/agents/pkg/sandboxroute"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
+	"github.com/openkruise/agents/pkg/utils/network"
 )
 
 // testRequestAdapter is a RequestAdapter implementation for testing
@@ -65,7 +70,7 @@ func (t *testRequestAdapter) Entry() string {
 
 func (t *testRequestAdapter) ParseRequest(headers map[string]string) *adapters.ParsedRequest {
 	// Use a real E2BAdapter to parse, so tests exercise the real parsing logic
-	a := adapters.NewE2BAdapter(0)
+	a := adapters.NewE2BAdapter(0, "")
 	return a.ParseRequest(headers)
 }
 
@@ -622,26 +627,74 @@ func TestServer_Process(t *testing.T) {
 	}
 }
 
-// TestServer_Run_Stop tests server start and stop
-func TestServer_Run_Stop(t *testing.T) {
-	// Create test adapter
-	adapter := &testRequestAdapter{
-		entry: "127.0.0.1:8080",
-	}
+func TestServerRunReturnsBindFailureSynchronously(t *testing.T) {
+	grpcAddr := network.ListenAddress("", consts.ExtProcPort)
+	occupied, err := net.Listen("tcp", grpcAddr)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := occupied.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close occupied listener: %v", err)
+		}
+	})
 
-	// Create server
 	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
-	server.SetRequestAdapter(adapter)
+	err = server.Run()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "listen for envoy ext-proc")
+	assert.Nil(t, server.httpLis)
+	assert.Nil(t, server.grpcLis)
 
-	// Start server in background
-	go func() {
-		// This will fail due to port occupation, but we only care about API calls
-		_ = server.Run()
-	}()
+	routeListener, err := net.Listen("tcp", network.ListenAddress("", refresh.DefaultPort))
+	require.NoError(t, err, "failed gRPC bind must close the HTTP listener")
+	require.NoError(t, routeListener.Close())
+}
 
-	// Wait a bit for goroutine to start
-	time.Sleep(10 * time.Millisecond)
+func TestServer_Run_Stop(t *testing.T) {
+	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
+	require.NoError(t, server.Run())
+	require.NotNil(t, server.httpLis)
+	require.NotNil(t, server.grpcLis)
 
-	// Stop server
 	server.Stop(t.Context())
+
+	for _, addr := range []string{
+		network.ListenAddress("", refresh.DefaultPort),
+		network.ListenAddress("", consts.ExtProcPort),
+	} {
+		listener, err := net.Listen("tcp", addr)
+		require.NoError(t, err, "Stop must release %s", addr)
+		require.NoError(t, listener.Close())
+	}
+}
+
+func TestServerRunSkipsGRPCWhenExtProcDisabled(t *testing.T) {
+	occupied, err := net.Listen("tcp", network.ListenAddress("", consts.ExtProcPort))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if err := occupied.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Errorf("close occupied listener: %v", err)
+		}
+	})
+
+	server := NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true})
+	require.NoError(t, server.Run())
+	require.NotNil(t, server.httpLis)
+	assert.Nil(t, server.grpcLis)
+	assert.Nil(t, server.grpcSrv)
+
+	server.Stop(t.Context())
+
+	listener, err := net.Listen("tcp", network.ListenAddress("", refresh.DefaultPort))
+	require.NoError(t, err, "Stop must release HTTP listener")
+	require.NoError(t, listener.Close())
+}
+
+func TestServerStopBeforeRunPreventsLateStart(t *testing.T) {
+	server := NewServer(config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000})
+	server.Stop(t.Context())
+
+	err := server.Run()
+	assert.ErrorContains(t, err, "proxy server is stopped")
+	assert.Nil(t, server.httpSrv)
+	assert.Nil(t, server.grpcSrv)
 }
