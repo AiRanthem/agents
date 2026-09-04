@@ -350,15 +350,6 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 	if err := m.infra.Run(ctx); err != nil {
 		return err
 	}
-
-	if m.peersManager != nil {
-		if err := m.peersManager.Start(ctx, m.bindAddress, m.memberlistBindPort); err != nil {
-			return fmt.Errorf("failed to start memberlist: %w", err)
-		}
-		log.Info("memberlist started successfully")
-	} else {
-		log.Info("peers manager not configured, skip starting memberlist")
-	}
 	m.trafficTokenIssues.init(ctx)
 	if m.enableShortID {
 		if err := m.initializeSandboxIDGenerator(ctx); err != nil {
@@ -366,9 +357,20 @@ func (m *SandboxManager) Run(ctx context.Context) error {
 		}
 	}
 
+	// The peer route listener must accept refreshes before memberlist
+	// advertises this replica; peers start syncing routes as soon as the
+	// background join succeeds.
 	klog.InfoS("starting proxy")
 	if err := m.proxy.Run(); err != nil {
 		return fmt.Errorf("failed to start proxy: %w", err)
+	}
+	if m.peersManager != nil {
+		if err := m.peersManager.Start(ctx, m.bindAddress, m.memberlistBindPort); err != nil {
+			return fmt.Errorf("failed to start memberlist: %w", err)
+		}
+		log.Info("memberlist started successfully")
+	} else {
+		log.Info("peers manager not configured, skip starting memberlist")
 	}
 	if m.quotaAntiDrift != nil {
 		m.quotaAntiDrift.Run(ctx)

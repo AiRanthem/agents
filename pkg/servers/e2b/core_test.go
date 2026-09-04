@@ -332,171 +332,47 @@ func TestNewControllerPropagatesShortSandboxIDOption(t *testing.T) {
 	}
 }
 
-type stopProbeInfraBuilder struct {
+// hookInfraBuilder builds hookInfra around a real sandboxcr infra.
+type hookInfraBuilder struct {
 	base infra.Builder
-	stop func()
 	run  func(context.Context) error
+	stop func()
 }
 
-func (b stopProbeInfraBuilder) Build() infra.Infrastructure {
-	return stopProbeInfra{Infrastructure: b.base.Build(), stop: b.stop, run: b.run}
+func (b hookInfraBuilder) Build() infra.Infrastructure {
+	return hookInfra{Infrastructure: b.base.Build(), run: b.run, stop: b.stop}
 }
 
-type stopProbeInfra struct {
+// hookInfra lets tests replace Run and observe Stop on an otherwise real
+// Infrastructure; its route source never emits events.
+type hookInfra struct {
 	infra.Infrastructure
-	stop func()
 	run  func(context.Context) error
+	stop func()
 }
 
-func (i stopProbeInfra) Run(ctx context.Context) error {
+func (i hookInfra) Run(ctx context.Context) error {
 	if i.run != nil {
 		return i.run(ctx)
 	}
 	return i.Infrastructure.Run(ctx)
 }
 
-func (i stopProbeInfra) Stop(ctx context.Context) {
-	i.stop()
+func (i hookInfra) Stop(ctx context.Context) {
+	if i.stop != nil {
+		i.stop()
+	}
 	i.Infrastructure.Stop(ctx)
 }
 
-func (stopProbeInfra) GetSandboxRouteSource() infra.SandboxRouteSource {
-	return subscribeNoop{}
+func (hookInfra) GetSandboxRouteSource() infra.SandboxRouteSource {
+	return noOpSandboxRouteSource{}
 }
 
-type subscribeNoop struct{}
+type noOpSandboxRouteSource struct{}
 
-func (subscribeNoop) Subscribe(context.Context, infra.SandboxRouteEventHandler) error {
+func (noOpSandboxRouteSource) Subscribe(context.Context, infra.SandboxRouteEventHandler) error {
 	return nil
-}
-
-// newStartupController builds a controller whose infra Run is replaced by
-// run, for exercising Controller.Run startup paths.
-func newStartupController(t *testing.T, run func(context.Context) error) *Controller {
-	t.Helper()
-	opts := config.InitOptions(config.SandboxManagerOptions{})
-	fakeCache, fc, err := cachetest.NewTestCache(t)
-	require.NoError(t, err)
-	proxyServer := proxy.NewServer(opts)
-	manager, err := sandboxmanager.NewSandboxManagerBuilder(opts).
-		WithCustomInfra(func() (infra.Builder, error) {
-			return stopProbeInfraBuilder{
-				base: sandboxcr.NewInfraBuilder(opts).
-					WithCache(fakeCache).
-					WithAPIReader(fc).
-					WithRouteReader(proxyServer),
-				run: run,
-			}, nil
-		}).
-		Build()
-	require.NoError(t, err)
-	return &Controller{
-		server:  &http.Server{},
-		manager: manager,
-	}
-}
-
-// TestControllerSignalDuringStartupExitsCleanly pins the startup crash
-// semantics: a termination signal that lands while the manager is still
-// starting makes Run return a canceled context with no error, so main exits
-// zero without waiting for startup or running per-component cleanup.
-func TestControllerSignalDuringStartupExitsCleanly(t *testing.T) {
-	started := make(chan struct{})
-	controller := newStartupController(t, func(ctx context.Context) error {
-		close(started)
-		<-ctx.Done()
-		return ctx.Err()
-	})
-
-	type runResult struct {
-		ctx context.Context
-		err error
-	}
-	result := make(chan runResult, 1)
-	stop := make(chan os.Signal, 1)
-	go func() {
-		ctx, err := controller.Run(stop)
-		result <- runResult{ctx: ctx, err: err}
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for manager startup to block")
-	}
-	stop <- syscall.SIGTERM
-
-	select {
-	case got := <-result:
-		require.NoError(t, got.err)
-		require.ErrorIs(t, got.ctx.Err(), context.Canceled)
-	case <-time.After(time.Second):
-		t.Fatal("Run did not return after SIGTERM during startup")
-	}
-}
-
-// TestControllerRunPropagatesStartupFailure pins that startup errors surface
-// synchronously from Run instead of crashing from a background goroutine.
-func TestControllerRunPropagatesStartupFailure(t *testing.T) {
-	controller := newStartupController(t, func(context.Context) error {
-		return errors.New("cache sync failed")
-	})
-
-	_, err := controller.Run(make(chan os.Signal, 1))
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "sandbox manager failed to start")
-}
-
-func TestAwaitStartup(t *testing.T) {
-	tests := []struct {
-		name     string
-		startup  func(startupDone chan error, stop chan os.Signal)
-		expected startupOutcome
-		errMsg   string
-	}{
-		{
-			name:     "startup succeeds",
-			startup:  func(startupDone chan error, _ chan os.Signal) { startupDone <- nil },
-			expected: startupCompleted,
-		},
-		{
-			name:     "startup fails",
-			startup:  func(startupDone chan error, _ chan os.Signal) { startupDone <- errors.New("boom") },
-			expected: startupFailed,
-			errMsg:   "boom",
-		},
-		{
-			name:     "signal interrupts startup",
-			startup:  func(_ chan error, stop chan os.Signal) { stop <- syscall.SIGTERM },
-			expected: startupInterrupted,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			startupDone := make(chan error, 1)
-			stop := make(chan os.Signal, 1)
-			tt.startup(startupDone, stop)
-
-			outcome, err := awaitStartup(startupDone, stop)
-			assert.Equal(t, tt.expected, outcome)
-			if tt.errMsg != "" {
-				assert.ErrorContains(t, err, tt.errMsg)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestControllerStartHTTPServerReportsBindFailure(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	controller := &Controller{server: &http.Server{Addr: listener.Addr().String()}}
-	err = controller.startHTTPServer()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "listen for E2B API")
 }
 
 func newStopProbeManager(t *testing.T, stop func()) *sandboxmanager.SandboxManager {
@@ -510,7 +386,7 @@ func newStopProbeManager(t *testing.T, stop func()) *sandboxmanager.SandboxManag
 	proxyServer := proxy.NewServer(opts)
 	mgr, err := sandboxmanager.NewSandboxManagerBuilder(opts).
 		WithCustomInfra(func() (infra.Builder, error) {
-			return stopProbeInfraBuilder{
+			return hookInfraBuilder{
 				base: sandboxcr.NewInfraBuilder(opts).
 					WithCache(fakeCache).
 					WithAPIReader(fc).

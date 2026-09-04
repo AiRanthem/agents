@@ -67,12 +67,10 @@ type Peer = peers.Peer
 type Server struct {
 	// grpc
 	grpcSrv                     *grpc.Server
-	grpcLis                     net.Listener
 	extProcMaxConcurrentStreams uint32
 	disableEnvoyExtProc         bool
 	// http
 	httpSrv *http.Server
-	httpLis net.Listener
 	// internal
 	store   *sandboxroute.Store
 	adapter RequestAdapter
@@ -80,9 +78,8 @@ type Server struct {
 	// peers - now managed by Peers
 	peersManager peers.Peers
 	bindAddress  string
-	// lifecycle
-	mu      sync.Mutex
-	stopped bool
+	// lifecycle: Run is called once and Stop at most once, after Run.
+	mu sync.Mutex
 }
 
 func NewServer(opts config.SandboxManagerOptions) *Server {
@@ -104,12 +101,13 @@ func (s *Server) SetPeersManager(p peers.Peers) {
 	s.peersManager = p
 }
 
+// Run binds the route-refresh HTTP listener and, unless disabled, the Envoy
+// ext-proc gRPC listener, then serves both in the background. Bind failures
+// are returned synchronously. Listeners are owned by their servers: Shutdown
+// and Stop close them, as does Serve when it observes a stopped server.
 func (s *Server) Run() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopped {
-		return fmt.Errorf("proxy server is stopped")
-	}
 
 	httpSrv := &http.Server{
 		Addr:              network.ListenAddress(s.bindAddress, refresh.DefaultPort),
@@ -126,12 +124,13 @@ func (s *Server) Run() error {
 	if s.disableEnvoyExtProc {
 		klog.InfoS("Envoy ext-proc gRPC listener disabled")
 	} else {
-		grpcLis, err = net.Listen("tcp", network.ListenAddress("", consts.ExtProcPort))
+		extProcAddr := network.ListenAddress("", consts.ExtProcPort)
+		grpcLis, err = net.Listen("tcp", extProcAddr)
 		if err != nil {
 			if closeErr := httpLis.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
 				err = errors.Join(err, fmt.Errorf("close proxy route listener: %w", closeErr))
 			}
-			return fmt.Errorf("failed to listen for envoy ext-proc on %s: %w", network.ListenAddress("", consts.ExtProcPort), err)
+			return fmt.Errorf("failed to listen for envoy ext-proc on %s: %w", extProcAddr, err)
 		}
 		grpcSrv = grpc.NewServer(grpc.MaxConcurrentStreams(s.extProcMaxConcurrentStreams))
 		extProcPb.RegisterExternalProcessorServer(grpcSrv, s)
@@ -139,9 +138,7 @@ func (s *Server) Run() error {
 	}
 
 	s.httpSrv = httpSrv
-	s.httpLis = httpLis
 	s.grpcSrv = grpcSrv
-	s.grpcLis = grpcLis
 
 	go func(srv *http.Server, lis net.Listener) {
 		klog.InfoS("Starting proxy system server", "address", lis.Addr())
@@ -179,23 +176,12 @@ func (s *Server) newServeMux() *http.ServeMux {
 func (s *Server) Stop(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.stopped = true
 	if s.grpcSrv != nil {
 		s.grpcSrv.Stop()
-	}
-	if s.grpcLis != nil {
-		if err := s.grpcLis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			klog.ErrorS(err, "Failed to close proxy gRPC listener")
-		}
 	}
 	if s.httpSrv != nil {
 		if err := s.httpSrv.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			klog.ErrorS(err, "Failed to shut down proxy system server")
-		}
-	}
-	if s.httpLis != nil {
-		if err := s.httpLis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			klog.ErrorS(err, "Failed to close proxy system listener")
 		}
 	}
 }

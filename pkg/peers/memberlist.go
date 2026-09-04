@@ -67,10 +67,9 @@ type memberlistHandle interface {
 
 // MemberlistPeers discovers peers through hashicorp memberlist.
 //
-// Lifecycle contract: Start is called exactly once, Stop is called at most
-// once, and the two never run concurrently; the only breach is Stop arriving
-// before Start, because shutdown signals can land while the owner is still
-// starting. mu plus stopped then keep a stopped peer from ever starting.
+// Lifecycle contract: one owner calls Start exactly once and Stop at most
+// once, after Start has returned; the two never run concurrently. Stop on a
+// peer whose Start never succeeded is a no-op.
 type MemberlistPeers struct {
 	apiReader ctrlclient.Reader
 
@@ -85,10 +84,9 @@ type MemberlistPeers struct {
 	// the lifecycle goroutine inherits the same write from the go statement.
 	list memberlistHandle
 
-	// mu guards stopped and the lifecycle fields below; see the type doc.
+	// mu serializes Start and Stop and guards the lifecycle fields below.
 	mu              sync.Mutex
 	started         atomic.Bool
-	stopped         bool
 	lifecycleCancel context.CancelFunc
 	// lifecycleDone carries the cleanup result; buffered so the lifecycle
 	// goroutine never blocks on delivery when Stop gives up waiting.
@@ -96,8 +94,9 @@ type MemberlistPeers struct {
 	lifecycleDone chan error
 }
 
-// NewMemberlistPeers lists selector-matching seed Pods through reader until a
-// join succeeds. Production passes a live uncached client; tests may pass a fake.
+// NewMemberlistPeers returns a peer that, once started, lists selector-matching
+// seed Pods in namespace through apiReader until a join succeeds. Production
+// passes a live uncached client; tests may pass a fake.
 func NewMemberlistPeers(apiReader ctrlclient.Reader, nodeName string, namespace, peerSelector string) *MemberlistPeers {
 	return &MemberlistPeers{
 		apiReader:     apiReader,
@@ -120,13 +119,12 @@ func FindPodIP() (string, error) {
 }
 
 // Start creates the memberlist listener and starts peer discovery in the
-// background. It must be called exactly once and fails when Stop has already
-// run.
+// background. It must be called exactly once.
 func (m *MemberlistPeers) Start(ctx context.Context, bindAddress string, bindPort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped {
-		return errors.New("peer discovery is stopped")
+	if m.started.Load() {
+		return errors.New("memberlist already started")
 	}
 	log := klog.FromContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -161,10 +159,10 @@ func (m *MemberlistPeers) Start(ctx context.Context, bindAddress string, bindPor
 	config.Name = m.localName
 	config.BindAddr = localIP
 	config.BindPort = bindPort
+	// Advertise exactly the bound address so peers reach the listener that
+	// this process actually owns.
+	config.AdvertiseAddr = localIP
 	config.AdvertisePort = bindPort
-	if bindAddress != "" {
-		config.AdvertiseAddr = localIP
-	}
 
 	// Tuning for faster failure detection and convergence
 	config.ProbeInterval = DefaultProbeInterval
@@ -189,36 +187,47 @@ func (m *MemberlistPeers) Start(ctx context.Context, bindAddress string, bindPor
 	if err != nil {
 		return fmt.Errorf("failed to create memberlist: %w", err)
 	}
+	m.startLifecycle(ctx, list, selector, bindPort, localURL)
+	log.Info("memberlist started", "addr", localIP, "port", bindPort, "name", m.localName)
+
+	return nil
+}
+
+// startLifecycle publishes list to the getters and launches the background
+// discovery owner. It is the tail of Start, shared with tests that inject a
+// fake memberlist, so both paths wire the lifecycle identically.
+func (m *MemberlistPeers) startLifecycle(ctx context.Context, list memberlistHandle, selector labels.Selector, bindPort int, localURL string) {
 	m.list = list
 	m.started.Store(true)
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	m.lifecycleCancel = cancel
 	m.lifecycleDone = make(chan error, 1)
 	go m.runLifecycle(lifecycleCtx, selector, bindPort, localURL)
-	log.Info("memberlist started", "addr", localIP, "port", bindPort, "name", m.localName)
-
-	return nil
 }
 
 func (m *MemberlistPeers) runLifecycle(ctx context.Context, selector labels.Selector, bindPort int, localURL string) {
-	ticker := time.NewTicker(m.retryInterval)
-	for ctx.Err() == nil {
-		if m.tryJoin(ctx, selector, bindPort, localURL) {
+	for attempt := 1; ctx.Err() == nil; attempt++ {
+		if m.tryJoin(ctx, selector, bindPort, localURL, attempt) {
 			break
 		}
+		// Wait a full interval after each failed attempt, however long the
+		// attempt itself took.
+		retry := time.NewTimer(m.retryInterval)
 		select {
 		case <-ctx.Done():
-		case <-ticker.C:
+			retry.Stop()
+		case <-retry.C:
 		}
 	}
-	ticker.Stop()
 	<-ctx.Done()
 	m.lifecycleDone <- m.cleanup()
 }
 
 // tryJoin lists candidate seed Pods once and joins them one by one in stable
 // order until one join succeeds. It reports whether this peer has joined.
-func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector, bindPort int, localURL string) bool {
+// attempt is the 1-based discovery cycle, used to keep steady-state retries
+// quiet in the logs.
+func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector, bindPort int, localURL string, attempt int) bool {
 	log := klog.FromContext(ctx)
 	peerList := &corev1.PodList{}
 	err := m.apiReader.List(ctx, peerList, &ctrlclient.ListOptions{
@@ -231,10 +240,23 @@ func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector,
 		}
 		return false
 	}
+	seeds := trustedSeedAddresses(peerList.Items, localURL, bindPort)
+	if len(seeds) == 0 {
+		// A single-replica deployment lands here on every cycle for the
+		// lifetime of the process, so only the first report is visible at
+		// the default verbosity.
+		seedLog := log.V(2)
+		if attempt == 1 {
+			seedLog = log
+		}
+		seedLog.Info("no eligible peer seeds, retrying discovery",
+			"pods", len(peerList.Items), "namespace", m.sysNs, "selector", m.peerSelector, "retryInterval", m.retryInterval)
+		return false
+	}
 	// Join one seed at a time: a bulk Join probes every address serially
 	// without short-circuiting, while per-seed calls stop at the first live
 	// seed and honor cancellation between attempts.
-	for _, seed := range trustedSeedAddresses(peerList.Items, localURL, bindPort) {
+	for _, seed := range seeds {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -250,10 +272,17 @@ func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector,
 	return false
 }
 
+// trustedSeedAddresses derives at most one seed address per Pod. Readiness
+// and non-terminal phases are not filters, but a Pod in the terminal
+// Succeeded or Failed phase has no container left to accept memberlist
+// traffic, so it is excluded rather than costing a dial timeout per cycle.
 func trustedSeedAddresses(pods []corev1.Pod, localURL string, bindPort int) []string {
 	seen := make(map[string]struct{}, len(pods))
 	seeds := make([]string, 0, len(pods))
 	for i := range pods {
+		if phase := pods[i].Status.Phase; phase == corev1.PodSucceeded || phase == corev1.PodFailed {
+			continue
+		}
 		podIP := net.ParseIP(pods[i].Status.PodIP)
 		if podIP == nil || podIP.To4() == nil {
 			continue
@@ -301,10 +330,9 @@ func parseMemberlistURL(annotated string, podIP net.IP) (string, bool) {
 	return net.JoinHostPort(podIP.String(), strconv.Itoa(portNumber)), true
 }
 
+// cleanup leaves and then shuts down the memberlist. Leave is best effort and
+// never prevents Shutdown; the two run exactly once, from the lifecycle owner.
 func (m *MemberlistPeers) cleanup() error {
-	if m.list == nil {
-		return nil
-	}
 	var errs []error
 	if err := m.list.Leave(DefaultLeaveTimeout); err != nil {
 		errs = append(errs, fmt.Errorf("failed to leave memberlist: %w", err))
@@ -316,14 +344,13 @@ func (m *MemberlistPeers) cleanup() error {
 }
 
 // Stop cancels peer discovery and waits for its cleanup result. It is called
-// at most once and never concurrently with Start; it may still arrive before
-// Start, in which case it marks the peer stopped so a later Start fails.
-// Stopping a peer that never started returns nil: callers shut down whole
-// components even when startup failed before Start.
+// at most once, after Start has returned. When ctx expires first, Stop
+// returns ctx.Err() while the lifecycle owner still completes Leave and
+// Shutdown. Stopping a peer that never started returns nil: callers shut
+// down whole components even when startup failed before Start.
 func (m *MemberlistPeers) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stopped = true
 	// Nil lifecycleDone means Start never succeeded.
 	if m.lifecycleDone == nil {
 		return nil

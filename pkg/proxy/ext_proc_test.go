@@ -22,6 +22,7 @@ import (
 	"net"
 	"sort"
 	"testing"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -626,14 +627,15 @@ func TestServer_Process(t *testing.T) {
 	}
 }
 
-func TestServerRunLifecycle(t *testing.T) {
+// TestServer_RunLifecycle binds the fixed route-refresh and ext-proc ports;
+// `make test` runs packages serially so it cannot collide with the e2b
+// controller tests that bind the same ports.
+func TestServer_RunLifecycle(t *testing.T) {
 	tests := []struct {
 		name         string
 		options      config.SandboxManagerOptions
 		occupyGRPC   bool
-		stopFirst    bool
 		wantRunErr   string
-		wantStarted  bool
 		wantGRPC     bool
 		wantReleased []string
 	}{
@@ -647,7 +649,6 @@ func TestServerRunLifecycle(t *testing.T) {
 		{
 			name:         "run then stop releases both listeners",
 			options:      config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000},
-			wantStarted:  true,
 			wantGRPC:     true,
 			wantReleased: []string{network.ListenAddress("", refresh.DefaultPort), network.ListenAddress("", consts.ExtProcPort)},
 		},
@@ -655,14 +656,7 @@ func TestServerRunLifecycle(t *testing.T) {
 			name:         "grpc listener skipped when ext-proc disabled",
 			options:      config.SandboxManagerOptions{DisableEnvoyExtProc: true},
 			occupyGRPC:   true,
-			wantStarted:  true,
 			wantReleased: []string{network.ListenAddress("", refresh.DefaultPort)},
-		},
-		{
-			name:       "stop before run prevents late start",
-			options:    config.SandboxManagerOptions{ExtProcMaxConcurrency: 1000},
-			stopFirst:  true,
-			wantRunErr: "proxy server is stopped",
 		},
 	}
 	for _, tt := range tests {
@@ -674,37 +668,32 @@ func TestServerRunLifecycle(t *testing.T) {
 			}
 
 			server := NewServer(tt.options)
-			if tt.stopFirst {
-				server.Stop(t.Context())
-			}
-
 			err := server.Run()
 			if tt.wantRunErr != "" {
 				require.Error(t, err)
 				assert.ErrorContains(t, err, tt.wantRunErr)
+				assert.Nil(t, server.httpSrv)
+				assert.Nil(t, server.grpcSrv)
 			} else {
 				require.NoError(t, err)
-			}
-			if tt.wantStarted {
-				require.NotNil(t, server.httpLis)
 				require.NotNil(t, server.httpSrv)
-			} else {
-				assert.Nil(t, server.httpLis)
-				assert.Nil(t, server.httpSrv)
-			}
-			if tt.wantGRPC {
-				require.NotNil(t, server.grpcLis)
-			} else {
-				assert.Nil(t, server.grpcLis)
-				assert.Nil(t, server.grpcSrv)
-			}
-			if tt.wantStarted {
+				if tt.wantGRPC {
+					require.NotNil(t, server.grpcSrv)
+				} else {
+					assert.Nil(t, server.grpcSrv)
+				}
 				server.Stop(t.Context())
 			}
+			// Serve may still be entering when Stop runs; it then closes the
+			// listener itself, so release is prompt but not synchronous.
 			for _, addr := range tt.wantReleased {
-				listener, err := net.Listen("tcp", addr)
-				require.NoError(t, err, "listener on %s must be released", addr)
-				require.NoError(t, listener.Close())
+				require.Eventuallyf(t, func() bool {
+					listener, err := net.Listen("tcp", addr)
+					if err != nil {
+						return false
+					}
+					return assert.NoError(t, listener.Close())
+				}, time.Second, 5*time.Millisecond, "listener on %s must be released", addr)
 			}
 		})
 	}

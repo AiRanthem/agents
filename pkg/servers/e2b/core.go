@@ -195,12 +195,11 @@ func (sc *Controller) initKeyStorage(ctx context.Context) error {
 // after an interrupted or failed startup, and only after the graceful
 // shutdown chain completes in steady state.
 //
-// An interrupted startup skips memberlist Leave and leader
-// lease release; peers converge through the memberlist suspicion timeout
-// (~1s with the tuned probe settings) and the lease expires via TTL. Both
-// self-heal without operator action. Upgrade path: run the shutdown chain
-// in the interrupted branch once graceful leaf cleanup during startup is
-// required.
+// An interrupted startup skips memberlist Leave and leader lease release;
+// peers converge through the memberlist suspicion timeout (a few seconds with
+// the tuned probe settings) and the lease expires via TTL. Both self-heal
+// without operator action. Upgrade path: run the shutdown chain in the
+// interrupted branch once graceful leaf cleanup during startup is required.
 func (sc *Controller) Run(stop <-chan os.Signal) (context.Context, error) {
 	ctx, cancel := context.WithCancel(logs.NewContext())
 
@@ -221,11 +220,13 @@ func (sc *Controller) Run(stop <-chan os.Signal) (context.Context, error) {
 		return ctx, err
 	}
 
-	// Steady state: a signal triggers the graceful shutdown chain. stop is
-	// buffered, so a signal that raced successful startup is consumed here and
-	// shuts the fully-started controller down gracefully.
+	// Steady state: a signal triggers the graceful shutdown chain. A signal
+	// that awaitStartup already consumed alongside a completed startup starts
+	// the chain right away.
 	go func() {
-		<-stop
+		if outcome != startupSignaled {
+			<-stop
+		}
 		shutdownCtx, shutdownCancel := context.WithTimeout(logs.NewContext("action", "shutdown"), consts.ShutdownTimeout)
 		defer shutdownCancel()
 		sc.shutdown(shutdownCtx, cancel)
@@ -257,25 +258,39 @@ func (sc *Controller) startComponents(ctx context.Context) error {
 type startupOutcome int
 
 const (
+	// startupCompleted: startup succeeded and no termination signal was seen.
 	startupCompleted startupOutcome = iota
+	// startupSignaled: startup succeeded and a termination signal was
+	// consumed alongside it; the caller must start graceful shutdown itself.
+	startupSignaled
 	startupFailed
+	// startupInterrupted: a termination signal preempted an unfinished startup.
 	startupInterrupted
 )
 
-// awaitStartup races startup completion against a termination signal. When
-// both are ready the select picks arbitrarily; either branch is safe, because
-// a fully-started controller either shuts down gracefully or exits with
-// startup crash semantics.
+// awaitStartup races startup completion against a termination signal. A
+// startup result that is already available when the signal is observed still
+// wins, so a fully started controller is never torn down with crash
+// semantics; only an unfinished startup is interrupted.
 func awaitStartup(startupDone <-chan error, stop <-chan os.Signal) (startupOutcome, error) {
 	select {
 	case err := <-startupDone:
-		if err != nil {
-			return startupFailed, err
-		}
-		return startupCompleted, nil
+		return classifyStartup(err, startupCompleted)
 	case <-stop:
-		return startupInterrupted, nil
+		select {
+		case err := <-startupDone:
+			return classifyStartup(err, startupSignaled)
+		default:
+			return startupInterrupted, nil
+		}
 	}
+}
+
+func classifyStartup(err error, success startupOutcome) (startupOutcome, error) {
+	if err != nil {
+		return startupFailed, err
+	}
+	return success, nil
 }
 
 func (sc *Controller) startHTTPServer() error {

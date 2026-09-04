@@ -27,11 +27,8 @@ import (
 )
 
 // ListenAddress returns a TCP listen address for host and port.
-// An empty host listens on all local addresses.
+// An empty host yields ":port", which listens on all local addresses.
 func ListenAddress(host string, port int) string {
-	if host == "" {
-		return fmt.Sprintf(":%d", port)
-	}
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 

@@ -19,6 +19,8 @@ package sandbox_manager
 import (
 	"context"
 	stderrors "errors"
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -37,7 +39,9 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
+	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
+	"github.com/openkruise/agents/pkg/utils/network"
 )
 
 type routeSourceOverrideBuilder struct {
@@ -70,20 +74,22 @@ type failingSandboxRouteSource struct {
 	err error
 }
 
-type workerAllocationFailureInfra struct {
+// recordingInfra is an Infrastructure whose Run succeeds immediately, records
+// "infra" into events when set, and serves cache as its cache provider.
+type recordingInfra struct {
 	infra.Infrastructure
 	cache  infracache.Provider
 	events *[]string
 }
 
-func (i workerAllocationFailureInfra) Run(context.Context) error {
+func (i recordingInfra) Run(context.Context) error {
 	if i.events != nil {
 		*i.events = append(*i.events, "infra")
 	}
 	return nil
 }
 
-func (i workerAllocationFailureInfra) GetCache() infracache.Provider {
+func (i recordingInfra) GetCache() infracache.Provider {
 	return i.cache
 }
 
@@ -144,7 +150,7 @@ func TestSandboxManagerRunFailsWhenWorkerAllocationFails(t *testing.T) {
 		},
 	})
 	manager := &SandboxManager{
-		infra: workerAllocationFailureInfra{cache: workerAllocationFailureCache{
+		infra: recordingInfra{cache: workerAllocationFailureCache{
 			Provider: cache,
 			reader:   failingReader,
 		}},
@@ -160,37 +166,68 @@ func TestSandboxManagerRunFailsWhenWorkerAllocationFails(t *testing.T) {
 	assert.Nil(t, manager.generateSandboxID)
 }
 
-func TestSandboxManagerRunStartsCacheBeforePeersAndPassesBindAddress(t *testing.T) {
-	events := []string{}
-	recorded := &staticPeers{events: &events, startErr: assert.AnError}
-	manager := &SandboxManager{
-		infra:              workerAllocationFailureInfra{events: &events},
-		peersManager:       recorded,
-		primary:            &primaryState{},
-		bindAddress:        "10.0.0.8",
-		memberlistBindPort: 9000,
+// TestSandboxManagerRunStartupOrder pins infra -> proxy -> peers: the peer
+// route listener must be serving before memberlist can advertise this
+// replica, and a proxy bind failure must stop startup before peers start.
+// The proxy binds the fixed route-refresh port; `make test` runs packages
+// serially so this cannot collide with the proxy and e2b package tests.
+func TestSandboxManagerRunStartupOrder(t *testing.T) {
+	routeAddr := network.ListenAddress("", refresh.DefaultPort)
+	tests := []struct {
+		name            string
+		occupyRoutePort bool
+		wantErr         string
+		wantEvents      []string
+		wantBindAddress string
+	}{
+		{
+			name:            "proxy bind failure stops startup before peers",
+			occupyRoutePort: true,
+			wantErr:         "failed to start proxy",
+			wantEvents:      []string{"infra"},
+		},
+		{
+			name:            "peers start after infra and proxy with the bind address",
+			wantErr:         assert.AnError.Error(),
+			wantEvents:      []string{"infra", "peers"},
+			wantBindAddress: "10.0.0.8",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.occupyRoutePort {
+				occupied, err := net.Listen("tcp", routeAddr)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = occupied.Close() })
+			}
+			events := []string{}
+			recorded := &staticPeers{events: &events, startErr: assert.AnError}
+			proxyServer := proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true})
+			t.Cleanup(func() { proxyServer.Stop(context.Background()) })
+			manager := &SandboxManager{
+				infra:              recordingInfra{events: &events},
+				proxy:              proxyServer,
+				peersManager:       recorded,
+				primary:            &primaryState{},
+				bindAddress:        "10.0.0.8",
+				memberlistBindPort: 9000,
+			}
 
-	err := manager.Run(t.Context())
-	require.ErrorIs(t, err, assert.AnError)
-	assert.Equal(t, []string{"infra", "peers"}, events)
-	assert.Equal(t, "10.0.0.8", recorded.bindAddress)
-	assert.Equal(t, 9000, recorded.bindPort)
-}
-
-func TestSandboxManagerRunPropagatesProxyStartupFailure(t *testing.T) {
-	proxyServer := proxy.NewServer(config.SandboxManagerOptions{})
-	proxyServer.Stop(t.Context())
-	manager := &SandboxManager{
-		infra:       workerAllocationFailureInfra{},
-		proxy:       proxyServer,
-		routeSource: failingSandboxRouteSource{},
-		primary:     &primaryState{},
+			err := manager.Run(t.Context())
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantErr)
+			assert.Equal(t, tt.wantEvents, events)
+			assert.Equal(t, tt.wantBindAddress, recorded.bindAddress)
+			if tt.wantBindAddress != "" {
+				assert.Equal(t, 9000, recorded.bindPort)
+				// Run returned from peers.Start, so a serving route listener
+				// proves the proxy came up before peers.
+				conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(refresh.DefaultPort)))
+				require.NoError(t, err, "peer route listener must serve before peers start")
+				require.NoError(t, conn.Close())
+			}
+		})
 	}
-
-	err := manager.Run(t.Context())
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "failed to start proxy")
 }
 
 func TestNewSandboxManagerBuilder(t *testing.T) {

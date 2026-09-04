@@ -34,8 +34,9 @@ type Peers interface {
 	// called exactly once.
 	Start(ctx context.Context, bindAddress string, bindPort int) error
 
-	// Stop gracefully shuts down the peer discovery. Must be called once,
-	// after Start returns. Stopping a peer that never started is a no-op.
+	// Stop gracefully shuts down the peer discovery. Must be called at most
+	// once, after Start returns. Stopping a peer that never started is a
+	// no-op.
 	Stop(ctx context.Context) error
 
 	// GetPeers returns the current list of alive peers (excluding self)
