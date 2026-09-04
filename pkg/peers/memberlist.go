@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/memberlist"
@@ -79,16 +80,19 @@ type MemberlistPeers struct {
 
 	retryInterval time.Duration
 
+	// list is assigned once in Start, before started is stored, and stays
+	// read-only afterwards, so getters gate on started instead of taking mu;
+	// the lifecycle goroutine inherits the same write from the go statement.
+	list memberlistHandle
+
 	// mu guards stopped and the lifecycle fields below; see the type doc.
 	mu              sync.Mutex
+	started         atomic.Bool
 	stopped         bool
-	list            memberlistHandle
 	lifecycleCancel context.CancelFunc
 	// lifecycleDone carries the cleanup result; buffered so the lifecycle
 	// goroutine never blocks on delivery when Stop gives up waiting.
-	// A non-nil lifecycleDone deliberately doubles as the "started" marker:
-	// Start assigns it right before launching the goroutine, so Stop needs
-	// no separate started flag.
+	// Nil means Start never succeeded.
 	lifecycleDone chan error
 }
 
@@ -186,6 +190,7 @@ func (m *MemberlistPeers) Start(ctx context.Context, bindAddress string, bindPor
 		return fmt.Errorf("failed to create memberlist: %w", err)
 	}
 	m.list = list
+	m.started.Store(true)
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	m.lifecycleCancel = cancel
 	m.lifecycleDone = make(chan error, 1)
@@ -319,8 +324,7 @@ func (m *MemberlistPeers) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopped = true
-	// Nil lifecycleDone means Start never succeeded; it doubles as the
-	// started marker, so there is intentionally no separate started flag.
+	// Nil lifecycleDone means Start never succeeded.
 	if m.lifecycleDone == nil {
 		return nil
 	}
@@ -335,7 +339,7 @@ func (m *MemberlistPeers) Stop(ctx context.Context) error {
 
 // GetPeers returns the current list of alive peers (excluding self)
 func (m *MemberlistPeers) GetPeers() []Peer {
-	if m.list == nil {
+	if !m.started.Load() {
 		return nil
 	}
 
@@ -356,7 +360,7 @@ func (m *MemberlistPeers) GetPeers() []Peer {
 
 // GetAllMembers returns all members including self
 func (m *MemberlistPeers) GetAllMembers() []Peer {
-	if m.list == nil {
+	if !m.started.Load() {
 		return nil
 	}
 
@@ -372,7 +376,7 @@ func (m *MemberlistPeers) GetAllMembers() []Peer {
 
 // LocalAddr returns the local node's address
 func (m *MemberlistPeers) LocalAddr() net.IP {
-	if m.list == nil {
+	if !m.started.Load() {
 		return nil
 	}
 	return m.list.LocalNode().Addr
@@ -380,7 +384,7 @@ func (m *MemberlistPeers) LocalAddr() net.IP {
 
 // LocalPort returns the local node's port
 func (m *MemberlistPeers) LocalPort() int {
-	if m.list == nil {
+	if !m.started.Load() {
 		return 0
 	}
 	return int(m.list.LocalNode().Port)

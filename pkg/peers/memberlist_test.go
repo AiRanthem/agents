@@ -98,6 +98,7 @@ func startFakeLifecycle(ctx context.Context, reader ctrlclient.Reader, handle me
 	lifecycleContext, cancel := context.WithCancel(ctx)
 	peer := NewMemberlistPeers(reader, "test-node", Namespace, LabelSelector)
 	peer.list = handle
+	peer.started.Store(true)
 	peer.lifecycleCancel = cancel
 	peer.lifecycleDone = make(chan error, 1)
 	peer.retryInterval = retry
@@ -274,6 +275,39 @@ func TestMemberlistPeers_GetPeers_NotStarted(t *testing.T) {
 	assert.Nil(t, peer.GetAllMembers())
 	assert.Nil(t, peer.LocalAddr())
 	assert.Equal(t, 0, peer.LocalPort())
+}
+
+// TestMemberlistPeers_GettersRaceWithStart fails under -race when a getter
+// reads list without waiting on the started barrier.
+func TestMemberlistPeers_GettersRaceWithStart(t *testing.T) {
+	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
+	peer, port, err := CreateTestPeer(t.Context(), fc, "race-node")
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = peer.GetPeers()
+					_ = peer.GetAllMembers()
+					_ = peer.LocalAddr()
+					_ = peer.LocalPort()
+				}
+			}
+		}()
+	}
+
+	require.NoError(t, peer.Start(t.Context(), "127.0.0.1", port))
+	close(stop)
+	wg.Wait()
+	require.NoError(t, peer.Stop(t.Context()))
 }
 
 // TestMemberlistPeers_Join_PartialFailure tests that partial join failure does not affect startup

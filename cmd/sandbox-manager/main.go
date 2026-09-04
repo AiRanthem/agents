@@ -149,7 +149,7 @@ func main() {
 			"use the same value on every sandbox-manager replica")
 	pflag.StringVar(&sysNs, "system-namespace", utils.DefaultSandboxDeployNamespace, "The namespace where the sandbox manager is running (required)")
 	pflag.StringVar(&peerSelector, "peer-selector", "", "Peer selector for sandbox manager (required)")
-	pflag.StringVar(&networkInterface, "network-interface", "", "Network interface whose single IPv4 address serves user-cluster traffic")
+	pflag.StringVar(&networkInterface, "network-interface", "", "Network interface whose single IPv4 address serves sandbox-cluster traffic")
 	pflag.StringVar(&sandboxNamespace, "sandbox-namespace", "", "Namespace to filter sandbox-related custom resources (Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy). Defaults to all.")
 	pflag.StringVar(&sandboxLabelSelector, "sandbox-label-selector", "", "Label selector to filter sandbox-related custom resources (Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy). Defaults to all.")
 	pflag.IntVar(&maxClaimWorkers, "max-claim-workers", consts.DefaultClaimWorkers, "Maximum number of claim workers (0 uses default)")

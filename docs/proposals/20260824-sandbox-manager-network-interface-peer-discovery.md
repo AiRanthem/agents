@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-24
-last-updated: 2026-08-26
+last-updated: 2026-09-04
 status: implementable
 ---
 
@@ -13,9 +13,9 @@ status: implementable
 ## Summary
 
 Sandbox Manager accepts an optional `--network-interface` flag. When it is set,
-one validated IPv4 address from that interface becomes the process-wide user
-network address for the control API, peer route service, memberlist, and the
-local return entry used by non-Sandbox proxy requests. When it is empty, the
+one validated IPv4 address from that interface becomes the process-wide
+sandbox-cluster address for the control API, peer route service, memberlist, and
+the local return entry used by non-Sandbox proxy requests. When it is empty, the
 existing non-hosted network behavior is preserved.
 
 Peer discovery lists selector-matching Pods through a live, uncached Kubernetes
@@ -31,10 +31,12 @@ without creating competing cleanup paths.
 
 ## Background
 
-A hosted Sandbox Manager Pod has both a platform network and a user network.
-Endpoints that serve or advertise user-cluster traffic must consistently use
-the user network; selecting different local addresses can make a process
-reachable through one protocol but isolated through another.
+A hosted Sandbox Manager is a Sandbox Manager deployed outside the sandbox
+cluster, meaning the cluster that runs sandbox orchestration. That Pod has both
+a platform network and a sandbox-cluster network. Endpoints that serve or
+advertise sandbox-cluster traffic must consistently use the sandbox-cluster
+network; selecting different local addresses can make a process reachable
+through one protocol but isolated through another.
 
 Peer Pods also start and stop independently. A one-time Kubernetes list or a
 single synchronous join turns ordinary startup ordering into permanent
@@ -44,7 +46,7 @@ memberlist. That retry is independent of API readiness.
 
 ## Target Design
 
-### One user network address
+### One sandbox-cluster address
 
 `--network-interface` has the following contract:
 
@@ -61,7 +63,8 @@ memberlist. That retry is independent of API readiness.
 - The same address is used by the control API listener, the peer route listener
   on port `7789`, and memberlist's bind and advertised address. The non-Sandbox
   proxy return entry uses this address as well, so return traffic does not
-  silently switch to loopback after the listeners move to the user network.
+  silently switch to loopback after the listeners move to the sandbox-cluster
+  network.
 - Interface selection controls local listeners and advertised peer identity. It
   does not use `SO_BINDTODEVICE`, select outbound routes, or change DNS policy.
 
@@ -99,14 +102,7 @@ Sandbox Manager and Sandbox Gateway share this listing contract. Gateway builds
 the same kind of live client from in-cluster configuration. While unjoined,
 each retry cycle performs at most one live Pod list and stops listing after a
 successful join. API availability therefore affects peer convergence, not
-control-API or Gateway readiness. Both otherwise share the retrying join and
-shutdown lifecycle described below.
-
-The Gateway is loaded into Envoy as a Go shared library. Its peer server
-registers for process `SIGTERM`, invokes the shared once-only stop path, restores
-the host process's original signal handling, and relays `SIGTERM` to the process
-after that stop attempt returns. Forced termination can still cut this
-best-effort cleanup short under the crash behavior described below.
+control-API or Gateway readiness.
 
 ### Trusted seed addresses
 
@@ -120,10 +116,34 @@ Each listed, selector-matching Pod can contribute at most one seed:
 - Pods with an empty or invalid PodIP, invalid annotated address, the local
   memberlist address, or a duplicate address are excluded.
 
-The eligible member set consists only of selector-matching peer Pods, including
-Sandbox Gateway and any Sandbox Manager replicas that share that peer identity.
-The local member is excluded. A Kubernetes Service and its mirrored or selected
-backends are routing objects, not peer membership or seed sources.
+**Warning:** A Sandbox Manager started with `--network-interface` must not be a
+memberlist seed. Seed addresses are always derived from `status.podIP`, which
+can differ from the selected interface address that memberlist actually binds
+and advertises. If the peer selector matches that Manager Pod, other members
+join `status.podIP` and never reach the listener. The peer selector must not
+select those Pods.
+
+This constraint belongs to the deployment that owns the peer selector. Sandbox
+Manager deliberately adds no in-process guard: the process knows only its own
+flag value and bound address, while the unreachable join happens in other
+members, so a local check could pass while the topology stays wrong. A
+misconfigured selector therefore keeps this process starting normally and
+surfaces as the affected members repeatedly logging join failures against the
+hosted Manager's PodIP. Correcting it is an orchestration change to the peer
+selector, not a code change.
+
+Those Managers still join memberlist by contacting a seed that listens on its
+PodIP, typically a Sandbox Gateway or a Sandbox Manager started without
+`--network-interface`. After a successful join, gossip advertises the selected
+interface address, so later members discover the hosted Manager that way
+rather than through Kubernetes seed listing.
+
+The Kubernetes seed set is therefore only the selector-matching Pods that
+listen on `status.podIP`. Sandbox Gateway and non-hosted Sandbox Manager
+replicas remain valid seeds. Hosted Managers may appear in memberlist
+membership after they join, but they are not seed sources. The local member is
+excluded. A Kubernetes Service and its mirrored or selected backends are
+routing objects, not peer membership or seed sources.
 
 Pod readiness and phase do not filter the seed set. They are not reliable
 membership signals: a newly starting peer may already accept memberlist
@@ -184,7 +204,9 @@ flowchart LR
 Startup fails before serving requests when the selected interface, resolved
 address, namespace, selector, peer client, control API listener,
 peer route listener, or memberlist listener is invalid. The initial seed set
-and join result are deliberately not startup requirements.
+and join result are deliberately not startup requirements. This startup and
+shutdown contract applies to the Sandbox Manager process. Sandbox Gateway
+process lifecycle is outside this proposal.
 
 Each peer instance establishes one lifecycle owner when memberlist starts. That
 owner remains until cleanup finishes, including after seed discovery succeeds.
@@ -230,7 +252,7 @@ initialized; cleanup must not replace the original startup error with a panic.
 
 This proposal adds only the optional CLI flag. It does not change CRDs, HTTP
 models, Secrets, or the memberlist wire protocol. Both in-cluster configuration
-and `KUBECONFIG` continue to supply the user-cluster Kubernetes client.
+and `KUBECONFIG` continue to supply the sandbox-cluster Kubernetes client.
 
 Network address resolution, process peer discovery, and peer lifecycle belong
 to the Manager layer because they coordinate Sandbox Manager processes rather
@@ -244,6 +266,8 @@ The following are outside this proposal:
 - disabling ext-proc or changing the port `9002` listener;
 - metrics, pprof, or observability listener isolation;
 - Deployment, RBAC, KDM, or rollout configuration;
+- Sandbox Gateway process lifecycle, including SIGTERM handling and peer-route
+  listener bind sequencing;
 - an informer refactor for Sandbox Gateway;
 - IPv6, address hot reload, or periodic seed reconciliation.
 
@@ -253,10 +277,17 @@ read-only objects and never mutates them.
 
 Deployment changes remain outside this proposal, but hosted activation depends
 on them. Kubernetes TCP probes without an explicit host target the Pod IP; when
-the control API and peer route bind only to a different user-interface address,
-those probes cannot reach the listeners and can restart the Pod. Hosted rollout
-configuration must make the `8080` and `7789` probes reach the selected user
-address before enabling `--network-interface`.
+the control API and peer route bind only to a different sandbox-cluster
+address, those probes cannot reach the listeners and can restart the Pod.
+Hosted rollout configuration must make the `8080` and `7789` probes reach the
+selected sandbox-cluster address before enabling `--network-interface`.
+
+Hosted activation also depends on seed topology. The peer selector must not
+match Sandbox Manager Pods started with `--network-interface`. At least one
+PodIP-reachable seed must remain in that selector, and the selected interface
+must be able to reach that seed's memberlist address. New hosted replicas
+cannot join if every such seed is gone, because Kubernetes listing stops after
+the first successful join.
 
 ## Risks
 
@@ -274,6 +305,11 @@ address before enabling `--network-interface`.
 - The API may become ready while the replica is still a single member. This is
   intentional: background retry repairs startup races without making peer
   availability a control-plane availability dependency.
+- A hosted Manager whose Pod is still selected as a seed will advertise one
+  address and be joined at another. Peer selector configuration must exclude
+  those Pods.
+- After the first successful join, a new hosted replica cannot join unless a
+  PodIP-reachable seed is still available.
 
 ## Alternatives
 
@@ -288,6 +324,9 @@ address before enabling `--network-interface`.
   address ordering is not a stable network identity.
 - Trusting an arbitrary `memberlist-url` host is rejected because Pod metadata
   must not redirect peer traffic outside the selected Pod identity.
+- Publishing the selected interface address as a Kubernetes seed is rejected.
+  Hosted Managers join through a PodIP-reachable seed and then rely on
+  memberlist gossip; the peer selector must not list them as seeds.
 - A custom cancellable memberlist transport is deferred because this scope
   accepts memberlist's existing network-deadline behavior, and a correct
   transport must preserve more than dialing alone.
