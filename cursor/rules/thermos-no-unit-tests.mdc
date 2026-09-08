@@ -1,0 +1,15 @@
+---
+description: Thermos/review subagents must not run unit tests
+alwaysApply: true
+---
+
+# Review Subagents: No Unit Tests
+
+When launching thermos, thermo-nuclear, Bugbot, security-review, or similar
+review subagents:
+
+- Do **not** instruct them to run unit tests, package suites, `go test`,
+  `make test`, or equivalent verification commands.
+- Explicitly tell each subagent to review via diff and source reading only.
+- The caller already ensures tests pass; subagent test runs waste time and
+  obscure review signal.
