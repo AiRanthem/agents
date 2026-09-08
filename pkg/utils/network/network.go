@@ -34,6 +34,7 @@ func ListenAddress(host string, port int) string {
 
 // ResolveNetworkInterfaceAddress returns the single global-unicast IPv4 address
 // on the named interface. An empty name returns an empty address.
+// TODO: support IPv6; currently only a single global-unicast IPv4 address is selected.
 func ResolveNetworkInterfaceAddress(name string) (string, error) {
 	if name == "" {
 		return "", nil

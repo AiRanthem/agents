@@ -219,6 +219,8 @@ func (m *MemberlistPeers) runLifecycle(ctx context.Context, selector labels.Sele
 		case <-retry.C:
 		}
 	}
+	// After a successful join, ctx is still active; wait for cancellation so
+	// Leave/Shutdown still run from this owner.
 	<-ctx.Done()
 	m.lifecycleDone <- m.cleanup()
 }
