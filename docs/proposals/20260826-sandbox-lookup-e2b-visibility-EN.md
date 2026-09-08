@@ -4,8 +4,8 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-26
-last-updated: 2026-08-28
-status: implementable
+last-updated: 2026-09-08
+status: provisional
 ---
 
 # Sandbox Lookup, Operational State, and E2B Visibility Boundary
@@ -16,17 +16,29 @@ This proposal separates three request-time facts that every Sandbox-ID request n
 not replace one another. Point lookup and owner answer whether the object exists and who owns it.
 `GetVisibility()` answers whether the current user delivery is still visible.
 `GetOperationalState()` answers what the underlying Sandbox is doing now. Manager lookup no longer
-accepts state. The E2B API projects public state or admits an operation only after owner
-authorization and `Visible=true`.
+accepts state. The E2B API projects public state or admits a restricted operation only after owner
+authorization and `Visible=true`. Delete has no Visible gate: an owned invisible object must still
+receive a cleanup or persistent deletion commit; absence, ambiguous IDs, and another owner all
+return a side-effect-free `204`.
 
 Each user delivery continues to use `agents.kruise.io/lock` as its epoch and a matching
-`agents.kruise.io/delivered-lock` as the persisted completion marker. The first Create write sets
-that marker to a sentinel to keep the delivery invisible and bounds delivery time with
-`ShutdownTime`. After all post-processing succeeds, Manager uses an Infra conditional Patch to
-atomically commit delivery and the final lifecycle times, retrying benign resourceVersion
-conflicts after re-reading and revalidating. A fully absent marker occurs only on pre-upgrade
-objects and is treated as delivered. Create, Resume, and Connect share a ten-minute server request
-limit.
+`agents.kruise.io/delivered-lock` as the persisted completion marker. When the new delivery flow is
+enabled, the first Create write sets that marker to a sentinel to keep the delivery invisible and
+bounds delivery time with `ShutdownTime`. After all post-processing succeeds, Manager uses an Infra
+conditional Patch to atomically commit delivery and the final lifecycle times, retrying benign
+resourceVersion conflicts after re-reading and revalidating. A legacy delivery with a fully absent
+marker is treated as delivered, including pre-upgrade objects and objects created with writing
+disabled. Create in the new delivery flow, together with Resume and Connect, shares a ten-minute
+server request limit.
+
+Rollout follows the short-id approach: deploy compatibility using the same version with a
+default-off new-delivery writer option, then enable it through a rolling update. The option controls
+only the marker, temporary deadline, and delivery commit for new Claim/Clone requests; reads,
+operation protection, and recycle cleanup always recognize markers. Disabling writing does not
+change existing deliveries or cancel their in-flight commits. Rolling upgrades must introduce no
+functional regression and add no duplicate Getters, endpoint state machines, data migration, or
+version negotiation. The mechanism for isolating cross-resource side effects remains unresolved,
+so this document is not yet an `implementable` baseline.
 
 `GetOperationalState()` returns one protocol-neutral typed value: `Provisioning`, `Serving`,
 `Pausing`, `Paused`, `Resuming`, `Upgrading`, `Recycling`, `Terminating`, `Completed`,
@@ -95,14 +107,16 @@ caller cannot perform the action itself, such as a team-scoped API key requestin
 action. When that decision does not read a target object and produces the same result for every
 Sandbox ID, it reveals no additional existence information and may use `401`. **Overreach** means
 that the caller could perform the action, but the target belongs to another user. A response that
-differs from actual absence would confirm that the ID exists, so every Sandbox-ID owner mismatch
-uses `404`.
+differs from actual absence would confirm that the ID exists. Sandbox-ID owner mismatch therefore
+uses the same response as absence: a side-effect-free `204` for Delete and `404` for other endpoints.
 
 A Visible denial for an owned object is neither case: it means the delivery has left the E2B
 operation surface. To the caller that is the same fact as absence — the sandbox is no longer
 usable — so it also uses `404` rather than a `401` that SDKs classify as an authentication
 exception. Only the owner can reach that response, so expressing it as `404` leaks no additional
-existence information and preserves the established not-found lookup contract. An operation
+existence information and preserves the established not-found lookup contract. Delete is an
+exception: invisibility does not prove deletion was committed, so it follows the lifecycle contract
+below. An operation
 admission failure for an owned object is different: it says the object is still there but the
 action cannot run now, and it uses that endpoint's declared response.
 
@@ -111,10 +125,10 @@ action cannot run now, and it uses that endpoint's declared response.
 - Narrow Manager Sandbox lookup to claimed identity, namespace, Sandbox ID, and owner from the
   informer, without accepting or reading an expected state.
 - Add an epoch-matched persisted completion marker to Create deliveries shared by Claim and Clone.
-- Define one bounded compatibility rule for pre-upgrade objects that lack that marker, together
-  with the condition for removing it.
+- Define compatibility for legacy deliveries without that marker, rolling enablement boundaries,
+  and verifiable exit conditions.
 - Add a protocol-neutral Visible observation to `infra.Sandbox` and make it a common prerequisite
-  for every Sandbox-ID endpoint.
+  for every Sandbox-ID endpoint except Delete.
 - Add a typed OperationalState observation to `infra.Sandbox`, with Infra providing the single
   projection from backend facts.
 - Give List, Describe, and every other Sandbox-ID endpoint one ordering for action permission,
@@ -123,7 +137,8 @@ action cannot run now, and it uses that endpoint's declared response.
 - Define state admission for Pause, Resume, Connect, Network, Set timeout, Snapshot, Browser, and
   traffic-token refresh, plus authoritative revalidation before an operation commits.
 - Define one centralized ten-minute server hard limit for E2B business requests and map it to
-  `504` when the upstream endpoint contract allows it.
+  `504` when the upstream endpoint contract allows it; the new Create/Clone limit is enabled
+  together with new-delivery writing.
 - Retain Controller responsibility for ShutdownTime deletion and recycle cleanup without making
   Manager delete success depend on recycle completion.
 - Apply the same contract to native E2B paths and customized-prefix paths.
@@ -148,8 +163,9 @@ action cannot run now, and it uses that endpoint's declared response.
   lookup. Neither may become the authority for Sandbox existence or ownership, but retaining their
   internal refresh behavior is outside this proposal.
 - Automatically deleting or recycling Sandboxes in `Succeeded` or `Failed`.
-- Designing migration for old delivery data or another Infra backend. Pre-upgrade objects without
-  delivered-lock are handled by the bounded rule in the compatibility boundary.
+- Designing migration for old delivery data or another Infra backend. Legacy objects without
+  delivered-lock are handled by the compatibility boundary; elapsed releases do not prove their
+  disappearance.
 - Changing the existing fail-closed lookup behavior for an ambiguous Sandbox ID.
 - Refactoring cache beyond the state migration in this proposal. Only Sandbox business-state
   interpretation involved in this boundary moves out.
@@ -163,12 +179,12 @@ action cannot run now, and it uses that endpoint's declared response.
 | Authenticate the request | E2B API | Verify caller identity without inferring Sandbox existence from a route |
 | Authorize the action | E2B API | When an endpoint requires it, make an object-independent permission decision; reject with `401` |
 | Resolve a claimed Sandbox | Infra | Match namespace and public Sandbox ID from the informer; distinguish absence, ambiguity, and internal failure |
-| Authorize ownership | Manager | Use Sandbox owner metadata without reading state or Visible; the API conceals a mismatch as `404` |
+| Authorize ownership | Manager | Use Sandbox owner metadata without reading state or Visible; the API conceals mismatch and absence identically: `204` for Delete, `404` for other endpoints |
 | Persist delivery | Manager and Infra capability | Commit complete delivery with a lock epoch and conditional Patch |
 | Calculate Visible | Infra Sandbox | Return a boolean and stable reason from protocol-neutral persisted facts |
 | Calculate OperationalState | Infra Sandbox | Project backend runtime facts into a typed state without exposing the Sandbox CR model |
 | Orchestrate lifecycle operations | Manager | Express protocol-neutral policy with OperationalState and delegate atomic backend work to Infra |
-| Map HTTP and E2B state | E2B API | Apply Visible first, then use OperationalState for public projection and endpoint-specific admission |
+| Map HTTP and E2B state | E2B API | For reads and restricted operations, apply Visible before OperationalState projection and admission; Delete uses its separate deletion-commit contract |
 | Commit backend operations | Infra capability | Revalidate delivery identity and runtime state on the latest observation, then execute, join, or reject |
 | Maintain the Route protocol | Sandbox Route | Preserve current Route state, Store ordering, and the deletion fence without consuming OperationalState |
 | Handle timeouts and recycle | Sandbox Controller | Delete expired Sandboxes, complete recycle, and clear prior-delivery data |
@@ -180,6 +196,8 @@ flowchart LR
     Permission --> Lookup[Informer claimed lookup]
     Lookup --> Owner[Authorize owner]
     Owner --> Visible[Visible gate]
+    Owner --> Delete[Delete: commit cleanup or deletion bound to delivery]
+    Delete --> Result[Public response]
     Visible --> Operational[OperationalState]
     Operational --> Projection[E2B state projection]
     Operational --> Admission[Operation admission]
@@ -210,7 +228,8 @@ Lookup follows these rules:
 3. Definitive absence maps to Manager not-found. An ambiguous ID is also hidden as not-found
    externally while retaining its internal cause. Other lookup failures map to internal error.
 4. Manager verifies owner after successful lookup. A mismatch returns internal not-allowed, which
-   the E2B API maps to the same `404` as actual absence.
+   the E2B API maps to the same concealed response as actual absence: `204` for Delete and `404` for
+   other endpoints. An ambiguous ID follows the same mapping.
 5. Manager returns `infra.Sandbox` without reading, logging, or filtering OperationalState,
    aggregate `GetState()`, or a Visible reason.
 
@@ -248,31 +267,35 @@ four cases:
 | Equal to lock | Delivered | The commit succeeded |
 | The sentinel `pending`, or present but empty | Not delivered | Delivery in progress, or left behind by a failed commit |
 | Non-empty, not the sentinel, and not equal to lock | Not delivered | A marker left by an earlier epoch, for example an incomplete recycle |
-| Fully absent | Treated as delivered | Only a pre-upgrade object claimed by the old code |
+| Fully absent | Treated as delivered | A pre-upgrade object or legacy delivery created with new-delivery writing disabled |
 
-“Fully absent means delivered” is a bounded upgrade-compatibility rule. It keeps existing objects
-visible after an upgrade without a one-time backfill and without inferring delivery from creation
-time or runtime state. It holds only because **the first persisted write of the new code always
-writes the sentinel**, so “absent” can never be produced by a new delivery. The rule flips the
-default for this one check from fail-closed to fail-open, so “a delivery is invisible before it
-commits” must be pinned by a regression test rather than by documentation alone. Remove the branch
-once pre-upgrade objects can no longer exist — Sandbox lifetimes are minutes to hours, so usually
-one release later — and mark its ceiling and removal condition with a `known-limit:` comment in the
-code.
+“Fully absent means delivered” preserves legacy delivery compatibility without exempting other
+Visible conditions. It needs no backfill and does not infer successful delivery from creation time
+or runtime state. **The first persisted write of the enabled new delivery flow must write the
+sentinel**; Claim/Clone with writing disabled does not enter that flow. An absent marker can therefore
+come from pre-upgrade objects, compatibility deployment, rolling enablement, or new requests after
+writing is disabled. Legacy deliveries have no guarantee of invisibility before commit.
 
-The SandboxClaim controller shares this same first persisted write but never calls
-delivery-commit, so the Sandboxes it claims keep the sentinel indefinitely. That is expected: the
-delivery marker governs E2B deliveries only, and those Sandboxes are already invisible to E2B users
-through owner mismatch. Do not “fix” them by committing delivery from the controller.
+This marker check defaults to admitting, so every first write on an enabled path must be verified
+to carry the sentinel. Remove the compatibility branch only after confirming that all supported
+writers and rollback versions no longer produce markerless deliveries and that all such existing
+deliveries are gone. Never-timeout objects may persist indefinitely; neither one elapsed release
+nor the temporary absence of this reason in logs proves that none remain. Record this boundary and
+exit condition in a `known-limit:` code comment without introducing a migration task.
+
+The new delivery flow is enabled through an E2B Claim/Clone request option. The SandboxClaim
+controller neither enables that option nor owns E2B delivery-commit. It need not write the sentinel
+or add a delivery commit; its claimed objects retain existing owner isolation.
 
 #### First persisted write: claim without delivery
 
-The Claim Update/Create and Clone Create persist the following together:
+When the new delivery flow is enabled, Claim Update/Create and Clone Create persist the following
+together:
 
 - the delivery lock epoch, owner, claimed identity, and Sandbox ID;
 - `delivered-lock` set to the sentinel `pending`, plus removal of `cleanup` left by a prior
-  delivery; this write cannot be skipped, because it is the only guarantee that the “absent means
-  delivered” rule covers pre-upgrade objects alone;
+  delivery; this write cannot be skipped, because it prevents an enabled path from being mistaken
+  for a legacy delivery;
 - an empty `PauseTime`, replacing the current behavior where an auto-pause request persists
   `PauseTime` in the first write, so that no automatic pause can fire before delivery commits;
 - the current API request's absolute deadline in `ShutdownTime`; and
@@ -311,26 +334,27 @@ invariant. The capability must therefore re-read the object, revalidate the deli
 retry within the request deadline instead of treating one conflict as a failed delivery. A retry
 replays only those three fields.
 
-Only four outcomes are terminal; everything else keeps retrying:
+The following outcomes end commit retries; benign resourceVersion conflicts are retried after
+re-reading and revalidating as described above:
 
 | Terminal failure | Meaning | Mapping |
 |---|---|---|
 | The object is gone from the API server | The Controller deleted it after the temporary deadline | `504` with the message below |
 | The request deadline expired | Post-processing or retries exhausted the ten-minute budget | `504` |
-| The lock epoch changed | The CR was recycled and re-claimed, voiding this delivery | Create's declared `500` |
+| The UID or lock epoch changed | The object was replaced or re-claimed, voiding this delivery | Create's declared `500` |
+| The object still exists but persistent deletion has started | The current delivery can no longer commit | Create's declared `500` |
 | `cleanup=true` is committed | A delete request already accepted this delivery | Create's declared `500` |
 
 None of them returns `201` or `404`, and an unclassifiable persistence failure also uses `500`.
 
-The optimistic lock here does not protect `delivered-lock`: epoch equality is self-healing, because
-a stale commit that lands on an already recycled and re-claimed CR writes an old lock value that no
-longer equals that CR's current lock, so the object stays invisible. What needs protection is
-`ShutdownTime` and `PauseTime` in the same Patch. Those are not self-healing, and writing them onto
-the next delivery would corrupt that delivery's lifecycle. This is also why the commit condition
-must include both UID and epoch rather than UID alone.
+The optimistic lock protects `delivered-lock`, `ShutdownTime`, and `PauseTime` together. Even if an
+old request cannot use its old lock to make a successor delivery visible prematurely, it can
+overwrite the successor's committed marker and hide a successfully delivered object. Overwriting
+deadlines corrupts its lifecycle. The commit condition must include both UID and epoch, rather than
+checking UID alone or relying on marker mismatch.
 
-A reserved-failed Sandbox retained for investigation after Create failure has no special existence
-semantics. Its delivery did not commit, so either the sentinel is still present or its Phase is
+With the new delivery flow enabled, a reserved-failed Sandbox retained for investigation after
+Create failure has no special existence semantics. Its delivery did not commit, so either the sentinel is still present or its Phase is
 terminal, which makes it `Visible=false`. The
 `agents.kruise.io/reserved-failed-sandbox` label cannot independently produce `404`.
 
@@ -350,8 +374,11 @@ ShutdownTime, but they are always `Visible=false`.
 ### Common API request limit
 
 The E2B API layer defines one centralized `MaxAPIRequestDuration = 10m` server hard limit for
-business requests. Each request establishes one absolute deadline on entry. An existing earlier
-deadline wins, and internal stages cannot each acquire a fresh ten-minute window.
+business requests. Create/Clone uses this new limit only when the new delivery flow is enabled;
+otherwise it retains existing creation limits and lifecycle writes. Other business requests are not
+controlled by the new-delivery writer option. Each request subject to the limit establishes one
+absolute deadline on entry. An existing earlier deadline wins, and internal stages cannot each
+acquire a fresh ten-minute window.
 
 - Create uses this deadline as both delivery timeout and the temporary `ShutdownTime` in the first
   persisted write.
@@ -390,8 +417,8 @@ Visible performs no second read. The caller obtains one reason using this preced
 | 11 | delivered-lock equals lock | true | `Delivered` |
 
 `DeliveryMarkerAbsent` uses a different reason from `Delivered` to keep the compatibility branch
-observable: only after confirming that `DeliveryMarkerAbsent` no longer appears in production can
-the “absent means delivered” rule be removed safely.
+observable. Exit still requires complete verification of supported writers and existing objects;
+the temporary absence of this reason in logs is insufficient to remove compatibility.
 
 `cleanup-enabled` does not participate; inherited from the SandboxSet template, it only marks
 whether this Sandbox supports recycle. Once a trusted internal writer commits `cleanup=true`, the
@@ -473,15 +500,18 @@ that does not publish it. Once the backend publishes the condition, only `True` 
 
 OperationalState is an observation, not an operation lock. Manager may use it to choose policy or
 reject an obvious conflict early, but an Infra capability that changes backend state must confirm
-before commit that the object still has the same UID and delivery epoch, Visible has not ended, and
-the latest runtime state still permits the action. An identical action already in progress joins
+before commit that the object still has the same UID and delivery epoch. Restricted operations also
+require that Visible has not ended and the latest runtime state still permits the action. Delete
+validates its deletion-commit contract; delivery commit requires that this delivery remains
+committable, without requiring Visible before commit. An identical action already in progress joins
 its wait; an already-reached target succeeds idempotently; an opposite action or disallowed state
 returns a typed conflict. A wait is also bound to UID and delivery epoch, never only namespace and
 name.
 
 ### E2B lookup, state, and operations
 
-Every Sandbox-ID endpoint uses the same decision order:
+Except for Delete, which uses the separate lifecycle contract below, Sandbox-ID endpoints use the
+same decision order:
 
 1. authenticate the caller;
 2. when the endpoint has action-level permission, check it without consulting Sandbox existence;
@@ -521,14 +551,15 @@ then paginates. The page limit and next token therefore describe the actual publ
 
 #### Operation admission matrix
 
-The table below defines the additional condition after the owner matches and `Visible=true`. For an
-upstream-defined endpoint each rejection uses only a response that endpoint declares; Browser and
+The table below defines conditions after the owner matches; every endpoint except Delete first
+requires `Visible=true`. For an upstream-defined endpoint each rejection uses only a response that
+endpoint declares; Browser and
 traffic-token refresh are repo-defined and take the codes of the closest native endpoint:
 
-| Endpoint | OperationalState contract after Visible | Response when admission fails |
+| Endpoint | Operation admission contract | Response when admission fails |
 |---|---|---:|
 | Describe | No operation gate; use the common E2B state projection | — |
-| Delete | No OperationalState gate | — |
+| Delete | No Visible or OperationalState gate; follow the deletion-commit contract | — |
 | Pause | Start from `Serving`; join an existing `Pausing`; succeed idempotently from `Paused` | `409` |
 | Resume | Start from `Paused`; join an existing `Resuming`; succeed idempotently from `Serving` | `409` |
 | Connect | Connect directly from `Serving` and return `200`; start from `Paused` or join `Resuming`, wait for `Serving`, and return `201` | `409` |
@@ -543,10 +574,11 @@ Except for Describe and Delete, any state not listed for an endpoint is rejected
 the state-restricted operations in the table. They may still compatibility-project to `paused`
 while `Visible=true`, but readable does not mean operable.
 
-Of those, `Provisioning`, `Recycling`, `Terminating`, and `Completed` are in fact unreachable while
-`Visible=true`: `delivered-lock` is written only after Ready and all post-processing succeed, and
-each of those four states ends Visible first. The matrix keeps them only to stay complete and fail
-closed; implementations need no cases for those combinations.
+These combinations cannot all be assumed unreachable. For example, a legacy delivery may have a
+lock, Phase `Pending`, and no marker, making it both `Visible=true` and `Provisioning`; that
+combination must follow the complete matrix above. Terminal states are excluded by Visible's
+terminal-phase rules, but other combinations must be established from their persisted prerequisites,
+not excluded solely from the successful path of the new delivery flow.
 
 After initial authorization and before minting a traffic token, token issuance retains one fresh
 Infra Sandbox validation to fence a recycle or reclaim race. That validation repeats owner,
@@ -562,33 +594,47 @@ observation so a stale Getter result cannot directly drive a write.
 
 #### Delete and recycle
 
-Delete also requires `Visible=true`, but it has no OperationalState gate. Manager first invokes a
-protocol-neutral recycle-attempt capability, which decides from the latest backend observation
-whether this Sandbox supports and can enter recycle. A successful write of `cleanup=true` accepts
-the delete and immediately ends Visible for this delivery. Manager does not wait for the Controller
-to complete recycle or make completion a prerequisite for the API response.
+Delete requires neither `Visible=true` nor an OperationalState gate. Authentication and
+object-independent action permission still apply, followed by claimed lookup and owner authorization:
 
-If the recycle-trigger write fails, the existing Kill fallback remains available. After Kill
-successfully starts persistent deletion, `DeletionTimestamp` ends Visible. Only after the object
-disappears from the informer does a later lookup become an actual not-found.
+- Absence, no matching claimed delivery, an ambiguous ID, or another owner all return the same empty
+  `204`, without modifying Sandbox, Route, or quota. Ambiguity must not select any object, and
+  another owner must be a strict no-op.
+- Internal lookup failures still return `500` and cannot masquerade as idempotent success.
+- For an authorized delivery that still exists, a write-free idempotent `204` requires an existing
+  irreversible cleanup commit or persistent deletion fact. `Visible=false` caused only by expiry,
+  uncommitted delivery, or a terminal Phase does not satisfy that condition.
 
-The first Delete that successfully commits `cleanup=true` or successfully starts persistent
-deletion returns `204`. Every later retry by the same owner also returns `204`: whether the object
-is already `Visible=false` through cleanup or `DeletionTimestamp`, or the old Sandbox ID has
-disappeared from point lookup, the deletion is complete from the caller's perspective. Another owner
-receives the same concealed `404` throughout.
+For an object that still requires deletion, Manager invokes a protocol-neutral recycle-attempt
+capability. Bound to the original UID and lock epoch, it decides from the latest backend observation
+whether this Sandbox supports and can enter recycle. Writing `cleanup=true` is a valid cleanup
+commit only when the Controller actually owns recycle-or-delete responsibility for this object.
+Adding a cleanup annotation to a terminal object the Controller cannot process cannot count as
+success.
 
-Delete is therefore the single exception to “invisible means `404`”. Deletion is idempotent and its
-target state is exactly that the object becomes unusable, so reporting “already unusable” as a
-failure carries no information. This also keeps the behavior of existing clients that call kill
-repeatedly unchanged.
+When recycle cannot be entered, start persistent deletion. The Kill fallback after a failed
+recycle-trigger write must also remain bound to the original UID and epoch. If identity has changed,
+the old request must not delete a successor delivery or modify its Route or quota. Once the original
+delivery is confirmed to have exited, absence may return `204`; unclassified errors do not prove
+that exit.
+
+Return `204` after successfully committing cleanup or persistent deletion, without waiting for
+asynchronous resource release. Route and quota post-processing belong only to the authorized and
+accepted original delivery; retries must not affect a successor. The same contract covers owned
+expired, uncommitted, `Succeeded`, `Failed`, and reserved-failed objects. Delete succeeds on a durable
+lifecycle commitment, not an instantaneous Visible observation. After a successful Delete during
+an expiry window, paused retention must not make the original delivery visible again. Automatically
+cleaning these invisible objects remains outside this proposal's new responsibilities.
 
 On successful recycle, the Controller clears the prior delivery's lock, delivered-lock, owner,
 Sandbox ID, claim-scoped metadata, `PauseTime`, `ShutdownTime`, and TrafficPolicy before returning
 the CR to the pool. This prevents a later Claim from inheriting the old epoch, but Manager delete
-semantics do not depend on cleanup completion. The next delivery uses a new lock and performs a
-new delivery commit. Once claimed identity and the old Sandbox ID are cleared, a later lookup of
-the prior delivery is an actual absence even though the reusable CR remains in the informer.
+semantics do not depend on cleanup completion. The next delivery uses a new lock and performs a new
+delivery commit when the new flow is enabled, or follows legacy delivery when disabled. The disabled
+path must also clear a leftover marker in the new delivery's first write; it must not clear the
+marker of an active delivery. Once claimed identity and the old Sandbox ID are cleared, a later
+lookup of the prior delivery is an actual absence even though the reusable CR remains in the
+informer.
 
 Clearing the TrafficPolicy is the **expected-correct state** this design depends on, and the current
 implementation does not yet provide it: the TrafficPolicy is owned by the Sandbox CR through an
@@ -596,6 +642,13 @@ OwnerReference and selects by Sandbox name, so it survives recycle and reuse and
 user's egress policy into the next delivery. That is a pre-existing defect independent of this
 proposal and must be fixed separately. Implement this proposal against the fixed behavior; do not
 write tests or compensating logic against the current behavior.
+
+Clearing an existing TrafficPolicy is insufficient to isolate late side effects: after passing
+Sandbox revalidation, an old request may still create an old policy after recycle and the next
+Claim. Network, runtime calls, and other cross-resource operations must ensure that late side
+effects of the old delivery cannot affect its successor. A preflight re-read, subsequent cleanup,
+or a rollout option alone does not prove that guarantee. The concrete mechanism is covered under
+“Open Questions”; this window cannot be classified as accepted brief informer inconsistency.
 
 ### HTTP errors and information disclosure
 
@@ -607,10 +660,10 @@ customized Sandbox-ID endpoint uses this public classification:
 |---|---:|---|
 | API key is missing or invalid | 401 | Authentication failed |
 | The caller lacks permission for the action itself, and the decision is independent of every Sandbox's existence | 401 | Explicitly reject the action without revealing object facts |
-| Claimed lookup finds no matching Sandbox | 404 | Actual absence |
-| More than one claimed Sandbox matches the same ID | 404 | Fail closed on ambiguity without choosing an object |
-| The Sandbox exists but has another owner, which is object-level overreach | 404 | Match absence so the response does not confirm that the ID exists |
-| The Sandbox is owned by the requester but `Visible=false` | 404 | The delivery has left the operation surface and matches absence; Delete folds it into an idempotent `204` |
+| Claimed lookup finds no matching Sandbox | Delete 204; others 404 | Actual absence; Delete has no side effects |
+| More than one claimed Sandbox matches the same ID | Delete 204; others 404 | Conceal ambiguity without choosing or modifying any object |
+| The Sandbox exists but has another owner, which is object-level overreach | Delete 204; others 404 | Match absence; Delete is strictly side-effect-free |
+| The Sandbox is owned by the requester but `Visible=false` | Delete follows its deletion-commit contract; others 404 | Delete must commit cleanup or deletion, or confirm an existing irreversible commit; invisibility alone cannot mean success |
 | Visible, but Pause, Resume, Connect, Network, or traffic-token admission conflicts | 409 | Conflict declared by the endpoint |
 | Visible, but Snapshot does not allow the OperationalState | 400 | Bad request declared by the endpoint |
 | Visible, but Set timeout or Browser does not allow the OperationalState | 401 | Neither endpoint has a 400 or 409 available, so `401` is reused |
@@ -619,9 +672,9 @@ customized Sandbox-ID endpoint uses this public classification:
 | Create, Resume, or Connect reaches the server hard limit | 504 | Backend timeout |
 | Another endpoint reaches the server hard limit | 500 | Server error declared by that endpoint |
 
-In principle, object-level overreach could use `401` only if its response were identical whether or
-not the object existed. Sandbox-ID requests in this proposal cannot establish that property, so an
-owner mismatch is always `404`. There are four `404` cases: actual absence, fail-closed ID
+Delete maps absence, ambiguous IDs, and another owner to the same empty `204`, with no Sandbox
+resource context or metadata. Other Sandbox-ID endpoints always use `404` for owner mismatch. Their
+four `404` cases are actual absence, fail-closed ID
 ambiguity, concealment of another owner, and an owned delivery whose Visible has ended. The first
 three must use the same status, public message, and response shape with no Sandbox resource context
 or metadata attached — being indistinguishable is precisely their purpose. The fourth can only be
@@ -634,32 +687,40 @@ OperationalState, and the ambiguity cause are written only to internal logs.
 
 ### Invariants
 
-- Create never succeeds before delivery commit, and neither List nor a Sandbox-ID endpoint returns
-  that delivery before commit.
+- Create with the new delivery flow enabled never succeeds before delivery commit, and neither
+  List nor public reads return that delivery before commit. Authorized Delete can still commit
+  cleanup or deletion to cancel that delivery.
 - `delivered-lock == lock` proves delivery only for the current epoch; a marker from an earlier
-  epoch cannot make a new delivery Visible. A fully absent marker is treated as delivered, which is
-  the only exception and covers pre-upgrade objects alone.
+  epoch cannot make a new delivery Visible. A fully absent marker is treated as a legacy delivery,
+  covering pre-upgrade objects and objects created with writing disabled.
 - `cleanup=true`, deletion start, and the three explicit terminal phases end Visible irreversibly.
   ShutdownTime expiry also ends Visible, but the Controller's paused retention can extend it, so it
   is not an irreversible endpoint.
 - A Sandbox that still exists in an informer and is owned by the requester never returns not-found
-  because of OperationalState or operation admission. A Visible denial is the one object-level case
-  that shares `404` with actual absence, and Delete folds it into an idempotent `204`.
+  because of OperationalState or operation admission. Except for Delete, a Visible denial is the
+  one object-level case sharing `404` with actual absence. Delete must verify actual absence or an
+  irreversible lifecycle commit; it cannot fold every `Visible=false` into success.
 - Action-level no permission returns `401` only when the decision does not read a target Sandbox and
-  therefore cannot reveal its existence. An owner mismatch always matches absence with `404`.
-- Every operation requires Visible before OperationalState and capability admission.
+  therefore cannot reveal its existence. Owner mismatch always matches absence: a side-effect-free
+  `204` for Delete and `404` for other endpoints.
+- Restricted operations require Visible before OperationalState and capability admission. Delete
+  and delivery commit each follow their own lifecycle commit conditions.
 - Manager point lookup accepts no E2B state and reads neither OperationalState, aggregate
   `GetState()`, nor Sandbox CR state.
 - List and Describe expose only `running` and `paused`: `Serving` becomes `running`, every other
   visible state becomes `paused`, and filtering occurs before pagination.
 - The OperationalState Getter returns one observation only. A capability that changes backend state
-  revalidates UID, delivery epoch, Visible, and the latest runtime state.
+  revalidates UID, delivery epoch, and the latest facts required by that operation, and ensures that
+  late side effects cannot affect a successor delivery.
 - `Unavailable` means understood but unserviceable, while `Unknown` means uninterpretable. Neither
   admits a restricted operation.
 - Route state and OperationalState are independent protocols and cannot derive or replace one
   another.
 - The final delivery Patch cannot overwrite deletion or an update won by the Controller.
-- A request receives at most one ten-minute budget; internal retries do not reset it.
+- A request subject to the common limit receives at most one ten-minute budget; internal retries
+  do not reset it.
+- The new-delivery writer option controls neither reads of existing markers, operation protection,
+  nor recycle cleanup, and does not cancel in-flight delivery commits.
 - Reads and public projection use the one Sandbox observation returned by point lookup. Neither
   Visible nor the OperationalState Getter performs a separate read. Authoritative operation
   revalidation does not change that read contract, and replicas may briefly return different
@@ -667,12 +728,65 @@ OperationalState, and the ambiguity cause are written only to internal logs.
 
 ### Compatibility boundary
 
-A lock-only Sandbox without delivered-lock can only come from the pre-upgrade code and is treated as
-delivered; the reasoning and boundary are in “Delivery epoch and commit marker”. The rule removes the
-need for a one-time backfill and for inferring delivery from creation time or runtime state. The cost
-is that this one check defaults to admitting, so a regression test must guarantee that a new delivery
-stays invisible until it commits, and the branch must be removed once pre-upgrade objects can no
-longer exist.
+Legacy deliveries without delivered-lock are treated as delivered; their sources and exit
+conditions are in “Delivery epoch and commit marker”. Disabling new-delivery writing neither
+revokes existing markers nor requires existing Sandboxes to be recreated.
+
+#### New-delivery writer option
+
+Use the same “always-compatible reads, separately enabled writes” approach as the
+[short-id rollout contract](20260711-short-sandbox-id.md#rollout-and-rollback). The same binary
+version provides one default-off new-delivery writer configuration through existing options. Each
+Claim/Clone request pins its choice at request start, without package-level mutable state or dynamic
+hot reload.
+
+| Configuration | New Claim/Clone | Existing deliveries |
+|---|---|---|
+| Off | Write no new marker; retain legacy creation limits and lifecycle writes; clear leftover markers in the new epoch's first write | Always recognize persisted markers and preserve their operation protection and in-flight commits |
+| On | Enable `pending`, the temporary deadline, final lifecycle commit, and delivery commit together | Use the same Getters, endpoint state machines, and cleanup contract |
+
+The option cannot gate only the annotation while leaving the temporary deadline independently
+active. Getters, owner validation, Delete, marker protection for other operations, Controller recycle
+cleanup, and delivery fencing always apply; it does not switch between two state models. The
+SandboxClaim controller does not consume this E2B writer configuration. Deployment-level writer
+configuration is necessary because a per-request option cannot prove that other cluster replicas
+understand the new data. At runtime it is still expressed as the neutral option pinned for that
+request, without version negotiation, new CR fields, data migration tasks, or a general switch
+framework.
+
+#### Rolling enablement and rollback
+
+1. Roll out the compatible version to every Manager with writing disabled, together with Controller
+   marker cleanup support. No new protocol data is produced while old versions coexist; API service
+   need not stop and existing Sandboxes need not be drained.
+2. Enable writing only after confirming that all replicas unaware of markers have exited, their
+   in-flight requests and delayed side effects have finished, relevant informers have synchronized,
+   and Controller cleanup plus required delivery fencing are available. Checking Deployment images
+   alone is insufficient.
+3. Enable new writes through rolling configuration updates. Compatible replicas still disabled
+   continue producing legacy deliveries, but must correctly read and operate on objects from enabled
+   replicas. Only after every writer is enabled do all subsequent E2B deliveries receive the new
+   guarantees.
+4. Disabling the option only stops later new requests from entering the flow. It removes no existing
+   marker and does not revoke the delivery choice pinned by an in-flight request. Once new markers
+   exist, rollback is supported only to a compatible version that understands the protocol, never
+   to a version completely unaware of markers.
+
+Both stages use the same functional version without maintaining two binary implementations.
+Removing compatibility is a separate change backed by evidence about existing objects; disabling
+the option or waiting one release cannot replace data verification. Legacy deliveries may retain
+old delivery behavior during upgrades, but no upgrade-specific functional regression is acceptable:
+a successful Create permanently hidden by an old marker, an old request overwriting a deadline,
+Delete harming a successor delivery, or old and new requests sharing the wrong network policy.
+The short-id document's allowance for briefly missing or stale Routes does not apply here, and
+this proposal adds no coordination protocol to conceal these errors.
+
+Validation must cover disabled old and new replicas coexisting, enabled and disabled compatible
+replicas coexisting, recycle/reclaim of marked objects, disabling during an in-flight commit,
+existing never-timeout objects, and rollback to a compatible version. Public `paused` objects that
+cannot Resume, state rejections classified as authentication exceptions by SDKs, and changed
+creation limits also require acceptance through actual SDK calls, not just response-code enums.
+Client retries must be bounded; not every `409` promises eventual success.
 
 This proposal also changes the following client-visible behavior. All of them are intentional:
 
@@ -683,15 +797,16 @@ This proposal also changes the following client-visible behavior. All of them ar
 | Browser with a disallowed state | `404` | `401`, matching Set timeout |
 | Network with a disallowed state | `404` | `409` |
 | Describe of a Sandbox past its ShutdownTime | Returns `dead`, outside the upstream enum | `404` |
-| Default server-side limit for Create and Clone | Effectively unbounded | Ten minutes, then `504` |
+| Default server-side limit for Create and Clone | Effectively unbounded | Ten minutes, then `504`, with new-delivery writing enabled; retain existing creation limits when disabled |
 
 Clients should note the first row: such a Sandbox has OperationalState `Unavailable`, and calling
-Resume on it returns `409`. A client cannot read `paused` as “resume will work”; it should treat
-`409` as a retry-later signal. `Upgrading` likewise projects to `paused` and refuses Resume, which
+Resume on it returns `409`. A client cannot read `paused` as “resume will work” or `409` as a promise
+of eventual recovery; retries need an attempt or time limit. `Upgrading` likewise projects to
+`paused` and refuses Resume, which
 matches today's behavior.
 
-The normal lifecycle timeout starts at the actual delivery commit rather than at the first claim
-write. The requested usable lifetime after delivery is therefore preserved, while total time from
+With the new delivery flow enabled, the normal lifecycle timeout starts at the actual delivery
+commit rather than at the first claim write. The requested usable lifetime after delivery is therefore preserved, while total time from
 initial claim to final expiry may increase. A longer client phase timeout remains capped by the
 single ten-minute API hard limit.
 
@@ -817,15 +932,18 @@ existing object does not match a state.
   once retries exhaust the request deadline. This deliberately gives Controller and concurrent
   lifecycle writes priority over Create success.
 - `Succeeded` and `Failed` Sandboxes may persist while remaining invisible to E2B and may continue
-  consuming existing resources or quota. Uncommitted deliveries and reserved-failed objects are
-  likewise invisible yet still counted for quota, and a user's Delete on them only returns an
-  idempotent `204` without releasing anything. This proposal adds no janitor and does not guarantee
-  their deletion by ShutdownTime.
+  consuming existing resources or quota. Uncommitted deliveries in the enabled new flow and
+  reserved-failed objects may likewise be invisible and consume quota. The same owner can use
+  Delete to actually commit cleanup or deletion. This proposal adds no janitor and does not
+  guarantee that ShutdownTime deletes all such objects; existing Controller cleanup duties for
+  objects it manages remain unchanged.
 - Visible depends on local time and informer observation. Clock skew and replica cache progress can
   cause brief differences, which this proposal explicitly accepts.
-- The “absent delivered-lock means delivered” compatibility rule is fail-open: any future write path
-  that forgets to persist the sentinel makes an undelivered object visible by default. A regression
-  test must guarantee it, and the branch must be removed once pre-upgrade objects cannot exist.
+- The “absent delivered-lock means delivered” compatibility rule defaults to admitting at the
+  marker check: an enabled path that omits the sentinel from its first write makes an undelivered
+  object visible by default. Enabled paths must be verified. Compatibility cannot be removed while
+  writing can still be disabled or long-lived markerless objects remain, and the option alone does
+  not prove that every replica meets the enablement prerequisites.
 - E2B projects every visible non-`Serving` state to `paused`. This satisfies the upstream enum, but
   a client cannot distinguish a stable pause, transition, upgrade, unserviceability, or unknown
   state from the read result alone.
@@ -838,3 +956,17 @@ existing object does not match a state.
 - Gateway routes retain their own projection and synchronization lifecycle. Sandbox-ID APIs no
   longer infer absence from a missing route, but this proposal does not make API Visible, E2B
   `running/paused`, and Route traffic reachability identical at every instant.
+
+## Open Questions
+
+Delete's public semantics, cleanup authority for owned invisible objects, the narrow default-off
+writer option, and rolling release boundaries are confirmed. Cross-resource side-effect isolation
+still needs a concrete, provable mechanism covering old Network/runtime requests that finish
+revalidation before interleaving with Delete, recycle, and reclaim, including late writes after
+cleanup completes. Preflight revalidation and cleanup of existing policies alone cannot satisfy
+that requirement. Keep this proposal `provisional` until it is resolved; agreement on rollout does
+not mean the entire proposal is ready to implement.
+Compatibility acceptance must also check legacy objects retained after failure: with writing
+disabled they may have no marker, and marker absence alone must not expose failed objects that were
+previously hidden. The relationship between this branch and existing filtering must be clarified
+before implementation.

@@ -4,8 +4,8 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-26
-last-updated: 2026-08-28
-status: implementable
+last-updated: 2026-09-08
+status: provisional
 ---
 
 # Sandbox 查询、运行状态与 E2B 可见性边界
@@ -15,14 +15,22 @@ status: implementable
 本提案把 Sandbox-ID 请求时需要回答的问题拆成三个互不替代的事实：点查与 owner 回答“对象是否
 存在、属于谁”，`GetVisibility()` 回答“当前用户交付是否仍可见”，`GetOperationalState()` 回答
 “底层 Sandbox 现在处于哪种运行或转换状态”。Manager 点查不再接受 state；E2B API 只有在完成
-owner 授权并确认 `Visible=true` 后，才投影公开 state 或判断当前操作能否执行。
+owner 授权并确认 `Visible=true` 后，才投影公开 state 或判断受限操作能否执行。Delete 不受 Visible
+门槛限制：同 owner 的隐藏对象也必须提交清理或持久化删除；不存在、歧义 ID 和其他 owner 统一
+返回无副作用的 `204`。
 
 每次用户交付仍以 `agents.kruise.io/lock` 作为 epoch，并以匹配的
-`agents.kruise.io/delivered-lock` 作为持久化完成标记。Create 的第一次写入把该标记置为哨兵值以
-保持交付不可见，并用 `ShutdownTime` 限制交付时间；全部后处理成功后，Manager 通过 Infra 条件
+`agents.kruise.io/delivered-lock` 作为持久化完成标记。启用新交付流程后，Create 的第一次写入把该
+标记置为哨兵值以保持交付不可见，并用 `ShutdownTime` 限制交付时间；全部后处理成功后，Manager 通过 Infra 条件
 Patch 原子提交交付和最终生命周期时间，并对良性 resourceVersion 冲突重读重验后重试。标记完全
-缺失只出现在升级前的存量对象上，按已交付兼容处理。Create、Resume 和 Connect 都受统一的 10
-分钟服务端请求上限约束。
+缺失的 legacy delivery 按已交付兼容处理，包括升级前对象和写入开关关闭时产生的对象。新交付
+流程中的 Create，以及 Resume 和 Connect，受统一的 10 分钟服务端请求上限约束。
+
+发布沿用 short-id 的方式：同一个版本先在默认关闭的新交付写入开关下完成兼容部署，再滚动开启。
+开关只控制新 Claim/Clone 的 marker、临时 deadline 和 delivery commit；读取、操作保护和 recycle
+清理始终识别 marker。关闭开关不改变已有 delivery，也不取消其在途提交。滚动升级不得引入功能
+退化，不增加两套 Getter、endpoint 状态机、数据迁移或版本协商。跨资源副作用隔离机制仍待闭合，
+因此本文暂不作为 `implementable` 基线。
 
 `GetOperationalState()` 返回协议中立的类型值：`Provisioning`、`Serving`、`Pausing`、`Paused`、
 `Resuming`、`Upgrading`、`Recycling`、`Terminating`、`Completed`、`Unavailable` 或 `Unknown`。
@@ -76,28 +84,31 @@ Route 凭证、配额占用、池身份、generation 或条件 reason。这些�
 本提案区分两类授权拒绝。**无权**表示调用方对动作本身没有权限，例如 team-scoped API key 请求
 admin-only 动作；只要该判断不读取目标对象，并对任意 Sandbox ID 都给出相同结果，它不会额外透露
 对象存在性，可以使用 `401`。**越权**表示调用方本可执行该动作，但目标属于其他用户；若它与实际
-不存在返回不同响应，就会确认该 ID 存在。所有 Sandbox-ID owner mismatch 因此固定使用 `404`。
+不存在返回不同响应，就会确认该 ID 存在。Sandbox-ID owner mismatch 与不存在使用相同响应：
+Delete 为无副作用的 `204`，其他 endpoint 为 `404`。
 
 同 owner 对象的 Visible 结束不属于上述两类，它表示该 delivery 已经离开 E2B 操作范围。对调用方
 而言这与对象不存在是同一件事——沙箱不再可用——因此它同样使用 `404`，而不是会被 SDK 归类为认证
 异常的 `401`。这条响应只有 owner 能触达，用 `404` 表达它不会额外泄漏任何存在性，同时保持了
-现有的 not-found 查询合同。同 owner 的操作准入失败则不同：它描述“对象仍在，但现在不能执行这个
-动作”，按对应 endpoint 的既有 response 表达。
+现有的 not-found 查询合同。Delete 例外：不可见不证明删除已提交，仍按下文生命周期合同处理。
+同 owner 的操作准入失败则不同：它描述“对象仍在，但现在不能执行这个动作”，按对应 endpoint 的
+既有 response 表达。
 
 ### 范围
 
 - 将 Manager 的 Sandbox 点查收窄为 informer 中的 claimed 身份、namespace、Sandbox ID 和 owner
   查询，不再接收或读取预期 state。
 - 为 Claim 和 Clone 共用的 Create 交付增加 epoch 匹配的持久化完成标记。
-- 为升级前缺失该标记的存量对象定义一条有界的兼容判定，并给出它的删除条件。
-- 为 `infra.Sandbox` 增加协议中立的 Visible 观测，并将其作为所有 Sandbox-ID endpoint 的共同
-  前提。
+- 为缺失该标记的 legacy delivery 定义兼容判定、滚动启用边界和可验证的退出条件。
+- 为 `infra.Sandbox` 增加协议中立的 Visible 观测，并将其作为除 Delete 外所有 Sandbox-ID
+  endpoint 的共同前提。
 - 为 `infra.Sandbox` 增加 typed OperationalState 观测，由 Infra 将底层事实统一投影为稳定状态。
 - 统一 List、Describe 和其他 Sandbox-ID endpoint 的动作权限、查询、所有权、Visible、
   OperationalState 与操作判断顺序，并以是否披露对象存在性作为 `401` 与 `404` 的边界。
 - 定义 Pause、Resume、Connect、Network、Set timeout、Snapshot、Browser 和 traffic-token refresh
   的状态准入，以及操作提交前的权威重验边界。
-- 为 E2B 业务请求设定一个集中定义的 10 分钟服务端硬上限，并在上游合同允许时映射为 `504`。
+- 为 E2B 业务请求设定一个集中定义的 10 分钟服务端硬上限，并在上游合同允许时映射为 `504`；
+  Create/Clone 的新上限随新交付写入一起启用。
 - 保留 Controller 的 ShutdownTime 删除与 recycle 清理职责，但不让 Manager 的删除成功依赖
   Controller 已经完成 recycle。
 - 原生 E2B 路径和定制前缀路径遵循相同合同。
@@ -117,8 +128,8 @@ admin-only 动作；只要该判断不读取目标对象，并对任意 Sandbox 
 - 改变 Infra 点查已有的 route polling hint 或 APIReader Get freshness fallback；它们不能成为
   Sandbox 存在性或 owner 的权威，但是否保留其内部刷新机制不属于本提案。
 - 自动删除或回收处于 `Succeeded`、`Failed` 的 Sandbox。
-- 设计旧 delivery 数据迁移或另一种 Infra 后端。缺失 delivered-lock 的升级前对象由兼容性边界
-  定义的有界规则处理。
+- 设计旧 delivery 数据迁移或另一种 Infra 后端。缺失 delivered-lock 的 legacy 对象由兼容性边界
+  处理，不按经过的版本数推断其已经消失。
 - 改变现有歧义 Sandbox ID 失败即隐藏的查询行为。
 - 对 cache 作与本提案状态迁移无关的全面重构；只迁出当前由 cache 解释的 Sandbox 业务状态判断。
 
@@ -131,12 +142,12 @@ admin-only 动作；只要该判断不读取目标对象，并对任意 Sandbox 
 | 认证请求 | E2B API | 验证调用方身份，不以 route 是否存在推断 Sandbox 是否存在 |
 | 验证动作权限 | E2B API | 在 endpoint 需要时作与目标对象无关的权限判断；拒绝时使用 `401` |
 | 查询已领取 Sandbox | Infra | 从 informer 匹配 namespace 和公开 Sandbox ID，区分不存在、歧义和内部失败 |
-| 验证所有权 | Manager | 使用 Sandbox owner metadata；不读取 state 或 Visible；API 将 mismatch 隐藏为 `404` |
+| 验证所有权 | Manager | 使用 Sandbox owner metadata；不读取 state 或 Visible；API 将 mismatch 与不存在统一隐藏，Delete 为 `204`，其他 endpoint 为 `404` |
 | 持久化 delivery | Manager 与 Infra capability | 以 lock epoch 和条件 Patch 提交完整交付 |
 | 计算 Visible | Infra Sandbox | 从协议中立的持久化事实返回布尔值和稳定 reason |
 | 计算 OperationalState | Infra Sandbox | 将底层运行事实投影为 typed 状态，不泄漏 Sandbox CR 模型 |
 | 编排生命周期操作 | Manager | 使用 OperationalState 表达协议中立策略，把底层原子读写交给 Infra |
-| 映射 HTTP 与 E2B state | E2B API | 先应用 Visible，再按 OperationalState 作公开投影和 endpoint 专用准入 |
+| 映射 HTTP 与 E2B state | E2B API | 读取和受限操作先应用 Visible，再按 OperationalState 作投影和准入；Delete 使用独立的删除提交合同 |
 | 提交底层操作 | Infra capability | 在最新观测上重验 delivery 身份和运行状态，再执行、join 或拒绝操作 |
 | 维护 Route 协议 | Sandbox Route | 保持现有 Route state、Store 顺序与 deletion fence，不消费 OperationalState |
 | 处理超时与 recycle | Sandbox Controller | 删除到期 Sandbox，完成 recycle 并清除上一 delivery 的数据 |
@@ -148,6 +159,8 @@ flowchart LR
     Permission --> Lookup[Informer claimed 查询]
     Lookup --> Owner[所有权授权]
     Owner --> Visible[Visible 门槛]
+    Owner --> Delete[Delete：绑定 delivery 提交清理或删除]
+    Delete --> Result[公开响应]
     Visible --> Operational[OperationalState]
     Operational --> Projection[E2B state 投影]
     Operational --> Admission[操作准入]
@@ -174,7 +187,7 @@ Sandbox-ID 请求判为 not-found。
 3. 明确不存在映射为 Manager not-found；歧义 ID 对外同样隐藏为 not-found，但保留内部 cause；
    其他查询失败映射为 internal error。
 4. Manager 在查询成功后验证 owner；不匹配返回内部 not-allowed，E2B API 将其与实际不存在映射为
-   相同 `404`。
+   相同隐藏响应：Delete 为 `204`，其他 endpoint 为 `404`；歧义 ID 同样遵循此映射。
 5. Manager 不读取、不记录、不筛选 OperationalState、聚合 `GetState()` 或 Visible reason，直接返回
    `infra.Sandbox`。
 
@@ -207,26 +220,28 @@ Sandbox ID 或 lock 都不表示 delivery 已完成。它的取值分四种情�
 | 等于 lock | 已交付 | 提交成功 |
 | 哨兵值 `pending`，或存在但为空 | 未交付 | 本次交付进行中，或提交失败后残留 |
 | 非空、非哨兵且不等于 lock | 未交付 | 上一 epoch 的残留标记，例如 recycle 未清理干净 |
-| 完全缺失 | 按已交付兼容处理 | 只可能是升级前由旧代码领取的存量对象 |
+| 完全缺失 | 按已交付兼容处理 | 升级前对象，或新交付写入开关关闭时产生的 legacy delivery |
 
-“完全缺失即视为已交付”是一条有界的升级兼容规则。它让存量对象在升级后保持可见，既不需要一次性
-backfill，也不需要按创建时间或运行状态做推测。它成立的前提是**新代码的首次持久化写一定写入
-哨兵值**，因此“缺失”不可能由新交付产生。这条规则把该项判断的默认方向从失败即隐藏翻转为失败即
-放行，所以“交付提交前不可见”必须由一条回归测试钉住，不能只依赖文档约定。当集群中不再可能存在
-升级前对象时应删除该分支——Sandbox 生命周期是分钟到小时级，通常下一个版本即可；实现时用
-`known-limit:` 注释在代码里标明它的天花板与删除条件。
+“完全缺失即视为已交付”保留 legacy delivery 的交付兼容性，不豁免其他 Visible 条件。它不需要
+backfill，也不按创建时间或运行状态推测交付是否成功。**启用新交付流程的首次持久化写必须写入
+哨兵值**；开关关闭的 Claim/Clone 则不进入该流程。因此缺失 marker 不只发生在升级前，也可能来自
+兼容部署、滚动启用或关闭开关后的新请求。legacy delivery 不享受提交前不可见保证。
 
-SandboxClaim controller 与 E2B 共用同一个首次持久化写，但它从不调用 delivery-commit，因此它
-领取的 Sandbox 会长期携带哨兵值。这是预期行为：交付标记只约束 E2B 交付，而这些 Sandbox 本来就
-因 owner 不匹配对 E2B 用户不可见。不要为了让它们“看起来正常”而在 controller 侧补一次交付提交。
+该规则在 marker 判定上默认放行，必须验证启用路径的每次首次写入均携带哨兵值。只有确认所有
+受支持写入方及回滚版本不再产生无 marker delivery，且此类存量已经清零，才能删除兼容分支；
+never-timeout 对象可以无限期保留，经过一个版本或日志中暂未出现该 reason 都不是清零证据。
+实现时以 `known-limit:` 注释记录这一边界和退出条件，不引入迁移任务。
+
+新交付流程由 E2B Claim/Clone 的请求选项启用。SandboxClaim controller 不启用该选项，也不承担
+E2B delivery-commit；它不需要写入哨兵或补交付提交，其领取对象仍受既有 owner 隔离。
 
 #### 第一次持久化写：领取但不交付
 
-Claim 的 Update/Create 和 Clone 的 Create 在同一次持久化写中：
+启用新交付流程时，Claim 的 Update/Create 和 Clone 的 Create 在同一次持久化写中：
 
 - 写入本次 lock epoch、owner、claimed 身份和 Sandbox ID；
 - 把 `delivered-lock` 写为哨兵值 `pending`，并删除来自上一 delivery 的 `cleanup`；该写入不能省略，
-  它是“缺失即已交付”兼容规则能够只覆盖升级前对象的唯一保证；
+  它保证启用路径不会被误认为 legacy delivery；
 - 将 `PauseTime` 置空（取代当前 auto-pause 请求在首次写入即提交 `PauseTime` 的行为，保证交付
   完成前不会触发自动暂停）；
 - 将本次 API 请求的绝对截止时间写入 `ShutdownTime`；
@@ -258,23 +273,23 @@ resourceVersion 冲突是**可预期的良性结果**——Sandbox controller �
 必须重读对象、重新校验交付不变量，并在请求 deadline 内重试，不得把一次冲突直接判为交付失败。
 重试只需重放这三个字段，不重放其他变更。
 
-终态失败只有四种，其余情况都应继续重试：
+以下情况结束提交重试；良性 resourceVersion 冲突按上述规则重读重验后重试：
 
 | 终态失败 | 含义 | 映射 |
 |---|---|---|
 | 对象已从 API server 消失 | 临时 deadline 到期后被 Controller 删除 | `504`，见下文 message |
 | 请求 deadline 到期 | 后处理或重试耗尽 10 分钟预算 | `504` |
-| lock epoch 已改变 | 该 CR 已被回收并重新领取，本次交付作废 | Create 已声明的 `500` |
+| UID 或 lock epoch 已改变 | 对象已被替换或重新领取，本次交付作废 | Create 已声明的 `500` |
+| 对象仍存在但已开始持久化删除 | 当前 delivery 已不能提交 | Create 已声明的 `500` |
 | `cleanup=true` 已提交 | 该 delivery 已被删除请求接受 | Create 已声明的 `500` |
 
 以上都不得返回 `201` 或 `404`；无法归类的持久化失败同样使用 `500`。
 
-乐观锁在这里保护的不是 `delivered-lock`——epoch 相等性本身具有自愈性，一次过期提交即使落在已被
-回收复用的 CR 上，写入的旧 lock 值也不会等于该 CR 的新 lock，因而仍然不可见。真正需要保护的是
-同一次 Patch 里的 `ShutdownTime` 与 `PauseTime`：它们没有自愈性，一旦写到下一次交付的对象上就会
-破坏那次交付的生命周期。这也是提交条件必须同时包含 UID 与 epoch、而不能只看 UID 的原因。
+乐观锁同时保护 `delivered-lock`、`ShutdownTime` 和 `PauseTime`。旧请求即使不能用旧 lock 使
+后继 delivery 提前可见，也可能覆盖其已提交 marker，使成功交付的对象重新隐藏；覆盖 deadline
+则会破坏其生命周期。提交条件必须同时包含 UID 与 epoch，不能只看 UID 或依赖 marker 不匹配。
 
-Create 失败后为排障保留的 reserved-failed Sandbox 不具有特殊的存在性语义。它没有成功提交本次
+启用新交付流程时，Create 失败后为排障保留的 reserved-failed Sandbox 不具有特殊的存在性语义。它没有成功提交本次
 delivery，因此哨兵标记仍在或 Phase 已终态，直接得到 `Visible=false`；
 `agents.kruise.io/reserved-failed-sandbox` label 本身不得再触发 `404`。
 
@@ -291,8 +306,10 @@ API 不把该失败伪装成 `404`，也不返回一个未提交的 Sandbox。Co
 
 ### 统一 API 请求上限
 
-E2B API 层使用一个集中定义的 `MaxAPIRequestDuration = 10m` 作为业务请求的服务端硬上限。每个
-请求在入口建立一个绝对 deadline；已有更早 deadline 时使用更早值，内部步骤不得逐段重新获得完整
+E2B API 层使用一个集中定义的 `MaxAPIRequestDuration = 10m` 作为业务请求的服务端硬上限。
+Create/Clone 仅在启用新交付流程时使用该新上限；关闭时保留既有创建时限和生命周期写入方式。
+其他业务请求不由新交付写入开关控制。适用该上限的每个请求在入口建立一个绝对 deadline；
+已有更早 deadline 时使用更早值，内部步骤不得逐段重新获得完整
 10 分钟。
 
 - Create 使用该 deadline 作为 delivery timeout 和第一次写入的临时 `ShutdownTime`。
@@ -326,8 +343,8 @@ Create、Resume 和 Connect 的硬超时映射为其 OpenAPI 已声明的 `504`�
 | 10 | delivered-lock 完全缺失 | true | `DeliveryMarkerAbsent` |
 | 11 | delivered-lock 等于 lock | true | `Delivered` |
 
-`DeliveryMarkerAbsent` 与 `Delivered` 使用不同 reason，是为了让兼容分支可观测：只有确认线上不再
-出现 `DeliveryMarkerAbsent`，才能安全删除“缺失即已交付”这条规则。
+`DeliveryMarkerAbsent` 与 `Delivered` 使用不同 reason，使兼容分支可观测；退出条件仍以受支持
+写入方和存量对象的完整核验为准，不能仅凭日志中暂未出现该 reason 删除兼容规则。
 
 `cleanup-enabled` 不参与计算；它从 SandboxSet 模板继承而来，只标记该 Sandbox 是否支持 recycle。
 任何受信任内部写入一旦提交 `cleanup=true`，当前 delivery 就立即且不可逆地结束 Visible，无论
@@ -399,13 +416,14 @@ endpoint 为空。
 
 OperationalState 是观测，不是操作锁。Manager 可以用它选择操作策略或提前拒绝明显冲突，但真正
 改变底层状态的 Infra capability 必须在提交前重新确认：对象仍是同一 UID 和 delivery epoch、
-Visible 仍未结束，并且最新运行状态仍允许该动作。同一动作已经进行时加入现有等待；已经到达目标
-状态时幂等成功；相反动作或不允许的状态返回 typed conflict。等待过程也必须绑定 UID 和 delivery
+对受限操作还要求 Visible 仍未结束，并且最新运行状态仍允许该动作；Delete 按删除提交合同校验，
+delivery commit 则要求本次交付仍可提交，而不要求提交前 Visible。同一动作已经进行时加入现有
+等待；已经到达目标状态时幂等成功；相反动作或不允许的状态返回 typed conflict。等待过程也必须绑定 UID 和 delivery
 epoch，不能只用 namespace/name 识别对象。
 
 ### E2B 查询、state 与操作
 
-所有 Sandbox-ID endpoint 使用相同的判断顺序：
+除 Delete 使用下文独立生命周期合同外，Sandbox-ID endpoint 使用相同的判断顺序：
 
 1. 认证调用方；
 2. endpoint 如有动作级权限，先作与 Sandbox 存在性无关的检查；
@@ -441,14 +459,14 @@ state 和 metadata 过滤，最后分页。page limit 和 next token 因而只�
 
 #### 操作准入矩阵
 
-下表定义 owner 已匹配且 `Visible=true` 之后的额外条件。拒绝码对上游已定义的 endpoint 只使用其
+下表定义 owner 已匹配后的条件；除 Delete 外均先要求 `Visible=true`。拒绝码对上游已定义的 endpoint 只使用其
 已声明的 response；Browser 与 traffic-token refresh 由本仓自行定义，取与其语义最接近的原生
 endpoint 一致的码值：
 
-| Endpoint | Visible 后的 OperationalState 合同 | 条件不满足 |
+| Endpoint | 操作准入合同 | 条件不满足 |
 |---|---|---:|
 | Describe | 不增加操作门槛；使用公共 E2B state 投影 | — |
-| Delete | 不增加 OperationalState 门槛 | — |
+| Delete | 不受 Visible 或 OperationalState 门槛限制；按删除提交合同处理 | — |
 | Pause | `Serving` 开始 Pause；`Pausing` 加入等待；`Paused` 幂等成功 | `409` |
 | Resume | `Paused` 开始 Resume；`Resuming` 加入等待；`Serving` 幂等成功 | `409` |
 | Connect | `Serving` 直接连接并返回 `200`；`Paused` 开始 Resume，`Resuming` 加入等待，恢复到 `Serving` 后返回 `201` | `409` |
@@ -462,9 +480,9 @@ endpoint 一致的码值：
 `Terminating`、`Completed`、`Unavailable` 和 `Unknown` 不能执行表中的状态受限操作。它们仍可能在
 `Visible=true` 时被 List 或 Describe 兼容投影为 `paused`，但“可读取”不等于“可操作”。
 
-其中 `Provisioning`、`Recycling`、`Terminating` 和 `Completed` 在 `Visible=true` 下实际不可达：
-`delivered-lock` 只在 Ready 与全部后处理成功后写入，而这四种状态都会先让 Visible 结束。矩阵保留
-它们只是为了让规则完整、失败即关闭，实现不需要为这些组合构造用例。
+不能把这些组合一概视为不可达。例如 legacy delivery 可能已有 lock、Phase 为 `Pending` 且没有
+marker，因而同时为 `Visible=true` 与 `Provisioning`；该组合必须按上述完整矩阵处理。终态受
+Visible 的终态规则排除，但其他组合必须从各自持久化前提证明，不能仅凭新交付的成功路径排除。
 
 traffic-token 在初次授权后、实际签发前保留一次新的 Infra Sandbox 校验，以防 recycle/reclaim
 竞态。该校验再次按 owner、Visible、OperationalState、`RequireTrafficAuth` 和 delivery 身份的顺序
@@ -478,31 +496,47 @@ Pause、Resume 和 Connect 只操作已经 Visible 的当前 delivery，不建�
 
 #### Delete 与 recycle
 
-Delete 也要求 `Visible=true`，但不设置 OperationalState 门槛。Manager 先调用协议中立的 recycle
-尝试 capability；该 capability 在最新 backend 观测上判断当前 Sandbox 是否支持并能够进入 recycle。
-成功写入 `cleanup=true` 即表示删除请求已被接受，并立即结束当前 delivery 的 Visible；Manager
-不等待 Controller 完成 recycle，也不以其完成作为释放 API 响应的条件。
+Delete 不要求 `Visible=true`，也不设置 OperationalState 门槛。认证和与对象无关的动作权限检查
+仍然适用；随后执行 claimed lookup 与 owner 授权：
 
-若 recycle trigger 写入失败，现有 Kill fallback 仍可执行。Kill 成功发起持久化删除后，
-`DeletionTimestamp` 使 Visible 结束；对象从 informer 消失后，后续查询才成为实际 not-found。
+- 不存在、没有匹配的 claimed delivery、歧义 ID 或其他 owner，统一返回相同的空响应 `204`，
+  不修改 Sandbox、Route 或 quota；歧义时不能选择任一对象，其他 owner 必须严格 no-op。
+- 查询内部失败仍返回 `500`，不能伪装成幂等成功。
+- 对已授权且仍存在的 delivery，只有已经存在不可逆清理提交或持久化删除事实时，才可无写入地
+  幂等返回 `204`。仅仅到期、未交付或 Phase 终态导致的 `Visible=false` 不满足该条件。
 
-第一次成功提交 `cleanup=true` 或成功发起持久化删除的 Delete 返回 `204`。此后同 owner 的重试一律
-仍返回 `204`：无论对象因 cleanup 或 `DeletionTimestamp` 已经 `Visible=false`，还是旧 Sandbox ID
-已经从点查结果中消失，对调用方而言删除都已完成。其他 owner 从始至终返回同样的隐藏 `404`。
+Manager 对仍需删除的对象调用协议中立的 recycle 尝试 capability。该 capability 绑定原 UID 和
+lock epoch，在最新 backend 观测上判断当前 Sandbox 是否支持并能够进入 recycle；只有 Controller
+确实承担该对象的 recycle-or-delete 责任时，写入 `cleanup=true` 才构成有效的清理提交。不能通过
+给无法处理的终态对象补一个 cleanup annotation 来报告成功。
 
-Delete 因此是“不可见即 `404`”的唯一例外：删除是幂等操作，它的目标状态就是对象不可用，所以把
-“已经不可用”报告为失败没有意义。这也保持了现有客户端反复调用 kill 的行为不变。
+不能进入 recycle 时发起持久化删除；recycle trigger 写入失败后的 Kill fallback 也必须继续绑定
+原 UID 和 epoch。若身份已经变化，旧请求不得删除后继 delivery，也不得修改其 Route 或 quota。
+确认原 delivery 已退出后可按不存在返回 `204`，不能把未分类错误当作身份退出。
+
+成功提交清理或持久化删除后返回 `204`，不等待异步资源释放。Route 与 quota 后处理只属于已授权
+且已接受的原 delivery，重复请求不得对后继 delivery 产生副作用。同 owner 的到期、未交付、
+`Succeeded`、`Failed` 或 reserved-failed 对象均使用此合同。Delete 的成功依据是持久化生命周期
+承诺，不是某一时刻的 Visible；到期窗口内成功 Delete 后，paused-retention 不得让原 delivery
+重新可见。自动清理这些隐藏对象仍不属于本提案新增职责。
 
 Controller 成功 recycle 时清除上一 delivery 的 lock、delivered-lock、owner、Sandbox ID、
 claim-scoped metadata、`PauseTime`、`ShutdownTime` 和 TrafficPolicy，然后才把 CR 返回池中。
 这些清理防止下一次 Claim 继承旧 epoch，但 Manager 的删除语义不依赖清理是否完成。下一次交付
-必须使用新的 lock，并重新完成 delivery commit。claimed 身份和旧 Sandbox ID 被清除后，即使可
-复用 CR 仍在 informer 中，旧 delivery 的后续查询也属于实际不存在。
+必须使用新的 lock；启用新交付流程时重新完成 delivery commit，关闭时走 legacy 交付。关闭路径
+也必须在新 delivery 的首次写入中清除旧 marker，不能清除仍在使用中的 delivery 的 marker。
+claimed 身份和旧 Sandbox ID 被清除后，即使可复用 CR 仍在 informer 中，旧 delivery 的后续查询
+也属于实际不存在。
 
 其中“清除 TrafficPolicy”是本设计依赖的**预期正确状态**，当前实现尚未做到：TrafficPolicy 以
 Sandbox CR 为 OwnerReference 并按 Sandbox 名选择，因此 CR 被回收复用时它不会被删除，上一位用户
 的出网策略会残留到下一次交付。这是一个独立于本提案的既存缺陷，需要单独修复；实现本提案时以修复
 后的行为为准，不得按现状行为编写测试或补偿逻辑。
+
+清理已有 TrafficPolicy 还不足以隔离迟到副作用：旧请求在 Sandbox 重验通过后，仍可能在 recycle
+和下一次 Claim 之后创建旧策略。Network、runtime 调用及其他跨资源操作必须保证旧 delivery 的
+迟到副作用不能作用于后继 delivery；只作前置重读、事后清理或增加发布开关都不能证明该保证。
+其具体机制见“待闭合事项”，不能把这个窗口归入允许的 informer 短暂不一致。
 
 ### HTTP 错误与信息披露
 
@@ -513,10 +547,10 @@ Sandbox CR 为 OwnerReference 并按 Sandbox 名选择，因此 CR 被回收复�
 |---|---:|---|
 | API key 无效或缺失 | 401 | 认证失败 |
 | 调用方对动作本身无权，且判断与任何 Sandbox 是否存在无关 | 401 | 明确拒绝该动作，不透露对象事实 |
-| claimed 点查没有匹配的 Sandbox | 404 | 实际不存在 |
-| 多个 claimed Sandbox 匹配同一 ID | 404 | 失败即隐藏歧义，不选择任一对象 |
-| Sandbox 存在但 owner 不匹配，即对象级越权 | 404 | 与不存在使用相同响应，避免确认该 ID 存在 |
-| Sandbox 属于当前用户但 `Visible=false` | 404 | 该 delivery 已离开操作范围，与不存在使用相同响应；Delete 折叠为幂等 `204` |
+| claimed 点查没有匹配的 Sandbox | Delete 204；其他 404 | 实际不存在；Delete 无副作用 |
+| 多个 claimed Sandbox 匹配同一 ID | Delete 204；其他 404 | 隐藏歧义，不选择或修改任一对象 |
+| Sandbox 存在但 owner 不匹配，即对象级越权 | Delete 204；其他 404 | 与不存在使用相同响应；Delete 严格无副作用 |
+| Sandbox 属于当前用户但 `Visible=false` | Delete 按删除提交合同；其他 404 | Delete 必须提交清理或删除，或确认已有不可逆提交，不能仅凭不可见返回成功 |
 | Visible 但 Pause、Resume、Connect、Network 或 traffic-token 准入冲突 | 409 | endpoint 已声明的冲突 |
 | Visible 但 Snapshot 的 OperationalState 不允许 | 400 | endpoint 已声明的 bad request |
 | Visible 但 Set timeout 或 Browser 的 OperationalState 不允许 | 401 | 这两个 endpoint 没有 400 或 409 可用，只能复用 `401` |
@@ -525,8 +559,9 @@ Sandbox CR 为 OwnerReference 并按 Sandbox 名选择，因此 CR 被回收复�
 | Create、Resume 或 Connect 达到服务端硬上限 | 504 | Backend timeout |
 | 其他 endpoint 达到服务端硬上限 | 500 | 该 endpoint 已声明的服务端错误 |
 
-原则上，对象级越权只有在响应对存在和不存在完全相同时才可使用 `401`；本提案的 Sandbox-ID 请求
-无法满足该条件，因此 owner mismatch 固定为 `404`。`404` 共有四类：实际不存在、歧义 ID 失败即
+Delete 将不存在、歧义 ID 和其他 owner 统一为相同的空响应 `204`，不得附加 Sandbox resource
+context 或 metadata。其他 Sandbox-ID endpoint 的 owner mismatch 固定为 `404`。其 `404` 共有
+四类：实际不存在、歧义 ID 失败即
 隐藏、隐藏其他 owner，以及同 owner 但 Visible 已结束。前三类必须使用完全相同的 status、公开
 message 和 response shape，且不附加 Sandbox resource context 或 metadata——它们的作用正是彼此
 不可区分。第四类只有对象的 owner 能够触达，因此可以使用自己的公开 message，但同样不得包含
@@ -538,35 +573,75 @@ lock、delivered-lock 的实际值或内部 reason。
 
 ### 不变量
 
-- Create 在 delivery commit 成功前绝不返回成功，List 和 Sandbox-ID endpoint 也不返回该 delivery。
+- 启用新交付流程的 Create 在 delivery commit 成功前绝不返回成功，List 和公开读取也不返回该
+  delivery；经过授权的 Delete 仍可提交取消该交付的清理或删除。
 - `delivered-lock == lock` 只证明当前 epoch 已交付；上一 epoch 的 marker 不能使新 delivery
-  Visible。标记完全缺失按已交付兼容处理，这是唯一的例外，且只覆盖升级前对象。
+  Visible。标记完全缺失按 legacy 交付兼容处理，覆盖升级前对象和写入开关关闭时产生的对象。
 - `cleanup=true`、删除开始和三个明确终态不可逆地结束 Visible；ShutdownTime 到期同样结束 Visible，
   但它可被 Controller 的 paused-retention 顺延，因此不是不可逆终点。
 - 一个 informer 中仍存在且属于当前用户的 Sandbox，不会因 OperationalState 或操作准入失败返回
-  not-found；Visible 结束是唯一与实际不存在共用 `404` 的对象级情形，而 Delete 把它折叠为幂等
-  `204`。
+  not-found；除 Delete 外，Visible 结束是唯一与实际不存在共用 `404` 的对象级情形。Delete 必须
+  验证实际不存在或不可逆生命周期提交，不能将所有 `Visible=false` 折叠为成功。
 - 动作级无权只有在判断不读取目标 Sandbox、因而不泄漏其存在性时才返回 `401`；owner mismatch
-  始终与不存在返回相同 `404`。
-- 所有操作先满足 Visible，再执行 OperationalState 与 capability 准入。
+  始终与不存在返回相同响应：Delete 为无副作用的 `204`，其他 endpoint 为 `404`。
+- 受限操作先满足 Visible，再执行 OperationalState 与 capability 准入；Delete 和 delivery commit
+  分别遵循自己的生命周期提交条件。
 - Manager 点查不接受 E2B state，也不读取 OperationalState、聚合 `GetState()` 或 Sandbox CR 状态。
 - List 与 Describe 只公开 `running` 和 `paused`：`Serving` 为 `running`，其他可见状态为 `paused`，
   并在分页前过滤。
 - OperationalState Getter 只返回一次观测；改变底层状态的 capability 必须重新确认 UID、delivery
-  epoch、Visible 和最新运行状态。
+  epoch 及该操作要求的最新事实，并保证迟到副作用不能影响后继 delivery。
 - `Unavailable` 表示已识别但不能服务，`Unknown` 表示无法可靠解释；二者都不能放行受限操作。
 - Route state 与 OperationalState 是两个独立协议，不能相互推导或替代。
 - 最终 delivery Patch 不能覆盖 Controller 赢得的删除或更新。
-- 单个请求最多获得一次 10 分钟预算；内部重试不会重置该预算。
+- 适用统一请求上限的请求最多获得一次 10 分钟预算；内部重试不会重置该预算。
+- 新交付写入开关不控制已有 marker 的读取、操作保护或 recycle 清理，也不取消在途 delivery commit。
 - 读取和公开投影使用点查返回的一次 Sandbox 观测；Visible 与 OperationalState Getter 都不另行
   读取。操作 capability 的权威重验不改变这一读取合同。不同副本仍可以在短时间内给出不同结果。
 
 ### 兼容性边界
 
-缺少 `delivered-lock` 的 lock-only Sandbox 只可能来自升级前的旧代码，按已交付兼容处理，理由与
-边界见“Delivery epoch 与提交标记”。这条规则让升级不需要一次性 backfill，也不需要按创建时间或
-运行状态推测；代价是该项判断默认放行，因此必须由回归测试保证新交付在提交前不可见，并在存量对象
-不可能再存在后删除该分支。
+缺少 `delivered-lock` 的 legacy delivery 按已交付兼容处理，来源和退出条件见“Delivery epoch
+与提交标记”。关闭新交付写入开关不会撤销已有 marker，也不会要求重建现存 Sandbox。
+
+#### 新交付写入开关
+
+采用与 [short-id 发布合同](20260711-short-sandbox-id.md#rollout-and-rollback)相同的“读取始终
+兼容、写入单独启用”方式。同一二进制版本提供一个默认关闭的新交付写入配置，通过既有 options
+传递，在每个 Claim/Clone 请求开始时固定该请求的选择，不引入包级可变状态或动态热加载机制。
+
+| 配置 | 新 Claim/Clone | 已有 delivery |
+|---|---|---|
+| 关闭 | 不写新 marker，保留 legacy 创建时限和生命周期写入；新 epoch 的首次写入清除残留 marker | 始终识别已持久化 marker，保留对应操作保护和在途 commit |
+| 开启 | `pending`、临时 deadline、最终生命周期提交与 delivery commit 一起启用 | 使用相同的 Getter、endpoint 状态机和清理合同 |
+
+开关不能只控制 annotation 而让临时 deadline 单独生效。Getter、owner 校验、Delete、其他操作的
+marker 保护、Controller recycle 清理和 delivery fencing 始终生效；它不切换两套状态模型。
+SandboxClaim controller 不消费该 E2B 写入配置。这里需要部署级写入配置，是因为单个请求选项
+无法证明集群中其他副本已经认识新数据；运行时仍以该请求固定的中立选项表达，不引入版本协商、
+新的 CR 字段、数据迁移任务或通用开关框架。
+
+#### 滚动启用与回滚
+
+1. 所有 Manager 以写入关闭的方式滚动部署兼容版本；Controller 同时具备 marker 清理能力。
+   混合旧版本期间不产生新协议数据，不要求停止 API 服务或清空现存 Sandbox。
+2. 确认所有不认识 marker 的副本退出、其在途请求和延迟副作用已结束，相关 informer 已同步，
+   Controller 清理与所需 delivery fencing 已具备后，才允许开启写入。不能只检查 Deployment 镜像。
+3. 通过滚动更新配置开启新写入。尚未开启的兼容副本继续产生 legacy delivery，但必须正确读取和
+   操作已启用副本产生的对象。所有写入方启用后，后续 E2B delivery 才全部适用新交付保证。
+4. 关闭开关只停止后续新请求进入该流程，不删除已有 marker，不撤销在途请求已固定的交付选择。
+   已产生新 marker 后只支持回退到理解该协议的兼容版本，不支持回退到完全不认识 marker 的版本。
+
+两阶段使用同一功能版本，无需维护两套二进制实现。兼容分支的删除是另一次有存量证据支持的变更，
+不能以开关关闭或经过一个版本替代数据核验。升级期间允许 legacy delivery 保持旧交付行为，
+但不得引入升级特有的功能退化：Create 已成功却因旧 marker 永久隐藏、deadline 被旧请求覆盖、
+Delete 误伤后继 delivery 或新旧请求串用网络策略均不属于可接受的过渡现象。short-id 文档对
+短暂缺失或陈旧 Route 的让步不在这里复用；本提案也不增加协调协议来掩盖这些错误。
+
+必须覆盖关闭状态的新旧副本共存、开启与关闭的兼容副本共存、带 marker 对象的 recycle/reclaim、
+在途 commit 时关闭开关、never-timeout 存量以及回退到兼容版本。公开 `paused` 但不可 Resume、
+状态拒绝被 SDK 分类为认证异常和创建时限变化还需通过实际 SDK 调用验收，不能仅检查 response
+code 枚举；客户端的重试应有边界，不能把所有 `409` 都理解为最终必然成功。
 
 本提案还会改变以下客户端可见行为，全部为有意变更：
 
@@ -577,15 +652,15 @@ lock、delivered-lock 的实际值或内部 reason。
 | Browser 遇到状态不允许 | `404` | `401`（与 Set timeout 保持一致） |
 | Network 遇到状态不允许 | `404` | `409` |
 | Describe 一个 ShutdownTime 已过期的沙箱 | 返回上游枚举之外的 `dead` | `404` |
-| Create、Clone 的默认服务端时限 | 实质无上限 | 10 分钟，超时返回 `504` |
+| Create、Clone 的默认服务端时限 | 实质无上限 | 新交付写入开启后为 10 分钟，超时返回 `504`；关闭时保留既有创建时限 |
 
 其中“Running 但未 Ready 投影为 `paused`”需要客户端注意：这类沙箱的 OperationalState 是
 `Unavailable`，对它调用 Resume 会得到 `409`。客户端不能把 `paused` 理解为“一定可以 resume”，而
-应把 `409` 当作稍后重试的信号。同理，`Upgrading` 也会被投影为 `paused` 且拒绝 Resume，这与现状
-一致。
+不能把 `409` 当作必然可以恢复的承诺，重试应有次数或时间边界。同理，`Upgrading` 也会被投影为
+`paused` 且拒绝 Resume，这与现状一致。
 
-正常生命周期的 timeout 从 delivery commit 的实际时刻开始计算，而不是从首次领取写入开始；因此
-交付后可用时长保持请求值，Sandbox 从首次领取到最终结束的总时长可能增加。任何更长的客户端阶段
+启用新交付流程后，正常生命周期的 timeout 从 delivery commit 的实际时刻开始计算，而不是从首次
+领取写入开始；因此交付后可用时长保持请求值，Sandbox 从首次领取到最终结束的总时长可能增加。任何更长的客户端阶段
 timeout 都仍受单个 10 分钟 API 硬上限约束。
 
 E2B 的 `paused` 保持上游兼容值，但含义扩展为“当前不能正常提供服务”。客户端不能据此判断底层
@@ -696,11 +771,13 @@ Create 成功与公开交付一致的合同。
   吸收，但重试耗尽请求 deadline 后仍会失败；这是 Controller 与并发生命周期写优先于 Create 成功的
   刻意取舍。
 - `Succeeded`、`Failed` Sandbox 可以持久存在且对 E2B 不可见，并可能继续占用现有资源或配额；
-  未提交交付的对象与 reserved-failed 对象同样不可见但仍计入配额，而用户对它们的 Delete 只会得到
-  幂等 `204`、不会真正释放。本提案不增加 janitor，也不保证 ShutdownTime 删除这些对象。
+  启用新流程但未提交交付的对象与 reserved-failed 对象也可能隐藏并占用配额。同 owner 可以通过
+  Delete 真正提交清理或删除。本提案不增加 janitor，也不保证 ShutdownTime 删除所有这些对象；
+  已有 Controller 对其管理对象的清理职责不变。
 - Visible 依赖本地时间与 informer 观测。时钟偏差和副本缓存进度可能导致短暂差异，本提案明确接受。
-- “缺失 delivered-lock 即视为已交付”这条兼容规则是失败即放行的：任何未来忘记在首次写入哨兵值的
-  新路径，都会让未交付的对象默认可见。它必须由回归测试保证，并在存量对象不可能存在后删除。
+- “缺失 delivered-lock 即视为已交付”这条兼容规则在 marker 判定上默认放行：任何启用路径忘记在
+  首次写入哨兵值，都会让未交付的对象默认可见。必须验证启用路径；写入开关仍可能关闭或长期存量
+  未清零时不能删除兼容分支，也不能仅凭该开关推断所有副本已满足启用前置条件。
 - E2B 把所有可见的非 `Serving` 状态统一公开为 `paused`。这满足上游枚举，但客户端无法仅凭读取
   结果区分稳定暂停、转换、升级、不可服务或未知状态。
 - OperationalState 是一次观测，可能在调用方作出判断后变化。若 Infra capability 未在 mutation 前
@@ -709,3 +786,12 @@ Create 成功与公开交付一致的合同。
   关闭；这可能暂时降低可操作性，但不会把未知状态误放行为可服务。
 - Gateway route 仍有自己的投影与同步生命周期。Sandbox-ID API 不再以 route 缺失判定不存在，但
   本提案不保证 API Visible、E2B `running/paused` 与 Route 流量可达性在每个瞬间完全相同。
+
+## 待闭合事项
+
+Delete 公开语义、同 owner 隐藏对象清理权限，以及默认关闭的窄写入开关和滚动发布边界已确认。
+跨资源副作用隔离还需给出可证明的具体机制：覆盖旧 Network/runtime 请求完成重验后，与
+Delete、recycle、reclaim 交错的情况，包括清理结束后的迟到写入。前置重验和已有策略清理不能
+单独满足该条件。该项闭合前保持 `provisional`，不能将发布方式确认等同于整个提案可直接实现。
+兼容验收还必须核对 legacy 失败保留对象：关闭写入时可能没有 marker，不能仅凭标记缺失把原本
+被隐藏的失败对象公开；这一分支与现有过滤行为的对应关系需在实施前明确。
