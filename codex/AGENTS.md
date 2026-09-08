@@ -6,6 +6,12 @@
 
 * Do not propose a plan unless the user has explicitly permitted it.
 
+# Skill authority
+
+* Explicit user instructions take precedence over skill guidelines. Apply existing authorization from the conversation without asking again; authorization remains limited to its approved scope and does not bypass harness permissions.
+* Before requesting new approval, complete independent, already-authorized work needed to make the decision concrete and reviewable.
+* If a skill causes a permission request, pause, or incomplete result, name and link to its `SKILL.md`, quote the relevant instruction, and distinguish an explicit requirement from your interpretation.
+
 # Ponytail engineering
 
 * Before editing code, understand the request and trace the relevant execution flow end to end. Choose the first sufficient solution: no change (YAGNI), an existing implementation or pattern, the standard library, a native platform feature, an installed dependency, one line, or the minimum new code.

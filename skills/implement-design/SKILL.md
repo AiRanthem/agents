@@ -14,15 +14,18 @@ every required behavior, add nothing outside it, and leave fresh evidence that t
   implement directly. Do not require a plan when neither the mode nor the user requires one.
 - Read and follow all repository instructions that apply to the files in scope. Preserve unrelated and
   pre-existing work.
-- Treat in-scope local edits and non-destructive checks as authorized. Ask before external writes, deployment,
-  destructive actions, new dependencies, or a material expansion of scope.
+- Treat in-scope local edits and non-destructive checks as authorized, subject to the type approvals below.
+  External writes, deployment, destructive actions, new dependencies, and material scope expansion require
+  user authorization; apply authorization already given in the conversation without asking again.
 - Do not create or modify plans, task files, OpenSpec artifacts, ADRs, or unrelated documentation unless the
   user explicitly requests it.
 - Do not modify `AGENTS.md`, `CLAUDE.md`, or another repository-level instruction file without explicit user
   approval in the current conversation. Put durable, local design reasoning in code comments. If comments
   cannot carry an important explanation, explain the need and ask before changing repository instructions.
 
-Ask for approval before adding or reshaping a data structure. This includes:
+Ask before adding or reshaping a data structure unless the user has already approved that change and its
+shape, directly or in the confirmed design. A general implementation request alone does not approve an
+unspecified shape. This applies to:
 
 - adding any named structure, class, interface, protocol, enum, union, or type alias;
 - adding, removing, or changing fields, methods, variants, or inheritance of an existing type;
@@ -32,10 +35,11 @@ Explain why the change is needed, what existing type or simpler representation w
 smallest proposed shape. Local variables and ordinary anonymous values do not need approval, but do not use
 them to hide a type or schema that should be explicit.
 
-Stop before an affected change when the design is a draft, has a decision-changing open question, conflicts
-with the code or its paired translation, or lacks a necessary product decision. Also stop for a newly found
-breaking change or special release requirement. Continue only with independent work that cannot constrain the
-pending decision.
+Implement deliberate differences between the current code and the confirmed target state. Stop before an
+affected change when the design is still an unapproved draft, lacks a necessary product decision, has a
+decision-changing open question or translation conflict, or repository evidence makes the intended contract
+unclear or infeasible. Also stop for a newly found breaking change or special release requirement not covered
+by existing approval. Continue independent work that cannot constrain the pending decision.
 
 If a breaking change, compatibility boundary, or special production upgrade must remain attached to the
 design, propose a narrow `Implementation Notes` / `实现注意事项` entry. Write it only after approval, keep it
@@ -57,11 +61,9 @@ Read the named design completely before editing code.
 
 ## Orchestrate with subagents
 
-When subagents are available and permitted, consider every available agent, model, and reasoning-effort
-combination, including Sol, Terra, Luna, and future choices. Honor an explicit user choice. Otherwise choose
-the least expensive combination that can reliably meet the subtask's quality bar, then optimize wall-clock
-time, main-agent context, and total token use. Evaluate the model and effort together rather than fixing one
-first.
+When subagents are available and permitted, follow applicable routing instructions and honor explicit user
+choices. Choose the least expensive available model and reasoning effort that can reliably meet the subtask's
+quality bar. Account for coordination, wall-clock time, main-agent context, and total token use.
 
 - Use current capability descriptions as routing evidence, not a permanent table. Prefer a low-cost agent for
   bounded research, documentation lookup, commands, output reduction, and mechanical edits; a balanced agent
@@ -77,21 +79,21 @@ first.
   judgment, integration, critical test scope, and the completion decision with the main agent. The main agent
   reviews every delegated diff and verifies material conclusions against primary evidence.
 
-Treat an implementation as non-trivial when it changes behavior across files or responsibility boundaries, or
-affects a public contract, stored data, concurrency, security, compatibility, or release safety.
-
-- For ambiguous, cross-boundary, or high-risk work, after mapping the affected flow and before editing it, use
-  a read-only subagent to challenge the scope, missed paths, and assumptions. Resolve its findings before any
-  writing agent starts.
-- After all writers and focused tests finish, freeze the implementation and require a fresh, independent,
-  read-only review for every non-trivial change. Ask it to compare the design, final diff, and tests for
+- Use a read-only subagent to challenge scope, missed paths, and assumptions when unresolved ambiguity or
+  cross-boundary risk warrants it. Resolve decision-changing findings before affected edits; independent
+  authorized work may continue.
+- Require an independent read-only review for changes with material risk to public contracts, stored data,
+  concurrency, security, compatibility, or release safety, and when repository instructions require it.
+  Otherwise delegate review when it improves confidence or saves time or context enough to justify its cost;
+  touching multiple files alone does not require delegation. Review after writers and focused tests finish,
+  against a stable implementation. Ask the reviewer to compare the design, final diff, and tests for
   correctness, omissions, extra scope, readability, minimality, coverage, and warnings, and to state evidence,
   uncertainty, and unexamined areas.
 - Re-review the affected area after material fixes. Skip delegation for small work when coordination costs
   more than doing and checking it directly.
 
-A subagent report is a second perspective, not completion proof. The main agent still performs the final diff
-review and fresh validation below.
+A subagent report is a second perspective, not completion proof. The main agent reviews the final diff and
+checks that validation evidence covers the final state; it need not repeat valid delegated checks.
 
 ## Write the smallest complete implementation
 
@@ -121,8 +123,9 @@ cannot support. Any unresolved relevant failure prevents completion.
 
 ## Prove the behavior
 
-Choose the test and implementation order that makes the work clearest. Finish with tests that fail for
-meaningful violations of the design.
+Choose the test and implementation order that makes the work clearest. Use existing tests when they already
+detect meaningful violations of the design; add the smallest regression check for uncovered non-trivial
+behavior. Do not add tests that merely mirror a reversible, low-impact edit.
 
 - Cover every visible rule and important invariant. Include relevant success, rejection, failure, missing
   data, limit, compatibility, concurrency, and recovery cases. Do not test imagined features outside scope.
@@ -137,9 +140,12 @@ meaningful violations of the design.
   concurrency, shared packages, or release behavior. Run required formatting and generation commands. Do not
   run unrelated end-to-end suites by habit.
 
-Before claiming completion, run fresh commands that prove the final tree builds, tests, formats, and passes
-relevant static checks without new warnings or errors. Read their exit status and output. If an essential
-check cannot run, report the exact gap and do not describe the implementation as fully verified.
+Before claiming completion, ensure build, test, formatting, generation, and static-check evidence covers the
+final state to the extent required by the change's risk and repository rules. Read command exit statuses and
+output. Reuse results from this task when the checked code, dependencies, configuration, and relevant
+environment remain unchanged. Repeat or broaden checks only for subsequent changes, failures, or unresolved
+concerns that invalidate or exceed that evidence. If an essential check cannot run, report the exact gap and
+do not describe the implementation as fully verified.
 
 ## Check and report the result
 

@@ -20,6 +20,26 @@ an implementation plan.
 - If the user also asks for implementation, finish or exit the design work first. Do not implement
   from this skill.
 
+## Decision value and code cost
+
+Apply code-cost tradeoffs only to lower-value decisions, where they are a high-priority selection
+criterion. Smaller, narrower changes generally make quality easier to assure, review faster, and
+merging easier; fewer lines alone do not prove a better design.
+
+- Judge each decision's importance against the core outcome, explicit requirements, and repository
+  evidence. Core, important decisions are not subject to code-cost tradeoffs. Do not weaken required
+  correctness, security, data protection, or other essential guarantees to reduce code changes.
+- For lower-value decisions, weigh the concrete incremental benefit in security, performance,
+  features, or usability against the code volume and breadth of change. Ground the estimate in
+  affected components, interfaces, callers, and required tests; qualitative estimates suffice.
+  Do not let the overall feature's value justify every optional refinement.
+- Actively discard low-benefit choices that require large or widespread changes, or choose a less
+  complete design with lower code cost. Prefer omission or existing behavior when sufficient;
+  elegance, uniformity, and speculative flexibility alone do not justify broad changes.
+- Record material tradeoffs as design rationale, non-goals, and accepted limitations, including
+  when a limitation would warrant revisiting. Keep code-cost evidence in exploration; do not turn
+  the final design into a file-by-file implementation plan.
+
 ## Explore and converge
 
 Treat exploration as a thinking stance, not a fixed questionnaire.
@@ -49,8 +69,9 @@ Inspect repository conventions before suggesting a title or path. Check applicab
 files, existing design or proposal directories, templates, metadata, naming patterns, and nearby
 documents. OpenSpec material may be read as context but must not be created or modified.
 
-Present the proposed scope and exact target paths, then obtain user confirmation before writing.
-When no repository or convention exists, ask the user to confirm the destination and base name.
+Use the scope and exact target paths already specified or approved by the user without asking again.
+If either remains unapproved, complete the relevant exploration, present the proposed scope and paths,
+and obtain confirmation before writing. Repository conventions inform the proposal, not authorization.
 
 Apply these language rules:
 
@@ -120,6 +141,8 @@ report. Keep it synchronized across both language versions that still exist.
 Before reporting completion:
 
 - Re-read the design against the confirmed decisions and research evidence.
+- Confirm that low-benefit, high-code-cost choices were removed or simplified, core decisions were
+  not compromised for code cost, and material accepted limitations are explicit.
 - Confirm that required sections exist, the Summary was written after the rest, and optional
   sections contain material information.
 - Confirm that the target state is specific enough for a reviewer to detect missing, incorrect, and

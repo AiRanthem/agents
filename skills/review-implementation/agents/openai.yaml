@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Implementation"
+  short_description: "Review an implementation against its confirmed design"
+  default_prompt: "Use $review-implementation to review this implementation against its confirmed design and report the findings."
+policy:
+  allow_implicit_invocation: false
