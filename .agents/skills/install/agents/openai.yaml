@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Dev Kit"
+  short_description: "Install shared skills and active Agent configuration"
+  default_prompt: "Use $install to install or update this dev kit for the active Agent on the current machine."

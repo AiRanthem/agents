@@ -1,4 +1,0 @@
-interface:
-  display_name: "Install Dev Kit"
-  short_description: "Install and update personal Agent configuration"
-  default_prompt: "Use $install to install or update this personal Agent configuration on the current machine."
