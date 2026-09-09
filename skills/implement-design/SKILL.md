@@ -61,7 +61,9 @@ The implementation owner retains contract interpretation, approval handling, arc
 
 After understanding the affected flow, prefer in order: no change, existing implementation or pattern, standard library, native platform capability, installed dependency, then minimum new code. Approval rules still apply.
 
-- Fix causes at the correct ownership boundary rather than duplicating caller patches. Prefer plain control flow, few files, and readable code over speculative wrappers, factories, helpers, or abstractions.
+- Fix causes at the correct ownership boundary rather than duplicating caller patches. Prefer plain control flow and few files over speculative wrappers, factories, helpers, or abstractions.
+- Immediately after writing or modifying each function, self-review it before continuing. Simplify it until no equally correct, more elegant or concise implementation is evident.
+- For production functions, also require the clearest readable implementation available under the contract and repository conventions. When the most elegant and concise correct form remains difficult to understand, add concise inline comments at the relevant expressions to explain their intent, reason, or invariant. For test functions and test-only helpers, apply the per-function elegance and concision review without the production readability requirement.
 - Respect repository placement, naming, ownership, and dependency direction. Add comments for reasons, invariants, or non-obvious failure and compatibility behavior, not syntax narration.
 - Handle relevant errors, cancellation, cleanup, uncertain outcomes, partial failure, and concurrency according to the actual contract.
 - Do not simplify away correctness, security, trust boundaries, accessibility, data-loss prevention, or required real-world behavior.
@@ -96,7 +98,7 @@ Do not automatically invoke another explicit-only skill without the user's reque
 
 ## Inspect and hand off the final state
 
-Re-read the design and final diff. Check required behavior, non-goals, approved type shapes, simplicity, dead code, stale comments, generated outputs, dependency changes, and final verification evidence.
+Re-read the design and final diff. Confirm every written or modified function received the required per-function self-review. Check required behavior, non-goals, approved type shapes, simplicity, dead code, stale comments, generated outputs, dependency changes, and final verification evidence.
 
 Report in the user's language, concisely but with reconstructable evidence:
 
