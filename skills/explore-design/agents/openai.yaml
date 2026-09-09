@@ -1,6 +1,6 @@
 interface:
   display_name: "Explore Design"
   short_description: "Explore and author implementation-anchoring designs"
-  default_prompt: "Use $explore-design to explore this problem and create a bilingual design document."
+  default_prompt: "Use $explore-design to explore this problem and create a Simplified Chinese design document."
 policy:
   allow_implicit_invocation: true

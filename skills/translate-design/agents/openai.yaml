@@ -1,0 +1,6 @@
+interface:
+  display_name: "Translate Design"
+  short_description: "Translate a frozen Chinese design into English"
+  default_prompt: "Use $translate-design to translate this Chinese design into an equivalent English document for pull request review."
+policy:
+  allow_implicit_invocation: true

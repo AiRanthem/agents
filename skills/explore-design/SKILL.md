@@ -1,6 +1,6 @@
 ---
 name: explore-design
-description: Explore feasibility, vague ideas, concrete requirements, or existing documents and create or refactor a repository-aware design that anchors later implementation and review. Use when explicitly invoked with $explore-design or /explore-design, or when the user clearly requests a pre-implementation design document. Do not trigger for ordinary discussion, implementation plans or code, OpenSpec or ADR authoring, or post-hoc documentation.
+description: Explore feasibility, vague ideas, concrete requirements, or existing documents and create or refactor a Simplified Chinese repository-aware design that anchors later implementation and review. Use when explicitly invoked with $explore-design or /explore-design, or when the user clearly requests a pre-implementation design document. Do not trigger for ordinary discussion, implementation plans or code, OpenSpec or ADR authoring, or post-hoc documentation.
 ---
 
 # Explore Design
@@ -23,7 +23,7 @@ Use the user-selected model and available tools. Do not infer quota, model ident
 - The design owner must directly inspect the evidence that determines consequential choices. A research summary is an index, not a substitute for understanding the affected flow.
 - Keep problem framing, architecture, invariant selection, public or stored contracts, security boundaries, tradeoffs, and decision-changing uncertainty with the design owner. Use the strongest justified model for genuinely difficult decisions; do not spend it on routine scanning by default.
 - Do not create multiple complete competing designs merely to use spare quota. Seek a focused independent challenge only when a material assumption needs it. This is not a substitute for later implementation review.
-- Delegate writing only within approved document paths and with non-overlapping ownership. Verify the resulting text and bilingual semantics yourself.
+- Delegate writing only within approved document paths and with non-overlapping ownership. Verify the resulting text yourself.
 
 ## Explore and converge
 
@@ -50,9 +50,8 @@ Apply code-cost tradeoffs only to lower-value choices. Never weaken required cor
 
 Inspect applicable instruction files, design directories, templates, metadata, naming patterns, and nearby documents. Use already-approved scope and exact paths; otherwise propose them and obtain confirmation before writing.
 
-- New designs use `<base>-EN.md` and `<base>-CN.md`, in natural English and natural Simplified Chinese.
-- Both versions are equal contracts. Decisions, constraints, diagrams, tables, unknowns, and draft status must match.
-- Update both members of an existing pair. Preserve a deliberately deleted counterpart; ask when its absence is unexplained.
+- New designs use `<base>-CN.md`, in natural Simplified Chinese.
+- Update the Chinese member of an existing pair without changing its English counterpart.
 - Update an existing unsuffixed single-file design in place. Do not rename it or create a bilingual pair just because this skill was invoked.
 - Follow repository formatting and metadata conventions, otherwise the conventions of the document's language.
 
@@ -60,9 +59,9 @@ Inspect applicable instruction files, design directories, templates, metadata, n
 
 Every design has these top-level sections:
 
-1. **Summary / 摘要** — first in the document, written last; explain the problem, direction, and end state in under one minute.
-2. **Background / 背景** — the problem, benefits, and significance: Why.
-3. **Target Design / 设计终态** — the complete intended system after the change: What.
+1. **摘要** — first in the document, written last; explain the problem, direction, and end state in under one minute.
+2. **背景** — the problem, benefits, and significance: Why.
+3. **设计终态** — the complete intended system after the change: What.
 
 Add Alternatives, Risks, or Open Questions only for material content. Stable facts about the existing system may explain the background; transient snapshots, superseded designs, implementation history, and migration narratives do not belong there.
 
@@ -79,7 +78,7 @@ Do not prescribe incidental implementation details to compensate for a weaker im
 
 Exclude file-by-file changes, task breakdowns, implementation pseudocode, migration procedures, rollout steps, test plans or commands, and implementation status or history. Runtime sequences are allowed; development sequences are not.
 
-A later implementation agent may propose a separate **Implementation Notes / 实现注意事项** section only for information essential to safe release, compatibility, or the design boundary, such as a special production upgrade requirement. Writing it requires authorization and semantic synchronization of both surviving language versions. It must not become a task list or work log.
+A later implementation agent may propose a separate **实现注意事项** section only for information essential to safe release, compatibility, or the design boundary, such as a special production upgrade requirement. Writing it requires authorization. It must not become a task list or work log.
 
 ## Write, validate, and stop
 
@@ -90,7 +89,7 @@ Before completion:
 - Re-read against confirmed decisions and primary evidence. Check that consequential assumptions are resolved or marked open.
 - Confirm that optional high-cost, low-value choices were removed or justified without weakening core guarantees.
 - Check the three required sections, observable target-state precision, and absence of implementation-plan content outside the narrow notes exception.
-- Compare every material decision, constraint, example, table, diagram, open question, and status across an EN/CN pair.
+- Confirm that the document is in natural Simplified Chinese and only the approved Chinese path was written.
 - Run only relevant narrow documentation checks, not application tests merely because design documents changed.
 
 Report written paths, draft or complete status, unresolved questions, and validation actually performed. “Complete” describes the document, not approval, independent design review, or implementation readiness when a required gate remains open. Do not propose an implementation plan, implementation prompt, or unsolicited next-step workflow.
