@@ -345,9 +345,10 @@ func TestTrustedSeedAddresses(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name string
-		pods []v1.Pod
-		want []string
+		name     string
+		pods     []v1.Pod
+		localURL string // empty means the default local URL below
+		want     []string
 	}{
 		{name: "pod ip with the bind port", pods: []v1.Pod{pod("10.0.0.3", "", v1.PodRunning)}, want: []string{"10.0.0.3:7946"}},
 		{name: "annotation overrides only the port", pods: []v1.Pod{pod("10.0.0.2", "10.0.0.2:9000", v1.PodRunning)}, want: []string{"10.0.0.2:9000"}},
@@ -356,6 +357,11 @@ func TestTrustedSeedAddresses(t *testing.T) {
 		{name: "annotation with an invalid port is dropped", pods: []v1.Pod{pod("10.0.0.5", "10.0.0.5:70000", v1.PodRunning)}, want: []string{}},
 		{name: "invalid pod ip is skipped", pods: []v1.Pod{pod("not-an-ip", "", v1.PodRunning)}, want: []string{}},
 		{name: "local address is excluded", pods: []v1.Pod{pod("127.0.0.1", "127.0.0.1:7946", v1.PodRunning)}, want: []string{}},
+		{name: "ipv6 pod ip is bracketed", pods: []v1.Pod{pod("fd00::3", "", v1.PodRunning)}, want: []string{"[fd00::3]:7946"}},
+		{name: "ipv6 annotation overrides only the port", pods: []v1.Pod{pod("fd00::2", "[fd00::2]:9000", v1.PodRunning)}, want: []string{"[fd00::2]:9000"}},
+		{name: "unbracketed ipv6 annotation is dropped", pods: []v1.Pod{pod("fd00::4", "fd00::4:9000", v1.PodRunning)}, want: []string{}},
+		{name: "ipv4-mapped pod ip stays a dotted quad", pods: []v1.Pod{pod("::ffff:10.0.0.3", "", v1.PodRunning)}, want: []string{"10.0.0.3:7946"}},
+		{name: "ipv6 local address is excluded", pods: []v1.Pod{pod("fd00::9", "", v1.PodRunning)}, localURL: "[fd00::9]:7946", want: []string{}},
 		{name: "pending and unready pods stay eligible", pods: []v1.Pod{pod("10.0.0.7", "", v1.PodPending), pod("10.0.0.8", "", "")}, want: []string{"10.0.0.7:7946", "10.0.0.8:7946"}},
 		{name: "terminal pods are excluded", pods: []v1.Pod{pod("10.0.0.9", "", v1.PodSucceeded), pod("10.0.0.10", "", v1.PodFailed)}, want: []string{}},
 		{name: "duplicates collapse", pods: []v1.Pod{pod("10.0.0.3", "", v1.PodRunning), pod("10.0.0.3", "", v1.PodRunning)}, want: []string{"10.0.0.3:7946"}},
@@ -363,7 +369,11 @@ func TestTrustedSeedAddresses(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, trustedSeedAddresses(tt.pods, "127.0.0.1:7946", 7946))
+			localURL := tt.localURL
+			if localURL == "" {
+				localURL = "127.0.0.1:7946"
+			}
+			assert.Equal(t, tt.want, trustedSeedAddresses(tt.pods, localURL, 7946))
 		})
 	}
 }
@@ -425,9 +435,10 @@ func TestMemberlistPeers_RetriesUntilJoinSucceeds(t *testing.T) {
 	assert.Equal(t, []string{"join:10.0.0.2:7946", "join:10.0.0.2:7946", "leave", "shutdown"}, handle.recordedCalls())
 }
 
-func TestMemberlistPeers_JoinsSeedsIndividuallyInStableOrder(t *testing.T) {
+func TestMemberlistPeers_JoinsAllSeedsIndividuallyInStableOrder(t *testing.T) {
 	reader := interceptList(func(_ context.Context, list ctrlclient.ObjectList, _ ...ctrlclient.ListOption) error {
 		list.(*v1.PodList).Items = []v1.Pod{
+			{Status: v1.PodStatus{PodIP: "10.0.0.4"}},
 			{Status: v1.PodStatus{PodIP: "10.0.0.3"}},
 			{Status: v1.PodStatus{PodIP: "10.0.0.2"}},
 		}
@@ -446,9 +457,14 @@ func TestMemberlistPeers_JoinsSeedsIndividuallyInStableOrder(t *testing.T) {
 	}}
 	peer := startFakeLifecycle(t.Context(), reader, handle, time.Hour)
 
-	require.Eventually(t, func() bool { return joinCalls.Load() == 2 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return joinCalls.Load() == 3 }, time.Second, time.Millisecond)
 	require.NoError(t, peer.Stop(t.Context()))
-	assert.Equal(t, []string{"join:10.0.0.2:7946", "join:10.0.0.3:7946", "leave", "shutdown"}, handle.recordedCalls())
+	assert.Equal(t, []string{
+		"join:10.0.0.2:7946", // first dial fails
+		"join:10.0.0.3:7946", // first success must not stop the loop
+		"join:10.0.0.4:7946",
+		"leave", "shutdown",
+	}, handle.recordedCalls())
 }
 
 // startBlockedJoin starts a peer whose first Join call blocks until the

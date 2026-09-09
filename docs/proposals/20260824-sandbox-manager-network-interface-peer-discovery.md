@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-08-24
-last-updated: 2026-09-04
+last-updated: 2026-09-09
 status: implementable
 ---
 
@@ -13,9 +13,10 @@ status: implementable
 ## Summary
 
 Sandbox Manager accepts an optional `--network-interface` flag. When it is set,
-one validated IPv4 address from that interface becomes the process-wide
-sandbox-cluster address for the control API, peer route service, memberlist, and
-the local return entry used by non-Sandbox proxy requests. When it is empty, the
+one validated global-unicast address from that interface, preferring IPv4 over
+IPv6, becomes the process-wide sandbox-cluster address for the control API,
+peer route service, memberlist, and the local return entry used by non-Sandbox
+proxy requests. When it is empty, the
 existing non-hosted network behavior is preserved. A second optional flag,
 `--disable-envoy-ext-proc`, skips the Envoy ext-proc gRPC listener on port
 `9002` for deployments whose data plane does not consume ext-proc; the peer
@@ -57,9 +58,11 @@ memberlist. That retry is independent of API readiness.
   `POD_IP` when present, otherwise the first non-loopback IPv4 address. The
   non-Sandbox proxy return entry remains on loopback.
 - A non-empty value is an exact operating-system interface name. The interface
-  must exist, be up, and have exactly one global-unicast IPv4 address. Missing,
-  down, addressless, or multi-address interfaces make startup fail. The process
-  never falls back to another interface.
+  must exist, be up, and have exactly one global-unicast address in the
+  preferred family: IPv4 when the interface has any global-unicast IPv4
+  address, otherwise IPv6. Missing, down, addressless, or multiple addresses
+  in the preferred family make startup fail. The process never falls back to
+  another interface.
 - The address is resolved and validated once during startup. Address changes
   take effect after a process restart.
 - The same address is used by the control API listener, the peer route listener
@@ -76,7 +79,7 @@ concern; only ext-proc enablement is covered below.
 
 ```mermaid
 flowchart LR
-    Flag["--network-interface"] --> Resolve[Resolve and validate one IPv4 address]
+    Flag["--network-interface"] --> Resolve[Resolve and validate one address]
     Resolve --> API[Control API]
     Resolve --> Route[Peer route :7789]
     Resolve --> Gossip[Memberlist bind and advertise]
@@ -127,7 +130,8 @@ control-API or Gateway readiness.
 Each listed, selector-matching Pod can contribute at most one seed:
 
 - Without a `memberlist-url` annotation, the seed is the Pod's `status.podIP`
-  plus the configured memberlist port.
+  plus the configured memberlist port. IPv4 and IPv6 PodIPs are both eligible;
+  IPv6 seeds use the bracketed host:port form.
 - With the annotation, its host must be the same valid IP as
   `status.podIP`; only the port may differ. An annotation cannot redirect peer
   traffic to another Pod, tenant, or external address.
@@ -170,9 +174,10 @@ Pod readiness and non-terminal phases do not filter the seed set. They are not
 reliable membership signals: a newly starting peer may already accept
 memberlist traffic, while memberlist itself owns ongoing liveness after a join.
 
-Seeds are sorted into a stable order and joined one at a time. Per-seed joining
-keeps one unreachable address from delaying attempts against every remaining
-seed in the same memberlist call.
+Seeds are sorted into a stable order, and every seed is joined, one Join call
+per seed, without stopping at the first success. Per-seed calls keep each
+failure attributable, because a bulk Join discards errors once any seed
+succeeds, and honor cancellation between dials.
 
 ### Non-blocking join lifecycle
 
@@ -183,8 +188,9 @@ starts, and Sandbox Manager runs the following lifecycle in the background:
 
 1. List eligible peer Pods from the API server and derive trusted seed
    addresses.
-2. Try seeds individually in stable order.
-3. Stop discovery after any join reports `joined > 0`.
+2. Join every seed in stable order, one Join call per seed, without stopping
+   at the first success.
+3. Stop discovery after a cycle in which any join reports `joined > 0`.
 4. If the list fails, no seeds exist, or every join fails, wait 10 seconds
    after the attempt finishes and retry.
 
@@ -311,7 +317,7 @@ The following are outside this proposal:
 - Sandbox Gateway process lifecycle, including SIGTERM handling and peer-route
   listener bind sequencing;
 - an informer refactor for Sandbox Gateway;
-- IPv6, address hot reload, or periodic seed reconciliation.
+- address hot reload or periodic seed reconciliation.
 
 No RBAC change is required for Sandbox Manager: its existing Pod permissions
 already include `get`, `list`, and `watch`. Peer discovery treats listed Pods as

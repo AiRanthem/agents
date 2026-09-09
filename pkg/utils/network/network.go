@@ -32,9 +32,9 @@ func ListenAddress(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
 }
 
-// ResolveNetworkInterfaceAddress returns the single global-unicast IPv4 address
-// on the named interface. An empty name returns an empty address.
-// TODO: support IPv6; currently only a single global-unicast IPv4 address is selected.
+// ResolveNetworkInterfaceAddress returns a single global-unicast address on the
+// named interface, preferring IPv4 over IPv6. Multiple addresses in the preferred
+// available family are rejected. An empty name returns an empty address.
 func ResolveNetworkInterfaceAddress(name string) (string, error) {
 	if name == "" {
 		return "", nil
@@ -50,11 +50,16 @@ func ResolveNetworkInterfaceAddress(name string) (string, error) {
 	return chooseInterfaceAddress(name, iface.Flags, addrs)
 }
 
+// chooseInterfaceAddress selects a global-unicast address from an up interface.
+// IPv4 is preferred regardless of address order; IPv6 is used only when no IPv4
+// address qualifies. It rejects down interfaces, no qualifying addresses, and
+// multiple qualifying addresses in the preferred available family.
 func chooseInterfaceAddress(name string, flags net.Flags, addrs []net.Addr) (string, error) {
 	if flags&net.FlagUp == 0 {
 		return "", fmt.Errorf("network interface %q is down", name)
 	}
 	var selected net.IP
+	count := 0
 	for _, addr := range addrs {
 		var ip net.IP
 		switch value := addr.(type) {
@@ -65,17 +70,25 @@ func chooseInterfaceAddress(name string, flags net.Flags, addrs []net.Addr) (str
 		default:
 			continue
 		}
-		ip = ip.To4()
-		if ip == nil || !ip.IsGlobalUnicast() {
+		// Skip non-global-unicast addresses and, once IPv4 is selected, any IPv6 address.
+		if !ip.IsGlobalUnicast() || (selected.To4() != nil && ip.To4() == nil) {
 			continue
 		}
-		if selected != nil {
-			return "", fmt.Errorf("network interface %q has multiple global-unicast IPv4 addresses", name)
+		if selected.To4() == nil && ip.To4() != nil {
+			count = 0
 		}
 		selected = ip
+		count++
+	}
+	if count > 1 {
+		family := "IPv6"
+		if selected.To4() != nil {
+			family = "IPv4"
+		}
+		return "", fmt.Errorf("network interface %q has multiple global-unicast %s addresses", name, family)
 	}
 	if selected == nil {
-		return "", fmt.Errorf("network interface %q has no global-unicast IPv4 address", name)
+		return "", fmt.Errorf("network interface %q has no global-unicast IPv4 or IPv6 address", name)
 	}
 	return selected.String(), nil
 }

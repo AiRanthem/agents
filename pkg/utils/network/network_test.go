@@ -80,7 +80,11 @@ func TestChooseInterfaceAddress(t *testing.T) {
 	}{
 		{name: "down interface", addrs: []net.Addr{addr("10.0.0.2/24")}, wantError: "is down"},
 		{name: "no address", flags: net.FlagUp, wantError: "has no global-unicast IPv4"},
-		{name: "loopback and IPv6 are excluded", flags: net.FlagUp, addrs: []net.Addr{addr("127.0.0.1/8"), addr("2001:db8::1/64")}, wantError: "has no global-unicast IPv4"},
+		{name: "loopback and link-local are excluded", flags: net.FlagUp, addrs: []net.Addr{addr("127.0.0.1/8"), addr("::1/128"), addr("fe80::1/64")}, wantError: "has no global-unicast IPv4 or IPv6"},
+		{name: "one IPv6 address", flags: net.FlagUp, addrs: []net.Addr{addr("fe80::1/64"), addr("2001:db8::1/64")}, want: "2001:db8::1"},
+		{name: "IPv6 IPAddr", flags: net.FlagUp, addrs: []net.Addr{&net.IPAddr{IP: net.ParseIP("fd00::1")}}, want: "fd00::1"},
+		{name: "multiple IPv6 addresses", flags: net.FlagUp, addrs: []net.Addr{addr("2001:db8::1/64"), addr("2001:db8::2/64")}, wantError: "has multiple global-unicast IPv6"},
+		{name: "IPv4 preferred after multiple IPv6 addresses", flags: net.FlagUp, addrs: []net.Addr{addr("2001:db8::1/64"), addr("2001:db8::2/64"), addr("10.0.0.2/24")}, want: "10.0.0.2"},
 		{name: "multiple IPv4 addresses", flags: net.FlagUp, addrs: []net.Addr{addr("10.0.0.2/24"), addr("192.168.1.2/24")}, wantError: "has multiple global-unicast IPv4"},
 		{name: "one IPv4 among ignored addresses", flags: net.FlagUp, addrs: []net.Addr{addr("127.0.0.1/8"), addr("10.0.0.2/24"), addr("2001:db8::1/64")}, want: "10.0.0.2"},
 	}

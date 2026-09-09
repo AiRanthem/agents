@@ -225,8 +225,8 @@ func (m *MemberlistPeers) runLifecycle(ctx context.Context, selector labels.Sele
 	m.lifecycleDone <- m.cleanup()
 }
 
-// tryJoin lists candidate seed Pods once and joins them one by one in stable
-// order until one join succeeds. It reports whether this peer has joined.
+// tryJoin lists candidate seed Pods once and joins every seed in stable
+// order, one Join call per seed. It reports whether any join succeeded.
 // attempt is the 1-based discovery cycle, used to keep steady-state retries
 // quiet in the logs.
 func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector, bindPort int, localURL string, attempt int) bool {
@@ -255,12 +255,14 @@ func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector,
 			"pods", len(peerList.Items), "namespace", m.sysNs, "selector", m.peerSelector, "retryInterval", m.retryInterval)
 		return false
 	}
-	// Join one seed at a time: a bulk Join probes every address serially
-	// without short-circuiting, while per-seed calls stop at the first live
-	// seed and honor cancellation between attempts.
+	// Join every seed, one Join call per seed: both styles probe every
+	// address serially, but per-seed calls keep each failure attributable
+	// (bulk Join discards errors once any seed succeeds) and honor
+	// cancellation between dials.
+	joined := false
 	for _, seed := range seeds {
 		if ctx.Err() != nil {
-			return false
+			return joined
 		}
 		count, joinErr := m.list.Join([]string{seed})
 		if joinErr != nil {
@@ -268,10 +270,10 @@ func (m *MemberlistPeers) tryJoin(ctx context.Context, selector labels.Selector,
 		}
 		if count > 0 {
 			log.Info("successfully joined peer", "peer", seed, "count", count)
-			return true
+			joined = true
 		}
 	}
-	return false
+	return joined
 }
 
 // trustedSeedAddresses derives at most one seed address per Pod. Readiness
@@ -286,10 +288,11 @@ func trustedSeedAddresses(pods []corev1.Pod, localURL string, bindPort int) []st
 			continue
 		}
 		podIP := net.ParseIP(pods[i].Status.PodIP)
-		if podIP == nil || podIP.To4() == nil {
+		if podIP == nil {
 			continue
 		}
-		podIP = podIP.To4()
+		// String canonicalizes 4-in-6 to dotted quad; JoinHostPort brackets
+		// IPv6. One path covers both families.
 		seed := net.JoinHostPort(podIP.String(), strconv.Itoa(bindPort))
 		if annotated := pods[i].Annotations[agentsv1alpha1.AnnotationMemberlistURL]; annotated != "" {
 			override, ok := parseMemberlistURL(annotated, podIP)
