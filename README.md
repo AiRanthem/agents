@@ -4,7 +4,7 @@
 
 ## 模型适配与限制
 
-这些 skills 专门面向每次维护时的 OpenAI 前沿模型持续迭代和优化，并以维护当日最新的官方 prompting 最佳实践为准。它们预期运行在具备相近指令遵循、推理、上下文管理和工具调用能力的模型上。
+这些 skills 专门面向每次维护时的最前沿模型持续迭代和优化，并以仓库原样保存的 prompting 最佳实践（`references/prompting-best-practices.md`）为准（随前沿模型代际刷新）。它们预期运行在具备相近指令遵循、推理、上下文管理和工具调用能力的模型上。
 
 较弱、较旧、上下文或工具能力受限的模型可能无法稳定遵循完整工作流，触发准确性、边界控制、工具使用和产出质量可能不及预期。本项目不保证不同模型之间的等价表现；切换模型或推理配置后，应先用真实任务验证关键工作流。
 
@@ -58,10 +58,11 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 ## 维护约束
 
-修改任何 `AGENTS.md`、skill 或其他 Agent 指令前，必须先获取并阅读维护当日最新的 OpenAI 官方 prompting 最佳实践。所有新增或修改的提示词都必须满足这些最佳实践，并完成仓库 `AGENTS.md` 要求的验证。
+修改任何 `AGENTS.md`、skill 或其他 Agent 指令前，遵循仓库 `AGENTS.md` 的 `# 提示词维护`：官方 prompting 最佳实践已逐字保存到 `references/prompting-best-practices.md`，日常维护无需联网检索；仅当目标前沿模型代际变化或该文件与实际行为冲突时，才重新查阅下方官方文档并用最新原文整体替换该文件。所有新增或修改的提示词都必须满足这些实践，并完成仓库 `AGENTS.md` 要求的验证。
 
-相关官方文档：
+相关官方文档（代际刷新时以此为准）：
 
 - [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
 - [Build skills](https://learn.chatgpt.com/docs/build-skills)
-- [Model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+- [Prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering)
+- [Model guidance（最新模型 prompting 最佳实践）](https://developers.openai.com/api/docs/guides/latest-model)

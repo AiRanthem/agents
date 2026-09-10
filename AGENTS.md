@@ -14,8 +14,9 @@
 
 # 提示词维护
 
-* 修改任何 `AGENTS.md`、skill（包括 `SKILL.md` 及其支持文件）、hooks 提示词或其他 Agent 指令前，必须先获取并阅读维护当日最新的 OpenAI 官方 prompting 最佳实践；若变更主题另有相关的官方 OpenAI 文档，也必须一并读取。
-* 所有新增或修改的提示词必须满足所获取的最新 prompting 最佳实践，并以相关官方 OpenAI 文档为准确定结构、措辞和行为边界；完成维护前审计并验证这一点。
+* 修改任何 `AGENTS.md`、skill（包括 `SKILL.md` 及其支持文件）、hooks 提示词或其他 Agent 指令前，先阅读并遵循 `references/prompting-best-practices.md`；该文件逐字保存官方 prompting 最佳实践，日常维护无需联网检索。
+* 仅当目标前沿模型代际变化、或该文件与实际模型行为冲突时，才重新查阅官方 OpenAI 文档（链接见 `README.md` 的“相关官方文档”），并用最新原文整体替换 `references/prompting-best-practices.md` 的正文。
+* 所有新增或修改的提示词必须满足 `references/prompting-best-practices.md`，并以相关官方 OpenAI 文档为准确定结构、措辞和行为边界；完成维护前审计并验证这一点。
 * 用目标结果、成功标准、适用范围、证据要求和停止条件描述期望行为。仅在执行路径本身属于契约时规定具体步骤。
 * 修改行为时，用新的期望行为直接替换原有文字，并删除旧行为描述、历史说明和迁移叙事。
 * 审计全局指令、仓库指令和 skills 组成的完整指令链，保持优先级清晰、语义一致和职责单一。
