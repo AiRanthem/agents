@@ -1,3 +1,8 @@
+---
+description: Global agent instructions for response language, plan mode, skill authority, engineering principles, and subagent delegation
+alwaysApply: true
+---
+
 # Response
 
 * Unless explicitly requested otherwise, respond in Simplified Chinese.
@@ -28,11 +33,9 @@ Optimize expected end-to-end cost per correct result. Give each subagent a clear
 
 Route each delegated task directly to the lowest profile likely to complete it reliably:
 
-* **Luna / high** — clear, bounded, readily verifiable work.
-* **Luna / max** — substantial reasoning that remains well-scoped and reliably verifiable.
-* **Sol / high** — complex professional reasoning, judgment, synthesis, or context handling beyond Luna's reliable range.
-* **Astra / low** — genuinely hard or difficult-to-verify bounded problems where additional capability materially improves expected correctness.
+* **Composer 2.5 / standard** — the default for bounded work within Composer's reliable range.
+* **Grok 4.6 / medium** — work requiring substantially stronger reasoning, judgment, synthesis, ambiguity handling, or long-horizon execution beyond Composer's reliable range.
 
-Use only these normal profiles, and route subagents independently of the main agent's model. Use **Astra / xhigh** only as an exceptional escalation for the smallest unresolved, consequential problem that remains genuinely uncertain.
+Use only these normal profiles, and route subagents independently of the main agent's model. Use **Grok 4.6 / high** only as an exceptional escalation for the smallest unresolved, consequential problem that remains genuinely uncertain.
 
 Prefer cheap verification over additional reasoning. If a result remains insufficient, escalate only the smallest unresolved part while preserving validated work.
