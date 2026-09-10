@@ -1,6 +1,6 @@
 interface:
   display_name: "Explore Design"
-  short_description: "Explore and author implementation-anchoring designs"
-  default_prompt: "Use $explore-design to explore or refine this design, report decisions for approval, and produce the approved mode-specific output."
+  short_description: "Discuss requirements and agree on design decisions"
+  default_prompt: "Use $explore-design to explore this need with me, agree on Why and What, and obtain approval before handing off to implementation planning in native Plan mode or writing the design in Agent mode."
 policy:
   allow_implicit_invocation: true

@@ -1,6 +1,6 @@
 interface:
   display_name: "Implement Design"
-  short_description: "Implement confirmed designs exactly and verify them"
-  default_prompt: "Use $implement-design to implement a confirmed design document exactly and validate the result."
+  short_description: "Resolve implementation TODOs, then plan or write code"
+  default_prompt: "Use $implement-design to understand the approved Why and What, discuss implementation choices, and produce actionable TODOs as the final plan in native Plan mode or execute them in Agent mode."
 policy:
   allow_implicit_invocation: true

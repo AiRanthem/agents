@@ -20,7 +20,7 @@ If a constraint prevents a complete review, name the exact missing input, permis
 
 ## Bind every conclusion to a stable target
 
-Read the complete confirmed design, both members of an EN/CN pair, applicable instructions, and relevant original requirements when available. Treat both language versions as equal. Report meaning-changing differences and decision-changing draft questions; continue reviewing unaffected rules with a stable contract.
+Read the complete confirmed Why/What contract from design documents or the approved conversation, the approved implementation plan when present, applicable instructions, and relevant original requirements. Read both members of an EN/CN pair when present and treat them as equal. Include approved corrections and verify their writeback to existing designs before affected implementation; no document is required when the contract was established only in conversation. Identify that conversational version without creating a file. Report meaning-changing differences and decision-changing draft questions; continue reviewing unaffected rules with a stable contract. Missing Why/What blocks the relevant assessment; absence of a design file alone does not.
 
 Establish repository/worktree, comparison base, HEAD where available, design version, final in-scope diff, and relevant staged, unstaged, and untracked content. A matching commit alone does not validate a dirty tree. Use available diff/content fingerprints or an equally reproducible snapshot identity, including relevant dependency and configuration inputs.
 
