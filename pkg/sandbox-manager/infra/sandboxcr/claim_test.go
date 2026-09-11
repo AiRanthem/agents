@@ -4429,11 +4429,11 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		assert.Nil(t, unchanged.Spec.AutoPausePolicy)
 	})
 
-	t.Run("updated candidate with required probe is preferred over incompatible old revision", func(t *testing.T) {
+	t.Run("new revision candidate without required probe falls back to old compatible revision", func(t *testing.T) {
 		testInfra, c := setup(t)
-		oldCandidate := newCandidate("old-without-probe", oldRevision, "512Mi")
-		updatedCandidate := newCandidate("updated-with-probe", newRevision, "1Gi")
-		updatedCandidate.Spec.Probes = []v1alpha1.Probe{{Name: "Active"}}
+		oldCandidate := newCandidate("old-with-probe", oldRevision, "512Mi")
+		oldCandidate.Spec.Probes = []v1alpha1.Probe{{Name: "Active"}}
+		updatedCandidate := newCandidate("updated-without-probe", newRevision, "1Gi")
 		CreateSandboxWithStatus(t, c, oldCandidate)
 		CreateSandboxWithStatus(t, c, updatedCandidate)
 		waitPool(t, testInfra, 2)
@@ -4449,7 +4449,7 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		sbx, lockType, err := pickAnAvailableSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache)
 		require.NoError(t, err)
 		assert.Equal(t, infra.LockTypeUpdate, lockType)
-		assert.Equal(t, "updated-with-probe", sbx.GetName())
+		assert.Equal(t, "old-with-probe", sbx.GetName())
 	})
 
 	t.Run("claim-carried probe does not require pool pre-declaration", func(t *testing.T) {
@@ -4629,7 +4629,8 @@ func TestModifyPickedSandbox_AutoPausePolicy(t *testing.T) {
 			AutoPausePolicy: claimPolicy,
 		}))
 		assert.Equal(t, claimPolicy, sbx.Spec.AutoPausePolicy)
-		assert.NotSame(t, claimPolicy, sbx.Spec.AutoPausePolicy)
+		sbx.Spec.AutoPausePolicy.Resume.OnIngressTraffic.PauseTimeout = &metav1.Duration{Duration: time.Minute}
+		assert.Nil(t, claimPolicy.Resume.OnIngressTraffic.PauseTimeout)
 	})
 }
 
@@ -4648,9 +4649,9 @@ func TestModifyPickedSandbox_Probes(t *testing.T) {
 			},
 		}
 	}
-	requiresActiveProbe := &v1alpha1.AutoPausePolicy{
+	requiresCronProbe := &v1alpha1.AutoPausePolicy{
 		Pause: &v1alpha1.PausePolicy{
-			WhenProbedIdleState: &v1alpha1.ProbedIdleStateRule{Probe: "Active"},
+			WhenProbedIdleState: &v1alpha1.ProbedIdleStateRule{Probe: "Cron"},
 		},
 	}
 
@@ -4675,24 +4676,15 @@ func TestModifyPickedSandbox_Probes(t *testing.T) {
 		sbx := newSandbox(probe("Active", "pool-cmd"), probe("Audit", "audit-cmd"))
 		claimProbes := []v1alpha1.Probe{probe("Active", "claim-cmd"), probe("Cron", "cron-cmd")}
 		require.NoError(t, modifyPickedSandbox(sbx, infra.LockTypeUpdate, infra.ClaimSandboxOptions{
-			Probes: claimProbes,
+			AutoPausePolicy: requiresCronProbe,
+			Probes:          claimProbes,
 		}))
 		// Pool order first with the claim version of "Active", then new names.
 		assert.Equal(t, []v1alpha1.Probe{probe("Active", "claim-cmd"), probe("Audit", "audit-cmd"), probe("Cron", "cron-cmd")}, sbx.Spec.Probes)
-		// Deep copy: the merged entry never aliases the claim probes.
-		assert.NotSame(t, &claimProbes[0], &sbx.Spec.Probes[0])
-	})
-
-	t.Run("policy may reference a claim-carried probe", func(t *testing.T) {
-		// The pool only declares "Cron"; the policy references "Active",
-		// which the claim itself carries and the merge appends.
-		sbx := newSandbox(probe("Cron", "cron-cmd"))
-		require.NoError(t, modifyPickedSandbox(sbx, infra.LockTypeUpdate, infra.ClaimSandboxOptions{
-			AutoPausePolicy: requiresActiveProbe,
-			Probes:          []v1alpha1.Probe{probe("Active", "claim-cmd")},
-		}))
-		assert.Equal(t, []v1alpha1.Probe{probe("Cron", "cron-cmd"), probe("Active", "claim-cmd")}, sbx.Spec.Probes)
-		assert.Equal(t, requiresActiveProbe, sbx.Spec.AutoPausePolicy)
+		assert.Equal(t, requiresCronProbe, sbx.Spec.AutoPausePolicy)
+		// Deep copy: changing the merged nested command never changes the claim.
+		sbx.Spec.Probes[0].Probe.Exec.Command[0] = "modified"
+		assert.Equal(t, "claim-cmd", claimProbes[0].Probe.Exec.Command[0])
 	})
 }
 
@@ -4707,10 +4699,17 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 
 	const templateName = "ref-sbs"
 	const refName = "my-sbt"
+	requiresActiveProbe := &v1alpha1.AutoPausePolicy{
+		Pause: &v1alpha1.PausePolicy{
+			WhenProbedIdleState: &v1alpha1.ProbedIdleStateRule{Probe: "Active"},
+		},
+	}
 
 	tests := []struct {
 		name       string
 		createSBT  bool
+		policy     *v1alpha1.AutoPausePolicy
+		probes     []v1alpha1.Probe
 		wantErr    string
 		wantLabels map[string]string
 		wantAnnos  map[string]string
@@ -4733,6 +4732,18 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 			name:      "templateRef not found returns NoAvailable error",
 			createSBT: false,
 			wantErr:   "cannot resolve sandbox template",
+		},
+		{
+			name:      "templateRef sandbox missing required probe is rejected",
+			createSBT: true,
+			policy:    requiresActiveProbe,
+			wantErr:   "new sandbox does not declare required probes [Active]",
+		},
+		{
+			name:      "claim-carried probe satisfies templateRef policy",
+			createSBT: true,
+			policy:    requiresActiveProbe,
+			probes:    []v1alpha1.Probe{{Name: "Active"}},
 		},
 	}
 
@@ -4790,14 +4801,18 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 			}
 
 			opts := infra.ClaimSandboxOptions{
-				Template: templateName,
-				User:     "test-user",
+				Template:        templateName,
+				User:            "test-user",
+				AutoPausePolicy: tt.policy,
+				Probes:          tt.probes,
 			}
 			sbx, _, err := newSandboxFromSandboxSet(t.Context(), opts, infraInstance.Cache)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
+				var retriable retriableError
+				require.ErrorAs(t, err, &retriable)
 				assert.Nil(t, sbx)
 				return
 			}
