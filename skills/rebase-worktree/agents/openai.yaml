@@ -1,0 +1,6 @@
+interface:
+  display_name: "Rebase Worktree"
+  short_description: "Safely rebase with recovery and independent review"
+  default_prompt: "Use $rebase-worktree to rebase the current worktree onto the specified branch while preserving local changes and verifying the result."
+policy:
+  allow_implicit_invocation: true

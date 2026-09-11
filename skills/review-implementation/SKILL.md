@@ -1,6 +1,6 @@
 ---
 name: review-implementation
-description: Independently assess a completed implementation against its confirmed design using final repository state, behavioral evidence, and risk-appropriate review. Invoke only when the user explicitly names $review-implementation or /review-implementation. Return a read-only acceptance report; exclude ordinary code review, built-in review mode, implementation, and written review artifacts.
+description: Independently assess a completed implementation against its confirmed design using final repository state and behavioral evidence. Use only when the user explicitly invokes $review-implementation or /review-implementation. If any review workflow is already active, including built-in review mode or another code-review skill, continue it without adding this skill unless the user explicitly invokes it. Produce a read-only acceptance report; ordinary code review, implementation, and written review artifacts are out of scope.
 disable-model-invocation: true
 ---
 
@@ -28,9 +28,18 @@ Inspect changed tests and enough surrounding code to trace callers, ownership, s
 
 An implementer's summary is only an index. It must not determine which requirements or code paths are allowed to be examined. Do not treat “all tests passed” or “no issues” as acceptance evidence without checking scope and provenance.
 
-## Require independence, not a fixed ceremony
+## Require independence and a dedicated quality pass
 
-At least one actual review execution must be independent of implementation. The current lead can satisfy this in a fresh context that did not implement the change; no extra subagent is mandatory merely to make the count two.
+At least one actual review execution must be independent of implementation. A lead in a fresh context that did not implement the change can satisfy this gate. The dedicated quality subagent below can also satisfy it when it is separate from implementation.
+
+Every review must also dispatch one fresh read-only subagent dedicated to implementation quality. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code to evaluate the final implementation. Keep this assignment separate from broad correctness, security, and test review so it focuses on:
+
+- whether the behavior is expressed with the smallest clear change and reuses suitable repository or platform capabilities;
+- unnecessary lines, files, branches, abstractions, dependencies, indirection, duplication, and generated churn;
+- naming, control flow, locality, ownership, dependency direction, consistency, and ease of understanding and maintenance; and
+- concrete simplifications supported by the design, callers, or existing repository patterns.
+
+Treat line count and changed surface area as evidence, not numeric targets: shorter code is better only when it remains explicit, correct, and easier to read. Require evidence-backed findings rather than personal style preferences. The acceptance lead must validate each material candidate against the code and contract before reporting it. The quality subagent does not replace an additional high-risk specialist required for another critical boundary. If no qualifying quality subagent can run, complete the remaining review and report Unable to conclude because the required quality gate is missing.
 
 - A fresh read-only subagent or a separately executed reviewer session can qualify. Merely asking the implementation conversation to “act as reviewer,” renaming its role, or forking its full history does not.
 - A design author in a fresh session can independently review someone else's implementation, but is not an independent second opinion on its own architectural choices. Report this distinction when relevant.
@@ -39,9 +48,9 @@ At least one actual review execution must be independent of implementation. The 
 
 Set review depth by consequence and difficulty:
 
-- **Routine:** One qualified independent lead is sufficient unless repository rules require more.
-- **Standard:** Use a qualified independent lead; add focused verification or a specialist only for a named uncertainty or boundary.
-- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility, or release safety require a user-designated strongest qualified lead and at least one additional independent targeted perspective on the critical boundary. Both review executions must be separate from implementation. This is a workflow policy, not a claim that two models prove correctness.
+- **Routine:** One qualified independent lead plus the dedicated quality subagent is sufficient unless repository rules require more.
+- **Standard:** Use a qualified independent lead and the dedicated quality subagent; add focused verification or a specialist only for a named uncertainty or boundary.
+- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility, or release safety require the dedicated quality subagent, a user-designated strongest qualified lead, and at least one additional independent targeted perspective on the critical boundary. All required review executions must be separate from implementation. This is a workflow policy, not a claim that multiple models prove correctness.
 
 If a required strongest model or additional perspective is unavailable, do not silently substitute a lower assurance level. Report Unable to conclude for acceptance while completing useful permitted checks. Honor stricter repository review policies.
 
@@ -64,7 +73,7 @@ Cover these dimensions at a depth set by the actual boundaries:
 - **Scope:** Match every required rule and non-goal to code and credible evidence. Identify missing, partial, different, or unnecessary behavior, dependencies, abstractions, compatibility promises, and generated churn.
 - **Behavior:** Trace relevant success, rejection, errors, missing data, limits, cancellation, partial failure, recovery, concurrency, security, compatibility, data safety, performance, and operations. Inspect effects on callers, shared state, feature gates, deployment assumptions, and developer workflows.
 - **Tests:** Treat tests as claims, not authority. For important rules, identify a plausible wrong implementation and determine whether a test would detect it. Check reachability, assertions, skipped cases, isolation, nondeterminism, mocks, and unjustified edits to expected behavior. Test success cannot validate an incorrect oracle shared with the implementation.
-- **Implementation quality:** Prioritize correctness, clear ownership and dependency direction, then the smallest readable repository-consistent implementation. Report complexity or duplication only when it materially affects correctness, reviewability, or future changes.
+- **Implementation quality:** Give simplicity, readability, and maintainability explicit weight after preserving correctness and required boundaries. Use the dedicated quality pass to identify avoidable code, files, abstractions, indirection, duplication, or inconsistency, and report supported issues when a materially simpler, clearer repository-consistent implementation is available.
 
 Run fresh relevant tests and static checks when permitted and needed. Start narrow and expand for risk or missing evidence. Reuse credible existing results only if code, dependencies, configuration, and relevant environment match; inspect exit status and meaningful output. A prose assertion without accessible output or reliable execution provenance is not reusable verification.
 
@@ -109,4 +118,4 @@ Then report, combining sections when that improves readability:
 4. **Verification performed:** actual commands and outcomes, reused evidence and why it remains valid, and blocked checks.
 5. **Independence and remaining gaps:** actual lead/reviewer roles and models when known, qualifications of reused evidence, unresolved assumptions, unexamined areas, and residual uncertainty.
 
-Pass means no acceptance-blocking problem was found within the stated adequate coverage and required gates. It does not mean bug-free. A missing essential contract, required independent perspective, strongest-model gate, unstable target, or essential verification prevents Pass. A concrete blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.
+Pass means no acceptance-blocking problem was found within the stated adequate coverage and required gates. It does not mean bug-free. A missing essential contract, dedicated quality pass, required independent perspective, strongest-model gate, unstable target, or essential verification prevents Pass. A concrete blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.

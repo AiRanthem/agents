@@ -12,6 +12,7 @@
 
 - `skills/`：安装到用户级目录、可在不同仓库复用的 skills。
 - `.agents/skills/install/`：仅用于安装、更新、修复或验证本 dev-kit 的仓库级 skill。
+- `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
 - `codex/`：Codex 全局指令和 hooks。
 - `cursor/`：Cursor 用户级规则和 CLI status line。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
@@ -42,11 +43,16 @@ $install 安装或更新这个 dev-kit
 | Skill | 用途 |
 | --- | --- |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree。 |
+| `$rebase-worktree` | 将当前 Git worktree 安全 rebase 到指定分支并独立验证结果。 |
 | `$explore-design` | 在实现前探索或细化设计，并产出经确认的计划或中文设计文档。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计的实现准备度。 |
 | `$implement-design` | 实现已确认的设计并提供测试和验证证据。 |
+| `$optimize-tests` | 在充分覆盖行为的前提下，主动清理、合并和精简指定范围内的测试代码，经确认后执行。 |
 | `$review-implementation` | 根据已确认设计独立验收完成的实现。 |
 | `$translate-design` | 将稳定的中文设计同步为语义等价的英文版本。 |
+| `$systematic-debugging` | 从证据追踪故障原因，按授权修复并验证。 |
+| `$receiving-code-review` | 核实审查意见，处理已授权的修复并说明分歧。 |
+| `$diff-reading-order` | 为变更生成有依赖依据的阅读导航。 |
 
 例如：
 
@@ -54,7 +60,9 @@ $install 安装或更新这个 dev-kit
 $review-design 评审 docs/proposal.md
 ```
 
-Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design` 和 `review-implementation` 配置为仅允许显式调用，以保证评审行为由用户主动启动。
+Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 配置为仅允许显式调用，后两者保留原安装的调用策略。
+
+在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；例如 `ponytail-review` 的有效简洁性要求已由工程原则和现有评审覆盖，不单独吸收。审计本地安装快照不代表已核查上游最新版本。
 
 ## 维护约束
 

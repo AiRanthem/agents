@@ -14,6 +14,18 @@
 
 仓库更新后重新执行安装流程。新增 skill 必须补齐对应软链接；删除 skill 必须移除对应软链接。不得留下指向本仓库、但已无对应 skill 的用户级链接。
 
+## 第三方技能接管
+
+先让仓库内替代技能可审阅并通过验证，再检查原目录、调用策略与来源元数据。第三方普通目录不属于第 4 步的仓库软链接清理范围；取得迁移授权后，将指定原目录完整备份到技能发现路径之外，再验证旧版不再被发现。低价值技能可以不吸收；停用其现存安装仍须在授权范围内。
+
+2026-09-10：已安装 `systematic-debugging`、`receiving-code-review`、`diff-reading-order` 的独立用户级软链接，分别指向本仓库同名目录。前两者保留原安装的 `allow_implicit_invocation: false`。本地 `absorb-skill` 位于 `.agents/skills/`，不创建用户级链接。经用户授权，四个旧目录（含不吸收的 `ponytail-review`）已完整移至 `~/.agents/skill-backups/20260910-150354-devkit-absorption/`，保留原相对目录结构及文件 SHA-256 清单 `manifest.json`，移动前后文件哈希一致。Codex 发现检查中旧条目已消失，`diff-reading-order` 仅保留新版；两个显式技能的实际调用仍未由该发现检查验证。
+
+2026-09-10：新增 `rebase-worktree` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/rebase-worktree`，指向本仓库 `skills/rebase-worktree`。
+
+2026-09-10：新增 `optimize-tests` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/optimize-tests`，指向本仓库 `skills/optimize-tests`。
+
+2026-09-11：更新 `optimize-tests` 的行为目标及入口提示词；验证现有用户级软链接仍指向本仓库且可读取更新后的正文，无需调整链接或机器配置。格式与链接检查不等同于新会话中的实际调用验证。
+
 ## 验证
 
 确认以下结果：

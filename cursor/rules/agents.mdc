@@ -27,6 +27,8 @@ alwaysApply: true
 
 # Subagent Delegation
 
+When dispatching, reassigning, or escalating a subagent, report its task, model, and reasoning effort to the user, briefly explaining the profile choice or change. Distinguish requested settings from runtime-confirmed settings and state when a setting is unavailable or unknown.
+
 When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
 
 Optimize expected end-to-end cost per correct result. Give each subagent a clear objective, relevant constraints, success criteria, and minimal sufficient context. Request concise, decision-relevant results with supporting evidence and material uncertainties.

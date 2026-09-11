@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optimize Tests"
+  short_description: "Reduce test code while preserving behavioral coverage"
+  default_prompt: "Use $optimize-tests to find deletions, consolidation, and simplifications that minimize test code while maintaining sufficient behavioral coverage, and present concrete changes for approval."
