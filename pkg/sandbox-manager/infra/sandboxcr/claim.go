@@ -630,6 +630,12 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 			log.Info("skip sandbox without claim-required probes", "sandbox", klog.KObj(obj), "missingProbes", missing)
 			continue
 		}
+		// Old candidates may have more probes than the current SandboxSet.
+		// Only merge to count when the combined lengths could exceed the limit.
+		if len(obj.Spec.Probes)+len(opts.Probes) > autopause.MaxSandboxProbes && len(autopause.MergeProbes(obj.Spec.Probes, opts.Probes)) > autopause.MaxSandboxProbes {
+			log.Info("skip sandbox whose merged probes exceed the limit", "sandbox", klog.KObj(obj))
+			continue
+		}
 		state, _ := utils.GetSandboxState(obj)
 		switch state {
 		case v1alpha1.SandboxStateAvailable:
@@ -786,6 +792,10 @@ func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOption
 		}
 	}
 	sbx := sandboxset.NewSandboxFromSandboxSet(sbs, refTemplate)
+	if mergedCount := len(autopause.MergeProbes(sbx.Spec.Probes, opts.Probes)); mergedCount > autopause.MaxSandboxProbes {
+		return nil, "", NoAvailableError(opts.Template,
+			fmt.Sprintf("new sandbox merged probes exceed the Sandbox limit of %d (%d probes)", autopause.MaxSandboxProbes, mergedCount))
+	}
 	if missing := missingRequiredProbeNames(sbx.Spec.Probes, autopause.RequiredProbeNames(opts.AutoPausePolicy, opts.Probes)); len(missing) > 0 {
 		return nil, "", NoAvailableError(opts.Template, fmt.Sprintf("new sandbox does not declare required probes %v", missing))
 	}
