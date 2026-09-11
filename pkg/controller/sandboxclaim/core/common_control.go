@@ -263,6 +263,11 @@ func (c *commonControl) EnsureClaimCompleted(ctx context.Context, args ClaimArgs
 }
 
 // claimSandboxes attempts to claim up to batchSize sandboxes from the pool
+//
+// TODO: Move TryClaimSandbox orchestration into SandboxClaim core and put any
+// primitives shared with sandbox-manager in a neutral package.
+// known-limit: This controller still depends on sandbox-manager's claim flow
+// and options until that refactor removes the reverse dependency.
 func (c *commonControl) claimSandboxes(ctx context.Context, claim *agentsv1alpha1.SandboxClaim, sandboxSet *agentsv1alpha1.SandboxSet, batchSize int) (int, error) {
 	log := logf.FromContext(ctx)
 

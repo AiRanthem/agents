@@ -52,6 +52,7 @@ import (
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/autopause"
 	infracache "github.com/openkruise/agents/pkg/cache"
 	"github.com/openkruise/agents/pkg/cache/controllers"
 	"github.com/openkruise/agents/pkg/identity"
@@ -4312,6 +4313,18 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 			},
 		}
 	}
+	newProbes := func(prefix string, count int) []v1alpha1.Probe {
+		probes := make([]v1alpha1.Probe, 0, count)
+		for i := range count {
+			probes = append(probes, v1alpha1.Probe{
+				Name: fmt.Sprintf("%s-%d", prefix, i),
+				Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+					Exec: &corev1.ExecAction{Command: []string{"true"}},
+				}},
+			})
+		}
+		return probes
+	}
 
 	// requiresActiveProbe is the minimal claim policy whose idle rule references
 	// the "Active" probe, standing in for the former RequiredProbeNames option.
@@ -4473,6 +4486,54 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		require.NoError(t, err)
 		assert.Equal(t, infra.LockTypeUpdate, lockType)
 		assert.Equal(t, "carried-probe-candidate", sbx.GetName())
+	})
+
+	t.Run("old revision exceeding the merged probe limit falls back to creation", func(t *testing.T) {
+		testInfra, c := setup(t)
+		candidate := newCandidate("old-at-probe-limit", oldRevision, "512Mi")
+		candidate.Spec.Probes = newProbes("old", autopause.MaxSandboxProbes)
+		CreateSandboxWithStatus(t, c, candidate)
+		waitPool(t, testInfra, 1)
+
+		opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+			Namespace:       "default",
+			User:            "test-user",
+			Template:        template,
+			Probes:          newProbes("claim", 1),
+			CreateOnNoStock: true,
+		})
+		require.NoError(t, err)
+
+		sbx, lockType, err := pickAnAvailableSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache)
+		require.NoError(t, err)
+		assert.Equal(t, infra.LockTypeCreate, lockType)
+		assert.NotEqual(t, candidate.Name, sbx.GetName())
+	})
+
+	t.Run("same-name probe replacement stays within the exact limit", func(t *testing.T) {
+		testInfra, c := setup(t)
+		candidate := newCandidate("old-at-exact-probe-limit", oldRevision, "512Mi")
+		candidate.Spec.Probes = newProbes("pool", autopause.MaxSandboxProbes)
+		CreateSandboxWithStatus(t, c, candidate)
+		waitPool(t, testInfra, 1)
+
+		replacement := candidate.Spec.Probes[0].DeepCopy()
+		replacement.Exec.Command = []string{"replacement"}
+		opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+			Namespace: "default",
+			User:      "test-user",
+			Template:  template,
+			Probes:    []v1alpha1.Probe{*replacement},
+		})
+		require.NoError(t, err)
+
+		sbx, lockType, err := pickAnAvailableSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache)
+		require.NoError(t, err)
+		assert.Equal(t, infra.LockTypeUpdate, lockType)
+		assert.Equal(t, candidate.Name, sbx.GetName())
+		require.NoError(t, modifyPickedSandbox(sbx, lockType, opts))
+		assert.Len(t, sbx.Spec.Probes, autopause.MaxSandboxProbes)
+		assert.Equal(t, []string{"replacement"}, sbx.Spec.Probes[0].Exec.Command)
 	})
 
 	t.Run("locked candidates keep the generic no-available path", func(t *testing.T) {
@@ -4704,11 +4765,21 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 			WhenProbedIdleState: &v1alpha1.ProbedIdleStateRule{Probe: "Active"},
 		},
 	}
+	maxPoolProbes := make([]v1alpha1.Probe, 0, autopause.MaxSandboxProbes)
+	for i := range autopause.MaxSandboxProbes {
+		maxPoolProbes = append(maxPoolProbes, v1alpha1.Probe{
+			Name: fmt.Sprintf("pool-%d", i),
+			Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+				Exec: &corev1.ExecAction{Command: []string{"true"}},
+			}},
+		})
+	}
 
 	tests := []struct {
 		name       string
 		createSBT  bool
 		policy     *v1alpha1.AutoPausePolicy
+		poolProbes []v1alpha1.Probe
 		probes     []v1alpha1.Probe
 		wantErr    string
 		wantLabels map[string]string
@@ -4745,6 +4816,18 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 			policy:    requiresActiveProbe,
 			probes:    []v1alpha1.Probe{{Name: "Active"}},
 		},
+		{
+			name:       "current sandboxset merged probes over the limit is rejected",
+			createSBT:  true,
+			poolProbes: maxPoolProbes,
+			probes: []v1alpha1.Probe{{
+				Name: "claim-extra",
+				Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+					Exec: &corev1.ExecAction{Command: []string{"true"}},
+				}},
+			}},
+			wantErr: "new sandbox merged probes exceed the Sandbox limit of 16 (17 probes)",
+		},
 	}
 
 	for _, tt := range tests {
@@ -4759,6 +4842,7 @@ func TestNewSandboxFromSandboxSet_TemplateRef(t *testing.T) {
 					Namespace: "default",
 				},
 				Spec: v1alpha1.SandboxSetSpec{
+					Probes: tt.poolProbes,
 					EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
 						TemplateRef: &v1alpha1.SandboxTemplateRef{Name: refName},
 					},
