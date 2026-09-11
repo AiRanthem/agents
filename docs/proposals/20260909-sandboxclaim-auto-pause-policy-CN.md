@@ -5,7 +5,7 @@ authors:
 reviewers:
   - "@TBD"
 creation-date: 2026-09-09
-last-updated: 2026-09-10
+last-updated: 2026-09-11
 status: implementable
 see-also:
   - "/docs/proposals/20260626-sandbox-auto-pause.md"
@@ -21,7 +21,7 @@ Sandbox 已能按 `spec.pauseTime` 做一次性定时暂停，并按 `spec.autoP
 
 ## 背景
 
-池 Sandbox 在创建时从 SandboxSet 复制 `probes` 与 `autoPausePolicy`。Claim 之后，未 claim 成员才进入 auto-pause 决策；recycle 会清掉 `pauseTime`/`shutdownTime` 并从 SandboxSet 恢复策略。E2B create 已能用 `autoPause` 写 `PauseTime`，用 `autoResume` 局部写入 `OnIngressTraffic`。Claim CR 作为声明式对象，缺的是与 `shutdownTime` 同形态的 overlay，而不是再引入一套 E2B 相对秒数与 bool。
+池 Sandbox 在创建时从 SandboxSet 复制 `probes` 与 `autoPausePolicy`。Claim 之后，只有已 claim 成员才进入 auto-pause 决策，未 claim 的池成员会被跳过；recycle 会清掉 `pauseTime`/`shutdownTime` 并从 SandboxSet 恢复策略。E2B create 已能用 `autoPause` 写 `PauseTime`，用 `autoResume` 局部写入 `OnIngressTraffic`。Claim CR 作为声明式对象，缺的是与 `shutdownTime` 同形态的 overlay，而不是再引入一套 E2B 相对秒数与 bool。
 
 没有 Claim 级 overlay 时，每租户无法覆盖池默认策略，也无法声明「到点暂停」；只能改 SandboxSet（影响整池）或绕开 Claim 直接改 Sandbox。
 
@@ -77,7 +77,7 @@ claimed Sandbox --recycle--> 池 Sandbox
 4. **deadline 成对写入。** 若 Claim 指定了 `pauseTime` 或 `shutdownTime` 中的任一个，则按 Claim 当前值同时设置 Sandbox 的这两个字段：Claim 上为 nil 的那一侧在 Sandbox 上为清空。两个都不指定则不改 Sandbox 的 deadline。
 5. **不推导删除时间。** `pauseTime` 到期只暂停；是否删除仍只看 `shutdownTime`。需要「暂停后再删除」时，调用方同时给出两个绝对时间。
 6. **批次一致。** 同一 Claim 一次 reconcile 中成功 claim 的多个副本带上相同的 overlay。
-7. **probes 按名合并。** claim `probes` 非 nil 时，与候选 Sandbox 上的 `spec.probes` 按名合并：同名项以 claim 版本替换（池序位置不变），新名追加在池序之后；claim 未带 probes 则不动。合并后的集合不得超过 Sandbox 的 probes 上限（16）。与单值字段 `autoPausePolicy` 的整份替换不同，probes 是集合类配置，与 labels/annotations 一样按 key 合并；取舍见「Claim 自带 probes」。
+7. **probes 按名合并。** claim `probes` 非 nil 时，与候选 Sandbox 上的 `spec.probes` 按名合并：同名项以 claim 版本替换（池序位置不变），新名追加在池序之后；claim 未带 probes 则不动。每个候选 Sandbox 的合并集合不得超过 Sandbox 的 probes 上限（16）；Claim 级合并超限与候选兼容性检查见「校验与失败」。与单值字段 `autoPausePolicy` 的整份替换不同，probes 是集合类配置，与 labels/annotations 一样按 key 合并；取舍见「Claim 自带 probes」。
 
 ### 校验与失败
 
@@ -86,8 +86,9 @@ Claim 在构建 claim 选项时校验 `autoPausePolicy` 与 `probes`：
 - 使用与 SandboxSet admission 相同的校验规则
 - claim `probes` 列表自身需通过 `ValidateProbes`（名字唯一、exec-only、name 可作 condition type，与 SandboxSet 相同）
 - 被引用的 probe 名以「当前 SandboxSet.spec.probes 与 claim.probes 按名合并后的集合」为准（模板上的 probes 对运行中的池成员无效，与现有复制规则一致）；claim 未带 policy 时无需重校验池策略——合并只会增加 probe 名，池策略的引用不会失效
-- 合并后的集合超过 16 时，Claim 以 `InvalidClaimSpec` 完成：提前给出清晰错误，而不是等到 sandbox update 被 apiserver 拒绝
+- 当前 `SandboxSet.spec.probes` 与 `claim.probes` 按名合并后的集合超过 16 时，Claim 以 `InvalidClaimSpec` 完成：提前给出清晰错误，而不是等到 sandbox update 被 apiserver 拒绝
 - 通过 Claim 级校验后，领取时仍按每个候选 Sandbox 自身的 `spec.probes` 复核，但扣除 claim 自带的 probe 名：claim 自带的 probe 不要求候选预先声明，领取时合并写入；滚动更新中的旧候选若缺少其余被引用的 probe，会留在池中并等待兼容候选，不会写入无法执行的策略
+- 候选 Sandbox 自身已有的 probes 与 claim probes 合并后超过 16 时，该候选会被跳过并按无可用 Sandbox 重试；`createOnNoStock` 的新建路径也将此情况作为可重试的 `NoAvailableError`，不将候选级超限归为 `InvalidClaimSpec`
 - 仅含 `OnIngressTraffic`、不含 probe 规则的策略合法
 - 空策略（没有任何 pause/resume 规则）、无法编译的 `messageRegex`、引用不存在的 probe 等均非法
 
@@ -99,7 +100,7 @@ Claim 在构建 claim 选项时校验 `autoPausePolicy` 与 `probes`：
 - 发出 Warning 事件 `InvalidClaimSpec`
 - 本轮之前已经 claim 成功的 Sandbox 保持已写入状态，不会回滚
 
-候选缺少当前合法策略所引用的 probe 是池容量暂时不匹配，不是 Claim spec 非法：本轮不领取该候选，并按现有无可用 Sandbox 路径重试；`createOnNoStock` 开启时可从当前 SandboxSet 创建兼容实例。
+候选缺少当前合法策略所引用的 probe，或候选与 claim probes 合并后超过 16，都是池容量暂时不匹配，不是 Claim spec 非法：本轮不领取该候选，并按现有无可用 Sandbox 路径重试；`createOnNoStock` 开启时，若当前 SandboxSet 能形成兼容集合，可从其中创建兼容实例。
 
 apiserver 仍接受字段形状合法的对象；交叉规则不靠新 webhook。若非法策略被绕过写到了 Sandbox，Sandbox 侧既有 `ProbeValid=False` 仍会拒绝 probe 驱动暂停，但这不是 Claim 的主路径。
 
@@ -167,7 +168,7 @@ probe 驱动策略要求被引用的 probe 预先声明在目标 SandboxSet 上�
 
 - Claim 同名 probe 覆盖池版本：租户可定制探测参数（命令、周期），池序位置不变
 - Claim 新名 probe 追加在池序之后
-- 合并后的最终集合需通过 `ValidateProbes` 且不超过 `MaxItems=16`
+- Claim 自带的 probes 需通过 `ValidateProbes`；SandboxSet 的 probes 已在 admission 时按同一规则校验，合并后的集合再检查 `MaxItems=16`
 
 最终组合自洽校验（控制器 claim 时已持有 SandboxSet）：
 
@@ -187,9 +188,9 @@ probe 驱动策略要求被引用的 probe 预先声明在目标 SandboxSet 上�
 
 merge 的代价及对策：
 
-- **最终探测集需合并后才可推断**：claim 单边不可见。通过校验报错/事件列出合并结果弥补；且「引用池 probe」本来就是运行时依赖（池策略改引用别的 probe 名，claim 会失效重试，与现状语义一致）
-- **同名覆盖可能遮蔽池探测**：claim 校验可对「覆盖了哪些池 probe 名」发出事件，保持可见性
-- **合并叠加可能超限**：合并后统一校验 `MaxItems=16`
+- **最终探测集需合并后才可推断**：claim 单边不可见。当前校验错误和 `InvalidClaimSpec` 事件只报告具体校验错误或上限，不列出完整合并结果；且「引用池 probe」本来就是运行时依赖（Claim 策略引用的 probe 名不在当前 SandboxSet 与 Claim 合并后的集合中时，以 `InvalidClaimSpec` 完成；仅候选不兼容时才重试）
+- **同名覆盖可能遮蔽池探测**：当前 claim 校验不会为被覆盖的池 probe 名单独发事件，覆盖关系需从 Claim 与池配置的内容推断
+- **合并叠加可能超限**：Claim 级与候选级都对合并结果检查 `MaxItems=16`
 
 ### 已关闭的开放问题
 
