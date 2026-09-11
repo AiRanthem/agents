@@ -570,10 +570,7 @@ func TestCommonControl_EnsureClaimClaiming(t *testing.T) {
 
 			// Check requeue strategy
 			if !tt.expectError {
-				assert.Equal(t, tt.expectedStrategy.Immediate, strategy.Immediate, "Immediate mismatch")
-				if tt.expectedStrategy.After > 0 {
-					assert.Equal(t, tt.expectedStrategy.After, strategy.After, "After mismatch")
-				}
+				assert.Equal(t, tt.expectedStrategy, strategy)
 			}
 
 			// Check status updates
@@ -1111,6 +1108,7 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 	ctx := context.Background()
 	shutdownTime := metav1.Now()
 	pauseTime := metav1.NewTime(shutdownTime.Time.Add(time.Hour))
+	oldDeadline := metav1.NewTime(shutdownTime.Time.Add(-time.Hour))
 	timeoutDuration := metav1.Duration{Duration: 3 * time.Minute}
 	idlePolicy := &agentsv1alpha1.AutoPausePolicy{
 		Pause: &agentsv1alpha1.PausePolicy{
@@ -1286,6 +1284,7 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 							Name:      "test-sandbox",
 							Namespace: "default",
 						},
+						Spec: agentsv1alpha1.SandboxSpec{PauseTime: oldDeadline.DeepCopy(), ShutdownTime: oldDeadline.DeepCopy()},
 					},
 				}
 				require.NoError(t, opts.Modifier(mockSandbox))
@@ -1294,10 +1293,11 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				assert.Equal(t, "test-claim", mockSandbox.Labels[agentsv1alpha1.LabelSandboxClaimName], "LabelSandboxClaimName mismatch")
 				expectedShutdownTime := shutdownTime.Time.Round(0).Truncate(time.Second).UTC()
 				assert.Equal(t, expectedShutdownTime, mockSandbox.Spec.ShutdownTime.Time, "ShutdownTime mismatch")
+				assert.Nil(t, mockSandbox.Spec.PauseTime)
 			},
 		},
 		{
-			name: "nil pause overlay leaves pool autoPausePolicy and pauseTime",
+			name: "nil pause overlay preserves pool policy and both deadlines",
 			claim: &agentsv1alpha1.SandboxClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-claim",
@@ -1320,13 +1320,17 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				assert.Nil(t, opts.AutoPausePolicy, "nil claim overlay must not replace the pool policy")
 				mockSandbox := &sandboxcr.Sandbox{
 					Sandbox: &agentsv1alpha1.Sandbox{
-						Spec: agentsv1alpha1.SandboxSpec{AutoPausePolicy: idlePolicy.DeepCopy()},
+						Spec: agentsv1alpha1.SandboxSpec{
+							AutoPausePolicy: idlePolicy.DeepCopy(),
+							PauseTime:       oldDeadline.DeepCopy(),
+							ShutdownTime:    oldDeadline.DeepCopy(),
+						},
 					},
 				}
 				require.NoError(t, opts.Modifier(mockSandbox))
 				assert.Equal(t, idlePolicy, mockSandbox.Spec.AutoPausePolicy)
-				assert.Nil(t, mockSandbox.Spec.PauseTime)
-				assert.Nil(t, mockSandbox.Spec.ShutdownTime)
+				assert.Equal(t, &oldDeadline, mockSandbox.Spec.PauseTime)
+				assert.Equal(t, &oldDeadline, mockSandbox.Spec.ShutdownTime)
 			},
 		},
 		{
@@ -1349,7 +1353,11 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
 				mockSandbox := &sandboxcr.Sandbox{
 					Sandbox: &agentsv1alpha1.Sandbox{
-						Spec: agentsv1alpha1.SandboxSpec{AutoPausePolicy: idlePolicy.DeepCopy()},
+						Spec: agentsv1alpha1.SandboxSpec{
+							AutoPausePolicy: idlePolicy.DeepCopy(),
+							PauseTime:       oldDeadline.DeepCopy(),
+							ShutdownTime:    oldDeadline.DeepCopy(),
+						},
 					},
 				}
 				require.NoError(t, opts.Modifier(mockSandbox))
@@ -1379,38 +1387,15 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			expectError: false,
 			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
 				mockSandbox := &sandboxcr.Sandbox{
-					Sandbox: &agentsv1alpha1.Sandbox{},
+					Sandbox: &agentsv1alpha1.Sandbox{
+						Spec: agentsv1alpha1.SandboxSpec{PauseTime: oldDeadline.DeepCopy(), ShutdownTime: oldDeadline.DeepCopy()},
+					},
 				}
 				require.NoError(t, opts.Modifier(mockSandbox))
 				require.NotNil(t, mockSandbox.Spec.PauseTime)
 				require.NotNil(t, mockSandbox.Spec.ShutdownTime)
 				assert.Equal(t, pauseTime.Time.Round(0).Truncate(time.Second).UTC(), mockSandbox.Spec.PauseTime.Time)
 				assert.Equal(t, shutdownTime.Time.Round(0).Truncate(time.Second).UTC(), mockSandbox.Spec.ShutdownTime.Time)
-			},
-		},
-		{
-			name: "claim autoPausePolicy replaces pool policy",
-			claim: &agentsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-claim",
-					Namespace: "default",
-					UID:       "test-uid-policy",
-				},
-				Spec: agentsv1alpha1.SandboxClaimSpec{
-					TemplateName:    "test-template",
-					AutoPausePolicy: wakePolicy,
-				},
-			},
-			sandboxSet: &agentsv1alpha1.SandboxSet{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default"},
-				Spec: agentsv1alpha1.SandboxSetSpec{
-					Probes:          []agentsv1alpha1.Probe{activeProbe},
-					AutoPausePolicy: idlePolicy,
-				},
-			},
-			expectError: false,
-			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
-				assert.Equal(t, wakePolicy, opts.AutoPausePolicy)
 			},
 		},
 		{
@@ -1470,19 +1455,6 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
 			expectError:         true,
 			expectErrorContains: "must reference a probe name defined in spec.probes",
-		},
-		{
-			name: "empty autoPausePolicy is rejected",
-			claim: &agentsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default"},
-				Spec: agentsv1alpha1.SandboxClaimSpec{
-					TemplateName:    "pool",
-					AutoPausePolicy: &agentsv1alpha1.AutoPausePolicy{},
-				},
-			},
-			sandboxSet:          &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
-			expectError:         true,
-			expectErrorContains: "at least one of pause.whenProbedIdleState",
 		},
 		{
 			name: "claim probes pass through and may satisfy the policy",

@@ -20,8 +20,6 @@ import (
 	"reflect"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
 
@@ -117,16 +115,6 @@ func TestRequiredProbeNames(t *testing.T) {
 }
 
 func TestMergeProbes(t *testing.T) {
-	probe := func(name, command string) agentsv1alpha1.Probe {
-		return agentsv1alpha1.Probe{
-			Name: name,
-			Probe: corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					Exec: &corev1.ExecAction{Command: []string{command}},
-				},
-			},
-		}
-	}
 	tests := []struct {
 		name  string
 		pool  []agentsv1alpha1.Probe
@@ -136,41 +124,36 @@ func TestMergeProbes(t *testing.T) {
 		{name: "both empty"},
 		{
 			name: "empty claim returns the pool probes",
-			pool: []agentsv1alpha1.Probe{probe("Active", "pool-cmd")},
-			want: []agentsv1alpha1.Probe{probe("Active", "pool-cmd")},
+			pool: []agentsv1alpha1.Probe{execProbe("Active", "pool-cmd")},
+			want: []agentsv1alpha1.Probe{execProbe("Active", "pool-cmd")},
 		},
 		{
-			name:  "same-name claim probe replaces the pool version in place",
-			pool:  []agentsv1alpha1.Probe{probe("Active", "pool-cmd"), probe("Audit", "audit-cmd")},
-			claim: []agentsv1alpha1.Probe{probe("Active", "claim-cmd")},
-			want:  []agentsv1alpha1.Probe{probe("Active", "claim-cmd"), probe("Audit", "audit-cmd")},
-		},
-		{
-			name:  "new-name claim probes append in claim order",
-			pool:  []agentsv1alpha1.Probe{probe("Active", "pool-cmd")},
-			claim: []agentsv1alpha1.Probe{probe("Cron", "cron-cmd"), probe("Audit", "audit-cmd")},
-			want:  []agentsv1alpha1.Probe{probe("Active", "pool-cmd"), probe("Cron", "cron-cmd"), probe("Audit", "audit-cmd")},
+			name:  "claim probes replace in pool order and append in claim order",
+			pool:  []agentsv1alpha1.Probe{execProbe("Active", "pool-cmd"), execProbe("Audit", "audit-cmd")},
+			claim: []agentsv1alpha1.Probe{execProbe("Cron", "cron-cmd"), execProbe("Active", "claim-cmd"), execProbe("Extra", "extra-cmd")},
+			want:  []agentsv1alpha1.Probe{execProbe("Active", "claim-cmd"), execProbe("Audit", "audit-cmd"), execProbe("Cron", "cron-cmd"), execProbe("Extra", "extra-cmd")},
 		},
 		{
 			name:  "empty pool takes the claim probes as-is",
-			claim: []agentsv1alpha1.Probe{probe("Cron", "cron-cmd")},
-			want:  []agentsv1alpha1.Probe{probe("Cron", "cron-cmd")},
+			claim: []agentsv1alpha1.Probe{execProbe("Cron", "cron-cmd")},
+			want:  []agentsv1alpha1.Probe{execProbe("Cron", "cron-cmd")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := MergeProbes(tt.pool, tt.claim)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("MergeProbes() = %v, want %v", got, tt.want)
+				t.Fatalf("MergeProbes() = %v, want %v", got, tt.want)
 			}
 			// The result must never alias the inputs: mutating it cannot leak
 			// back into the pool or claim specs.
 			for i := range got {
 				got[i].Name = "mutated"
+				got[i].Exec.Command[0] = "mutated"
 			}
 			for _, src := range [][]agentsv1alpha1.Probe{tt.pool, tt.claim} {
 				for i := range src {
-					if src[i].Name == "mutated" {
+					if src[i].Name == "mutated" || src[i].Exec.Command[0] == "mutated" {
 						t.Fatalf("merged result aliases the input probe %v", src[i])
 					}
 				}
