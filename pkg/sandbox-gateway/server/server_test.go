@@ -219,7 +219,8 @@ func TestServerStopClearsPeerManager(t *testing.T) {
 	t.Cleanup(ResetProcessLifecycleForTest)
 
 	server, _ := newTestGatewayServer()
-	setPeerManager(&peers.MemberlistPeers{})
+	server.peerManager = &peers.MemberlistPeers{}
+	setPeerManager(server.peerManager)
 	require.NotNil(t, GetPeerManager())
 	require.NoError(t, server.Stop(context.Background()))
 	assert.Nil(t, GetPeerManager())
@@ -239,7 +240,8 @@ func TestStopProcessStopsStoredServer(t *testing.T) {
 	t.Cleanup(ResetProcessLifecycleForTest)
 
 	server, _ := newTestGatewayServer()
-	setPeerManager(&peers.MemberlistPeers{})
+	server.peerManager = &peers.MemberlistPeers{}
+	setPeerManager(server.peerManager)
 	processServer.Store(server)
 	require.NotNil(t, GetPeerManager())
 

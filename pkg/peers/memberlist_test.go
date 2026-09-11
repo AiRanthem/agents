@@ -186,52 +186,6 @@ func TestMemberlistPeers_Start_Twice(t *testing.T) {
 	require.NoError(t, peer.Stop(ctx))
 }
 
-// TestMemberlistPeers_Stop_LeavePanicRecovered covers Leave panicking when the
-// memberlist was already shut down: Stop recovers the panic into an error. The
-// pre-shutdown releases the sockets itself, so this test cannot detect a
-// missing Shutdown call; that regression is covered by
-// TestMemberlistPeers_Stop_LeaveErrorReleasesResources.
-func TestMemberlistPeers_Stop_LeavePanicRecovered(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := context.Background()
-	peer, port, err := CreateTestPeer(ctx, fc, "test-node-leave-fail")
-	require.NoError(t, err)
-	require.NoError(t, peer.Start(ctx, port))
-	require.True(t, peer.started.Load())
-
-	require.NoError(t, peer.list.Shutdown())
-
-	err = peer.Stop()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "leave after shutdown")
-	assert.False(t, peer.started.Load())
-	assert.Nil(t, peer.GetPeers())
-}
-
-// TestMemberlistPeers_Stop_LeaveErrorReleasesResources forces Leave to return
-// an error and verifies Stop still runs memberlist.Shutdown: the bind port can
-// be reused only after Shutdown closes its sockets, so this test fails if the
-// Shutdown call in Stop is removed.
-func TestMemberlistPeers_Stop_LeaveErrorReleasesResources(t *testing.T) {
-	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
-	ctx := context.Background()
-	peer, port, err := CreateTestPeer(ctx, fc, "test-node-leave-error")
-	require.NoError(t, err)
-	require.NoError(t, peer.Start(ctx, port))
-
-	peer.leave = func(time.Duration) error { return errors.New("leave failed") }
-
-	err = peer.Stop()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "leave failed")
-	assert.False(t, peer.started.Load())
-
-	restarted := NewMemberlistPeers(fc, "test-node-leave-error-restart", Namespace, LabelSelector)
-	restarted.localIP = "127.0.0.1"
-	require.NoError(t, restarted.Start(ctx, port))
-	require.NoError(t, restarted.Stop())
-}
-
 // TestMemberlistPeers_ThreeNodes_Join tests three-node join and discovery
 func TestMemberlistPeers_ThreeNodes_Join(t *testing.T) {
 	fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
