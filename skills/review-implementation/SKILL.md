@@ -50,9 +50,9 @@ Set review depth by consequence and difficulty:
 
 - **Routine:** One qualified independent lead plus the dedicated quality subagent is sufficient unless repository rules require more.
 - **Standard:** Use a qualified independent lead and the dedicated quality subagent; add focused verification or a specialist only for a named uncertainty or boundary.
-- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility, or release safety require the dedicated quality subagent, a user-designated strongest qualified lead, and at least one additional independent targeted perspective on the critical boundary. All required review executions must be separate from implementation. This is a workflow policy, not a claim that multiple models prove correctness.
+- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility, or release safety require the dedicated quality subagent, a lead qualified to assess the critical boundary, and at least one additional independent targeted perspective on that boundary. All required review executions must be separate from implementation. This is a workflow policy, not a claim that multiple models prove correctness.
 
-If a required strongest model or additional perspective is unavailable, do not silently substitute a lower assurance level. Report Unable to conclude for acceptance while completing useful permitted checks. Honor stricter repository review policies.
+Select the lead using existing user model choices and applicable model-routing instructions. The current lead may continue when qualified and independent; high risk alone does not require a model switch or a new user designation. Escalate only a concrete capability gap or unresolved consequential uncertainty. If a qualified lead or required independent perspective is unavailable, report Unable to conclude while completing useful permitted checks. Honor stricter repository review policies.
 
 Use existing independent evidence when its provenance, target, contract, coverage, and inputs remain valid. An inaccessible report, changed target, or vague summary does not satisfy a gate. An already-requested final review is not evidence until it actually runs.
 
@@ -62,7 +62,7 @@ Honor user model choices and actual supported routing. Check available model set
 
 Capable execution agents may collect a contract-to-code map, run permitted checks, inspect test reachability, enumerate callers, or investigate a bounded counterexample. Give exact stable scope, constraints, evidence requirements, stopping conditions, and return format. Do not dispatch several broad reviewers to rediscover the same facts by default.
 
-The acceptance lead must itself inspect the critical changed behavior and enough surrounding code, assess test oracles and omissions, and validate each material candidate finding. It is not a summarizer or vote counter for cheaper agents. Give the strongest lead enough primary context to reason; saving quota does not justify hiding uncertainty or only forwarding favorable summaries.
+The acceptance lead must itself inspect the critical changed behavior and enough surrounding code, assess test oracles and omissions, and validate each material candidate finding. It is not a summarizer or vote counter for cheaper agents. Give the lead enough primary context to reason; saving quota does not justify hiding uncertainty or only forwarding favorable summaries.
 
 Before reading other reviewers' conclusions, orient independently from requirements, design, diff, and tests where practical. Then use their reports to challenge or extend coverage. This does not require redundant full repository scans.
 
@@ -81,6 +81,12 @@ A read-only reviewer may run existing tests or non-writing commands. Propose a n
 
 ## Validate findings and resolve disagreement
 
+Attribute every candidate issue, including subagent findings and test failures, to the reviewed change before assigning acceptance impact. Compare the stable target with its comparison base using relevant code, callers, configuration, history, or equivalent behavioral evidence. The boundary is causal, not limited to changed lines: a regression in unchanged code can be introduced by a changed caller or input. Merely discovering an issue during review, touching its file, or adding a test that reveals it does not establish introduction.
+
+- **Introduced by this change:** Report as a finding only with evidence of new faulty behavior, an incremental regression caused by this change, or an unmet requirement assigned to this change by the confirmed contract. For an existing defect made worse or newly reachable by this change, report only the newly introduced impact and its causal link.
+- **Pre-existing:** An issue already present at the base with no demonstrated new impact may be reported separately as a warning. It does not affect acceptance, require a waiver, or become a mandatory fix for this change, regardless of severity.
+- **Attribution unresolved:** State the uncertainty without presenting it as an introduced finding. Continue focused checks when it could materially affect this change; only a concrete gap in essential verification of the change can justify Unable to conclude. An unrelated or established baseline issue alone cannot.
+
 Include a finding only after the lead has:
 
 1. reproduced the issue where practical, or traced a concrete affected path;
@@ -89,14 +95,14 @@ Include a finding only after the lead has:
 4. separated fact from inference and stated meaningful uncertainty; and
 5. merged duplicate symptoms under a supported root cause.
 
-For each finding state severity, location, triggering situation, expected versus actual behavior, impact, violated contract or repository rule, evidence, confidence or uncertainty, and the required outcome. Do not implement the fix.
+For each finding state severity, location, triggering situation, expected versus actual behavior, impact, violated contract or repository rule, evidence of introduction relative to the base, confidence or uncertainty, and the required outcome. Do not implement the fix.
 
 - **Critical:** Likely security compromise, data loss, or broad outage; blocks acceptance.
 - **High:** Missing or incorrect required behavior, unintended scope, serious regression, or materially misleading tests; blocks acceptance.
 - **Medium:** Realistic defect or substantial maintainability problem; normally fix before acceptance. An exception needs explicit user acceptance and must not violate a governing requirement.
 - **Low:** Supported non-blocking improvement. Keep these few.
 
-Do not report cosmetic preferences or speculative risks. Include pre-existing issues only when the change exposes, worsens, or makes them material to acceptance, and explain that relationship.
+Do not report cosmetic preferences or speculative risks. Apply severity and acceptance consequences only to introduced findings; keep any pre-existing warnings outside that list and explain their baseline evidence.
 
 When reviewers disagree, adjudicate the exact claim against requirements, paths, and a distinguishing scenario. Do not choose by majority, stronger-model status, or a demand for consensus. Without decisive evidence, state the unresolved uncertainty and its acceptance impact. Do not add debate rounds without a new source or experiment.
 
@@ -108,14 +114,15 @@ Broaden the review when a fix changes architecture, ownership, public or stored 
 
 ## Report acceptance and stop
 
-Write in the user's language. Lead with supported findings in severity order. Use clickable file and line references when available. If there are none, say so directly without implying complete safety.
+Write in the user's language. Lead with supported findings introduced by this change in severity order. Use clickable file and line references when available. If there are none, say so directly without implying complete safety.
 
 Then report, combining sections when that improves readability:
 
 1. **Conclusion:** Pass, Changes required, or Unable to conclude, with one explanation.
-2. **Target and coverage:** exact reviewed state; complete, missing, extra, and uncertain rules or boundaries; exclusions and baseline issues.
+2. **Target and coverage:** exact reviewed state and comparison base; complete, missing, extra, and uncertain rules or boundaries; exclusions.
 3. **Implementation and test assessment:** material simplicity/ownership observations, what verification establishes, and important violations it would miss.
 4. **Verification performed:** actual commands and outcomes, reused evidence and why it remains valid, and blocked checks.
 5. **Independence and remaining gaps:** actual lead/reviewer roles and models when known, qualifications of reused evidence, unresolved assumptions, unexamined areas, and residual uncertainty.
+6. **Pre-existing warnings, if any:** baseline evidence and impact, explicitly excluded from the acceptance decision and required fixes.
 
-Pass means no acceptance-blocking problem was found within the stated adequate coverage and required gates. It does not mean bug-free. A missing essential contract, dedicated quality pass, required independent perspective, strongest-model gate, unstable target, or essential verification prevents Pass. A concrete blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.
+Pass means no acceptance-blocking problem introduced by this change was found within the stated adequate coverage and required gates; pre-existing warnings do not change that result. It does not mean bug-free. A missing essential contract, dedicated quality pass, qualified lead, required independent perspective, stable target, or essential verification prevents Pass. A concrete introduced blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.

@@ -22,6 +22,10 @@
 
 # Subagent Delegation
 
+If your runtime model is Astra and you are the main agent, invoke $astra-lead before starting the task.
+
+Wait for subagent results with the event-driven waiting tool, setting a 60-second timeout (`timeout_ms: 60000` where supported). Process messages, completion events, or user input when they wake you earlier. After a timeout, wait again if there is neither new information nor useful independent work. Query status or run additional checks only when new evidence or a task requirement justifies them.
+
 When dispatching, reassigning, or escalating a subagent, report its task, model, and reasoning effort to the user, briefly explaining the profile choice or change. Distinguish requested settings from runtime-confirmed settings and state when a setting is unavailable or unknown.
 
 When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
