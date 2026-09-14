@@ -22,13 +22,11 @@
 
 # Subagent Delegation
 
-If your runtime model is Astra and you are the main agent, invoke $astra-lead before starting the task.
-
-Wait for subagent results with the event-driven waiting tool, setting a 60-second timeout (`timeout_ms: 60000` where supported). Process messages, completion events, or user input when they wake you earlier. After a timeout, wait again if there is neither new information nor useful independent work. Query status or run additional checks only when new evidence or a task requirement justifies them.
+Use the event-driven waiting tool for subagent updates with a 60-second timeout (`timeout_ms: 60000` when supported). After a timeout, continue useful independent work or wait again; do not poll status or create work solely because the wait expired.
 
 When dispatching, reassigning, or escalating a subagent, report its task, model, and reasoning effort to the user, briefly explaining the profile choice or change. Distinguish requested settings from runtime-confirmed settings and state when a setting is unavailable or unknown.
 
-When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
+When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. When two or more independent workstreams exist, dispatch multiple subagents in parallel and use available worker capacity when this can shorten delivery or add useful independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
 
 Optimize expected end-to-end cost per correct result. Give each subagent a clear objective, relevant constraints, success criteria, and minimal sufficient context. Request concise, decision-relevant results with supporting evidence and material uncertainties.
 
