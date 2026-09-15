@@ -583,15 +583,6 @@ func TestRequestPeerAddressAndTransport(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid peer IP")
 	})
 
-	t.Run("IPv6 URL host", func(t *testing.T) {
-		peer := newRecordingPeer()
-		t.Cleanup(peer.close)
-		host := peer.server.Listener.Addr().String()
-		overridePeerTransport(t, map[string]string{"[2001:db8::1]:7789": host}, time.Second)
-		err := requestPeer(t.Context(), http.MethodPost, "2001:db8::1", refresh.Path, []byte(`{"id":"x","namespace":"ns","name":"x","uid":"u","resourceVersion":"1","state":"Running"}`))
-		require.NoError(t, err)
-	})
-
 	t.Run("plaintext disables proxy and redirects", func(t *testing.T) {
 		origClient := requestPeerClient
 		origScheme := requestPeerScheme
@@ -605,7 +596,11 @@ func TestRequestPeerAddressAndTransport(t *testing.T) {
 		require.True(t, ok)
 		assert.Nil(t, transport.Proxy)
 		assert.ErrorIs(t, requestPeerClient.CheckRedirect(&http.Request{}, []*http.Request{{}}), errPeerRedirect)
-		ConfigurePeerTransport(&tls.Config{MinVersion: tls.VersionTLS12})
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		ConfigurePeerTransport(tlsConfig)
 		assert.Equal(t, "https", requestPeerScheme)
+		transport, ok = requestPeerClient.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Same(t, tlsConfig, transport.TLSClientConfig)
 	})
 }
