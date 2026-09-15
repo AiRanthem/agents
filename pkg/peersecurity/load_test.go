@@ -55,7 +55,7 @@ func TestLoadCanceled(t *testing.T) {
 	_, _, _, err := Load(ctx, fake.NewClientBuilder().Build(), Inputs{
 		PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "key"},
 	})
-	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestLoadPeerKey(t *testing.T) {
@@ -183,6 +183,8 @@ func TestLoadSecretReads(t *testing.T) {
 		"client.crt": clientCert,
 		"client.key": clientKey,
 	}
+	keyAndTLS := tlsInputs("ns/server", "ns/client")
+	keyAndTLS.PeerKeySecret = types.NamespacedName{Namespace: "ns", Name: "peer-key"}
 
 	tests := []struct {
 		name    string
@@ -190,12 +192,23 @@ func TestLoadSecretReads(t *testing.T) {
 		inputs  Inputs
 		gets    int
 		wantErr string
+		wantKey []byte
 	}{
 		{
 			name:    "separate secrets",
 			objects: []ctrlclient.Object{secret("ns", "server", serverData), secret("ns", "client", clientData)},
 			inputs:  tlsInputs("ns/server", "ns/client"),
 			gets:    2,
+		},
+		{
+			name: "key and TLS",
+			objects: []ctrlclient.Object{
+				secret("ns", "peer-key", map[string][]byte{"key": bytes32('x')}),
+				secret("ns", "server", serverData), secret("ns", "client", clientData),
+			},
+			inputs:  keyAndTLS,
+			gets:    3,
+			wantKey: bytes32('x'),
 		},
 		{
 			name:    "same secret read once",
@@ -233,31 +246,13 @@ func TestLoadSecretReads(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Nil(t, key)
+			assert.Equal(t, tt.wantKey, key)
 			require.NotNil(t, serverTLS)
 			require.NotNil(t, clientTLS)
 			assert.Equal(t, serverName, clientTLS.ServerName)
 			assert.Equal(t, tt.gets, int(gets.Load()))
 		})
 	}
-}
-
-func TestLoadKeyAndTLS(t *testing.T) {
-	caCert, caKey, caPEM := mustCA(t)
-	serverCert, serverKey := mustIssued(t, caCert, caKey, x509.ExtKeyUsageServerAuth, []string{serverName})
-	clientCert, clientKey := mustIssued(t, caCert, caKey, x509.ExtKeyUsageClientAuth, nil)
-	reader := fake.NewClientBuilder().WithObjects(
-		secret("ns", "peer-key", map[string][]byte{"key": bytes32('x')}),
-		secret("ns", "server", map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey}),
-		secret("ns", "client", map[string][]byte{"ca.crt": caPEM, "client.crt": clientCert, "client.key": clientKey}),
-	).Build()
-	in := tlsInputs("ns/server", "ns/client")
-	in.PeerKeySecret = types.NamespacedName{Namespace: "ns", Name: "peer-key"}
-	key, serverTLS, clientTLS, err := Load(t.Context(), reader, in)
-	require.NoError(t, err)
-	assert.Equal(t, bytes32('x'), key)
-	require.NotNil(t, serverTLS)
-	require.NotNil(t, clientTLS)
 }
 
 func tlsInputs(server, client string) Inputs {

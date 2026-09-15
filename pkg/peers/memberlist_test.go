@@ -17,6 +17,7 @@ limitations under the License.
 package peers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -546,8 +547,8 @@ func TestMemberlistPeers_ParentCancellationOwnsCleanup(t *testing.T) {
 
 func TestMemberlistPeers_SecretKeyJoin(t *testing.T) {
 	ctx := t.Context()
-	matching := bytesRepeat(32, 1)
-	other := bytesRepeat(32, 2)
+	matching := bytes.Repeat([]byte{1}, 32)
+	other := bytes.Repeat([]byte{2}, 32)
 
 	tests := []struct {
 		name      string
@@ -582,12 +583,4 @@ func TestMemberlistPeers_SecretKeyJoin(t *testing.T) {
 			assert.Empty(t, peer2.GetPeers())
 		})
 	}
-}
-
-func bytesRepeat(n int, b byte) []byte {
-	key := make([]byte, n)
-	for i := range key {
-		key[i] = b
-	}
-	return key
 }
