@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -288,8 +289,13 @@ func (rp *recordingPeer) getReceived() []sandboxroute.Route {
 func overridePeerTransport(t *testing.T, routes map[string]string, timeout time.Duration) {
 	t.Helper()
 	origClient := requestPeerClient
+	origScheme := requestPeerScheme
 	requestPeerClient = &http.Client{Timeout: timeout, Transport: &muxRoundTripper{routes: routes}}
-	t.Cleanup(func() { requestPeerClient = origClient })
+	requestPeerScheme = "http"
+	t.Cleanup(func() {
+		requestPeerClient = origClient
+		requestPeerScheme = origScheme
+	})
 }
 
 func peerAddr(ip string) string {
@@ -568,4 +574,38 @@ func newMemberlistPeerForTest(t *testing.T, c client.Client, name string) *membe
 		peer: peer,
 		port: port,
 	}
+}
+
+func TestRequestPeerAddressAndTransport(t *testing.T) {
+	t.Run("invalid IP", func(t *testing.T) {
+		err := requestPeer(t.Context(), http.MethodPost, "not-an-ip", refresh.Path, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid peer IP")
+	})
+
+	t.Run("IPv6 URL host", func(t *testing.T) {
+		peer := newRecordingPeer()
+		t.Cleanup(peer.close)
+		host := peer.server.Listener.Addr().String()
+		overridePeerTransport(t, map[string]string{"[2001:db8::1]:7789": host}, time.Second)
+		err := requestPeer(t.Context(), http.MethodPost, "2001:db8::1", refresh.Path, []byte(`{"id":"x","namespace":"ns","name":"x","uid":"u","resourceVersion":"1","state":"Running"}`))
+		require.NoError(t, err)
+	})
+
+	t.Run("plaintext disables proxy and redirects", func(t *testing.T) {
+		origClient := requestPeerClient
+		origScheme := requestPeerScheme
+		t.Cleanup(func() {
+			requestPeerClient = origClient
+			requestPeerScheme = origScheme
+		})
+		ConfigurePeerTransport(nil)
+		assert.Equal(t, "http", requestPeerScheme)
+		transport, ok := requestPeerClient.Transport.(*http.Transport)
+		require.True(t, ok)
+		assert.Nil(t, transport.Proxy)
+		assert.ErrorIs(t, requestPeerClient.CheckRedirect(&http.Request{}, []*http.Request{{}}), errPeerRedirect)
+		ConfigurePeerTransport(&tls.Config{MinVersion: tls.VersionTLS12})
+		assert.Equal(t, "https", requestPeerScheme)
+	})
 }

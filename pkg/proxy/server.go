@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -76,8 +77,9 @@ type Server struct {
 	adapter RequestAdapter
 	LBEntry string // entry of load balancer, usually a service
 	// peers - now managed by Peers
-	peersManager peers.Peers
-	bindAddress  string
+	peersManager  peers.Peers
+	bindAddress   string
+	peerServerTLS *tls.Config
 	// lifecycle: Run is called once and Stop at most once, after Run.
 	mu sync.Mutex
 }
@@ -101,6 +103,12 @@ func (s *Server) SetPeersManager(p peers.Peers) {
 	s.peersManager = p
 }
 
+// SetPeerServerTLS installs the inbound peer TLS snapshot. A nil config keeps
+// the route listener on HTTP. ClientAuth must already be set by the caller.
+func (s *Server) SetPeerServerTLS(cfg *tls.Config) {
+	s.peerServerTLS = cfg
+}
+
 // Run binds the route-refresh HTTP listener and, unless disabled, the Envoy
 // ext-proc gRPC listener, then serves both in the background. Bind failures
 // are returned synchronously. Listeners are owned by their servers: Shutdown
@@ -117,6 +125,9 @@ func (s *Server) Run() error {
 	httpLis, err := net.Listen("tcp", httpSrv.Addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen for proxy route updates on %s: %w", httpSrv.Addr, err)
+	}
+	if s.peerServerTLS != nil {
+		httpLis = tls.NewListener(httpLis, s.peerServerTLS)
 	}
 
 	var grpcSrv *grpc.Server
@@ -184,6 +195,7 @@ func (s *Server) Stop(ctx context.Context) {
 			klog.ErrorS(err, "Failed to shut down proxy system server")
 		}
 	}
+	ClosePeerIdleConnections()
 }
 
 func (s *Server) updateRouteCount() {

@@ -4,7 +4,7 @@ authors:
   - "@AiRanthem"
 reviewers: []
 creation-date: 2026-09-08
-last-updated: 2026-09-09
+last-updated: 2026-09-15
 status: implementable
 see-also:
   - "/docs/proposals/20260824-sandbox-manager-network-interface-peer-discovery.md"
@@ -80,17 +80,34 @@ Manager 提供以下启动参数。默认值保留未配置 peer 安全的非托
 | `--peer-tls-server-key-key` | `tls.key` | 服务端私钥的 Secret 数据键。空则用默认值。 |
 | `--peer-tls-client-secret` | 空 | 本进程自身 runtime 客户端 bundle 的精确 `namespace/name` 引用。两个 TLS 引用都空时使用 HTTP，只配置其中一个则启动失败。 |
 | `--peer-tls-client-ca-key` | `ca.crt` | 客户端信任 CA 的 Secret 数据键。空则用默认值。 |
-| `--peer-tls-client-cert-key` | Manager：`client.crt`；Gateway：`tls.crt` | 客户端证书的 Secret 数据键。空则用本组件的默认值。 |
-| `--peer-tls-client-key-key` | Manager：`client.key`；Gateway：`tls.key` | 客户端私钥的 Secret 数据键。空则用本组件的默认值。 |
+| `--peer-tls-client-cert-key` | `client.crt` | 客户端证书的 Secret 数据键。空则用默认值；Gateway 复用自身 bundle，其部署必须显式设置为 `tls.crt`。 |
+| `--peer-tls-client-key-key` | `client.key` | 客户端私钥的 Secret 数据键。空则用默认值；Gateway 复用自身 bundle，其部署必须显式设置为 `tls.key`。 |
 | `--disable-envoy-ext-proc` | `false` | 跳过 `9002` ext-proc 监听和处理链路，保留 peer 路由及本地路由接入。托管 sandbox-api 固定设为 `true`。 |
 
-这些参数名称是托管与非托管部署渲染共同遵循的合同。ext-proc 开关沿用网卡设计，不新增替代开关或别名。数据键参数描述布局，不是凭据；单独设置它们不会开启任何安全功能。两项功能分别只看自己的 Secret 引用。数据键参数未设置或为空时使用默认值；非空值原样使用，不裁剪、不回退、不猜测第二个键名。TLS 默认值沿用仓库既有名称：Manager 客户端使用 `ca.crt`、`client.crt`、`client.key`；Gateway 客户端与 peer 服务端使用 `ca.crt`、`tls.crt`、`tls.key`。
+这些参数名称是托管与非托管部署渲染共同遵循的合同。ext-proc 开关沿用网卡设计，不新增替代开关或别名。数据键参数描述布局，不是凭据；单独设置它们不会开启任何安全功能。两项功能分别只看自己的 Secret 引用。数据键参数未设置或为空时使用默认值；非空值原样使用，不裁剪、不回退、不猜测第二个键名。TLS 默认值沿用仓库既有名称：客户端使用 `ca.crt`、`client.crt`、`client.key`；peer 服务端使用 `ca.crt`、`tls.crt`、`tls.key`。客户端默认值全局唯一，进程不按组件区分；Gateway 复用自身 runtime 客户端 bundle，其部署必须显式设置 `tls.crt`、`tls.key` 两个客户端数据键。
 
 托管部署使用 `sandbox-system/peer-key-secret` 保存共享密钥；这是外部渲染约定，不是开源进程要求的对象名或默认查找位置。空参数保持为空，所有 Secret 对象名均由部署配置指定，证书引用指向既有用户集群对象；这些参数不创建或重命名对象。引用必须恰有一个斜杠，namespace 和 Secret 名均非空且符合 Kubernetes 命名要求，不补默认 namespace，也不自动修正空白字符。
 
-Gateway 运行在 Envoy 内，通过与上述 flag 对应的环境变量接收同样的 peer 配置，名称去掉 `--`、转为大写并把连字符换成下划线：`PEER_KEY_SECRET`、`PEER_KEY_SECRET_KEY`、`PEER_TLS_SERVER_SECRET`、`PEER_TLS_CLIENT_SECRET`，以及六个 `PEER_TLS_{SERVER,CLIENT}_{CA,CERT,KEY}_KEY`。默认值和启用判定语义与 Manager 参数一致。Gateway 的客户端引用指向自身既有 runtime 客户端 bundle，不指向 Manager 客户端 bundle。不能通过环境变量或启动参数传递凭据值。Gateway 的 peer 配置属于进程启动配置，不属于每条路由的 filter 配置。ext-proc 开关仅适用于 Manager。
+Gateway 运行在 Envoy 内，通过与上述 flag 对应的环境变量接收同样的 peer 配置，名称去掉 `--`、转为大写并把连字符换成下划线：`PEER_KEY_SECRET`、`PEER_KEY_SECRET_KEY`、`PEER_TLS_SERVER_SECRET`、`PEER_TLS_CLIENT_SECRET`，以及六个 `PEER_TLS_{SERVER,CLIENT}_{CA,CERT,KEY}_KEY`。默认值、启用判定与读取范围语义与 Manager 参数一致：两个 TLS 引用都空时保留明文 peer HTTP，数据键只在同侧引用非空时读取；`PEER_TLS_SERVER_CA_KEY` 是入站信任集合，验证入站 peer 客户端证书，`PEER_TLS_CLIENT_CA_KEY` 是出站信任集合，验证出站 peer 服务端证书。Gateway 的客户端引用指向自身既有 runtime 客户端 bundle，不指向 Manager 客户端 bundle。不能通过环境变量或启动参数传递凭据值。Gateway 的 peer 配置属于进程启动配置，不属于每条路由的 filter 配置。ext-proc 开关仅适用于 Manager。
 
 Manager 和 Gateway 各自只根据本地启动输入决定两项功能，不读取对方配置，也不通过 Secret 传递开关。外部部署分别渲染各实例的引用和数据键名；托管部署的安全终态要求两项保护都启用，由部署配置保证，不增加进程级总开关。
+
+### 编排启用方式
+
+启用 mTLS 只发生在每个实例自己的编排输入上：Manager 用进程启动参数，Gateway 用承载它的 Envoy 进程环境变量。编排只提供引用：不能通过启动参数或环境变量传递凭据值，也不需要挂载 Secret，进程按引用自行读取。两种编排的输入形式和启用后必须一并切换的编排项不同，具体清单不属于本文范围。
+
+| 编排项 | Manager（sandbox-api） | Gateway |
+| --- | --- | --- |
+| TLS 引用 | 同时设置 `--peer-tls-server-secret` 与 `--peer-tls-client-secret`。 | 同时设置 `PEER_TLS_SERVER_SECRET` 与 `PEER_TLS_CLIENT_SECRET`。 |
+| 客户端凭据来源 | 本进程自身 runtime 客户端 bundle，通常与 `--runtime-client-cert-secret` 指向同一 Secret，因此可用默认客户端数据键。 | 自身 runtime 客户端 bundle，其布局为 `ca.crt`、`tls.crt`、`tls.key`；编排必须把 `PEER_TLS_CLIENT_CERT_KEY`、`PEER_TLS_CLIENT_KEY_KEY` 显式设为 `tls.crt`、`tls.key`。指向 Manager 客户端 bundle 不满足本合同。 |
+| 启用后的 `7789` 接收端 | TLS 握手要求客户端证书，未认证 peer 在握手阶段被丢弃，不进入路由处理。 | TLS 握手允许不带客户端证书，`/refresh` 在读取请求体前强制验证，两条 GET 健康路径豁免。 |
+| 探针 | 以 `8080` 控制 API 为依据，不探测 `7789`，接收端因此可以在握手阶段强制。 | readiness 与 peer 接收端共用 `7789`，探针必须从 HTTP 切换为 HTTPS 并设置 `insecureSkipTLSVerify`。 |
+
+只设置一个 TLS 引用使对应实例启动失败，编排不能把"配置了一半"的实例当作可服务状态，也不能靠移除引用把已启用的接收端切换为明文 HTTP。引用、数据键和凭据按启动快照生效，变更由重启应用。
+
+Gateway 的探针形式是启用 mTLS 时必须一并切换的编排项。kubelet 的 HTTPS 探针不校验服务端证书，也不提供客户端证书；明文探针打到只提供 HTTPS 的 `7789` 会在 TLS 握手阶段失败，使副本永不 Ready。指向其他端口的 TCP 探针不做 TLS 握手，不受影响。同一份探针定义不能同时适配明文与 mTLS，两种状态由各自的编排渲染。
+
+两类输入都只影响本实例：一侧未启用时该侧仍是明文 HTTP，成员组不因此隔离（见兼容性）。两侧配置兼容由部署保证，进程不协商也不回退。
 
 ### 共享密钥 Secret 与既有证书输入
 
@@ -108,7 +125,7 @@ Secret 仅承载凭据，不要求也不解释启用注解。证书 Secret 不�
 | --- | --- |
 | Manager 和 Gateway peer 服务端 | 配置的服务端 CA、证书、私钥数据键。默认 `ca.crt`、`tls.crt`、`tls.key`。证书链和私钥证明本进程是 peer 接收端，CA 验证入站客户端。 |
 | Manager peer 客户端 | 本进程 runtime 客户端 bundle，使用配置的客户端数据键。默认 `ca.crt`、`client.crt`、`client.key`。 |
-| Gateway peer 客户端 | 本进程 runtime 客户端 bundle，使用配置的客户端数据键。默认 `ca.crt`、`tls.crt`、`tls.key`。Gateway 不为 peer 用途获取 Manager 客户端私钥。 |
+| Gateway peer 客户端 | 本进程 runtime 客户端 bundle，使用部署显式配置的客户端数据键（`tls.crt`、`tls.key`）。Gateway 不为 peer 用途获取 Manager 客户端私钥。 |
 
 Peer mTLS 要求选定 bundle 中的三个字段均非空。配置的键缺失、值为空或 PEM 无法解析时，实例启动失败。进程从不尝试另一个数据键名。Runtime 请求 TLS 加载器保留各自的固定名称；这些 peer 参数不改变它们。
 
