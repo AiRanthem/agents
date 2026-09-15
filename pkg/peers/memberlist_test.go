@@ -543,3 +543,51 @@ func TestMemberlistPeers_ParentCancellationOwnsCleanup(t *testing.T) {
 	require.NoError(t, peer.Stop(t.Context()))
 	assert.Equal(t, []string{"leave", "shutdown"}, handle.recordedCalls())
 }
+
+func TestMemberlistPeers_SecretKeyJoin(t *testing.T) {
+	ctx := t.Context()
+	matching := bytesRepeat(32, 1)
+	other := bytesRepeat(32, 2)
+
+	tests := []struct {
+		name      string
+		key1      []byte
+		key2      []byte
+		wantPeers bool
+	}{
+		{name: "matching keys join", key1: matching, key2: matching, wantPeers: true},
+		{name: "mismatched keys do not join", key1: matching, key2: other},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := fake.NewClientBuilder().WithStatusSubresource(&v1.Pod{}).Build()
+			peer1, port1, err := CreateTestPeer(ctx, fc, "enc-1-"+tt.name)
+			require.NoError(t, err)
+			peer2, port2, err := CreateTestPeer(ctx, fc, "enc-2-"+tt.name)
+			require.NoError(t, err)
+			peer1.SetSecretKey(tt.key1)
+			peer2.SetSecretKey(tt.key2)
+			require.NoError(t, peer1.Start(ctx, "127.0.0.1", port1))
+			t.Cleanup(func() { _ = peer1.Stop(ctx) })
+			require.NoError(t, peer2.Start(ctx, "127.0.0.1", port2))
+			t.Cleanup(func() { _ = peer2.Stop(ctx) })
+			if tt.wantPeers {
+				assert.Eventually(t, func() bool {
+					return len(peer1.GetPeers()) == 1 && len(peer2.GetPeers()) == 1
+				}, 5*time.Second, 50*time.Millisecond)
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+			assert.Empty(t, peer1.GetPeers())
+			assert.Empty(t, peer2.GetPeers())
+		})
+	}
+}
+
+func bytesRepeat(n int, b byte) []byte {
+	key := make([]byte, n)
+	for i := range key {
+		key[i] = b
+	}
+	return key
+}
