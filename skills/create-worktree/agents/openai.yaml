@@ -1,0 +1,3 @@
+interface:
+  display_name: "Create Worktree and Track Remote"
+  short_description: "Create a worktree and publish its branch with upstream tracking"

@@ -24,7 +24,7 @@
 
 Use the event-driven waiting tool for subagent updates with a 60-second timeout (`timeout_ms: 60000` when supported). After a timeout, continue useful independent work or wait again; do not poll status or create work solely because the wait expired.
 
-When dispatching, reassigning, or escalating a subagent, report its task, model, and reasoning effort to the user, briefly explaining the profile choice or change. Distinguish requested settings from runtime-confirmed settings and state when a setting is unavailable or unknown.
+When dispatching, reassigning, or escalating a subagent, report its task and the model and reasoning effort specified in the dispatch parameters, briefly explaining the profile choice or change. Do not inspect or verify the subagent's runtime settings.
 
 When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. When two or more independent workstreams exist, dispatch multiple subagents in parallel and use available worker capacity when this can shorten delivery or add useful independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
 

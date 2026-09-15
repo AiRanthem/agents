@@ -42,7 +42,7 @@ $install 安装或更新这个 dev-kit
 
 | Skill | 用途 |
 | --- | --- |
-| `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree。 |
+| `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$rebase-worktree` | 将当前 Git worktree 安全 rebase 到指定分支并独立验证结果。 |
 | `$explore-design` | 在实现前探索或细化设计，并产出经确认的计划或中文设计文档。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计的实现准备度。 |
