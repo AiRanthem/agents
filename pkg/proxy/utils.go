@@ -46,14 +46,28 @@ var errPeerRejected = errors.New("peer rejected request")
 // errPeerRedirect is returned instead of following an HTTP redirect.
 var errPeerRedirect = errors.New("peer refresh does not follow redirects")
 
-var (
-	requestPeerScheme = "http"
-	requestPeerClient = newPeerHTTPClient(nil)
-)
+// PeerOutbound is one process's outbound peer HTTP client. The peer owner holds
+// this value and every producer uses it; callers must not construct a second
+// client with an independent security decision.
+type PeerOutbound struct {
+	scheme string
+	client *http.Client
+}
 
-// newPeerHTTPClient builds the outbound peer client. A nil clientTLS keeps
+// NewPeerOutbound builds the outbound peer client. A nil clientTLS keeps
 // plaintext HTTP. Transport tuning mirrors http.DefaultTransport, except that
 // environment proxies are unused and redirects are refused at the client level.
+func NewPeerOutbound(clientTLS *tls.Config) *PeerOutbound {
+	scheme := "http"
+	if clientTLS != nil {
+		scheme = "https"
+	}
+	return &PeerOutbound{
+		scheme: scheme,
+		client: newPeerHTTPClient(clientTLS),
+	}
+}
+
 func newPeerHTTPClient(clientTLS *tls.Config) *http.Client {
 	transport := &http.Transport{
 		// Peer refreshes dial fixed IPs directly, never a proxy.
@@ -76,23 +90,18 @@ func newPeerHTTPClient(clientTLS *tls.Config) *http.Client {
 	}
 }
 
-// ConfigurePeerTransport installs the process-wide outbound peer client.
-// A nil TLS config keeps HTTP and still disables redirects and HTTP proxies.
-func ConfigurePeerTransport(clientTLS *tls.Config) {
-	requestPeerClient = newPeerHTTPClient(clientTLS)
-	if clientTLS != nil {
-		requestPeerScheme = "https"
-	} else {
-		requestPeerScheme = "http"
+// CloseIdleConnections drops idle outbound peer connections.
+func (o *PeerOutbound) CloseIdleConnections() {
+	if o == nil || o.client == nil {
+		return
 	}
+	o.client.CloseIdleConnections()
 }
 
-// ClosePeerIdleConnections drops idle outbound peer connections.
-func ClosePeerIdleConnections() {
-	requestPeerClient.CloseIdleConnections()
-}
-
-func requestPeer(ctx context.Context, method, ip, path string, body []byte) error {
+func (o *PeerOutbound) request(ctx context.Context, method, ip, path string, body []byte) error {
+	if o == nil || o.client == nil {
+		return fmt.Errorf("peer outbound client is not configured")
+	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return fmt.Errorf("invalid peer IP %q", ip)
@@ -101,13 +110,13 @@ func requestPeer(ctx context.Context, method, ip, path string, body []byte) erro
 	if len(body) > 0 {
 		buf = bytes.NewReader(body)
 	}
-	url := requestPeerScheme + "://" + net.JoinHostPort(parsed.String(), strconv.Itoa(refresh.DefaultPort)) + path
+	url := o.scheme + "://" + net.JoinHostPort(parsed.String(), strconv.Itoa(refresh.DefaultPort)) + path
 	request, err := http.NewRequestWithContext(ctx, method, url, buf)
 	if err != nil {
 		return err
 	}
 
-	resp, err := requestPeerClient.Do(request)
+	resp, err := o.client.Do(request)
 	if err != nil {
 		return err
 	}
@@ -125,14 +134,14 @@ func requestPeer(ctx context.Context, method, ip, path string, body []byte) erro
 	return nil
 }
 
-func requestPeerWithRetry(ctx context.Context, method, ip, path string, body []byte) error {
+func (o *PeerOutbound) requestWithRetry(ctx context.Context, method, ip, path string, body []byte) error {
 	var lastErr error
 	err := wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
 		Steps:    peerSyncRetrySteps,
 		Duration: peerSyncRetryInterval,
 		Factor:   1,
 	}, func(ctx context.Context) (bool, error) {
-		lastErr = requestPeer(ctx, method, ip, path, body)
+		lastErr = o.request(ctx, method, ip, path, body)
 		if errors.Is(lastErr, errPeerRejected) {
 			return false, lastErr
 		}
