@@ -67,28 +67,37 @@ const (
 // ReadinessCheck reports whether the gateway is ready to receive traffic.
 type ReadinessCheck func() error
 
-// globalPeerManager is set when server.Start() creates the peerManager.
-// It allows other packages (e.g. wake) to access the peer manager for
-// SyncRouteWithPeers without creating a full Server instance.
-// Protected by globalPeerManagerMu for concurrent read/write safety.
+// globalPeerRuntime is set when server.Start() creates the peer manager and
+// outbound client. It allows other packages (e.g. wake) to use this process's
+// peer owner without creating a full Server instance.
+// Protected by globalPeerRuntimeMu for concurrent read/write safety.
 var (
-	globalPeerManagerMu sync.RWMutex
+	globalPeerRuntimeMu sync.RWMutex
 	globalPeerManager   peers.Peers
+	globalPeerOutbound  *proxy.PeerOutbound
 )
 
-// setPeerManager sets the global peer manager. Called during Start.
-func setPeerManager(pm peers.Peers) {
-	globalPeerManagerMu.Lock()
-	defer globalPeerManagerMu.Unlock()
+func setPeerRuntime(pm peers.Peers, outbound *proxy.PeerOutbound) {
+	globalPeerRuntimeMu.Lock()
+	defer globalPeerRuntimeMu.Unlock()
 	globalPeerManager = pm
+	globalPeerOutbound = outbound
 }
 
 // GetPeerManager returns the peer manager for use by the wake package.
 // Returns nil if the server has not been started yet.
 func GetPeerManager() peers.Peers {
-	globalPeerManagerMu.RLock()
-	defer globalPeerManagerMu.RUnlock()
+	globalPeerRuntimeMu.RLock()
+	defer globalPeerRuntimeMu.RUnlock()
 	return globalPeerManager
+}
+
+// GetPeerOutbound returns this process's outbound peer client for use by the
+// wake package. Returns nil if the server has not been started yet.
+func GetPeerOutbound() *proxy.PeerOutbound {
+	globalPeerRuntimeMu.RLock()
+	defer globalPeerRuntimeMu.RUnlock()
+	return globalPeerOutbound
 }
 
 // getMemberlistBindPort reads the memberlist bind port from environment variable
@@ -161,6 +170,7 @@ type Server struct {
 	registry           *registry.Registry
 	readinessCheck     ReadinessCheck
 	peerServerTLS      *tls.Config
+	peerOutbound       *proxy.PeerOutbound
 }
 
 // NewServer creates a new peer server
@@ -240,7 +250,7 @@ func (s *Server) Start(ctx context.Context) error {
 		cfg.ClientAuth = tls.VerifyClientCertIfGiven
 		s.peerServerTLS = cfg
 	}
-	proxy.ConfigurePeerTransport(clientTLS)
+	s.peerOutbound = proxy.NewPeerOutbound(clientTLS)
 	s.httpServer.Handler = s.newServeMux(s.peerServerTLS != nil)
 
 	lis, err := net.Listen("tcp", s.httpServer.Addr)
@@ -257,7 +267,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.peerManager = peers.NewMemberlistPeers(s.client, peers.NodePrefixSandboxGateway+nodeName, namespace, labelSelector)
 	s.peerManager.SetSecretKey(secretKey)
-	setPeerManager(s.peerManager)
+	setPeerRuntime(s.peerManager, s.peerOutbound)
 
 	go func() {
 		klog.InfoS("Starting sandbox-gateway peer server", "address", lis.Addr().String())
@@ -341,9 +351,9 @@ func (s *Server) Stop(ctx context.Context) error {
 		if err := s.peerManager.Stop(ctx); err != nil {
 			errs = append(errs, err)
 		}
-		setPeerManager(nil)
+		setPeerRuntime(nil, nil)
 	}
-	proxy.ClosePeerIdleConnections()
+	s.peerOutbound.CloseIdleConnections()
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}

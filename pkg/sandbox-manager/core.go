@@ -444,7 +444,7 @@ func (m *SandboxManager) applyPeerSecurity(ctx context.Context) error {
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
 		m.proxy.SetPeerServerTLS(cfg)
 	}
-	proxy.ConfigurePeerTransport(clientTLS)
+	m.proxy.SetPeerOutbound(clientTLS)
 	return nil
 }
 

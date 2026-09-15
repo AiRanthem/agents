@@ -166,8 +166,15 @@ func loadTLS(serverSecret, clientSecret *corev1.Secret, inputs Inputs) (serverTL
 	if err := verifyCertificate(clientLeaf, inboundTrust, clientIntermediates, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, "", now); err != nil {
 		return nil, nil, fmt.Errorf("peer TLS client certificate %s failed ClientAuth verification: %w", describeCert(clientLeaf), err)
 	}
-	// The server certificate must fail ClientAuth verification; server and
-	// client identities must stay distinct.
+	// The server certificate's own EKU must exclude ClientAuth and Any, including
+	// when inbound and outbound CAs differ. ClientAuth verification against the
+	// inbound trust set can fail for an untrusted issuer; that must not skip
+	// this check. An empty EKU is valid for all usages.
+	if serverCertAllowsClientAuth(serverLeaf.ExtKeyUsage) {
+		return nil, nil, fmt.Errorf("peer TLS server certificate %s allows ClientAuth usage", describeCert(serverLeaf))
+	}
+	// The server certificate must also fail ClientAuth verification against the
+	// inbound trust set; server and client identities must stay distinct.
 	if err := verifyCertificate(serverLeaf, inboundTrust, serverIntermediates, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, "", now); err == nil {
 		return nil, nil, fmt.Errorf("peer TLS server certificate %s is accepted as a client credential", describeCert(serverLeaf))
 	}
@@ -242,6 +249,18 @@ func intermediatesOf(cert tls.Certificate) (*x509.CertPool, error) {
 		pool.AddCert(parsed)
 	}
 	return pool, nil
+}
+
+func serverCertAllowsClientAuth(usages []x509.ExtKeyUsage) bool {
+	if len(usages) == 0 {
+		return true
+	}
+	for _, usage := range usages {
+		if usage == x509.ExtKeyUsageAny || usage == x509.ExtKeyUsageClientAuth {
+			return true
+		}
+	}
+	return false
 }
 
 func verifyCertificate(leaf *x509.Certificate, roots, intermediates *x509.CertPool, usages []x509.ExtKeyUsage, dnsName string, now time.Time) error {

@@ -284,18 +284,14 @@ func (rp *recordingPeer) getReceived() []sandboxroute.Route {
 	return result
 }
 
-// overridePeerTransport points the global requestPeerClient at a muxRoundTripper
-// for the test's lifetime and restores the original client on cleanup.
-func overridePeerTransport(t *testing.T, routes map[string]string, timeout time.Duration) {
+// overridePeerTransport points the server's outbound client at a muxRoundTripper
+// for the test's lifetime.
+func overridePeerTransport(t *testing.T, s *Server, routes map[string]string, timeout time.Duration) {
 	t.Helper()
-	origClient := requestPeerClient
-	origScheme := requestPeerScheme
-	requestPeerClient = &http.Client{Timeout: timeout, Transport: &muxRoundTripper{routes: routes}}
-	requestPeerScheme = "http"
-	t.Cleanup(func() {
-		requestPeerClient = origClient
-		requestPeerScheme = origScheme
-	})
+	s.peerOutbound = &PeerOutbound{
+		scheme: "http",
+		client: &http.Client{Timeout: timeout, Transport: &muxRoundTripper{routes: routes}},
+	}
 }
 
 func peerAddr(ip string) string {
@@ -326,16 +322,15 @@ func TestSyncRouteWithPeers_TwoNodes_Success(t *testing.T) {
 	peer2 := newRecordingPeer()
 	defer peer2.close()
 
-	overridePeerTransport(t, map[string]string{
-		peerAddr("127.0.0.1"): peer1.server.URL[7:], // strip "http://"
-		peerAddr("127.0.0.2"): peer2.server.URL[7:],
-	}, 5*time.Second)
-
 	pm := newMockPeers(
 		peers.Peer{IP: "127.0.0.1", Name: "node-1"},
 		peers.Peer{IP: "127.0.0.2", Name: "node-2"},
 	)
 	s := newTestServer(pm)
+	overridePeerTransport(t, s, map[string]string{
+		peerAddr("127.0.0.1"): peer1.server.URL[7:], // strip "http://"
+		peerAddr("127.0.0.2"): peer2.server.URL[7:],
+	}, 5*time.Second)
 
 	route := testProxyRoute("sb-test", "10.0.0.5", "1")
 	err := s.SyncRouteWithPeers(t.Context(), route)
@@ -355,11 +350,10 @@ func TestSyncRouteWithPeers_IPv6Peer(t *testing.T) {
 	defer peer.close()
 
 	const peerIP = "fd11:1111:1111::10"
-	overridePeerTransport(t, map[string]string{
+	s := newTestServer(newMockPeers(peers.Peer{IP: peerIP, Name: "node-v6"}))
+	overridePeerTransport(t, s, map[string]string{
 		net.JoinHostPort(peerIP, fmt.Sprint(refresh.DefaultPort)): peer.server.URL[7:],
 	}, 5*time.Second)
-
-	s := newTestServer(newMockPeers(peers.Peer{IP: peerIP, Name: "node-v6"}))
 	route := testProxyRoute("sb-v6", "fd11:1111:1111::20", "1")
 	require.NoError(t, s.SyncRouteWithPeers(t.Context(), route))
 
@@ -374,16 +368,15 @@ func TestSyncRouteWithPeers_TwoNodes_OneFails(t *testing.T) {
 	peer1 := newRecordingPeer()
 	defer peer1.close()
 
-	overridePeerTransport(t, map[string]string{
-		peerAddr("127.0.0.1"): peer1.server.URL[7:],
-		// 127.0.0.2 has no mapping, will fail to connect
-	}, 200*time.Millisecond)
-
 	pm := newMockPeers(
 		peers.Peer{IP: "127.0.0.1", Name: "node-1"},
 		peers.Peer{IP: "127.0.0.2", Name: "node-2"},
 	)
 	s := newTestServer(pm)
+	overridePeerTransport(t, s, map[string]string{
+		peerAddr("127.0.0.1"): peer1.server.URL[7:],
+		// 127.0.0.2 has no mapping, will fail to connect
+	}, 200*time.Millisecond)
 
 	route := testProxyRoute("sb-fail", "1.2.3.4", "1")
 	err := s.SyncRouteWithPeers(t.Context(), route)
@@ -403,12 +396,11 @@ func TestSyncRouteWithPeers_RejectedNotRetried(t *testing.T) {
 	}))
 	defer rejecting.Close()
 
-	overridePeerTransport(t, map[string]string{
-		peerAddr("127.0.0.1"): rejecting.URL[7:],
-	}, 5*time.Second)
-
 	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
 	s := newTestServer(pm)
+	overridePeerTransport(t, s, map[string]string{
+		peerAddr("127.0.0.1"): rejecting.URL[7:],
+	}, 5*time.Second)
 
 	err := s.SyncRouteWithPeers(t.Context(), testProxyRoute("sb-reject", "1.2.3.4", "1"))
 	require.Error(t, err)
@@ -427,12 +419,11 @@ func TestSyncRouteWithPeers_5xxRetried(t *testing.T) {
 	}))
 	defer flaky.Close()
 
-	overridePeerTransport(t, map[string]string{
-		peerAddr("127.0.0.1"): flaky.URL[7:],
-	}, 5*time.Second)
-
 	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
 	s := newTestServer(pm)
+	overridePeerTransport(t, s, map[string]string{
+		peerAddr("127.0.0.1"): flaky.URL[7:],
+	}, 5*time.Second)
 
 	err := s.SyncRouteWithPeers(t.Context(), testProxyRoute("sb-5xx", "1.2.3.4", "1"))
 	require.NoError(t, err)
@@ -447,12 +438,11 @@ func TestSyncRouteWithPeers_CancelledContextStopsRetries(t *testing.T) {
 	}))
 	defer failing.Close()
 
-	overridePeerTransport(t, map[string]string{
-		peerAddr("127.0.0.1"): failing.URL[7:],
-	}, 5*time.Second)
-
 	pm := newMockPeers(peers.Peer{IP: "127.0.0.1", Name: "node-1"})
 	s := newTestServer(pm)
+	overridePeerTransport(t, s, map[string]string{
+		peerAddr("127.0.0.1"): failing.URL[7:],
+	}, 5*time.Second)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -536,7 +526,7 @@ func TestSyncRouteWithPeers_TwoNodes_Memberlist(t *testing.T) {
 	peer1IP := members1[0].IP
 	peer2IP := members2[0].IP
 
-	overridePeerTransport(t, map[string]string{
+	overridePeerTransport(t, server1, map[string]string{
 		peerAddr(peer1IP): hs1.Listener.Addr().String(),
 		peerAddr(peer2IP): hs2.Listener.Addr().String(),
 	}, 5*time.Second)
@@ -578,28 +568,22 @@ func newMemberlistPeerForTest(t *testing.T, c client.Client, name string) *membe
 
 func TestRequestPeerAddressAndTransport(t *testing.T) {
 	t.Run("invalid IP", func(t *testing.T) {
-		err := requestPeer(t.Context(), http.MethodPost, "not-an-ip", refresh.Path, nil)
+		err := NewPeerOutbound(nil).request(t.Context(), http.MethodPost, "not-an-ip", refresh.Path, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid peer IP")
 	})
 
 	t.Run("plaintext disables proxy and redirects", func(t *testing.T) {
-		origClient := requestPeerClient
-		origScheme := requestPeerScheme
-		t.Cleanup(func() {
-			requestPeerClient = origClient
-			requestPeerScheme = origScheme
-		})
-		ConfigurePeerTransport(nil)
-		assert.Equal(t, "http", requestPeerScheme)
-		transport, ok := requestPeerClient.Transport.(*http.Transport)
+		out := NewPeerOutbound(nil)
+		assert.Equal(t, "http", out.scheme)
+		transport, ok := out.client.Transport.(*http.Transport)
 		require.True(t, ok)
 		assert.Nil(t, transport.Proxy)
-		assert.ErrorIs(t, requestPeerClient.CheckRedirect(&http.Request{}, []*http.Request{{}}), errPeerRedirect)
+		assert.ErrorIs(t, out.client.CheckRedirect(&http.Request{}, []*http.Request{{}}), errPeerRedirect)
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-		ConfigurePeerTransport(tlsConfig)
-		assert.Equal(t, "https", requestPeerScheme)
-		transport, ok = requestPeerClient.Transport.(*http.Transport)
+		out = NewPeerOutbound(tlsConfig)
+		assert.Equal(t, "https", out.scheme)
+		transport, ok = out.client.Transport.(*http.Transport)
 		require.True(t, ok)
 		assert.Same(t, tlsConfig, transport.TLSClientConfig)
 	})

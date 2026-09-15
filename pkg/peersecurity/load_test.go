@@ -98,6 +98,7 @@ func TestLoadTLS(t *testing.T) {
 	clientCert, clientKey := mustIssued(t, caCert, caKey, x509.ExtKeyUsageClientAuth, nil)
 	bothCert, bothKey := mustIssued(t, caCert, caKey, x509.ExtKeyUsageServerAuth, []string{serverName}, x509.ExtKeyUsageClientAuth)
 	noEKUCert, noEKUKey := mustIssued(t, caCert, caKey, 0, []string{serverName})
+	anyCert, anyKey := mustIssued(t, caCert, caKey, 0, []string{serverName}, x509.ExtKeyUsageAny)
 	wrongNameCert, wrongNameKey := mustIssued(t, caCert, caKey, x509.ExtKeyUsageServerAuth, []string{"other.example"})
 
 	clientData := map[string][]byte{
@@ -127,13 +128,19 @@ func TestLoadTLS(t *testing.T) {
 			name:       "server cert allows ClientAuth",
 			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": bothCert, "tls.key": bothKey},
 			clientData: clientData,
-			wantErr:    "accepted as a client credential",
+			wantErr:    "allows ClientAuth usage",
 		},
 		{
 			name:       "server cert omits EKU",
 			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": noEKUCert, "tls.key": noEKUKey},
 			clientData: clientData,
-			wantErr:    "accepted as a client credential",
+			wantErr:    "allows ClientAuth usage",
+		},
+		{
+			name:       "server cert allows Any usage",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": anyCert, "tls.key": anyKey},
+			clientData: clientData,
+			wantErr:    "allows ClientAuth usage",
 		},
 		{
 			name:       "server name mismatch",
@@ -147,6 +154,63 @@ func TestLoadTLS(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			serverTLS, clientTLS, err := loadTLS(
 				secret("ns", "server", tt.serverData), secret("ns", "client", tt.clientData), inputs)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.NotContains(t, err.Error(), "BEGIN")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, serverTLS)
+			require.NotNil(t, clientTLS)
+			assert.Equal(t, serverName, clientTLS.ServerName)
+		})
+	}
+}
+
+func TestLoadTLSSplitCA(t *testing.T) {
+	inboundCA, inboundKey, inboundPEM := mustCA(t)
+	outboundCA, outboundKey, outboundPEM := mustCA(t)
+	serverCert, serverKey := mustIssued(t, outboundCA, outboundKey, x509.ExtKeyUsageServerAuth, []string{serverName})
+	clientCert, clientKey := mustIssued(t, inboundCA, inboundKey, x509.ExtKeyUsageClientAuth, nil)
+	bothCert, bothKey := mustIssued(t, outboundCA, outboundKey, x509.ExtKeyUsageServerAuth, []string{serverName}, x509.ExtKeyUsageClientAuth)
+	noEKUCert, noEKUKey := mustIssued(t, outboundCA, outboundKey, 0, []string{serverName})
+	anyCert, anyKey := mustIssued(t, outboundCA, outboundKey, 0, []string{serverName}, x509.ExtKeyUsageAny)
+
+	clientData := map[string][]byte{
+		"ca.crt":     outboundPEM,
+		"client.crt": clientCert,
+		"client.key": clientKey,
+	}
+	validServer := map[string][]byte{"ca.crt": inboundPEM, "tls.crt": serverCert, "tls.key": serverKey}
+	inputs := tlsInputs("ns/server", "ns/client")
+
+	tests := []struct {
+		name       string
+		serverData map[string][]byte
+		wantErr    string
+	}{
+		{name: "server-auth only", serverData: validServer},
+		{
+			name:       "server cert allows ClientAuth",
+			serverData: map[string][]byte{"ca.crt": inboundPEM, "tls.crt": bothCert, "tls.key": bothKey},
+			wantErr:    "allows ClientAuth usage",
+		},
+		{
+			name:       "server cert omits EKU",
+			serverData: map[string][]byte{"ca.crt": inboundPEM, "tls.crt": noEKUCert, "tls.key": noEKUKey},
+			wantErr:    "allows ClientAuth usage",
+		},
+		{
+			name:       "server cert allows Any usage",
+			serverData: map[string][]byte{"ca.crt": inboundPEM, "tls.crt": anyCert, "tls.key": anyKey},
+			wantErr:    "allows ClientAuth usage",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverTLS, clientTLS, err := loadTLS(
+				secret("ns", "server", tt.serverData), secret("ns", "client", clientData), inputs)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
