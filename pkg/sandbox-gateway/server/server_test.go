@@ -19,18 +19,28 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/sandbox-gateway/registry"
@@ -273,6 +283,117 @@ func TestStartListenFailureIsSynchronous(t *testing.T) {
 	err = server.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to listen")
+}
+
+func TestStartPeerSecurityLoadFails(t *testing.T) {
+	t.Setenv("HOSTNAME", "gw-test")
+	t.Setenv("POD_IP", "127.0.0.1")
+	t.Setenv(envPeerTLSServerSecret, "ns/server")
+	t.Setenv(envPeerTLSClientSecret, "ns/client")
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := lis.Addr().(*net.TCPAddr).Port
+	require.NoError(t, lis.Close())
+
+	server := NewServer(nil, registry.NewRegistry(), port)
+	err = server.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load peer security")
+	assert.Contains(t, err.Error(), "peer secret reader is not configured")
+}
+
+func TestStartPeerTLSWrapsListenerThenFailsMemberlist(t *testing.T) {
+	serverSecret, clientSecret := mustPeerTLSSecrets(t)
+	t.Setenv("HOSTNAME", "gw-test")
+	t.Setenv("POD_IP", "127.0.0.1")
+	t.Setenv(EnvNamespace, "")
+	t.Setenv(EnvLabelSelector, "")
+	t.Setenv(envPeerTLSServerSecret, "ns/server")
+	t.Setenv(envPeerTLSClientSecret, "ns/client")
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := lis.Addr().(*net.TCPAddr).Port
+	require.NoError(t, lis.Close())
+
+	server := NewServer(
+		fake.NewClientBuilder().WithObjects(serverSecret, clientSecret).Build(),
+		registry.NewRegistry(),
+		port,
+	)
+	t.Cleanup(func() { _ = server.Stop(context.Background()) })
+	err = server.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "peer namespace is empty")
+	require.NotNil(t, server.peerServerTLS)
+	assert.Equal(t, tls.VerifyClientCertIfGiven, server.peerServerTLS.ClientAuth)
+	require.NotNil(t, server.peerOutbound)
+}
+
+func mustPeerTLSSecrets(t *testing.T) (*corev1.Secret, *corev1.Secret) {
+	t.Helper()
+	caCert, caKey, caPEM := mustTestCA(t)
+	serverCert, serverKey := mustTestIssued(t, caCert, caKey, x509.ExtKeyUsageServerAuth, []string{"agentruntime.sandbox.agents.kruise.io"})
+	clientCert, clientKey := mustTestIssued(t, caCert, caKey, x509.ExtKeyUsageClientAuth, nil)
+	return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "server"},
+			Data: map[string][]byte{
+				"ca.crt":  caPEM,
+				"tls.crt": serverCert,
+				"tls.key": serverKey,
+			},
+		}, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "client"},
+			Data: map[string][]byte{
+				"ca.crt":     caPEM,
+				"client.crt": clientCert,
+				"client.key": clientKey,
+			},
+		}
+}
+
+func mustTestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "peer-test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	return cert, key, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func mustTestIssued(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, usage x509.ExtKeyUsage, dnsNames []string) ([]byte, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, big.NewInt(1<<62))
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "peer-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+		DNSNames:     dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	require.NoError(t, err)
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 }
 
 func newTestGatewayServer(checks ...ReadinessCheck) (*Server, *registry.Registry) {
