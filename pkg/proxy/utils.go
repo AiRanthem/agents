@@ -73,6 +73,10 @@ func newPeerHTTPClient(clientTLS *tls.Config) *http.Client {
 		// Peer refreshes dial fixed IPs directly, never a proxy.
 		Proxy:           nil,
 		TLSClientConfig: clientTLS,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
 		// A non-nil TLSClientConfig disables HTTP/2 auto-upgrade; keep it enabled.
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
