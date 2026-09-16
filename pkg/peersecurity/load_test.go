@@ -21,6 +21,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -176,6 +177,62 @@ func TestLoadTLS(t *testing.T) {
 			clientData: map[string][]byte{"ca.crt": []byte("not-a-pem"), "client.crt": clientCert, "client.key": clientKey},
 			wantErr:    "parse peer TLS client CA",
 		},
+		{
+			name:       "missing server key",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert},
+			clientData: clientData,
+			wantErr:    "missing or empty",
+		},
+		{
+			name:       "mismatched server key pair",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": clientKey},
+			clientData: clientData,
+			wantErr:    "parse certificate/key pair",
+		},
+		{
+			name:       "missing server CA after key pair",
+			serverData: map[string][]byte{"tls.crt": serverCert, "tls.key": serverKey},
+			clientData: clientData,
+			wantErr:    "missing or empty",
+		},
+		{
+			name:       "missing client certificate",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"ca.crt": caPEM, "client.key": clientKey},
+			wantErr:    "missing or empty",
+		},
+		{
+			name:       "missing client CA after key pair",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"client.crt": clientCert, "client.key": clientKey},
+			wantErr:    "missing or empty",
+		},
+		{
+			name:       "client cert fails ClientAuth",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"ca.crt": caPEM, "client.crt": serverCert, "client.key": serverKey},
+			wantErr:    "ClientAuth",
+		},
+		{
+			name: "invalid server intermediate",
+			serverData: map[string][]byte{
+				"ca.crt":  caPEM,
+				"tls.crt": append(append([]byte{}, serverCert...), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("bad")})...),
+				"tls.key": serverKey,
+			},
+			clientData: clientData,
+			wantErr:    "parse peer TLS server intermediates",
+		},
+		{
+			name:       "invalid client intermediate",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{
+				"ca.crt":     caPEM,
+				"client.crt": append(append([]byte{}, clientCert...), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("bad")})...),
+				"client.key": clientKey,
+			},
+			wantErr: "parse peer TLS client intermediates",
+		},
 	}
 	inputs := tlsInputs("ns/server", "ns/client")
 	for _, tt := range tests {
@@ -326,6 +383,18 @@ func TestLoadSecretReads(t *testing.T) {
 			inputs:  Inputs{PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "peer-key"}},
 			wantErr: "exactly 32 bytes",
 		},
+		{
+			name:    "missing client TLS secret",
+			objects: []ctrlclient.Object{secret("ns", "server", serverData)},
+			inputs:  tlsInputs("ns/server", "ns/client"),
+			wantErr: "get peer secret",
+		},
+		{
+			name:    "TLS materials fail loadTLS",
+			objects: []ctrlclient.Object{secret("ns", "server", map[string][]byte{"ca.crt": caPEM}), secret("ns", "client", clientData)},
+			inputs:  tlsInputs("ns/server", "ns/client"),
+			wantErr: "missing or empty",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -351,6 +420,37 @@ func TestLoadSecretReads(t *testing.T) {
 			assert.Equal(t, tt.gets, int(gets.Load()))
 		})
 	}
+}
+
+func TestLeafOfAndIntermediates(t *testing.T) {
+	ca, caKey, _ := mustCA(t)
+	leafPEM, _ := mustIssued(t, ca, caKey, x509.ExtKeyUsageServerAuth, []string{serverName})
+	leafBlock, _ := pem.Decode(leafPEM)
+	require.NotNil(t, leafBlock)
+
+	t.Run("empty chain", func(t *testing.T) {
+		_, err := leafOf(tls.Certificate{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "certificate chain is empty")
+	})
+	t.Run("invalid leaf DER", func(t *testing.T) {
+		_, err := leafOf(tls.Certificate{Certificate: [][]byte{[]byte("bad")}})
+		require.Error(t, err)
+	})
+	t.Run("parses leaf when Leaf is unset", func(t *testing.T) {
+		parsed, err := leafOf(tls.Certificate{Certificate: [][]byte{leafBlock.Bytes}})
+		require.NoError(t, err)
+		assert.Equal(t, leafBlock.Bytes, parsed.Raw)
+	})
+	t.Run("invalid intermediate DER", func(t *testing.T) {
+		_, err := intermediatesOf(tls.Certificate{Certificate: [][]byte{leafBlock.Bytes, []byte("bad")}})
+		require.Error(t, err)
+	})
+	t.Run("intermediate pool", func(t *testing.T) {
+		pool, err := intermediatesOf(tls.Certificate{Certificate: [][]byte{leafBlock.Bytes, ca.Raw}})
+		require.NoError(t, err)
+		require.NotNil(t, pool)
+	})
 }
 
 func tlsInputs(server, client string) Inputs {
