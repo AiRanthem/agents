@@ -58,6 +58,22 @@ func TestLoadCanceled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestLoadNilReader(t *testing.T) {
+	_, _, _, err := Load(t.Context(), nil, Inputs{
+		PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "key"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "peer secret reader is not configured")
+}
+
+func TestLoadInvalidInputs(t *testing.T) {
+	_, _, _, err := Load(t.Context(), fake.NewClientBuilder().Build(), Inputs{
+		TLSServerSecret: types.NamespacedName{Namespace: "ns", Name: "server"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "both server and client")
+}
+
 func TestLoadPeerKey(t *testing.T) {
 	valid := bytes32('k')
 	tests := []struct {
@@ -147,6 +163,18 @@ func TestLoadTLS(t *testing.T) {
 			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": wrongNameCert, "tls.key": wrongNameKey},
 			clientData: clientData,
 			wantErr:    "ServerAuth",
+		},
+		{
+			name:       "invalid server CA PEM",
+			serverData: map[string][]byte{"ca.crt": []byte("not-a-pem"), "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: clientData,
+			wantErr:    "parse peer TLS server CA",
+		},
+		{
+			name:       "invalid client CA PEM",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"ca.crt": []byte("not-a-pem"), "client.crt": clientCert, "client.key": clientKey},
+			wantErr:    "parse peer TLS client CA",
 		},
 	}
 	inputs := tlsInputs("ns/server", "ns/client")
@@ -291,6 +319,12 @@ func TestLoadSecretReads(t *testing.T) {
 			objects: nil,
 			inputs:  Inputs{PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "peer-key"}},
 			wantErr: "get peer secret",
+		},
+		{
+			name:    "short peer key",
+			objects: []ctrlclient.Object{secret("ns", "peer-key", map[string][]byte{"key": make([]byte, 16)})},
+			inputs:  Inputs{PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "peer-key"}},
+			wantErr: "exactly 32 bytes",
 		},
 	}
 	for _, tt := range tests {

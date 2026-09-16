@@ -52,10 +52,10 @@ const (
 // Environment variable names for peer security. They mirror the sandbox-manager
 // --peer-* flags.
 const (
-	envPeerKeySecret        = "PEER_KEY_SECRET"
-	envPeerKeySecretKey     = "PEER_KEY_SECRET_KEY"
-	envPeerTLSServerSecret  = "PEER_TLS_SERVER_SECRET"
-	envPeerTLSClientSecret  = "PEER_TLS_CLIENT_SECRET"
+	envPeerKeySecret        = "PEER_KEY_SECRET"        // #nosec G101 -- env-var name, not a credential
+	envPeerKeySecretKey     = "PEER_KEY_SECRET_KEY"    // #nosec G101 -- env-var name, not a credential
+	envPeerTLSServerSecret  = "PEER_TLS_SERVER_SECRET" // #nosec G101 -- env-var name, not a credential
+	envPeerTLSClientSecret  = "PEER_TLS_CLIENT_SECRET" // #nosec G101 -- env-var name, not a credential
 	envPeerTLSServerCAKey   = "PEER_TLS_SERVER_CA_KEY"
 	envPeerTLSServerCertKey = "PEER_TLS_SERVER_CERT_KEY"
 	envPeerTLSServerKeyKey  = "PEER_TLS_SERVER_KEY_KEY"

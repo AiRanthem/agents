@@ -26,6 +26,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -248,6 +250,75 @@ func TestSandboxManagerRunPeerSecurityFailsBeforeProxy(t *testing.T) {
 	assert.Equal(t, []string{"infra"}, events)
 	_, dialErr := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(refresh.DefaultPort)))
 	assert.Error(t, dialErr, "route listener must not bind when peer security fails")
+}
+
+func TestApplyPeerSecurity(t *testing.T) {
+	key := bytes32('k')
+	keySecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "peer-key"},
+		Data:       map[string][]byte{"key": key},
+	}
+	keyInputs := peersecurity.Inputs{PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "peer-key"}}
+	keyReader := fake.NewClientBuilder().WithObjects(keySecret).Build()
+
+	tests := []struct {
+		name    string
+		manager *SandboxManager
+		wantErr string
+	}{
+		{
+			name:    "plaintext without a peer client is a no-op",
+			manager: &SandboxManager{proxy: proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true})},
+		},
+		{
+			name: "configured inputs require a peer client",
+			manager: &SandboxManager{
+				proxy:        proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true}),
+				peerSecurity: keyInputs,
+			},
+			wantErr: "peer security is configured but the peer client is not",
+		},
+		{
+			name: "memberlist key is rejected by a non-memberlist manager",
+			manager: &SandboxManager{
+				proxy:        proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true}),
+				peersManager: &staticPeers{},
+				peerReader:   keyReader,
+				peerSecurity: keyInputs,
+			},
+			wantErr: "does not accept it",
+		},
+		{
+			name: "installs the memberlist key",
+			manager: &SandboxManager{
+				proxy:        proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true}),
+				peersManager: peers.NewMemberlistPeers(keyReader, "test-node", "ns", "app=test"),
+				peerReader:   keyReader,
+				peerSecurity: keyInputs,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() { tt.manager.proxy.Stop(context.Background()) })
+			err := tt.manager.applyPeerSecurity(t.Context())
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func bytes32(b byte) []byte {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = b
+	}
+	return key
 }
 
 func TestNewSandboxManagerBuilder(t *testing.T) {
@@ -577,6 +648,19 @@ func TestSandboxManagerBuilder_Build(t *testing.T) {
 		_, err := builder.Build()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get peers")
+		assert.Equal(t, errors.ErrorInternal, errors.GetErrCode(err))
+	})
+
+	t.Run("peer security requires peer discovery", func(t *testing.T) {
+		opts := config.SandboxManagerOptions{}
+		_, err := NewSandboxManagerBuilder(opts).
+			WithCustomInfra(withTestInfra(t, opts)).
+			WithPeerSecurity(peersecurity.Inputs{
+				PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "peer-key"},
+			}).
+			Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "peer security is configured but peer discovery is not")
 		assert.Equal(t, errors.ErrorInternal, errors.GetErrCode(err))
 	})
 }
