@@ -59,6 +59,22 @@ func TestValidateTLSPair(t *testing.T) {
 			},
 			wantErr: "incomplete",
 		},
+		{
+			name: "incomplete TLS server ref",
+			inputs: Inputs{
+				TLSServerSecret: types.NamespacedName{Name: "server"},
+				TLSClientSecret: types.NamespacedName{Namespace: "ns", Name: "client"},
+			},
+			wantErr: "incomplete",
+		},
+		{
+			name: "incomplete TLS client ref",
+			inputs: Inputs{
+				TLSServerSecret: types.NamespacedName{Namespace: "ns", Name: "server"},
+				TLSClientSecret: types.NamespacedName{Name: "client"},
+			},
+			wantErr: "incomplete",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,4 +105,34 @@ func TestApplyDefaults(t *testing.T) {
 	preset.ApplyDefaults()
 	assert.Equal(t, "other.crt", preset.ClientCertDataKey)
 	assert.Equal(t, defaultClientKeyKey, preset.ClientKeyDataKey)
+}
+
+func TestConfigured(t *testing.T) {
+	tests := []struct {
+		name   string
+		inputs Inputs
+		want   bool
+	}{
+		{name: "empty"},
+		{
+			name:   "peer key",
+			inputs: Inputs{PeerKeySecret: types.NamespacedName{Namespace: "ns", Name: "key"}},
+			want:   true,
+		},
+		{
+			name:   "TLS server",
+			inputs: Inputs{TLSServerSecret: types.NamespacedName{Namespace: "ns", Name: "server"}},
+			want:   true,
+		},
+		{
+			name:   "TLS client",
+			inputs: Inputs{TLSClientSecret: types.NamespacedName{Namespace: "ns", Name: "client"}},
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.inputs.Configured())
+		})
+	}
 }
