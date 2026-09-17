@@ -22,10 +22,18 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/openkruise/agents/pkg/proxy"
 )
+
+func readCertFile(path string) ([]byte, error) {
+	if strings.Contains(path, "..") || !strings.HasPrefix(path, "/certs/") {
+		return nil, fmt.Errorf("certificate path %q must be under /certs/ without '..'", path)
+	}
+	return os.ReadFile(path) // #nosec G304 -- path constrained to /certs/
+}
 
 func sendWithOutbound(outbound *proxy.PeerOutbound, tlsConfigured bool, req sendRequest) sendResponse {
 	if outbound == nil {
@@ -49,7 +57,7 @@ func explicitClientTLS(certFile, keyFile, caFile string) (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load explicit client certificate: %w", err)
 	}
-	caPEM, err := os.ReadFile(caFile) // #nosec G304 -- test fixture certificate path from env
+	caPEM, err := readCertFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("read explicit server CA: %w", err)
 	}
