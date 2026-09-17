@@ -64,7 +64,11 @@ cmd_secrets() {
     local cert_dir
     cert_dir="$(mktemp -d)"
     chmod 700 "$cert_dir"
-    trap 'rm -rf "$cert_dir"' EXIT
+    # EXIT must not capture the local: after this function returns, a trap
+    # referencing cert_dir trips set -u ("unbound variable") at script exit.
+    # RETURN also does not run when set -e aborts the function.
+    _peer_mtls_cert_dir="$cert_dir"
+    trap 'rm -rf "${_peer_mtls_cert_dir:-}"' EXIT
     umask 077
 
     openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
