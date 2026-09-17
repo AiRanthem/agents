@@ -111,7 +111,7 @@ func newNegativeTLSListener(inner net.Listener, admin *adminState) (net.Listener
 		ClientAuth:   tls.RequestClientCert,
 	}
 	if caFile := os.Getenv("TLS_CA_FILE"); caFile != "" {
-		pem, err := os.ReadFile(caFile) // #nosec G304 -- test fixture certificate path from env
+		pem, err := readCertFile(caFile)
 		if err != nil {
 			return nil, err
 		}

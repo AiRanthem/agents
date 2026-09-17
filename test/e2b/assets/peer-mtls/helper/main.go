@@ -24,6 +24,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/openkruise/agents/pkg/utils/logs"
 )
 
 const (
@@ -57,6 +59,6 @@ func main() {
 		err = fmt.Errorf("unknown mode %q", *mode)
 	}
 	if err != nil {
-		log.Fatalf("peer-mtls helper: %v", err)
+		log.Fatalf("peer-mtls helper: %s", logs.SanitizeValue(err.Error()))
 	}
 }
