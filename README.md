@@ -49,7 +49,7 @@ $install 安装或更新这个 dev-kit
 | `$implement-design` | 实现已确认的设计并提供测试和验证证据。 |
 | `$optimize-tests` | 在充分覆盖行为的前提下，主动清理、合并和精简指定范围内的测试代码，经确认后执行。 |
 | `$review-implementation` | 根据已确认设计独立验收完成的实现。 |
-| `$translate-design` | 将稳定的中文设计同步为语义等价的英文版本。 |
+| `$explain-design` | 将已确定的设计写成独立、易读且可长期留存的设计介绍，面向不熟悉仓库的技术专家；默认英文，可指定其他语言。 |
 | `$systematic-debugging` | 从证据追踪故障原因，按授权修复并验证。 |
 | `$receiving-code-review` | 核实审查意见，处理已授权的修复并说明分歧。 |
 | `$diff-reading-order` | 为变更生成有依赖依据的阅读导航。 |

@@ -22,7 +22,7 @@
 
 # Subagent Delegation
 
-Use the event-driven waiting tool for subagent updates with a 60-second timeout (`timeout_ms: 60000` when supported). After a timeout, continue useful independent work or wait again; do not poll status or create work solely because the wait expired.
+Use the event-driven waiting tool for subagent updates with a 600-second timeout (`timeout_ms: 600000` when supported). After a timeout, continue useful independent work or wait again; do not poll status or create work solely because the wait expired.
 
 When dispatching, reassigning, or escalating a subagent, report its task and the model and reasoning effort specified in the dispatch parameters, briefly explaining the profile choice or change. Do not inspect or verify the subagent's runtime settings.
 

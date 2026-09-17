@@ -1,0 +1,6 @@
+interface:
+  display_name: "Explain Design"
+  short_description: "Explain design context, decisions, and tradeoffs"
+  default_prompt: "Use $explain-design to turn this established design into a self-contained explanation for technical experts unfamiliar with the repository, in English unless I request another language."
+policy:
+  allow_implicit_invocation: true
