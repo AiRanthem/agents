@@ -65,6 +65,7 @@ Notes:
 - Data-key variables describe the Secret layout, not credentials, and are read only while the matching `*_SECRET` reference is set.
 - Both TLS references empty keeps plaintext peer HTTP; setting only one of them fails startup.
 - The variables mirror the sandbox-manager flags (`--peer-key-secret`, `--peer-tls-*`) with the same names, defaults, and meanings.
+- Startup self-check only proves this process's inbound and outbound material is locally consistent. It does not prove cluster-wide compatibility: every participant's server certificate must verify against every participant's clientSecret `ca.crt`, and every client certificate must verify against every participant's serverSecret `ca.crt`.
 
 ## 4. Customization
 

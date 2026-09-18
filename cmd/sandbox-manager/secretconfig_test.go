@@ -102,7 +102,7 @@ func TestLoadSecretConfig(t *testing.T) {
 			{name: "empty-name", ref: "ns/", wantErr: "namespace/name"},
 			{name: "empty", ref: "", wantErr: "namespace/name"},
 			{name: "extra-slash", ref: "ns/cfg/extra", wantErr: "namespace/name"},
-			{name: "invalid-dns-name", ref: "ns/Invalid", wantErr: "namespace/name"},
+			{name: "invalid-dns-name", ref: "ns/Invalid", wantErr: `secret name "Invalid" is invalid`},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
