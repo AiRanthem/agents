@@ -1,0 +1,6 @@
+interface:
+  display_name: "Implement POC"
+  short_description: "Build or fix the smallest diagnosable POC"
+  default_prompt: "Use $implement-poc to confirm one concrete acceptance scenario, build its smallest diagnosable POC, or repair a failed run from its logs."
+policy:
+  allow_implicit_invocation: true

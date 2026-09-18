@@ -34,6 +34,8 @@
 
 2026-09-16：将 `translate-design` 重构并重命名为 `explain-design`，同步用户级软链接 `~/.agents/skills/explain-design`，指向本仓库 `skills/explain-design`；移除原来指向本仓库的 `~/.agents/skills/translate-design` 链接。已进一步完善面向陌生读者的信息取舍与语义核对，并在交付前加入独立 subagent 内容审查、修订和复核；现有链接继续读取更新后的技能。
 
+2026-09-18：新增 `implement-poc` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/implement-poc`，指向本仓库 `skills/implement-poc`。
+
 ## 验证
 
 确认以下结果：
