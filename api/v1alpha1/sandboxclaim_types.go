@@ -114,6 +114,32 @@ type SandboxClaimSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	SkipInitRuntime bool `json:"skipInitRuntime,omitempty"`
+
+	// PostClaim is a declarative post-claim action executed as the last step of
+	// a complete try. Ordinary claims leave this unset.
+	// +optional
+	PostClaim *SandboxClaimPostClaim `json:"postClaim,omitempty"`
+}
+
+// SandboxClaimPostClaim is a bounded post-claim action persisted with the claim.
+type SandboxClaimPostClaim struct {
+	// Run is a bounded foreground command. The try succeeds only if the
+	// command exits with status 0.
+	// +optional
+	Run *SandboxClaimPostClaimRun `json:"run,omitempty"`
+}
+
+// SandboxClaimPostClaimRun is a foreground command executed after the sandbox
+// is ready and runtime initialization has finished.
+type SandboxClaimPostClaimRun struct {
+	// Command is the argv executed inside the sandbox. Required when run is set.
+	// +kubebuilder:validation:MinItems=1
+	Command []string `json:"command"`
+
+	// Timeout bounds how long the command may run. Zero or unset uses the
+	// claim implementation default.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
 }
 
 type SandboxClaimInplaceUpdateOptions struct {
@@ -249,3 +275,7 @@ type SandboxClaimList struct {
 func init() {
 	SchemeBuilder.Register(&SandboxClaim{}, &SandboxClaimList{})
 }
+
+// SandboxClaimControllerKind is the owner GVK used when a session-mode
+// Sandbox binds to its Claim.
+var SandboxClaimControllerKind = GroupVersion.WithKind("SandboxClaim")

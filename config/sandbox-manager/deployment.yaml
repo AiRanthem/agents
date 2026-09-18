@@ -38,6 +38,12 @@ spec:
             - --e2b-admin-key=some-api-key
             - --e2b-enable-auth=true
             - --e2b-max-timeout=2592000
+            - --admin-port=8081
+            # - --enable-openai-agents-api=true
+            # - --openai-agents-api-port=8082
+            # - --openai-agents-template=openai-session
+            # - --openai-agents-namespace=default
+            # - --openai-agents-init-command=/usr/local/bin/connect-openai
             # - --quota-redis-addr=redis.sandbox-system.svc:6379
             # - --quota-redis-operation-timeout=50ms
             # - --quota-anti-drift-interval=5m
@@ -52,25 +58,32 @@ spec:
           ports:
             - containerPort: 8080
               name: http-manager
+            - containerPort: 8081
+              name: admin
+            - containerPort: 8082
+              name: openai-agents
             - containerPort: 9002
               name: grpc-ext-proc
           livenessProbe:
-            tcpSocket:
-              port: 8080
-            initialDelaySeconds: 60
+            httpGet:
+              path: /livez
+              port: admin
+            initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
-            tcpSocket:
-              port: 7789
+            httpGet:
+              path: /readyz
+              port: admin
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
           startupProbe:
-            tcpSocket:
-              port: 7789
+            httpGet:
+              path: /livez
+              port: admin
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 30

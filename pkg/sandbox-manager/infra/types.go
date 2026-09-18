@@ -103,6 +103,30 @@ type ClaimSandboxOptions struct {
 	// TrafficAccessTokenValidity is Manager-owned issuance policy. API callers
 	// cannot override it because SandboxManager replaces it before delegation.
 	TrafficAccessTokenValidity time.Duration `json:"-"`
+	// Idempotency, when set, makes ClaimSandbox create or join a persistent
+	// task keyed by Idempotency.Key. Accepted is closed once by the callee
+	// after this call's persist-accept point; the caller must not close it.
+	Idempotency *IdempotencyOptions `json:"-"`
+	// PostClaim is the last step of a complete try. Nil skips the command.
+	PostClaim *PostClaimRun `json:"postClaim,omitempty"`
+	// BindOwnerToClaim, when Claim is non-nil, binds the sandbox OwnerReference
+	// to the Claim UID in the same lock write and does not return the sandbox
+	// to a shared pool.
+	BindOwnerToClaim bool `json:"bindOwnerToClaim,omitempty"`
+}
+
+// IdempotencyOptions carry a persistent claim key and an in-process accept signal.
+type IdempotencyOptions struct {
+	Key string
+	// Accepted is closed once when this call's accept point is reached.
+	// Nil skips the notification. The callee closes it; the caller never does.
+	Accepted chan struct{}
+}
+
+// PostClaimRun is a bounded foreground command executed after runtime init.
+type PostClaimRun struct {
+	Command []string
+	Timeout time.Duration
 }
 
 type CloneSandboxOptions struct {

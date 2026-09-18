@@ -23,7 +23,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -59,7 +58,7 @@ type Controller struct {
 	// fields
 	mux             *http.ServeMux
 	server          *http.Server
-	metricsServer   *http.Server
+	ready           bool
 	cache           cache.Provider
 	storageRegistry storages.VolumeMountProviderRegistry
 	adapter         *adapters.E2BAdapter
@@ -76,11 +75,6 @@ type ControllerOptions struct {
 	Domain string
 	// Port is the port the E2B HTTP server listens on.
 	Port int
-	// MetricsPort is the port for GET /metrics. 0 or the same value as Port
-	// serves it on the control API listener; any other positive port starts a
-	// dedicated observability listener. Negative values are invalid and
-	// rejected by startup validation.
-	MetricsPort int
 	// MaxTimeout is the E2B maximum sandbox timeout in seconds.
 	MaxTimeout int
 	// KeyConfig configures API key storage. Nil disables E2B authentication.
@@ -88,6 +82,8 @@ type ControllerOptions struct {
 
 	// Manager is passed to the sandbox-manager builder unchanged.
 	Manager config.SandboxManagerOptions
+	// SandboxManager is the process-shared manager. Required before Init.
+	SandboxManager *sandboxmanager.SandboxManager
 	// RuntimeTLSBundle is the client TLS bundle used to reach TLS-capable
 	// agent-runtimes during claim and clone post-processing. Nil keeps every
 	// runtime call on the legacy plaintext paths.
@@ -104,6 +100,7 @@ func NewController(opts ControllerOptions) *Controller {
 		keyCfg:           opts.KeyConfig,
 		mgrOpts:          opts.Manager,
 		runtimeTLSBundle: opts.RuntimeTLSBundle,
+		manager:          opts.SandboxManager,
 	}
 
 	sc.server = &http.Server{
@@ -112,19 +109,19 @@ func NewController(opts ControllerOptions) *Controller {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	if opts.MetricsPort > 0 && opts.MetricsPort != opts.Port {
-		metricsMux := http.NewServeMux()
-		registerObservabilityRoutes(metricsMux)
-		sc.metricsServer = &http.Server{
-			Addr:              fmt.Sprintf(":%d", opts.MetricsPort),
-			Handler:           metricsMux,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-	} else {
-		registerObservabilityRoutes(sc.mux)
-	}
-
 	return sc
+}
+
+func (sc *Controller) RequestAdapter() *adapters.E2BAdapter {
+	return sc.adapter
+}
+
+func (sc *Controller) SetSandboxManager(manager *sandboxmanager.SandboxManager) {
+	sc.manager = manager
+}
+
+func (sc *Controller) Ready() bool {
+	return sc != nil && sc.ready && sc.manager != nil
 }
 
 func (sc *Controller) Init() error {
@@ -132,19 +129,11 @@ func (sc *Controller) Init() error {
 	log := klog.FromContext(ctx)
 	log.Info("init controller")
 
-	sandboxManager, err := sandboxmanager.NewSandboxManagerBuilder(sc.mgrOpts).
-		WithSandboxInfra().
-		WithMemberlistPeers().
-		WithRequestAdapter(sc.adapter).
-		WithRuntimeTLSBundle(sc.runtimeTLSBundle).
-		Build()
-
-	if err != nil {
-		return err
+	if sc.manager == nil {
+		return fmt.Errorf("sandbox manager is required")
 	}
 
-	sc.manager = sandboxManager
-	sc.cache = sandboxManager.GetInfra().GetCache()
+	sc.cache = sc.manager.GetInfra().GetCache()
 	sc.storageRegistry = storages.NewStorageProvider()
 	sc.registerRoutes()
 
@@ -245,9 +234,7 @@ func (sc *Controller) startComponents(ctx context.Context) error {
 	if err := sc.startHTTPServer(); err != nil {
 		return err
 	}
-	if sc.metricsServer != nil {
-		go serveMetrics(sc.metricsServer)
-	}
+	sc.ready = true
 	if sc.keys != nil {
 		sc.keys.Run()
 	}
@@ -309,15 +296,6 @@ func (sc *Controller) startHTTPServer() error {
 	return nil
 }
 
-func serveMetrics(server *http.Server) {
-	klog.InfoS("Starting metrics server", "address", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		// Metrics live only on this listener once a dedicated port is configured,
-		// so a bind failure is a fatal misconfiguration, matching the control API listener.
-		klog.Fatalf("metrics HTTP server failed to start: %v", err)
-	}
-}
-
 func shutdownHTTPServer(ctx context.Context, srv *http.Server, msg string) {
 	if srv == nil {
 		return
@@ -331,18 +309,9 @@ func (sc *Controller) shutdown(ctx context.Context, cancel context.CancelFunc) {
 	log := klog.FromContext(ctx)
 	log.Info("Shutting down server...")
 	defer cancel()
+	sc.ready = false
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		shutdownHTTPServer(ctx, sc.server, "HTTP server forced to shutdown")
-	}()
-	go func() {
-		defer wg.Done()
-		shutdownHTTPServer(ctx, sc.metricsServer, "metrics HTTP server forced to shutdown")
-	}()
-	wg.Wait()
+	shutdownHTTPServer(ctx, sc.server, "HTTP server forced to shutdown")
 	if sc.manager != nil {
 		sc.manager.Stop(ctx)
 	}

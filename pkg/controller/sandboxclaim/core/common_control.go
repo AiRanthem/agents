@@ -302,8 +302,17 @@ func validateClaimReservedIdentityKeys(claim *agentsv1alpha1.SandboxClaim) error
 	if _, exists := claim.Spec.Labels[agentsv1alpha1.LabelSandboxID]; exists {
 		return fmt.Errorf("%w: label %q is reserved and cannot be set by SandboxClaim", ErrInvalidClaimSpec, agentsv1alpha1.LabelSandboxID)
 	}
+	if _, exists := claim.Spec.Labels[agentsv1alpha1.LabelSandboxSession]; exists {
+		return fmt.Errorf("%w: label %q is reserved and cannot be set by SandboxClaim", ErrInvalidClaimSpec, agentsv1alpha1.LabelSandboxSession)
+	}
 	if _, exists := claim.Spec.Annotations[agentsv1alpha1.AnnotationSandboxID]; exists {
 		return fmt.Errorf("%w: annotation %q is reserved and cannot be set by SandboxClaim", ErrInvalidClaimSpec, agentsv1alpha1.AnnotationSandboxID)
+	}
+	if _, exists := claim.Spec.Annotations[agentsv1alpha1.AnnotationSandboxSessionID]; exists {
+		return fmt.Errorf("%w: annotation %q is reserved and cannot be set by SandboxClaim", ErrInvalidClaimSpec, agentsv1alpha1.AnnotationSandboxSessionID)
+	}
+	if _, exists := claim.Spec.Annotations[agentsv1alpha1.AnnotationClaimDeliveryComplete]; exists {
+		return fmt.Errorf("%w: annotation %q is reserved and cannot be set by SandboxClaim", ErrInvalidClaimSpec, agentsv1alpha1.AnnotationClaimDeliveryComplete)
 	}
 	return nil
 }
@@ -393,6 +402,11 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 		// Set here because this control bypasses Infrastructure.ClaimSandbox
 		// (see the runtimeTLSBundle field doc).
 		RuntimeTLSBundle: c.runtimeTLSBundle,
+	}
+
+	if sandboxcr.IsSessionClaim(claim) {
+		opts.BindOwnerToClaim = true
+		opts.PostClaim = sandboxcr.PostClaimFromSpec(claim)
 	}
 
 	if claim.Spec.InplaceUpdate != nil {
@@ -525,6 +539,22 @@ func (c *commonControl) buildCSIMountOptions(ctx context.Context, mounts []agent
 
 // countClaimedSandboxes counts active sandboxes claimed by this claim.
 func (c *commonControl) countClaimedSandboxes(ctx context.Context, claim *agentsv1alpha1.SandboxClaim) (int32, error) {
+	if sandboxcr.IsSessionClaim(claim) {
+		sandboxes, err := c.cache.ListSandboxes(ctx, cache.ListSandboxesOptions{
+			User:      string(claim.UID),
+			Namespace: claim.Namespace,
+		})
+		if err != nil {
+			return 0, err
+		}
+		var n int32
+		for _, sbx := range sandboxes {
+			if sbx.Annotations[agentsv1alpha1.AnnotationClaimDeliveryComplete] == agentsv1alpha1.True {
+				n++
+			}
+		}
+		return n, nil
+	}
 	return c.cache.CountActiveSandboxes(ctx, cache.ListSandboxesOptions{
 		User:      string(claim.UID),
 		Namespace: claim.Namespace,

@@ -112,6 +112,9 @@ type Infra struct {
 }
 
 func (i *Infra) Run(ctx context.Context) error {
+	if err := i.registerClaimScaleObserver(); err != nil {
+		return err
+	}
 	return i.Cache.Run(ctx)
 }
 
@@ -145,6 +148,10 @@ func (i *Infra) ClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions
 	// post-processing can resolve the per-sandbox transport; the field is
 	// Infra-owned, see ClaimSandboxOptions.RuntimeTLSBundle.
 	opts.RuntimeTLSBundle = i.RuntimeTLSBundle
+
+	if opts.Idempotency != nil {
+		return i.claimSandboxWithKey(ctx, opts)
+	}
 
 	claimCtx, cancel := context.WithTimeout(ctx, opts.ClaimTimeout)
 	defer cancel()
@@ -525,6 +532,17 @@ func (i *Infra) getSandboxFromAPIReader(ctx context.Context, key client.ObjectKe
 // object key. A route observed with the miss is only a propagation signal: it
 // enables polling until the cache hits or the caller's context ends.
 func (i *Infra) GetSandbox(ctx context.Context, opts infra.GetSandboxOptions) (infra.Sandbox, error) {
+	if opts.SessionID != "" && opts.SandboxID != "" {
+		return nil, managererrors.NewError(managererrors.ErrorBadRequest, "session id and sandbox id are mutually exclusive")
+	}
+	if opts.SessionID != "" {
+		sbx, err := i.lookupSessionSandbox(ctx, opts)
+		if err != nil {
+			return nil, wrapGetSandboxError(err)
+		}
+		return sbx, nil
+	}
+
 	lookup, err := i.lookupSandbox(ctx, opts)
 	if err != nil {
 		return nil, wrapGetSandboxError(err)
@@ -548,6 +566,8 @@ func wrapGetSandboxError(err error) error {
 		return fmt.Errorf("%w: %w", infra.ErrSandboxNotFound, err)
 	case errors.Is(err, cache.ErrSandboxIDAmbiguous):
 		return fmt.Errorf("%w: %w", infra.ErrSandboxIDAmbiguous, err)
+	case errors.Is(err, infra.ErrSandboxNotFound), errors.Is(err, infra.ErrSessionSandboxMissing):
+		return err
 	}
 	return err
 }

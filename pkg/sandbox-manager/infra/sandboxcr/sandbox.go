@@ -472,6 +472,14 @@ func (s *Sandbox) SaveTimeoutWithPolicy(ctx context.Context, opts infra.SaveTime
 			shouldUpdate = !timeout.Equal(current, opts.Timeout)
 		case timeout.UpdatePolicyExtendOnly:
 			shouldUpdate = timeout.ShouldExtendTimeout(current, opts.Timeout)
+		case timeout.UpdatePolicyHoldOrAdvancePause:
+			next, changed := timeout.ApplyHoldOrAdvancePause(current, opts.Timeout)
+			if !changed {
+				return false, nil
+			}
+			setTimeout(sbx, next)
+			mergeExtraAnnotations(sbx, opts.ExtraAnnotations)
+			return true, nil
 		default:
 			return false, fmt.Errorf("unsupported timeout update policy %q", policy)
 		}

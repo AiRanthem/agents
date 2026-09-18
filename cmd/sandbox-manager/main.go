@@ -37,12 +37,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	agentsclient "github.com/openkruise/agents/client"
+	sandboxmanager "github.com/openkruise/agents/pkg/sandbox-manager"
 	"github.com/openkruise/agents/pkg/sandbox-manager/clients"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
+	"github.com/openkruise/agents/pkg/servers/admin"
 	"github.com/openkruise/agents/pkg/servers/e2b"
 	"github.com/openkruise/agents/pkg/servers/e2b/keys"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/servers/openai"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
@@ -59,6 +62,11 @@ const (
 	E2BKeyHashPepperSecretKey   = "E2B_KEY_HASH_PEPPER"  // #nosec G101 -- env-var/Secret data key name, not a credential
 	QuotaRedisUsernameSecretKey = "QUOTA_REDIS_USERNAME" // #nosec G101 -- env-var/Secret data key name, not a credential
 	QuotaRedisPasswordSecretKey = "QUOTA_REDIS_PASSWORD" // #nosec G101 -- env-var/Secret data key name, not a credential
+
+	openaiWebhookSecretEnv = "OPENAI_AGENTS_WEBHOOK_SECRET" // #nosec G101 -- env-var name, not a credential
+	openaiAPIKeyEnv        = "OPENAI_AGENTS_API_KEY"        // #nosec G101 -- env-var name, not a credential
+	openaiSigningSecretKey = "signing-secret"               // #nosec G101 -- Secret data key name, not a credential
+	openaiAPIKeySecretKey  = "api-key"                      // #nosec G101 -- Secret data key name, not a credential
 )
 
 // validateE2BTimeoutFlags rejects a non-positive E2B max timeout, which would
@@ -70,19 +78,30 @@ func validateE2BTimeoutFlags(maxTimeout int) error {
 	return nil
 }
 
-// validateMetricsPort rejects invalid metrics ports and dedicated listener collisions with memberlist.
-func validateMetricsPort(metricsPort, controlPort, memberlistBindPort int) error {
+// validateMetricsPort rejects invalid metrics ports. Metrics are served on the
+// admin listener, so a non-zero --metrics-port must equal --admin-port.
+func validateMetricsPort(metricsPort, adminPort, memberlistBindPort int) error {
 	if metricsPort == 0 {
 		return nil
 	}
 	if metricsPort < 1 || metricsPort > 65535 {
 		return fmt.Errorf("--metrics-port must be 0 or a valid TCP port in the range 1-65535, got %d", metricsPort)
 	}
+	if metricsPort != adminPort {
+		return fmt.Errorf("--metrics-port (%d) must equal --admin-port (%d); /metrics is served on the admin listener", metricsPort, adminPort)
+	}
 	if memberlistBindPort <= 0 {
 		memberlistBindPort = config.DefaultMemberlistBindPort
 	}
-	if metricsPort != controlPort && metricsPort == memberlistBindPort {
-		return fmt.Errorf("--metrics-port (%d) must differ from --memberlist-bind-port (%d) when using a dedicated metrics listener", metricsPort, memberlistBindPort)
+	if metricsPort == memberlistBindPort {
+		return fmt.Errorf("--metrics-port (%d) must differ from --memberlist-bind-port (%d)", metricsPort, memberlistBindPort)
+	}
+	return nil
+}
+
+func validateAPIEnablement(enableE2B, enableOpenAI bool) error {
+	if !enableE2B && !enableOpenAI {
+		return fmt.Errorf("at least one of --enable-e2b-api or --enable-openai-agents-api must be true")
 	}
 	return nil
 }
@@ -90,8 +109,8 @@ func validateMetricsPort(metricsPort, controlPort, memberlistBindPort int) error
 // newStartupSecretClient builds a client only when startup needs to read Secrets.
 // It returns a nil Reader exactly when no startup Secret is referenced; callers
 // must not pass a non-empty ref to resolveSecretSettings with a nil reader.
-func newStartupSecretClient(clientConfig *rest.Config, runtimeClientCertSecret, secretConfigRef string) (ctrlclient.Client, error) {
-	if runtimeClientCertSecret == "" && secretConfigRef == "" {
+func newStartupSecretClient(clientConfig *rest.Config, runtimeClientCertSecret, secretConfigRef, openaiSecretRef string) (ctrlclient.Client, error) {
+	if runtimeClientCertSecret == "" && secretConfigRef == "" && openaiSecretRef == "" {
 		return nil, nil
 	}
 	return ctrlclient.New(clientConfig, ctrlclient.Options{})
@@ -151,6 +170,20 @@ func main() {
 	var trafficTokenMinValidity time.Duration
 	var trafficTokenMaxValidity time.Duration
 	var secretConfigRef string
+	var enableE2BAPI bool
+	var enableOpenAIAgentsAPI bool
+	var adminPort int
+	var openaiAgentsAPIPort int
+	var openaiAgentsNamespace string
+	var openaiAgentsTemplate string
+	var openaiAgentsInitCommand []string
+	var openaiAgentsBaseURL string
+	var openaiAgentsSigningSecret string
+	var openaiAgentsAPIKey string
+	var openaiAgentsSecretRef string
+	var openaiAgentsClaimTimeout time.Duration
+	var openaiAgentsPauseAfter time.Duration
+	var openaiAgentsShutdownAfter time.Duration
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(pflag.CommandLine)
 
@@ -159,9 +192,25 @@ func main() {
 	pflag.StringVar(&pprofAddr, "pprof-addr", ":6060", "The address the pprof debug maps to.")
 
 	// Register server configuration flags
-	pflag.IntVar(&port, "port", 8080, "The port the server listens on")
+	pflag.IntVar(&port, "port", 8080, "The port the E2B API listens on")
+	pflag.IntVar(&adminPort, "admin-port", admin.DefaultPort, "Port for /livez, /readyz, and /metrics")
 	pflag.IntVar(&metricsPort, "metrics-port", 0,
-		"Port for /metrics; 0 or the same value as --port reuses the control API listener")
+		"Deprecated alias for the admin metrics listener; 0 uses --admin-port. A non-zero value must equal --admin-port (metrics are not served on a second listener)")
+	pflag.BoolVar(&enableE2BAPI, "enable-e2b-api", true, "Enable the E2B-compatible API")
+	pflag.BoolVar(&enableOpenAIAgentsAPI, "enable-openai-agents-api", false, "Enable the OpenAI Agents webhook API")
+	pflag.IntVar(&openaiAgentsAPIPort, "openai-agents-api-port", 8082, "The port the OpenAI Agents API listens on")
+	pflag.StringVar(&openaiAgentsNamespace, "openai-agents-namespace", "", "Namespace for OpenAI session SandboxClaims (defaults to --sandbox-namespace or default)")
+	pflag.StringVar(&openaiAgentsTemplate, "openai-agents-template", "", "SandboxTemplate/SandboxSet name used for OpenAI session sandboxes")
+	pflag.StringSliceVar(&openaiAgentsInitCommand, "openai-agents-init-command", nil, "Post-claim command prefix; environment id and remote_url are appended")
+	pflag.StringVar(&openaiAgentsBaseURL, "openai-agents-base-url", "", "OpenAI API base URL for session retrieve (default https://api.openai.com)")
+	pflag.StringVar(&openaiAgentsSigningSecret, "openai-agents-signing-secret", os.Getenv(openaiWebhookSecretEnv), "OpenAI webhook signing secret")
+	pflag.StringVar(&openaiAgentsAPIKey, "openai-agents-api-key", os.Getenv(openaiAPIKeyEnv), "OpenAI session API key")
+	pflag.StringVar(&openaiAgentsSecretRef, "openai-agents-secret", "",
+		"name or namespace/name of a Secret with keys "+openaiSigningSecretKey+" and "+openaiAPIKeySecretKey+
+			"; overlay used only when --enable-openai-agents-api is true")
+	pflag.DurationVar(&openaiAgentsClaimTimeout, "openai-agents-claim-timeout", sandboxmanager.DefaultSessionClaimTimeout, "Timeout for OpenAI session claim delivery")
+	pflag.DurationVar(&openaiAgentsPauseAfter, "openai-agents-pause-after", sandboxmanager.DefaultSessionPauseAfter, "Idle pause delay for OpenAI session sandboxes")
+	pflag.DurationVar(&openaiAgentsShutdownAfter, "openai-agents-shutdown-after", sandboxmanager.DefaultSessionShutdownAfter, "Shutdown delay for OpenAI session sandboxes")
 	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (required when --e2b-enable-auth is true)")
 	pflag.BoolVar(&e2bEnableAuth, "e2b-enable-auth", true, "Enable E2B authentication")
 	pflag.StringVar(&domain, "e2b-domain", "",
@@ -259,10 +308,16 @@ func main() {
 	}
 
 	// Validate timeout flags.
+	if err := validateAPIEnablement(enableE2BAPI, enableOpenAIAgentsAPI); err != nil {
+		klog.Fatalf("invalid API enablement: %v", err)
+	}
 	if err := validateE2BTimeoutFlags(e2bMaxTimeout); err != nil {
 		klog.Fatalf("invalid e2b timeout flags: %v", err)
 	}
-	if err := validateMetricsPort(metricsPort, port, memberlistBindPort); err != nil {
+	if adminPort < 1 || adminPort > 65535 {
+		klog.Fatalf("--admin-port must be a valid TCP port in the range 1-65535, got %d", adminPort)
+	}
+	if err := validateMetricsPort(metricsPort, adminPort, memberlistBindPort); err != nil {
 		klog.Fatalf("invalid metrics-port flag: %v", err)
 	}
 	if quotaRedisOperationTimeout <= 0 {
@@ -302,7 +357,7 @@ func main() {
 		klog.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
 
-	startupReader, err := newStartupSecretClient(clientConfig, runtimeClientCertSecret, secretConfigRef)
+	startupReader, err := newStartupSecretClient(clientConfig, runtimeClientCertSecret, secretConfigRef, openaiAgentsSecretRef)
 	if err != nil {
 		klog.Fatalf("Failed to create client for startup Secrets: %v", err)
 	}
@@ -322,8 +377,35 @@ func main() {
 	quotaRedisUsername = secretSettings.RedisUsername
 	quotaRedisPassword = secretSettings.RedisPassword
 
-	if e2bEnableAuth && e2bAdminKey == "" {
+	if enableE2BAPI && e2bEnableAuth && e2bAdminKey == "" {
 		klog.Fatalf("E2B admin key is required when --e2b-enable-auth is true; provide it via --e2b-admin-key or the %q key of the Secret named by --secret-config", E2BAdminKeySecretKey)
+	}
+
+	if enableOpenAIAgentsAPI {
+		if openaiAgentsSecretRef != "" {
+			signing, apiKey, err := loadOpenAIAgentsSecret(startupReader, openaiAgentsSecretRef, sysNs)
+			if err != nil {
+				klog.Fatalf("Failed to load OpenAI Agents secret: %v", err)
+			}
+			if signing != "" {
+				openaiAgentsSigningSecret = signing
+			}
+			if apiKey != "" {
+				openaiAgentsAPIKey = apiKey
+			}
+		}
+		if openaiAgentsNamespace == "" {
+			openaiAgentsNamespace = sandboxNamespace
+		}
+		if openaiAgentsNamespace == "" {
+			openaiAgentsNamespace = "default"
+		}
+		if openaiAgentsSigningSecret == "" || openaiAgentsAPIKey == "" {
+			klog.Fatalf("OpenAI webhook signing secret and session API key are required when --enable-openai-agents-api is true")
+		}
+		if openaiAgentsTemplate == "" {
+			klog.Fatalf("--openai-agents-template is required when --enable-openai-agents-api is true")
+		}
 	}
 
 	quotaOpts := config.QuotaOptions{
@@ -379,7 +461,7 @@ func main() {
 	}
 
 	var keyCfg *keys.Config
-	if e2bEnableAuth {
+	if enableE2BAPI && e2bEnableAuth {
 		keyCfg = &keys.Config{
 			Mode:               keys.StorageMode(e2bKeyStorage),
 			Namespace:          sysNs,
@@ -401,43 +483,131 @@ func main() {
 		klog.Fatalf("startup hook failed: %v", err)
 	}
 
-	sandboxController := e2b.NewController(e2b.ControllerOptions{
-		Domain:      domain,
-		Port:        port,
-		MetricsPort: metricsPort,
-		MaxTimeout:  e2bMaxTimeout,
-		KeyConfig:   keyCfg,
-		Manager: config.SandboxManagerOptions{
-			SystemNamespace:       sysNs,
-			PeerSelector:          peerSelector,
-			BindAddress:           bindAddress,
-			SandboxNamespace:      sandboxNamespace,
-			SandboxLabelSelector:  sandboxLabelSelector,
-			MaxClaimWorkers:       maxClaimWorkers,
-			MaxCreateQPS:          maxCreateQPS,
-			ExtProcMaxConcurrency: uint32(extProcMaxConcurrency),
-			DisableEnvoyExtProc:   disableEnvoyExtProc,
-			MemberlistBindPort:    memberlistBindPort,
-			EnableShortSandboxID:  enableShortSandboxID,
-			ShortSandboxIDPrefix:  shortSandboxIDPrefix,
-			RestConfig:            clientConfig,
-			Quota:                 quotaOpts,
-			TrafficAccessToken:    trafficTokenOpts,
-		},
-		RuntimeTLSBundle: runtimeTLSBundle,
+	mgrOpts := config.SandboxManagerOptions{
+		SystemNamespace:       sysNs,
+		PeerSelector:          peerSelector,
+		BindAddress:           bindAddress,
+		SandboxNamespace:      sandboxNamespace,
+		SandboxLabelSelector:  sandboxLabelSelector,
+		MaxClaimWorkers:       maxClaimWorkers,
+		MaxCreateQPS:          maxCreateQPS,
+		ExtProcMaxConcurrency: uint32(extProcMaxConcurrency),
+		DisableEnvoyExtProc:   disableEnvoyExtProc,
+		MemberlistBindPort:    memberlistBindPort,
+		EnableShortSandboxID:  enableShortSandboxID,
+		ShortSandboxIDPrefix:  shortSandboxIDPrefix,
+		RestConfig:            clientConfig,
+		Quota:                 quotaOpts,
+		TrafficAccessToken:    trafficTokenOpts,
+	}
+
+	var e2bController *e2b.Controller
+	if enableE2BAPI {
+		e2bController = e2b.NewController(e2b.ControllerOptions{
+			Domain:           domain,
+			Port:             port,
+			MaxTimeout:       e2bMaxTimeout,
+			KeyConfig:        keyCfg,
+			Manager:          mgrOpts,
+			RuntimeTLSBundle: runtimeTLSBundle,
+		})
+	}
+
+	managerBuilder := sandboxmanager.NewSandboxManagerBuilder(mgrOpts).
+		WithSandboxInfra().
+		WithMemberlistPeers().
+		WithRuntimeTLSBundle(runtimeTLSBundle)
+	if e2bController != nil {
+		managerBuilder = managerBuilder.WithRequestAdapter(e2bController.RequestAdapter())
+	}
+	sandboxManager, err := managerBuilder.Build()
+	if err != nil {
+		klog.Fatalf("Failed to build sandbox manager: %v", err)
+	}
+
+	if e2bController != nil {
+		e2bController.SetSandboxManager(sandboxManager)
+		if err := e2bController.Init(); err != nil {
+			klog.Fatalf("Failed to initialize E2B API: %v", err)
+		}
+	} else if err := sandboxManager.InitQuota(context.Background(), config.QuotaOptions{}, nil); err != nil {
+		klog.Fatalf("Failed to initialize quota: %v", err)
+	}
+
+	var openaiController *openai.Controller
+	if enableOpenAIAgentsAPI {
+		openaiController = openai.NewController(openai.ControllerOptions{
+			Port:          openaiAgentsAPIPort,
+			BindAddress:   bindAddress,
+			Manager:       sandboxManager,
+			SigningSecret: openaiAgentsSigningSecret,
+			APIKey:        openaiAgentsAPIKey,
+			BaseURL:       openaiAgentsBaseURL,
+			Namespace:     openaiAgentsNamespace,
+			Template:      openaiAgentsTemplate,
+			InitCommand:   openaiAgentsInitCommand,
+			ClaimTimeout:  openaiAgentsClaimTimeout,
+			PauseAfter:    openaiAgentsPauseAfter,
+			ShutdownAfter: openaiAgentsShutdownAfter,
+		})
+	}
+
+	adminReady := []admin.ReadyCheck{
+		func() bool { return sandboxManager != nil },
+	}
+	if e2bController != nil {
+		adminReady = append(adminReady, e2bController.Ready)
+	}
+	if openaiController != nil {
+		adminReady = append(adminReady, openaiController.Ready)
+	}
+	adminServer := admin.New(admin.Options{
+		BindAddress: bindAddress,
+		Port:        adminPort,
+		Ready:       adminReady,
 	})
 
-	if err := sandboxController.Init(); err != nil {
-		klog.Fatalf("Failed to initialize sandbox controller: %v", err)
-	}
-
-	// Start HTTP Server
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	sandboxCtx, err := sandboxController.Run(stop)
-	if err != nil {
-		klog.Fatalf("Failed to start sandbox controller: %v", err)
+
+	var runCtx context.Context
+	if e2bController != nil {
+		runCtx, err = e2bController.Run(stop)
+		if err != nil {
+			klog.Fatalf("Failed to start E2B API: %v", err)
+		}
+	} else {
+		if err := sandboxManager.Run(context.Background()); err != nil {
+			klog.Fatalf("Failed to start sandbox manager: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		runCtx = ctx
+		go func() {
+			<-stop
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), consts.ShutdownTimeout)
+			defer shutdownCancel()
+			sandboxManager.Stop(shutdownCtx)
+			cancel()
+		}()
 	}
-	<-sandboxCtx.Done()
-	klog.Info("Sandbox controller stopped")
+
+	if openaiController != nil {
+		if err := openaiController.Start(context.Background()); err != nil {
+			klog.Fatalf("Failed to start OpenAI Agents API: %v", err)
+		}
+	}
+	if err := adminServer.Start(); err != nil {
+		klog.Fatalf("Failed to start admin server: %v", err)
+	}
+
+	<-runCtx.Done()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), consts.ShutdownTimeout)
+	defer shutdownCancel()
+	if openaiController != nil {
+		openaiController.Stop(shutdownCtx)
+	}
+	if err := adminServer.Shutdown(shutdownCtx); err != nil {
+		klog.ErrorS(err, "admin server forced to shutdown")
+	}
+	klog.Info("Sandbox manager stopped")
 }

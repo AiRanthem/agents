@@ -29,6 +29,10 @@ type UpdatePolicy string
 const (
 	UpdatePolicyAlways     UpdatePolicy = "Always"
 	UpdatePolicyExtendOnly UpdatePolicy = "ExtendOnly"
+	// UpdatePolicyHoldOrAdvancePause refreshes ShutdownTime and only sets
+	// PauseTime when it is currently empty or the requested value is earlier.
+	// It never postpones an existing PauseTime and never clears PauseTime.
+	UpdatePolicyHoldOrAdvancePause UpdatePolicy = "HoldOrAdvancePause"
 )
 
 const (

@@ -55,6 +55,7 @@ import (
 	"github.com/openkruise/agents/pkg/utils/inplaceupdate"
 	"github.com/openkruise/agents/pkg/utils/runtime"
 	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
+	"github.com/openkruise/agents/proto/envd/process"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -268,8 +269,15 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 		}
 		metrics.LastError = err
 		log.Info("try claim sandbox result", "metrics", metrics.String())
+		if err != nil && claimed != nil && opts.BindOwnerToClaim && opts.Claim != nil {
+			expectClaimScale(string(opts.Claim.UID), expectations.Delete, claimed.GetName())
+		}
 		clearFailedSandbox(ctx, claimed, err, opts.ReserveFailedSandboxFor, opts.Admission, opts.LockString)
 	}()
+	if opts.BindOwnerToClaim && opts.Claim != nil && claimScaleExpectationUnsatisfied(string(opts.Claim.UID)) {
+		err = retriableError{Message: "claim scale expectation is not yet satisfied"}
+		return
+	}
 	// Step 1: Pick an available sandbox
 	var sbx *Sandbox
 	var lockType infra.LockType
@@ -317,6 +325,9 @@ func TryClaimSandbox(ctx context.Context, opts infra.ClaimSandboxOptions, pickCa
 	metrics.PickAndLock = time.Since(pickStart)
 	metrics.Total += metrics.PickAndLock
 	expectations.ResourceVersionExpectationExpect(sbx)
+	if opts.BindOwnerToClaim && opts.Claim != nil {
+		expectClaimScale(string(opts.Claim.UID), expectations.Create, sbx.GetName())
+	}
 	log = log.WithValues("sandbox", klog.KObj(sbx.Sandbox))
 	log.Info("sandbox locked", "cost", metrics.PickAndLock, "type", metrics.LockType)
 	claimed = sbx
@@ -479,7 +490,65 @@ func runClaimPostProcesses(ctx context.Context, sbx *Sandbox, lockType infra.Loc
 		log.Info("csi mount completed", "cost", metrics.CSIMount)
 	}
 
+	if err := runPostClaim(ctx, sbx, opts, rtOpts...); err != nil {
+		return err
+	}
+	if opts.BindOwnerToClaim || (opts.PostClaim != nil && len(opts.PostClaim.Command) > 0) {
+		if err := markClaimDeliveryComplete(ctx, sbx); err != nil {
+			return retriableError{Message: fmt.Sprintf("failed to persist claim delivery: %s", err)}
+		}
+	}
+
 	return nil
+}
+
+func runPostClaim(ctx context.Context, sbx *Sandbox, opts infra.ClaimSandboxOptions, rtOpts ...runtime.Option) error {
+	if opts.PostClaim == nil || len(opts.PostClaim.Command) == 0 {
+		return nil
+	}
+	timeout := opts.PostClaim.Timeout
+	if timeout <= 0 {
+		timeout = DefaultPostClaimTimeout
+	}
+	cmd := opts.PostClaim.Command[0]
+	var args []string
+	if len(opts.PostClaim.Command) > 1 {
+		args = opts.PostClaim.Command[1:]
+	}
+	result, err := runtime.RunCommandWithRuntime(ctx, runtime.RunCmdFuncArgs{
+		Sbx: sbx.Sandbox,
+		ProcessConfig: &process.ProcessConfig{
+			Cmd:  cmd,
+			Args: args,
+		},
+		Timeout: timeout,
+	}, rtOpts...)
+	if err != nil {
+		return retriableError{Message: fmt.Sprintf("post-claim command failed: %s", err)}
+	}
+	if result.Error != nil {
+		return retriableError{Message: fmt.Sprintf("post-claim command failed: %s", result.Error)}
+	}
+	if !result.Exited || result.ExitCode != 0 {
+		return retriableError{Message: fmt.Sprintf("post-claim command exited %d", result.ExitCode)}
+	}
+	return nil
+}
+
+func markClaimDeliveryComplete(ctx context.Context, sbx *Sandbox) error {
+	_, err := sbx.retryUpdate(ctx, func(s *v1alpha1.Sandbox) (bool, error) {
+		ann := s.GetAnnotations()
+		if ann == nil {
+			ann = make(map[string]string, 1)
+		}
+		if ann[v1alpha1.AnnotationClaimDeliveryComplete] == v1alpha1.True {
+			return false, nil
+		}
+		ann[v1alpha1.AnnotationClaimDeliveryComplete] = v1alpha1.True
+		s.SetAnnotations(ann)
+		return true, nil
+	})
+	return err
 }
 
 // clearFailedSandbox cleans up (or reserves) a failed sandbox according to
@@ -838,6 +907,10 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 	}
 	// claim sandbox
 	sbx.SetOwnerReferences([]metav1.OwnerReference{}) // make SandboxSet scale up
+	if opts.BindOwnerToClaim && opts.Claim != nil {
+		ref := *metav1.NewControllerRef(opts.Claim, v1alpha1.SandboxClaimControllerKind)
+		sbx.SetOwnerReferences([]metav1.OwnerReference{ref})
+	}
 	labels := sbx.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string, 1)

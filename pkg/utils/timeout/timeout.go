@@ -55,6 +55,26 @@ func Equal(a, b Options) bool {
 	return timeEqual(a.ShutdownTime, b.ShutdownTime) && timeEqual(a.PauseTime, b.PauseTime)
 }
 
+// ApplyHoldOrAdvancePause returns the timeout to persist under
+// UpdatePolicyHoldOrAdvancePause and whether it differs from current.
+func ApplyHoldOrAdvancePause(current, requested Options) (Options, bool) {
+	next := current
+	changed := false
+	if !requested.ShutdownTime.IsZero() && !timeEqual(current.ShutdownTime, requested.ShutdownTime) {
+		next.ShutdownTime = NormalizeTime(requested.ShutdownTime)
+		changed = true
+	}
+	if requested.PauseTime.IsZero() {
+		return next, changed
+	}
+	requestedPause := NormalizeTime(requested.PauseTime)
+	if current.PauseTime.IsZero() || requestedPause.Before(NormalizeTime(current.PauseTime)) {
+		next.PauseTime = requestedPause
+		changed = true
+	}
+	return next, changed
+}
+
 // ShouldExtendTimeout reports whether requested extends the effective end time.
 func ShouldExtendTimeout(current, requested Options) bool {
 	currentEndAt := timeoutEndAt(current)

@@ -32,4 +32,5 @@ var (
 	CreateRetryJitter              = 0.3
 	CreateRetryIntervalCap         = 16 * time.Second
 	CreateMaxRetrySteps            = 10
+	DefaultPostClaimTimeout        = 60 * time.Second
 )

@@ -26,7 +26,10 @@ const (
 	LabelSandboxIsClaimed = InternalPrefix + "sandbox-claimed"
 	// LabelSandboxClaimName indicates the name of the SandboxClaim that claimed this sandbox
 	LabelSandboxClaimName = InternalPrefix + "claim-name"
-	LabelTemplateHash     = InternalPrefix + "template-hash"
+	// LabelSandboxSession marks a SandboxClaim that is a session-mode key.
+	// Ordinary claims leave this unset.
+	LabelSandboxSession = InternalPrefix + "sandbox-session"
+	LabelTemplateHash   = InternalPrefix + "template-hash"
 	// LabelSandboxReservedFailed marks a failed sandbox retained for debugging.
 	LabelSandboxReservedFailed = InternalPrefix + "reserved-failed-sandbox"
 	// LabelSandboxName is the label key used by TrafficPolicy Spec.Selector to select the sandbox pod.

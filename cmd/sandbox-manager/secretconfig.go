@@ -112,3 +112,28 @@ func loadSecretConfig(reader ctrlclient.Reader, ref, defaultNamespace string) (s
 	}
 	return cfg, nil
 }
+
+func loadOpenAIAgentsSecret(reader ctrlclient.Reader, ref, defaultNamespace string) (string, string, error) {
+	if reader == nil {
+		return "", "", fmt.Errorf("kubernetes client is required to load --openai-agents-secret")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), secretConfigLoadTimeout)
+	defer cancel()
+	namespace, name, err := parseSecretRef(ref, defaultNamespace)
+	if err != nil {
+		return "", "", err
+	}
+	secret := &corev1.Secret{}
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
+		return "", "", fmt.Errorf("failed to get OpenAI Agents secret %s/%s: %w", namespace, name, err)
+	}
+	signing, ok := secret.Data[openaiSigningSecretKey]
+	if !ok {
+		return "", "", fmt.Errorf("OpenAI Agents secret %s/%s missing key %q", namespace, name, openaiSigningSecretKey)
+	}
+	apiKey, ok := secret.Data[openaiAPIKeySecretKey]
+	if !ok {
+		return "", "", fmt.Errorf("OpenAI Agents secret %s/%s missing key %q", namespace, name, openaiAPIKeySecretKey)
+	}
+	return string(signing), strings.TrimSpace(string(apiKey)), nil
+}

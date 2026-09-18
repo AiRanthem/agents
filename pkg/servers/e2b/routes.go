@@ -23,12 +23,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/openkruise/agents/pkg/sandboxid"
 	"github.com/openkruise/agents/pkg/servers/e2b/adapters"
@@ -92,11 +90,6 @@ func RegisterE2BRoute[T any](mux *http.ServeMux, method, path string, handler we
 	web.RegisterRoute(mux, method, path, handler, middlewares...)
 	// Customized E2B API
 	web.RegisterRoute(mux, method, adapters.CustomPrefix+"/api"+path, handler, middlewares...)
-}
-
-func registerObservabilityRoutes(mux *http.ServeMux) {
-	// Prometheus metrics endpoint for exporting metrics
-	mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 }
 
 // User-facing trace operation verbs recorded in baggage and surfaced as the

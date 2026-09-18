@@ -170,6 +170,32 @@ spec:
                   to claimed Sandbox resources and synced to sandbox template labels.
                 type: object
                 x-kubernetes-map-type: granular
+              postClaim:
+                description: |-
+                  PostClaim is a declarative post-claim action executed as the last step of
+                  a complete try. Ordinary claims leave this unset.
+                properties:
+                  run:
+                    description: |-
+                      Run is a bounded foreground command. The try succeeds only if the
+                      command exits with status 0.
+                    properties:
+                      command:
+                        description: Command is the argv executed inside the sandbox.
+                          Required when run is set.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                      timeout:
+                        description: |-
+                          Timeout bounds how long the command may run. Zero or unset uses the
+                          claim implementation default.
+                        type: string
+                    required:
+                    - command
+                    type: object
+                type: object
               replicas:
                 default: 1
                 description: |-

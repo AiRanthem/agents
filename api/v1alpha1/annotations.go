@@ -65,6 +65,16 @@ const (
 	// the calling workload's verified identity.
 	AnnotationSecurityRules = InternalPrefix + "security-rules"
 
+	// AnnotationSandboxSessionID stores the original session identifier on a
+	// session-mode SandboxClaim. The Claim object name may be a deterministic
+	// hash of this value when the raw ID is not a valid resource name.
+	AnnotationSandboxSessionID = InternalPrefix + "sandbox-session-id"
+
+	// AnnotationClaimDeliveryComplete marks a Sandbox whose claim try finished
+	// successfully, including any PostClaim command. Selector membership or
+	// Ready alone is not a complete delivery.
+	AnnotationClaimDeliveryComplete = InternalPrefix + "claim-delivery-complete"
+
 	// SandboxAnnotationPriority is the annotation key for sandbox priority.
 	// If not set, the default value is 0.
 	// Larger values indicate higher priority.

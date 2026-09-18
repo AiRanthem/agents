@@ -175,6 +175,25 @@ type HasCheckpointOptions struct {
 type GetSandboxOptions struct {
 	Namespace string
 	SandboxID string
+	// SessionID looks up a sandbox through the session-key claim chain.
+	// Mutually exclusive with SandboxID.
+	SessionID string
+}
+
+// SessionKeyInfo is a protocol-neutral view of a persisted session claim key.
+type SessionKeyInfo struct {
+	SessionID string
+	// Failed is true when the persistent claim finished without a delivered sandbox.
+	Failed bool
+}
+
+type ListSessionKeysOptions struct {
+	Namespace string
+}
+
+type DeleteSessionKeyOptions struct {
+	Namespace string
+	SessionID string
 }
 
 // IssueTrafficAccessTokenOptions identifies a Sandbox and carries the
@@ -272,6 +291,11 @@ var ErrSandboxNotFound = errors.New("sandbox not found")
 // but must not classify the lookup as an infrastructure outage.
 var ErrSandboxIDAmbiguous = errors.New("sandbox ID is ambiguous")
 
+// ErrSessionSandboxMissing reports that a session key exists from a successful
+// delivery but the sandbox is gone. Callers must not treat this as a missing
+// key that can be reclaimed.
+var ErrSessionSandboxMissing = errors.New("session sandbox is missing")
+
 type Infrastructure interface {
 	Run(ctx context.Context) error // Starts the infrastructure
 	Stop(ctx context.Context)      // Stops the infrastructure
@@ -289,6 +313,8 @@ type Infrastructure interface {
 	SelectSucceededCheckpoints(ctx context.Context, opts SelectSucceededCheckpointsOptions) ([]CheckpointInfo, error)
 	ClaimSandbox(ctx context.Context, opts ClaimSandboxOptions) (Sandbox, ClaimMetrics, error)
 	CloneSandbox(ctx context.Context, opts CloneSandboxOptions) (Sandbox, CloneMetrics, error)
+	ListSessionKeys(ctx context.Context, opts ListSessionKeysOptions) ([]SessionKeyInfo, error)
+	DeleteSessionKey(ctx context.Context, opts DeleteSessionKeyOptions) error
 	DeleteCheckpoint(ctx context.Context, opts DeleteCheckpointOptions) error
 	CreateVolume(ctx context.Context, opts CreateVolumeOptions) (*VolumeInfo, error)
 	ListVolumes(ctx context.Context, opts ListVolumesOptions) ([]*VolumeInfo, error)
