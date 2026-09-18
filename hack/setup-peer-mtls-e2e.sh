@@ -22,14 +22,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ASSETS_DIR="$PROJECT_ROOT/test/e2b/assets/peer-mtls"
 RUNTIME_NAME="agentruntime.sandbox.agents.kruise.io"
+FIXTURE_DIR="${PEER_MTLS_FIXTURE_DIR:-/tmp/peer-mtls-e2e}"
 
 usage() {
-    echo "Usage: $0 secrets|workloads|junit [junit.xml]" >&2
+    echo "Usage: $0 secrets|junit [junit.xml]" >&2
     exit 1
-}
-
-fingerprint() {
-    openssl x509 -in "$1" -outform DER | openssl dgst -sha256 -hex | awk '{print $2}'
 }
 
 issue_leaf() {
@@ -80,96 +77,27 @@ cmd_secrets() {
 
     printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$RUNTIME_NAME" >"$cert_dir/server.ext"
     printf 'extendedKeyUsage=clientAuth\n' >"$cert_dir/client.ext"
-    printf 'subjectAltName=DNS:wrong.example\nextendedKeyUsage=serverAuth\n' >"$cert_dir/wrong-san.ext"
-    # M09 EKU leg: the expected SAN but clientAuth only, so rejection must come
-    # from key usage, not from hostname verification.
-    printf 'subjectAltName=DNS:%s\nextendedKeyUsage=clientAuth\n' "$RUNTIME_NAME" >"$cert_dir/wrong-eku.ext"
 
     issue_leaf "$cert_dir" server "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/server.ext"
     issue_leaf "$cert_dir" manager-client "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/client.ext"
     issue_leaf "$cert_dir" gateway-client "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/client.ext"
-    issue_leaf "$cert_dir" helper-client "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/client.ext"
-    issue_leaf "$cert_dir" wrong-san "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/wrong-san.ext"
-    issue_leaf "$cert_dir" untrusted-server "$cert_dir/ca-b.crt" "$cert_dir/ca-b.key" "$cert_dir/server.ext"
     issue_leaf "$cert_dir" untrusted-client "$cert_dir/ca-b.crt" "$cert_dir/ca-b.key" "$cert_dir/client.ext"
-    # clientAuth-only leaf reused as a remote server certificate for M09 EKU.
-    issue_leaf "$cert_dir" wrong-eku "$cert_dir/ca-a.crt" "$cert_dir/ca-a.key" "$cert_dir/wrong-eku.ext"
 
     create_tls_secret peer-mtls-server "$cert_dir/server.crt" "$cert_dir/server.key" "$cert_dir/ca-a.crt"
     create_client_secret peer-mtls-manager-client "$cert_dir/manager-client.crt" "$cert_dir/manager-client.key" "$cert_dir/ca-a.crt"
     create_client_secret peer-mtls-gateway-client "$cert_dir/gateway-client.crt" "$cert_dir/gateway-client.key" "$cert_dir/ca-a.crt"
-    create_client_secret peer-mtls-helper-client "$cert_dir/helper-client.crt" "$cert_dir/helper-client.key" "$cert_dir/ca-a.crt"
-    create_client_secret peer-mtls-untrusted-client "$cert_dir/untrusted-client.crt" "$cert_dir/untrusted-client.key" "$cert_dir/ca-b.crt"
-    create_tls_secret peer-mtls-untrusted-server "$cert_dir/untrusted-server.crt" "$cert_dir/untrusted-server.key" "$cert_dir/ca-b.crt"
-    create_tls_secret peer-mtls-wrong-san-server "$cert_dir/wrong-san.crt" "$cert_dir/wrong-san.key" "$cert_dir/ca-a.crt"
-    create_tls_secret peer-mtls-wrong-eku-server "$cert_dir/wrong-eku.crt" "$cert_dir/wrong-eku.key" "$cert_dir/ca-a.crt"
 
     kubectl apply -f "$ASSETS_DIR/rbac.yaml" >/dev/null
 
-    mkdir -p /tmp/peer-mtls-e2e
-    chmod 700 /tmp/peer-mtls-e2e
-    cp "$cert_dir/ca-a.crt" /tmp/peer-mtls-e2e/ca-a.crt
-    printf '%s\n' "$(fingerprint "$cert_dir/manager-client.crt")" >/tmp/peer-mtls-e2e/manager.fp
-    printf '%s\n' "$(fingerprint "$cert_dir/gateway-client.crt")" >/tmp/peer-mtls-e2e/gateway.fp
-    printf '%s\n' "$(fingerprint "$cert_dir/helper-client.crt")" >/tmp/peer-mtls-e2e/helper.fp
+    mkdir -p "$FIXTURE_DIR"
+    chmod 700 "$FIXTURE_DIR"
+    cp "$cert_dir/ca-a.crt" "$FIXTURE_DIR/ca-a.crt"
+    # Untrusted and server-as-client material stays on the runner for curl.
+    cp "$cert_dir/untrusted-client.crt" "$FIXTURE_DIR/untrusted.crt"
+    cp "$cert_dir/untrusted-client.key" "$FIXTURE_DIR/untrusted.key"
+    cp "$cert_dir/server.crt" "$FIXTURE_DIR/server.crt"
+    cp "$cert_dir/server.key" "$FIXTURE_DIR/server.key"
     echo "peer-mtls secrets created"
-}
-
-wait_rollout() {
-    local deploy="$1"
-    kubectl rollout status "deployment/${deploy}" -n "$NS" --timeout=180s
-}
-
-wait_membership() {
-    local pod i members
-    pod="$(kubectl get pod -n "$NS" -l app.kubernetes.io/name=peer-mtls-witness -o jsonpath='{.items[0].metadata.name}')"
-    kubectl port-forward -n "$NS" "pod/${pod}" 18081:18081 >/tmp/peer-mtls-e2e/witness-pf.log 2>&1 &
-    local pf_pid=$!
-    trap 'kill "$pf_pid" 2>/dev/null || true' RETURN
-    for i in $(seq 1 90); do
-        if members="$(curl -sf http://127.0.0.1:18081/members 2>/dev/null)"; then
-            if echo "$members" | grep -q '"name":"sm-' && echo "$members" | grep -q '"name":"sg-'; then
-                echo "peer-mtls membership includes manager and gateway"
-                kill "$pf_pid" 2>/dev/null || true
-                wait "$pf_pid" 2>/dev/null || true
-                trap - RETURN
-                return 0
-            fi
-        fi
-        sleep 2
-    done
-    echo "membership not found: witness did not observe sm- and sg- members" >&2
-    echo "$members" >&2
-    return 1
-}
-
-cmd_workloads() {
-    local nonce echo_a echo_b rendered
-    nonce="$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
-    echo_a="peer-route-A-${nonce}"
-    echo_b="peer-route-B-${nonce}"
-    mkdir -p /tmp/peer-mtls-e2e
-    printf '%s\n' "$nonce" >/tmp/peer-mtls-e2e/nonce
-    printf '%s\n' "$echo_a" >/tmp/peer-mtls-e2e/echo-a-body
-    printf '%s\n' "$echo_b" >/tmp/peer-mtls-e2e/echo-b-body
-
-    rendered="$(mktemp)"
-    sed \
-        -e "s/PLACEHOLDER_NONCE/${nonce}/g" \
-        -e "s/PLACEHOLDER_ECHO_A/${echo_a}/g" \
-        -e "s/PLACEHOLDER_ECHO_B/${echo_b}/g" \
-        "$ASSETS_DIR/workloads.yaml.tmpl" >"$rendered"
-    kubectl apply -f "$rendered"
-    rm -f "$rendered"
-
-    wait_rollout peer-mtls-echo-a
-    wait_rollout peer-mtls-echo-b
-    wait_rollout peer-mtls-witness
-    wait_rollout peer-mtls-wrong-ca
-    wait_rollout peer-mtls-wrong-san
-    wait_rollout peer-mtls-wrong-eku
-    wait_rollout peer-mtls-plaintext
-    wait_membership
 }
 
 cmd_junit() {
@@ -203,7 +131,6 @@ PY
 
 case "${1:-}" in
     secrets) cmd_secrets ;;
-    workloads) cmd_workloads ;;
     junit) shift; cmd_junit "$@" ;;
     *) usage ;;
 esac

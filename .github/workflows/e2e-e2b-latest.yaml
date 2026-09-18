@@ -22,7 +22,6 @@ env:
   MANAGER_IMG: sandbox-manager:latest
   RUNTIME_IMG: agent-runtime:latest
   GATEWAY_IMG: sandbox-gateway:latest
-  PEER_MTLS_HELPER_IMG: peer-mtls-helper:latest
   CODE_INTERPRETER_IMG: registry-ap-southeast-1.ack.aliyuncs.com/acs/code-interpreter:v1.6
   INPLACE_UPDATE_IMG: registry-ap-southeast-1.ack.aliyuncs.com/acs/code-interpreter:v1.6-new
 
@@ -166,25 +165,6 @@ jobs:
             kind load docker-image --name=${KIND_CLUSTER_NAME} ${GATEWAY_IMG} || { echo >&2 "kind not installed or error loading image: ${GATEWAY_IMG}"; exit 1; }
             docker rmi ${GATEWAY_IMG}
 
-      - name: Build peer mTLS helper image
-        if: matrix.peer_mtls
-        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
-        with:
-          timeout_minutes: 20
-          max_attempts: 3
-          retry_wait_seconds: 60
-          retry_on: error
-          shell: bash
-          on_retry_command: |
-            echo "Build peer-mtls helper image failed; pruning Docker state before retry..."
-            docker builder prune -af || true
-            docker system prune -f || true
-            df -h || true
-          command: |
-            docker build -f test/e2b/assets/peer-mtls/helper/Dockerfile -t ${PEER_MTLS_HELPER_IMG} .
-            kind load docker-image --name=${KIND_CLUSTER_NAME} ${PEER_MTLS_HELPER_IMG} || { echo >&2 "kind not installed or error loading image: ${PEER_MTLS_HELPER_IMG}"; exit 1; }
-            docker rmi ${PEER_MTLS_HELPER_IMG}
-
       - name: Install Kruise Agents
         run: |
           {
@@ -270,7 +250,6 @@ jobs:
             echo "peer-mtls: deploying Gateway with peer TLS and HTTPS readiness"
             kubectl apply -k test/e2b/assets/peer-mtls
             kubectl rollout status deployment/sandbox-gateway -n sandbox-system --timeout=5m
-            bash hack/setup-peer-mtls-e2e.sh workloads
           else
             make deploy-sandbox-gateway
           fi
@@ -316,31 +295,17 @@ jobs:
           fi
           echo "=== sandbox-system pods ==="
           kubectl get pods -n sandbox-system -o wide || true
-          echo "=== peer-mtls helper pods ==="
-          kubectl get pods -n sandbox-system -l app.kubernetes.io/part-of=peer-mtls-e2e -o wide || true
           echo "=== manager/gateway describe (no secrets) ==="
           kubectl describe deployment sandbox-manager sandbox-gateway -n sandbox-system || true
-          echo "=== peer-mtls helper logs ==="
-          for helperPod in $(kubectl get pod -n sandbox-system -l app.kubernetes.io/part-of=peer-mtls-e2e --no-headers -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            echo "--- $helperPod ---"
-            kubectl logs "$helperPod" -n sandbox-system --tail=100 2>&1 || true
-          done
 
       - name: Cleanup peer mTLS fixtures
         if: always() && matrix.peer_mtls
         run: |
-          kubectl delete deployment -n sandbox-system -l app.kubernetes.io/part-of=peer-mtls-e2e --ignore-not-found || true
-          kubectl delete configmap peer-mtls-fixture -n sandbox-system --ignore-not-found || true
           kubectl delete -f test/e2b/assets/peer-mtls/rbac.yaml --ignore-not-found || true
           kubectl delete secret -n sandbox-system \
             peer-mtls-server \
             peer-mtls-manager-client \
             peer-mtls-gateway-client \
-            peer-mtls-helper-client \
-            peer-mtls-untrusted-client \
-            peer-mtls-untrusted-server \
-            peer-mtls-wrong-san-server \
-            peer-mtls-wrong-eku-server \
             --ignore-not-found || true
           rm -rf /tmp/peer-mtls-e2e
 

@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -122,6 +123,9 @@ func (o *PeerOutbound) request(ctx context.Context, method, ip, path string, bod
 
 	resp, err := o.client.Do(request)
 	if err != nil {
+		if o.scheme == "https" && isOutboundTLSError(err) {
+			outboundTLSErrors.Inc()
+		}
 		return err
 	}
 	defer func(Body io.ReadCloser) {
@@ -157,4 +161,24 @@ func (o *PeerOutbound) requestWithRetry(ctx context.Context, method, ip, path st
 		return lastErr
 	}
 	return err
+}
+
+func isOutboundTLSError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var (
+		unknownAuth x509.UnknownAuthorityError
+		hostname    x509.HostnameError
+		invalid     x509.CertificateInvalidError
+		verify      *tls.CertificateVerificationError
+		record      tls.RecordHeaderError
+		alert       tls.AlertError
+	)
+	return errors.As(err, &unknownAuth) ||
+		errors.As(err, &hostname) ||
+		errors.As(err, &invalid) ||
+		errors.As(err, &verify) ||
+		errors.As(err, &record) ||
+		errors.As(err, &alert)
 }
