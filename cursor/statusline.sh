@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cursor CLI status line — model, context usage, daily token totals, and billing.
+# Cursor CLI status line — model, git branch, context usage, daily token totals, and billing.
 #
 # Performance notes:
 # - Hot path must stay well under CLI timeoutMs (default 2000ms). New updates kill
@@ -34,6 +34,7 @@ eval "$(printf '%s' "$input" | jq -r '
     "PCT=\(((.context_window.used_percentage // 0) | floor) | sh)",
     "CTX_SIZE=\((.context_window.context_window_size // "") | sh)",
     "SESSION_ID=\((.session_id // "") | sh)",
+    "CWD=\((.cwd // .workspace.current_dir // "") | sh)",
     "TOTAL_OUTPUT_RAW=\((.context_window.total_output_tokens // "") | sh)",
     "USAGE_JSON=\((.context_window.current_usage // null) | tojson | sh)"
   ] | join("\n")
@@ -45,6 +46,7 @@ PARAMS=${PARAMS:-}
 PCT=${PCT:-0}
 CTX_SIZE=${CTX_SIZE:-}
 SESSION_ID=${SESSION_ID:-}
+CWD=${CWD:-}
 TOTAL_OUTPUT_RAW=${TOTAL_OUTPUT_RAW:-}
 USAGE_JSON=${USAGE_JSON:-null}
 [ "$USAGE_JSON" = "null" ] && USAGE_JSON=""
@@ -478,6 +480,13 @@ format_daily_token_right() {
   printf '\033[90m%s\033[0m' "$right"
 }
 
+# Current branch in cwd; empty when missing, not a repo, or detached HEAD.
+current_git_branch() {
+  local dir=$1
+  [ -n "$dir" ] && [ -d "$dir" ] || return
+  git -C "$dir" branch --show-current 2>/dev/null
+}
+
 # --- Billing (never block the render path on network) ---
 
 CACHE_FILE="${HOME}/.cursor/statusline-billing-cache.json"
@@ -634,17 +643,17 @@ fi
 # Daily cumulative tokens (before line 2 render).
 accumulate_daily_tokens "$SESSION_ID" "$USAGE_JSON" "$TOTAL_OUTPUT_RAW" "$NOW" >/dev/null 2>&1 || true
 
-# Line 1: model + params | refreshes in XdYh (right)
+# Line 1: model + params | git branch (right)
 MODEL=$(strip_ctx_size_label "$MODEL")
 LINE1_LEFT=$(printf '\033[36m%s\033[0m' "$MODEL")
 if [ -n "$PARAMS" ] && ! model_includes_params "$MODEL" "$PARAMS"; then
   LINE1_LEFT="$LINE1_LEFT $(printf '\033[36m%s\033[0m' "$(strip_ctx_size_label "$(normalize_param_summary "$PARAMS")")")"
 fi
 
-REFRESH_RIGHT=""
-REFRESH_TEXT=$(format_refresh_in "${BILLING_CYCLE_END:-}" "$NOW")
-[ -n "$REFRESH_TEXT" ] && REFRESH_RIGHT=$(printf '\033[90m%s\033[0m' "$REFRESH_TEXT")
-print_lr "$LINE1_LEFT" "$REFRESH_RIGHT"
+BRANCH_RIGHT=""
+BRANCH=$(current_git_branch "$CWD")
+[ -n "$BRANCH" ] && BRANCH_RIGHT=$(printf '\033[90m%s\033[0m' "$BRANCH")
+print_lr "$LINE1_LEFT" "$BRANCH_RIGHT"
 
 # Line 2: context usage bar | In / Cache / Out / Tot (daily cumulative)
 BAR_WIDTH=12
@@ -673,7 +682,13 @@ fi
 TOK_RIGHT=$(format_daily_token_right "$CUM_IN" "$CUM_CACHE_READ" "$CUM_CACHE_WRITE" "$CUM_OUT")
 print_lr "$CTX_LEFT" "$TOK_RIGHT"
 
-# Line 3: billing — Cursor Models on left, Other Models pool on right
+REFRESH_TEXT=$(format_refresh_in "${BILLING_CYCLE_END:-}" "$NOW")
+REFRESH_LEFT=""
+[ -n "$REFRESH_TEXT" ] && REFRESH_LEFT=$(printf '\033[90m%s\033[0m' "$REFRESH_TEXT")
+
+# Line 3: refreshes in XdYh on the left, billing on the right
+CURSOR_BILLING=""
+OTHER_BILLING=""
 if [ -n "${SPEND:-}" ] && [ -n "${LIMIT:-}" ]; then
   # Rough estimate (Other Models has no separate dollar fields):
   #   Other Models ≈ apiPercentUsed% × plan limit
@@ -690,45 +705,52 @@ if [ -n "${SPEND:-}" ] && [ -n "${LIMIT:-}" ]; then
       ;;
   esac
 
-  BILLING_LEFT=""
   case "${AUTO_PCT:-}" in
     ''|null)
       if [ -n "${AUTO_SPEND:-}" ] && [ "$AUTO_SPEND" != "null" ] && [ -n "${AUTO_LIMIT:-}" ] && [ "$AUTO_LIMIT" != "null" ]; then
-        BILLING_LEFT=$(printf '\033[90mCursor Models\033[0m %s/%s' "$(format_usd_cents "$AUTO_SPEND")" "$(format_usd_cents "$AUTO_LIMIT")")
+        CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s/%s' "$(format_usd_cents "$AUTO_SPEND")" "$(format_usd_cents "$AUTO_LIMIT")")
       fi
       ;;
     *)
-      BILLING_LEFT=$(printf '\033[90mCursor Models\033[0m %s' "$(format_pct "$AUTO_PCT")")
+      CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s' "$(format_pct "$AUTO_PCT")")
       if [ -n "$FP_EST_CENTS" ]; then
-        BILLING_LEFT="$BILLING_LEFT $(printf '\033[90m≈\033[0m') $(format_usd_cents "$FP_EST_CENTS")"
+        CURSOR_BILLING="$CURSOR_BILLING $(printf '\033[90m≈\033[0m') $(format_usd_cents "$FP_EST_CENTS")"
       fi
       ;;
   esac
 
-  BILLING_RIGHT=""
   case "${API_PCT:-}" in
     ''|null)
       if [ -n "${API_SPEND:-}" ] && [ "$API_SPEND" != "null" ] && [ -n "${API_LIMIT:-}" ] && [ "$API_LIMIT" != "null" ]; then
         case "$API_LIMIT" in *[!0-9]*) ;; *)
           if (( API_LIMIT > 0 )); then
-            BILLING_RIGHT=$(printf '\033[90mOther Models\033[0m %s/%s' "$(format_usd_cents "$API_SPEND")" "$(format_usd_cents "$API_LIMIT")")
+            OTHER_BILLING=$(printf '\033[90mOther\033[0m %s/%s' "$(format_usd_cents "$API_SPEND")" "$(format_usd_cents "$API_LIMIT")")
           fi
           ;;
         esac
       fi
-      if [ -z "$BILLING_RIGHT" ]; then
-        BILLING_RIGHT="$(format_usd_cents "$SPEND") / $(format_usd_cents "$LIMIT")"
+      if [ -z "$OTHER_BILLING" ]; then
+        OTHER_BILLING="$(format_usd_cents "$SPEND") / $(format_usd_cents "$LIMIT")"
       fi
       ;;
     *)
-      BILLING_RIGHT=$(printf '\033[90mOther Models\033[0m %s' "$(format_pct "$API_PCT")")
+      OTHER_BILLING=$(printf '\033[90mOther\033[0m %s' "$(format_pct "$API_PCT")")
       if [ -n "$API_EST_CENTS" ]; then
-        BILLING_RIGHT="$BILLING_RIGHT $(printf '\033[90m≈\033[0m') $(format_usd_cents "$API_EST_CENTS") / $(format_usd_cents "$LIMIT")"
+        OTHER_BILLING="$OTHER_BILLING $(printf '\033[90m≈\033[0m') $(format_usd_cents "$API_EST_CENTS") / $(format_usd_cents "$LIMIT")"
       else
-        BILLING_RIGHT="$BILLING_RIGHT / $(format_usd_cents "$LIMIT")"
+        OTHER_BILLING="$OTHER_BILLING / $(format_usd_cents "$LIMIT")"
       fi
       ;;
   esac
+fi
 
-  print_lr "$BILLING_LEFT" "$BILLING_RIGHT"
+BILLING=""
+if [ -n "$CURSOR_BILLING" ] && [ -n "$OTHER_BILLING" ]; then
+  BILLING="${CURSOR_BILLING} $(printf '\033[90m·\033[0m') ${OTHER_BILLING}"
+else
+  BILLING="${CURSOR_BILLING:-$OTHER_BILLING}"
+fi
+
+if [ -n "$REFRESH_LEFT" ] || [ -n "$BILLING" ]; then
+  print_lr "$REFRESH_LEFT" "$BILLING"
 fi
