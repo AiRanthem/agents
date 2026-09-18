@@ -77,8 +77,11 @@ func loadSecretConfig(reader ctrlclient.Reader, ref string) (secretConfig, error
 	ctx, cancel := context.WithTimeout(context.Background(), secretConfigLoadTimeout)
 	defer cancel()
 	secretRef, err := utils.ParseSecretRef(ref)
-	if err != nil || ref == "" {
+	if ref == "" {
 		return secretConfig{}, fmt.Errorf("--secret-config must be in namespace/name form, got %q", ref)
+	}
+	if err != nil {
+		return secretConfig{}, fmt.Errorf("--secret-config: %w", err)
 	}
 	secret := &corev1.Secret{}
 	if err := reader.Get(ctx, secretRef, secret); err != nil {
