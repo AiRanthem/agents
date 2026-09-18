@@ -51,11 +51,11 @@ func TestWebhookActivatePersistsSessionClaim(t *testing.T) {
 		template      = "openai-session"
 		namespace     = "default"
 		envID         = "env_123"
-		remoteURL     = "wss://api.openai.com/v1/beta/agents/sessions/sess_integration_1"
+		remoteURL     = "wss://api.openai.com/v1/agents/sessions/sess_integration_1"
 	)
 
 	openaiAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/beta/agents/sessions/"+sessionID {
+		if r.URL.Path != "/v1/agents/sessions/"+sessionID || r.Header.Get("OpenAI-Beta") != "agents=v1" {
 			http.NotFound(w, r)
 			return
 		}

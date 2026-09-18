@@ -133,6 +133,8 @@ type Cache struct {
 //
 //	Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy
 //	(TrafficPolicy only when its CRD is installed)
+//	SandboxClaim uses the same namespace scope without the sandbox label
+//	selector, because session claims do not carry those labels.
 //
 // B — System namespace resources (requires opts.SystemNamespace to be set):
 //
@@ -171,6 +173,14 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 	byObject[&agentsv1alpha1.SandboxSet{}] = customObjConfig
 	byObject[&agentsv1alpha1.Checkpoint{}] = customObjConfig
 	byObject[&agentsv1alpha1.SandboxTemplate{}] = customObjConfig
+	// Session claims are named lookups, not sandbox-label members.
+	claimObjConfig := ctrlcache.ByObject{}
+	if opts.SandboxNamespace != "" {
+		claimObjConfig.Namespaces = map[string]ctrlcache.Config{
+			opts.SandboxNamespace: {},
+		}
+	}
+	byObject[&agentsv1alpha1.SandboxClaim{}] = claimObjConfig
 	// The TrafficPolicy CRD is optional: skip its informer when the CRD is
 	// not discovered on the API server, otherwise the cache fails to resolve
 	// the GVK and crashes the process at startup.

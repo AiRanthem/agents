@@ -27,7 +27,11 @@ import (
 	"time"
 )
 
-const defaultOpenAIBaseURL = "https://api.openai.com"
+const (
+	defaultOpenAIBaseURL = "https://api.openai.com"
+	sessionRetrievePath  = "/v1/agents/sessions/"
+	openaiAgentsBeta     = "agents=v1"
+)
 
 var errSessionNotFound = errors.New("openai session not found")
 
@@ -73,11 +77,12 @@ func newSessionClient(baseURL, apiKey string, timeout time.Duration) *sessionCli
 }
 
 func (c *sessionClient) Retrieve(ctx context.Context, sessionID string) (*agentSession, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/beta/agents/sessions/"+sessionID, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+sessionRetrievePath+sessionID, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("OpenAI-Beta", openaiAgentsBeta)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

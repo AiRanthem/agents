@@ -1,0 +1,44 @@
+#!/bin/sh
+# PostClaim init command. Writes the non-secret environment connection file
+# atomically. Same content is idempotent; different content is rejected so an
+# already-bound executor is not silently retargeted.
+# Usage: connect-openai <environment-id> <remote-url>
+set -eu
+
+if [ "$#" -ne 2 ]; then
+	echo "usage: connect-openai <environment-id> <remote-url>" >&2
+	exit 2
+fi
+
+environment_id=$1
+remote_url=$2
+if [ -z "$environment_id" ] || [ -z "$remote_url" ]; then
+	echo "environment-id and remote-url are required" >&2
+	exit 2
+fi
+newline='
+'
+case "$environment_id$remote_url" in
+*"$newline"*)
+	echo "connection fields must not contain newlines" >&2
+	exit 2
+	;;
+esac
+
+file=${OPENAI_CONNECTION_FILE:-/workspace/.openai-env/connection}
+dir=$(dirname "$file")
+expected=$(printf 'environment_id=%s\nremote_url=%s\n' "$environment_id" "$remote_url")
+
+if [ -f "$file" ]; then
+	current=$(cat "$file")
+	if [ "$current" = "$expected" ]; then
+		exit 0
+	fi
+	echo "connection file already exists with different content" >&2
+	exit 1
+fi
+
+mkdir -p "$dir"
+tmp=$file.tmp.$$
+printf '%s' "$expected" >"$tmp"
+mv "$tmp" "$file"

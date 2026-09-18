@@ -1353,6 +1353,7 @@ func countTypesByCategory(byObject map[ctrlclient.Object]ctrlcache.ByObject) (cu
 		reflect.TypeOf(&agentsv1alpha1.SandboxSet{}),
 		reflect.TypeOf(&agentsv1alpha1.Checkpoint{}),
 		reflect.TypeOf(&agentsv1alpha1.SandboxTemplate{}),
+		reflect.TypeOf(&agentsv1alpha1.SandboxClaim{}),
 		reflect.TypeOf(&agentsv1alpha1.TrafficPolicy{}),
 	}
 	systemTypes := []reflect.Type{
@@ -1404,7 +1405,7 @@ func TestBuildCacheConfig(t *testing.T) {
 			name:            "empty options - only custom resources and PersistentVolume",
 			opts:            config.SandboxManagerOptions{},
 			wantErr:         false,
-			wantCustom:      5, // Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy
+			wantCustom:      6, // Sandbox, SandboxSet, Checkpoint, SandboxTemplate, SandboxClaim, TrafficPolicy
 			wantSystem:      0,
 			wantPV:          1,
 			wantCustomNs:    "",
@@ -1417,7 +1418,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SandboxNamespace: "team-a",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      0,
 			wantPV:          1,
 			wantCustomNs:    "team-a",
@@ -1430,7 +1431,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SandboxLabelSelector: "env=prod",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      0,
 			wantPV:          1,
 			wantCustomNs:    "",
@@ -1450,7 +1451,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SandboxLabelSelector: "env=prod",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      0,
 			wantPV:          1,
 			wantCustomNs:    "team-a",
@@ -1463,7 +1464,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SystemNamespace: "sandbox-system",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      2, // Secret + ConfigMap
 			wantPV:          1,
 			wantCustomNs:    "",
@@ -1477,7 +1478,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SandboxNamespace: "team-a",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      2,
 			wantPV:          1,
 			wantCustomNs:    "team-a",
@@ -1492,7 +1493,7 @@ func TestBuildCacheConfig(t *testing.T) {
 				SandboxLabelSelector: "env=prod",
 			},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      2,
 			wantPV:          1,
 			wantCustomNs:    "team-a",
@@ -1503,7 +1504,7 @@ func TestBuildCacheConfig(t *testing.T) {
 			name:            "complex valid label selector",
 			opts:            config.SandboxManagerOptions{SandboxLabelSelector: "app=myapp,version in (v1,v2),!deprecated"},
 			wantErr:         false,
-			wantCustom:      5,
+			wantCustom:      6,
 			wantSystem:      0,
 			wantPV:          1,
 			wantCustomLabel: "app=myapp", // Partial match - selector is normalized internally
@@ -1569,6 +1570,19 @@ func TestBuildCacheConfig(t *testing.T) {
 				// so per-object config should be nil.
 				assert.Nil(t, cfg.UnsafeDisableDeepCopy, "UnsafeDisableDeepCopy should be nil for %T (handled by DefaultUnsafeDisableDeepCopy)", obj)
 			}
+
+			claimCfg, claimOk := getConfigByType(byObject, &agentsv1alpha1.SandboxClaim{})
+			require.True(t, claimOk, "missing config for SandboxClaim")
+			if tt.wantCustomNs != "" {
+				require.NotNil(t, claimCfg.Namespaces, "Namespaces should be set for SandboxClaim")
+				assert.Len(t, claimCfg.Namespaces, 1)
+				_, nsOk := claimCfg.Namespaces[tt.wantCustomNs]
+				assert.True(t, nsOk, "namespace %s should be in Namespaces for SandboxClaim", tt.wantCustomNs)
+			} else {
+				assert.Nil(t, claimCfg.Namespaces, "Namespaces should be nil for SandboxClaim when no SandboxNamespace")
+			}
+			assert.Nil(t, claimCfg.Label, "SandboxClaim must not use the sandbox label selector")
+			assert.Nil(t, claimCfg.UnsafeDisableDeepCopy, "UnsafeDisableDeepCopy should be nil for SandboxClaim")
 
 			// Verify system namespace resources (Secret, ConfigMap)
 			if tt.wantSystemNs != "" {
