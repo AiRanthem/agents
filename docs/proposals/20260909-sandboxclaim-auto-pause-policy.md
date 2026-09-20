@@ -117,7 +117,7 @@ Writing a policy from a Claim does not enable the feature gate. When the gate is
 
 ### Compatibility and Upgrade
 
-- Existing Claims that do not write these two fields behave exactly as they do now
+- Existing Claims that do not write these fields behave exactly as they do now
 - A claimed Sandbox for which the caller did not overlay a policy continues to use the pool policy
 - After recycle, a pool member is restored to the SandboxSet's `probes` and `autoPausePolicy`, and `pauseTime` is cleared; the next Claim applies its new overlay
 - E2B HTTP is unchanged; E2B continues to use a bool plus relative seconds, while Claim uses absolute times
@@ -191,6 +191,10 @@ Costs of merging and mitigations:
 - **The final probe set can be inferred only after merging:** the Claim alone does not show it. Current validation errors and `InvalidClaimSpec` events report only the specific validation error or limit, not the complete merged result; moreover, “referencing a pool probe” is already a runtime dependency (if a probe name referenced by the Claim policy is absent from the merged set of the current SandboxSet and Claim, the Claim completes with `InvalidClaimSpec`; retries apply only when a candidate is incompatible)
 - **Same-name replacement can obscure a pool probe:** current Claim validation does not emit a separate event identifying overridden pool probe names; overrides must be inferred from the Claim and pool configurations
 - **Accumulated merges can exceed the limit:** both Claim-level and candidate-level checks enforce `MaxItems=16` on the merged result
+
+### Operational Switch
+
+This capability is controlled by the `SandboxClaimProbeOverlay` feature gate (enabled by default). When the gate is disabled, a Claim carrying `spec.probes` does not claim any Sandbox and completes with reason `FeatureGateDisabled` (no retry); Claims without probes and the `autoPausePolicy` overlay are unaffected. The switch takes effect at each claim attempt: a Claim that has not finished claiming (including an in-flight one) stops at its next reconcile and completes with `FeatureGateDisabled`; probes already merged onto claimed Sandboxes are not rolled back.
 
 ### Closed Open Questions
 

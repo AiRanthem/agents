@@ -777,6 +777,188 @@ func TestCommonControl_EnsureClaimClaiming_ResourceResizeFeatureGatePrecondition
 	})
 }
 
+func TestCommonControl_EnsureClaimClaiming_ProbeOverlayFeatureGatePrecondition(t *testing.T) {
+	true_ := true
+
+	makeAvailableSandbox := func(name, sbsName string, sbsUID types.UID) *agentsv1alpha1.Sandbox {
+		return &agentsv1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         "default",
+				CreationTimestamp: metav1.Now(),
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion: agentsv1alpha1.GroupVersion.String(),
+						Kind:       "SandboxSet",
+						Name:       sbsName,
+						UID:        sbsUID,
+						Controller: &true_,
+					},
+				},
+				Labels: map[string]string{
+					agentsv1alpha1.LabelSandboxTemplate: sbsName,
+				},
+			},
+			Status: agentsv1alpha1.SandboxStatus{
+				Phase: agentsv1alpha1.SandboxRunning,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(agentsv1alpha1.SandboxConditionReady),
+						Status: metav1.ConditionTrue,
+					},
+				},
+				PodInfo: agentsv1alpha1.PodInfo{
+					PodIP: "10.0.0.1",
+				},
+			},
+		}
+	}
+
+	makeClaim := func(name string, withProbes bool) *agentsv1alpha1.SandboxClaim {
+		claim := &agentsv1alpha1.SandboxClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "default",
+				UID:       types.UID(name + "-uid"),
+			},
+			Spec: agentsv1alpha1.SandboxClaimSpec{
+				TemplateName:    "probe-gate-template",
+				Replicas:        int32Ptr(1),
+				SkipInitRuntime: true, // skip InitRuntime to avoid connecting to pod
+			},
+		}
+		if withProbes {
+			claim.Spec.Probes = []agentsv1alpha1.Probe{{
+				Name: "Active",
+				Probe: corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						Exec: &corev1.ExecAction{Command: []string{"true"}},
+					},
+				},
+			}}
+		}
+		return claim
+	}
+
+	makeSandboxSet := func() *agentsv1alpha1.SandboxSet {
+		return &agentsv1alpha1.SandboxSet{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "probe-gate-template",
+				Namespace: "default",
+				UID:       types.UID("probe-gate-sbs-uid"),
+			},
+		}
+	}
+
+	setGate := func(t *testing.T, enabled bool) {
+		t.Helper()
+		require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+			string(features.SandboxClaimProbeOverlayGate): enabled,
+		}))
+		t.Cleanup(func() {
+			_ = utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+				string(features.SandboxClaimProbeOverlayGate): true,
+			})
+		})
+	}
+
+	t.Run("feature gate disabled transitions claim to completed without claiming", func(t *testing.T) {
+		setGate(t, false)
+		sbs := makeSandboxSet()
+		sbx := makeAvailableSandbox("probe-gate-sbx", sbs.Name, sbs.UID)
+		claim := makeClaim("probe-gate-disabled", true)
+		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
+		require.NoError(t, err)
+
+		newStatus := &agentsv1alpha1.SandboxClaimStatus{
+			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
+		}
+		fakeRecorder := record.NewFakeRecorder(10)
+		control := NewCommonControl(fakeClient, fakeRecorder, cache, nil)
+
+		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
+			Claim:      claim,
+			SandboxSet: sbs,
+			NewStatus:  newStatus,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, NoRequeue(), strategy)
+		assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseCompleted, newStatus.Phase)
+		assert.Contains(t, newStatus.Message, "disabled by feature gate")
+		assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
+		cond := GetClaimCondition(newStatus, string(agentsv1alpha1.SandboxClaimConditionCompleted))
+		require.NotNil(t, cond)
+		assert.Equal(t, "FeatureGateDisabled", cond.Reason)
+
+		select {
+		case event := <-fakeRecorder.Events:
+			assert.Contains(t, event, "Warning FeatureGateDisabled")
+		default:
+			t.Fatalf("expected event containing %q", "Warning FeatureGateDisabled")
+		}
+
+		// The available sandbox must stay unclaimed: the gate short-circuits
+		// before any pick happens.
+		got := &agentsv1alpha1.Sandbox{}
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Namespace: sbx.Namespace, Name: sbx.Name}, got))
+		assert.NotEqual(t, agentsv1alpha1.True, got.Labels[agentsv1alpha1.LabelSandboxIsClaimed])
+	})
+
+	t.Run("feature gate disabled does not affect claims without probes", func(t *testing.T) {
+		setGate(t, false)
+		sbs := makeSandboxSet()
+		sbx := makeAvailableSandbox("probe-gate-plain-sbx", sbs.Name, sbs.UID)
+		claim := makeClaim("probe-gate-plain", false)
+		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
+		require.NoError(t, err)
+
+		newStatus := &agentsv1alpha1.SandboxClaimStatus{
+			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
+		}
+		control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
+
+		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
+			Claim:      claim,
+			SandboxSet: sbs,
+			NewStatus:  newStatus,
+		})
+		require.NoError(t, err)
+		assert.True(t, strategy.Immediate, "Expected RequeueImmediately when claimed > 0")
+		assert.Equal(t, int32(1), newStatus.ClaimedReplicas)
+	})
+
+	t.Run("feature gate enabled lets claims with probes claim normally", func(t *testing.T) {
+		setGate(t, true)
+		sbs := makeSandboxSet()
+		sbx := makeAvailableSandbox("probe-gate-enabled-sbx", sbs.Name, sbs.UID)
+		claim := makeClaim("probe-gate-enabled", true)
+		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
+		require.NoError(t, err)
+
+		newStatus := &agentsv1alpha1.SandboxClaimStatus{
+			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
+		}
+		control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
+
+		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
+			Claim:      claim,
+			SandboxSet: sbs,
+			NewStatus:  newStatus,
+		})
+		require.NoError(t, err)
+		assert.True(t, strategy.Immediate, "Expected RequeueImmediately when claimed > 0")
+		assert.Equal(t, int32(1), newStatus.ClaimedReplicas)
+
+		// The gate stays open and the claim's probes must be merged onto the
+		// claimed sandbox, not block the claiming flow.
+		got := &agentsv1alpha1.Sandbox{}
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Namespace: sbx.Namespace, Name: sbx.Name}, got))
+		assert.Equal(t, agentsv1alpha1.True, got.Labels[agentsv1alpha1.LabelSandboxIsClaimed])
+		require.Len(t, got.Spec.Probes, 1)
+		assert.Equal(t, "Active", got.Spec.Probes[0].Name)
+	})
+}
+
 func TestCommonControl_EnsureClaimClaiming_ResizeIncompatibleSandboxRetries(t *testing.T) {
 	claim := &agentsv1alpha1.SandboxClaim{
 		ObjectMeta: metav1.ObjectMeta{

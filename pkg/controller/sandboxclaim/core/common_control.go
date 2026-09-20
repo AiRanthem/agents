@@ -137,6 +137,13 @@ func (c *commonControl) EnsureClaimClaiming(ctx context.Context, args ClaimArgs)
 	}
 
 	// Step 7: Precondition
+	if len(claim.Spec.Probes) > 0 && !utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbeOverlayGate) {
+		msg := fmt.Sprintf("claim probe overlay is disabled by feature gate %s", features.SandboxClaimProbeOverlayGate)
+		log.Info(msg)
+		c.recorder.Event(claim, "Warning", "FeatureGateDisabled", msg)
+		TransitionToCompleted(args.NewStatus, "FeatureGateDisabled", msg)
+		return NoRequeue(), nil
+	}
 	if claim.Spec.InplaceUpdate != nil {
 		if res := claim.Spec.InplaceUpdate.Resources; res != nil && (len(res.Requests) > 0 || len(res.Limits) > 0) {
 			if !utilfeature.DefaultFeatureGate.Enabled(features.SandboxInPlaceResourceResizeGate) {
