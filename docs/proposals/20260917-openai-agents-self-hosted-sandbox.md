@@ -1,7 +1,7 @@
 ---
 title: OpenAI Agents API 自托管沙箱接入设计
 creation-date: 2026-09-17
-last-updated: 2026-09-18
+last-updated: 2026-09-20
 status: implementable
 ---
 
@@ -11,7 +11,7 @@ status: implementable
 
 sandbox-manager 增加与 E2B 平行的 OpenAI Agents APIController，共享 Manager，并将健康检查与已有 metrics 移入独立管理入口。业务继续直接使用 OpenAI；本系统只负责自托管沙箱的供应、初始化、休眠唤醒与清理。
 
-Manager 以 ActivateSession、DeactivateSession、CloseSession 提供通用生命周期。Session 由带 Key 的幂等领取记录表达，不增加独立 Binding 存储；sandboxcr 用确定名称的 SandboxClaim 承载任务，以 Claim status 记录完整交付，不增加 Sandbox 交付标记。PostClaim 纳入完整领取尝试，确认失败后清理重试，结果未持久化时在原实例幂等恢复；所有尝试共用原领取预算。Webhook 不等待 executor 连接；已持久化的终态领取失败也返回 2xx，但不自动重新领取。
+Manager 以 ActivateSession、DeactivateSession、CloseSession 提供通用生命周期。`created` 与有效的环境连接请求均可在回查后触发激活和首次供应。Session 由带 Key 的幂等领取记录表达，不增加独立 Binding 存储；sandboxcr 用确定名称的 SandboxClaim 承载任务，以 Claim status 记录完整交付，不增加 Sandbox 交付标记。PostClaim 固定以 root 执行并纳入完整领取尝试，确认失败后清理重试，结果未持久化时在原实例幂等恢复；所有尝试共用原领取预算。Webhook 不等待 executor 连接；已持久化的终态领取失败也返回 2xx，但不自动重新领取。
 
 首版以 scale expectation 约束缓存延迟下的重复领取，以接口前限流保护入口，主节点轮询只兜底清理。模板负责跨暂停恢复和容器重启保留协议文件及工作区，executor 沿用模板的容器重启策略重连，不将 Resume 扩展为 PostClaim 重放。设计接受休眠与新 Turn 的竞态，以及切主极端窗口下不保证严格唯一的边界，不引入额外任务系统或恢复平台。
 
@@ -19,7 +19,7 @@ Manager 以 ActivateSession、DeactivateSession、CloseSession 提供通用生�
 
 OpenAI Agents API 承担模型推理、工具调度和对话管理，工具执行仍然需要计算环境。使用自托管环境的业务希望由自己的基础设施控制镜像、计算资源和隔离策略，同时继续通过 OpenAI 提交输入、获取结果。
 
-sandbox-manager 已提供沙箱领取、连接、超时管理和释放能力。本设计为其增加与 E2B 平行的 OpenAI Agents API 接入，将 OpenAI 的环境连接请求转换成通用的 Sandbox Session 生命周期操作。业务应用不必另外领取沙箱；sandbox-manager 也不代理业务应用与 OpenAI 之间的对话请求。
+sandbox-manager 已提供沙箱领取、连接、超时管理和释放能力。本设计为其增加与 E2B 平行的 OpenAI Agents API 接入，将 OpenAI 的 Session 创建事件与环境连接请求转换成通用的 Sandbox Session 生命周期操作。创建时即可提前供应，减少首次输入时等待环境的时间。业务应用不必另外领取沙箱；sandbox-manager 也不代理业务应用与 OpenAI 之间的对话请求。
 
 接入的主要问题不是转发工具调用，而是跨服务的生命周期协调：Webhook 可能重复，领取可能跨越进程重启，缓存不能立即观察到写入，OpenAI Session 删除也不等于沙箱被回收。因此，需要明确持久化接受、完整交付、环境连接三个不同的时点，以及重试、并发和清理分别由谁负责。
 
@@ -92,17 +92,22 @@ ShutdownTime 不是连续工具执行心跳。若一次长 Turn 在整个保留�
 
 APIController 在解码前验证原始 Webhook body 的签名，解析事件，并将其映射到 Manager 操作。固定模板、凭证作用域与允许处理的自托管环境由部署确定，Webhook 不能指定任意模板或获得额外权限。经验证但不属于本部署处理范围的事件返回 2xx 忽略，不能据此操作本地资源。
 
-本接入的所有 OpenAI Session 回查，包括连接请求、失败事件和周期清理，都必须使用 `GET /v1/agents/sessions/{session_id}`，并同时发送 `OpenAI-Beta: agents=v1` 与 `Authorization: Bearer ...`。SDK 中的 `beta.agents` 是客户端命名空间，不属于 HTTP 路径。实现可以使用官方 SDK 或遵循同一 wire contract 的直接 HTTP 客户端；本设计不绑定具体客户端。
+本接入的所有 OpenAI Session 回查，包括创建事件、连接请求、失败事件和周期清理，都必须使用 `GET /v1/agents/sessions/{session_id}`，并同时发送 `OpenAI-Beta: agents=v1` 与 `Authorization: Bearer ...`。SDK 中的 `beta.agents` 是客户端命名空间，不属于 HTTP 路径。实现可以使用官方 SDK 或遵循同一 wire contract 的直接 HTTP 客户端；本设计不绑定具体客户端。
 
 | 事件 | 行为 |
 | --- | --- |
+| `agent.session.created` | 回查当前 Session，确认属于本部署的自托管范围且未失败或删除，取得完整初始化信息后 Activate，允许创建；无需等待 `environment_connection` |
 | `agent.session.action_required`，`required_action.type=environment_connection` | 查询并确认连接请求仍有效，取得初始化信息，Activate，允许创建 |
 | `agent.session.in_progress` | Activate 已有 Session，禁止创建；清空 PauseTime、刷新 ShutdownTime |
 | `agent.session.idle` | 不回查 Session，直接 Deactivate；有可操作实例时设置延迟休眠并刷新 ShutdownTime，领取中且确认尚无 Sandbox 时无操作成功 |
 | `agent.session.failed` | 查询并确认 Session 仍失败后 Close |
-| 其余事件，包括 `agent.session.created` 或 `function_call` 类型的 action-required | 首版忽略，不用于预热供应 |
+| 其余事件，包括 `function_call` 类型的 action-required | 首版忽略 |
 
-`in_progress` 表示执行已经开始，不能作为首次提供离线环境的唯一触发点；首次供应由 `environment_connection` 请求驱动。`idle` 也不等于某次 Turn 成功完成，它可能出现在环境连接恢复后、等待输入真正开始前。事件含义见 [Session Webhook 协议](https://developers.openai.com/api/docs/guides/agents-api/sessions/webhooks)。
+`created` 的连接信息优先使用回查得到的 `session.environment.id` 与 `session.environment.remote_url`；缺失字段允许由同一 OpenAI Session 的已验签事件中的 `data.environment_id` 与 `data.connect.remote_url` 补齐。两处同时提供的值必须一致，冲突或补齐后仍不完整时返回错误，不创建不完整领取任务，也不报告接受成功。事件载荷不能替代当前状态与部署作用域的回查；查询失败时沿用查询错误语义，不能仅凭事件直接创建。回查确认 Session 已失败或删除时不激活，已有本地资源按既有 Close 规则清理。
+
+`created` 与 `environment_connection` 使用相同的 Session Key。两者重复或并发到达时，按 first-wins 加入同一领取任务；不能先持久化缺少初始化信息的 Claim，再等待后续事件补全 PostClaim。已交付实例仍按已有激活规则唤醒和续期，不重放 PostClaim。提前供应意味着尚未提交输入的 OpenAI Session 也可能占用 Sandbox；没有后续生命周期事件时，仍由初始 ShutdownTime 兜底。
+
+`in_progress` 表示执行已经开始，不能作为首次提供离线环境的唯一触发点；首次供应可由 `created` 或仍有效的 `environment_connection` 请求驱动。`idle` 也不等于某次 Turn 成功完成，它可能出现在环境连接恢复后、等待输入真正开始前。事件含义及 created 连接字段见 [Session Webhook 协议](https://developers.openai.com/api/docs/guides/agents-api/sessions/webhooks)。
 
 Webhook 的响应边界不是一律等待 Sandbox Ready，也不是一律看到旧 Key 就成功：
 
@@ -118,7 +123,7 @@ Webhook 的响应边界不是一律等待 Sandbox Ready，也不是一律看到�
 
 Infra 和 Manager 对终态失败、禁止创建时 Key 不存在、已交付结果丢失仍返回可识别的原错误，由 APIController 映射成 2xx，表示本次有效投递已处理、无需继续重投；错误原因保留在已有状态或诊断信息中。它不证明环境可用，不清除 OpenAI 的连接请求，也不等价于让 OpenAI Session 成功。若查询确认 OpenAI Session 本身已失败，仍按 Close 规则清理，不能因 Claim 失败而跳过。
 
-上述 2xx 规则以确认事实为前提；缓存尚未观察到对象、查询失败等不确定情况不能当作不存在，仍返回可重试错误。只有按上述 wire contract、使用本部署正确作用域凭证发起的查询，且响应可归因于目标 OpenAI Session 不存在时，才能映射为 Session 不存在。错误路径、缺少必需 Header、通用路由或网关 404，以及不能识别为 OpenAI Session not-found 的响应，都是查询失败；处理连接请求时不得据此返回 2xx 忽略事件。未持久化的创建失败、创建所需模板不存在等前置错误继续返回对应错误，不能伪装成任务已接受。`environment_connection` 在 Key 不存在时仍按原规则允许首次创建，不适用“禁止创建时忽略”的分支。
+上述 2xx 规则以确认事实为前提；缓存尚未观察到对象、查询失败等不确定情况不能当作不存在，仍返回可重试错误。只有按上述 wire contract、使用本部署正确作用域凭证发起的查询，且响应可归因于目标 OpenAI Session 不存在时，才能映射为 Session 不存在。错误路径、缺少必需 Header、通用路由或网关 404，以及不能识别为 OpenAI Session not-found 的响应，都是查询失败；处理创建事件或连接请求时不得据此返回 2xx 忽略事件。未持久化的创建失败、创建所需模板不存在等前置错误继续返回对应错误，不能伪装成任务已接受。符合上述条件的 `created` 与 `environment_connection` 在 Key 不存在时允许首次创建，不适用“禁止创建时忽略”的分支。
 
 APIController 可以启动后台调用并等待其接受通知，以便及时返回。后台调用继承请求的日志上下文，但不受 HTTP handler 返回后的取消影响；其等待仍受组件生命周期与操作超时约束。进程内 goroutine 只是调用方和等待者，持久化任务才是领取工作的所有者。已接受任务不依赖该 goroutine 存活，也不需要 Manager 主节点重新投递。
 
@@ -173,6 +178,10 @@ Close 对当前 Claim 身份发起带 UID 保护的后台级联删除，先删�
 PostClaim 是领取任务中的声明式后置动作，首版支持有限时长的 run command。它是 **Try 的最后一步**：基础就绪、运行时初始化等前置步骤完成后才执行；命令确实退出且退出码为零，完整 Try 才成功。成功启动命令或 RPC 未报错都不能单独作为完成依据。
 
 PostClaim 与领取参数一起持久化，发生在 Accepted 之前。CR 委托模式由 Controller 执行，并由 Controller 提供运行时 TLS 配置，不依赖发起请求的 sandbox-manager 进程存活。命令时限必须落在原 Claim 剩余总预算内；本次不增加独立执行队列或 worker 隔离，也不新增 E2B 的公开 PostClaim 接口。
+
+首版 PostClaim 命令固定以 Sandbox 内的 `root` 用户执行，与现有 lifecycle hook 的执行身份一致。实际执行方必须在每次 runtime 命令请求中显式传入 `AuthUser="root"`，包括首次执行、领取重试、Controller 重启后的恢复与幂等重放；身份不依赖发起请求的上下文。AuthUser 表示 runtime 解析的 OS 用户，不是 Claim owner、OpenAI 用户或 API Key，也不替代 runtime access token 与 TLS 校验。本次不增加执行用户配置或持久化字段，不修改通用 runtime 客户端的默认身份。模板必须支持 root 执行初始化命令；用户解析失败或权限不足时按 PostClaim 失败处理，不省略身份或切换用户重试。
+
+<!-- known-limit: PostClaim runs only as root in the first version. Templates requiring a non-root identity need an explicit persisted execution-user contract before support can be added. -->
 
 PostClaim 确认失败按一次完整 Try 失败处理：清理本次 Sandbox，再由现有 Reconcile Loop 在剩余总预算内从头尝试。执行结果未知不等于确认失败，按下面的原实例恢复规则处理。PostClaim 不拥有独立重试状态机或重试预算。清理失败或结果仍不明确时，不能跳过旧实例并不断领取新实例；已取消的领取等待也不能使必要清理直接被取消。
 
