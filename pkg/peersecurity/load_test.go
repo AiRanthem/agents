@@ -497,6 +497,10 @@ func mustCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, []byte) {
 }
 
 func mustIssued(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, usage x509.ExtKeyUsage, dnsNames []string, extraUsage ...x509.ExtKeyUsage) ([]byte, []byte) {
+	return mustIssuedNamed(t, ca, caKey, usage, "peer-test", dnsNames, extraUsage...)
+}
+
+func mustIssuedNamed(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, usage x509.ExtKeyUsage, cn string, dnsNames []string, extraUsage ...x509.ExtKeyUsage) ([]byte, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
@@ -504,7 +508,7 @@ func mustIssued(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, usa
 	require.NoError(t, err)
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "peer-test"},
+		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

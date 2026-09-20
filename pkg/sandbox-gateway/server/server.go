@@ -62,6 +62,7 @@ const (
 	envPeerTLSClientCAKey   = "PEER_TLS_CLIENT_CA_KEY"
 	envPeerTLSClientCertKey = "PEER_TLS_CLIENT_CERT_KEY"
 	envPeerTLSClientKeyKey  = "PEER_TLS_CLIENT_KEY_KEY"
+	envPeerAllowedClientCNs = "PEER_ALLOWED_CLIENT_CNS"
 )
 
 // ReadinessCheck reports whether the gateway is ready to receive traffic.
@@ -122,12 +123,14 @@ func normalizePort(port int, defaultPort int) int {
 // They mirror the sandbox-manager flags and keep the same defaults and
 // enablement rules: a feature is enabled only by its own Secret reference, data
 // keys are read only while that reference is set, and both TLS references empty
-// keeps plaintext peer HTTP. The server variables are the credentials this
-// process presents on inbound peer HTTPS, and PEER_TLS_SERVER_CA_KEY is the
-// trust anchor verifying inbound peer client certificates. The client variables
-// are this process's own runtime client bundle used for outbound peer HTTPS
-// (never the sandbox manager's bundle), and PEER_TLS_CLIENT_CA_KEY is the trust
-// anchor verifying outbound peer server certificates.
+// keeps plaintext peer HTTP. PEER_ALLOWED_CLIENT_CNS is an optional inbound
+// identity restriction and requires the TLS pair when non-empty. The server
+// variables are the credentials this process presents on inbound peer HTTPS,
+// and PEER_TLS_SERVER_CA_KEY is the trust anchor verifying inbound peer client
+// certificates. The client variables are this process's own runtime client
+// bundle used for outbound peer HTTPS (never the sandbox manager's bundle),
+// and PEER_TLS_CLIENT_CA_KEY is the trust anchor verifying outbound peer
+// server certificates.
 func peerSecurityFromEnv() (peersecurity.Inputs, error) {
 	keySecret, err := utils.ParseSecretRef(os.Getenv(envPeerKeySecret))
 	if err != nil {
@@ -152,6 +155,7 @@ func peerSecurityFromEnv() (peersecurity.Inputs, error) {
 		ClientCADataKey:   os.Getenv(envPeerTLSClientCAKey),
 		ClientCertDataKey: os.Getenv(envPeerTLSClientCertKey),
 		ClientKeyDataKey:  os.Getenv(envPeerTLSClientKeyKey),
+		AllowedClientCNs:  os.Getenv(envPeerAllowedClientCNs),
 	}
 	in.ApplyDefaults()
 	if err := in.Validate(); err != nil {

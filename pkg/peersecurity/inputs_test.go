@@ -75,6 +75,33 @@ func TestValidateTLSPair(t *testing.T) {
 			},
 			wantErr: "incomplete",
 		},
+		{
+			name: "allowlist without TLS",
+			inputs: Inputs{
+				AllowedClientCNs: "sandbox-manager",
+			},
+			wantErr: "peer allowed client CNs require peer TLS",
+		},
+		{
+			name: "comma-only allowlist without TLS",
+			inputs: Inputs{
+				AllowedClientCNs: ",",
+			},
+			wantErr: "peer allowed client CNs require peer TLS",
+		},
+		{
+			name: "allowlist with both TLS refs",
+			inputs: Inputs{
+				TLSServerSecret:  types.NamespacedName{Namespace: "ns", Name: "server"},
+				TLSClientSecret:  types.NamespacedName{Namespace: "ns", Name: "client"},
+				AllowedClientCNs: "sandbox-manager",
+			},
+		},
+		{
+			name:    "empty allowlist stays plaintext",
+			inputs:  Inputs{AllowedClientCNs: ""},
+			wantErr: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -127,6 +154,16 @@ func TestConfigured(t *testing.T) {
 		{
 			name:   "TLS client",
 			inputs: Inputs{TLSClientSecret: types.NamespacedName{Namespace: "ns", Name: "client"}},
+			want:   true,
+		},
+		{
+			name:   "allowlist",
+			inputs: Inputs{AllowedClientCNs: "sandbox-manager"},
+			want:   true,
+		},
+		{
+			name:   "comma-only allowlist",
+			inputs: Inputs{AllowedClientCNs: ","},
 			want:   true,
 		},
 	}

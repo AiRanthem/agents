@@ -158,6 +158,7 @@ func main() {
 	var peerTLSClientCAKey string
 	var peerTLSClientCertKey string
 	var peerTLSClientKeyKey string
+	var peerAllowedClientCNs string
 	var trafficTokenValidity time.Duration
 	var trafficTokenMinValidity time.Duration
 	var trafficTokenMaxValidity time.Duration
@@ -241,6 +242,9 @@ func main() {
 		"Secret data key for the client certificate presented on outbound peer HTTPS. Empty uses \"client.crt\".")
 	pflag.StringVar(&peerTLSClientKeyKey, "peer-tls-client-key-key", "",
 		"Secret data key for the private key of the client certificate. Empty uses \"client.key\".")
+	pflag.StringVar(&peerAllowedClientCNs, "peer-allowed-client-cns", "",
+		"Comma-separated client identities allowed on inbound peer mTLS, matched against the client certificate CN or its DNS SANs. "+
+			"Empty allows any client trusted by the peer server CA. A non-empty value requires --peer-tls-server-secret and --peer-tls-client-secret.")
 	pflag.DurationVar(&trafficTokenValidity, "traffic-access-token-validity", config.DefaultTrafficAccessTokenValidity,
 		"Validity requested from the identity provider for traffic access tokens. "+
 			"Must be between --traffic-access-token-min-validity and --traffic-access-token-max-validity.")
@@ -319,6 +323,7 @@ func main() {
 		ClientCADataKey:   peerTLSClientCAKey,
 		ClientCertDataKey: peerTLSClientCertKey,
 		ClientKeyDataKey:  peerTLSClientKeyKey,
+		AllowedClientCNs:  peerAllowedClientCNs,
 	}
 	peerSecurity.ApplyDefaults()
 	if err := peerSecurity.Validate(); err != nil {

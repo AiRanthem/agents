@@ -31,7 +31,9 @@ import (
 // Load applies defaults, validates inputs, and reads the configured peer
 // Secrets through a live uncached reader. Empty Inputs reads nothing and
 // returns plaintext materials. TLS ClientAuth on the returned server config is
-// left unset so each process can apply its receive policy.
+// left unset so each process can apply its receive policy. A non-empty
+// AllowedClientCNs installs VerifyConnection on the server config so inbound
+// identity authorization also covers resumed sessions.
 func Load(ctx context.Context, reader ctrlclient.Reader, inputs Inputs) (secretKey []byte, serverTLS, clientTLS *tls.Config, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
@@ -73,6 +75,7 @@ func Load(ctx context.Context, reader ctrlclient.Reader, inputs Inputs) (secretK
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		attachClientIdentityAllowlist(serverTLS, inputs.AllowedClientCNs)
 	}
 	return secretKey, serverTLS, clientTLS, nil
 }

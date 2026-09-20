@@ -312,23 +312,41 @@ func TestStartPeerTLSWrapsListenerThenFailsMemberlist(t *testing.T) {
 	t.Setenv(envPeerTLSServerSecret, "ns/server")
 	t.Setenv(envPeerTLSClientSecret, "ns/client")
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := lis.Addr().(*net.TCPAddr).Port
-	require.NoError(t, lis.Close())
+	tests := []struct {
+		name              string
+		allowedClientCNs  string
+		wantIdentityCheck bool
+	}{
+		{name: "empty allowlist"},
+		{
+			name:              "configured allowlist",
+			allowedClientCNs:  "sandbox-manager,sandbox-ingress-gateway",
+			wantIdentityCheck: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(envPeerAllowedClientCNs, tt.allowedClientCNs)
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			port := lis.Addr().(*net.TCPAddr).Port
+			require.NoError(t, lis.Close())
 
-	server := NewServer(
-		fake.NewClientBuilder().WithObjects(serverSecret, clientSecret).Build(),
-		registry.NewRegistry(),
-		port,
-	)
-	t.Cleanup(func() { _ = server.Stop(context.Background()) })
-	err = server.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "peer namespace is empty")
-	require.NotNil(t, server.peerServerTLS)
-	assert.Equal(t, tls.VerifyClientCertIfGiven, server.peerServerTLS.ClientAuth)
-	require.NotNil(t, server.peerOutbound)
+			server := NewServer(
+				fake.NewClientBuilder().WithObjects(serverSecret, clientSecret).Build(),
+				registry.NewRegistry(),
+				port,
+			)
+			t.Cleanup(func() { _ = server.Stop(context.Background()) })
+			err = server.Start(context.Background())
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "peer namespace is empty")
+			require.NotNil(t, server.peerServerTLS)
+			assert.Equal(t, tls.VerifyClientCertIfGiven, server.peerServerTLS.ClientAuth)
+			assert.Equal(t, tt.wantIdentityCheck, server.peerServerTLS.VerifyConnection != nil)
+			require.NotNil(t, server.peerOutbound)
+		})
+	}
 }
 
 func mustPeerTLSSecrets(t *testing.T) (*corev1.Secret, *corev1.Secret) {
@@ -403,12 +421,13 @@ func newTestGatewayServer(checks ...ReadinessCheck) (*Server, *registry.Registry
 
 func TestPeerSecurityFromEnv(t *testing.T) {
 	tests := []struct {
-		name            string
-		env             map[string]string
-		wantErr         string
-		wantKeySecret   types.NamespacedName
-		wantCertDataKey string
-		wantKeyDataKey  string
+		name                 string
+		env                  map[string]string
+		wantErr              string
+		wantKeySecret        types.NamespacedName
+		wantCertDataKey      string
+		wantKeyDataKey       string
+		wantAllowedClientCNs string
 	}{
 		{name: "empty is plaintext", wantCertDataKey: "client.crt", wantKeyDataKey: "client.key"},
 		{
@@ -423,6 +442,33 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 			env:             map[string]string{envPeerTLSClientCertKey: "tls.crt", envPeerTLSClientKeyKey: "tls.key"},
 			wantCertDataKey: "tls.crt",
 			wantKeyDataKey:  "tls.key",
+		},
+		{
+			name: "allowlist with TLS refs",
+			env: map[string]string{
+				envPeerTLSServerSecret:  "ns/server",
+				envPeerTLSClientSecret:  "ns/client",
+				envPeerAllowedClientCNs: "sandbox-manager,sandbox-ingress-gateway",
+			},
+			wantCertDataKey:      "client.crt",
+			wantKeyDataKey:       "client.key",
+			wantAllowedClientCNs: "sandbox-manager,sandbox-ingress-gateway",
+		},
+		{
+			name:            "empty allowlist stays plaintext",
+			env:             map[string]string{envPeerAllowedClientCNs: ""},
+			wantCertDataKey: "client.crt",
+			wantKeyDataKey:  "client.key",
+		},
+		{
+			name:    "allowlist without TLS",
+			env:     map[string]string{envPeerAllowedClientCNs: "sandbox-manager"},
+			wantErr: "invalid peer security environment variables: peer allowed client CNs require peer TLS",
+		},
+		{
+			name:    "comma-only allowlist without TLS",
+			env:     map[string]string{envPeerAllowedClientCNs: ","},
+			wantErr: "invalid peer security environment variables: peer allowed client CNs require peer TLS",
 		},
 		{
 			name:    "one TLS ref",
@@ -447,6 +493,7 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 				envPeerTLSServerSecret, envPeerTLSClientSecret,
 				envPeerTLSServerCAKey, envPeerTLSServerCertKey, envPeerTLSServerKeyKey,
 				envPeerTLSClientCAKey, envPeerTLSClientCertKey, envPeerTLSClientKeyKey,
+				envPeerAllowedClientCNs,
 			} {
 				t.Setenv(key, "")
 			}
@@ -464,6 +511,7 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 			assert.Equal(t, "key", in.PeerKeyDataKey)
 			assert.Equal(t, tt.wantCertDataKey, in.ClientCertDataKey)
 			assert.Equal(t, tt.wantKeyDataKey, in.ClientKeyDataKey)
+			assert.Equal(t, tt.wantAllowedClientCNs, in.AllowedClientCNs)
 		})
 	}
 }

@@ -297,6 +297,23 @@ func TestApplyPeerSecurity(t *testing.T) {
 				peerSecurity: keyInputs,
 			},
 		},
+		{
+			name: "allowlist without a peer client",
+			manager: &SandboxManager{
+				proxy:        proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true}),
+				peerSecurity: peersecurity.Inputs{AllowedClientCNs: "sandbox-manager"},
+			},
+			wantErr: "peer security is configured but the peer client is not",
+		},
+		{
+			name: "allowlist requires TLS",
+			manager: &SandboxManager{
+				proxy:        proxy.NewServer(config.SandboxManagerOptions{DisableEnvoyExtProc: true}),
+				peerReader:   keyReader,
+				peerSecurity: peersecurity.Inputs{AllowedClientCNs: "sandbox-manager"},
+			},
+			wantErr: "peer allowed client CNs require peer TLS",
+		},
 	}
 
 	for _, tt := range tests {

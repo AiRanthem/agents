@@ -65,6 +65,10 @@ type Inputs struct {
 	ClientCADataKey   string
 	ClientCertDataKey string
 	ClientKeyDataKey  string
+	// AllowedClientCNs is the raw comma-separated inbound client-identity
+	// allow-list. Empty leaves authorization at the trusted CA. A non-empty
+	// value requires both TLS secret references.
+	AllowedClientCNs string
 }
 
 // ApplyDefaults fills empty data-key fields. The client certificate and key
@@ -92,6 +96,9 @@ func (in Inputs) Validate() error {
 	if (in.TLSServerSecret.Name == "") != (in.TLSClientSecret.Name == "") {
 		return fmt.Errorf("peer TLS requires both server and client secret references, or neither")
 	}
+	if in.AllowedClientCNs != "" && in.TLSServerSecret.Name == "" {
+		return fmt.Errorf("peer allowed client CNs require peer TLS")
+	}
 	if err := requireCompleteRef("peer key secret", in.PeerKeySecret); err != nil {
 		return err
 	}
@@ -102,7 +109,7 @@ func (in Inputs) Validate() error {
 }
 
 func (in Inputs) Configured() bool {
-	return in.PeerKeySecret.Name != "" || in.TLSServerSecret.Name != "" || in.TLSClientSecret.Name != ""
+	return in.PeerKeySecret.Name != "" || in.TLSServerSecret.Name != "" || in.TLSClientSecret.Name != "" || in.AllowedClientCNs != ""
 }
 
 func requireCompleteRef(what string, ref types.NamespacedName) error {
