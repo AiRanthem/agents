@@ -10,6 +10,8 @@
 # Billing cache (~/.cursor/statusline-billing-cache.json):
 # - API at most once per CACHE_TTL seconds (120s); otherwise cache is reused.
 # - Refresh always runs detached in the background.
+# - Cursor/Other dollar spends are derived from totalSpend and the three
+#   percent fields. includedSpend is capped at the plan limit and is not a split.
 #
 # Daily token cache (~/.cursor/statusline-daily-tokens.json):
 # - Best-effort cumulative In / Cache / Out / Tot for the current billing day.
@@ -491,9 +493,8 @@ current_git_branch() {
 
 CACHE_FILE="${HOME}/.cursor/statusline-billing-cache.json"
 CACHE_TTL=120
-SPEND=""
-REMAINING=""
-LIMIT=""
+TOTAL_SPEND=""
+TOTAL_PCT=""
 AUTO_PCT=""
 API_PCT=""
 AUTO_SPEND=""
@@ -514,9 +515,8 @@ read_billing_cache() {
     else
       [
         "BILLING_UPDATED_AT=\((.updated_at // 0) | tostring | @sh)",
-        "SPEND=\(.spend | shempty)",
-        "REMAINING=\(.remaining | shempty)",
-        "LIMIT=\(.limit | shempty)",
+        "TOTAL_SPEND=\(.total_spend | shempty)",
+        "TOTAL_PCT=\(.total_pct | shempty)",
         "AUTO_PCT=\(.auto_pct | shempty)",
         "API_PCT=\(.api_pct | shempty)",
         "AUTO_SPEND=\(.auto_spend | shempty)",
@@ -529,13 +529,49 @@ read_billing_cache() {
   ' "$CACHE_FILE" 2>/dev/null) || return 1
   [ -n "$assigns" ] || return 1
   eval "$assigns"
-  [ -n "$SPEND" ] && [ -n "$LIMIT" ]
+  [ -n "$TOTAL_SPEND" ] || [ -n "$AUTO_PCT" ] || [ -n "$API_PCT" ]
 }
 
 cache_is_fresh() {
   [ -n "${BILLING_UPDATED_AT:-}" ] || return 1
   case "$BILLING_UPDATED_AT" in ''|*[!0-9]*) return 1 ;; esac
+  # Old caches lack total_spend; without it Cursor/Other dollars cannot be split.
+  [ -n "${TOTAL_SPEND:-}" ] || return 1
   (( NOW - BILLING_UPDATED_AT < CACHE_TTL ))
+}
+
+# Cursor and Other percentages are of separate pools, not of planUsage.limit.
+# Combined pool S = totalSpend × 100 / totalPercentUsed
+# Other pool     = (100×totalSpend − autoPercentUsed×S) / (apiPercentUsed − autoPercentUsed)
+# Cursor pool    = S − Other pool
+# spend          = percent × pool / 100
+derive_bucket_spends() {
+  local auto_pct=${1:-} api_pct=${2:-} total_pct=${3:-} total_spend=${4:-}
+  DERIVED_AUTO_SPEND=""
+  DERIVED_API_SPEND=""
+  DERIVED_AUTO_LIMIT=""
+  DERIVED_API_LIMIT=""
+
+  case "$auto_pct" in ''|null) auto_pct=0 ;; esac
+  case "$api_pct" in ''|null) api_pct=0 ;; esac
+  case "$total_pct" in ''|null) return 0 ;; esac
+  case "$total_spend" in ''|null) return 0 ;; esac
+
+  local assigns
+  assigns=$(awk -v auto_pct="$auto_pct" -v api_pct="$api_pct" -v total_pct="$total_pct" -v total_spend="$total_spend" 'BEGIN {
+    if (total_pct <= 0 || total_spend < 0) exit 1
+    if (auto_pct == api_pct) exit 1
+    S = total_spend * 100.0 / total_pct
+    y = (100.0 * total_spend - auto_pct * S) / (api_pct - auto_pct)
+    x = S - y
+    if (x < 0 || y < 0) exit 1
+    aspend = auto_pct * x / 100.0
+    ispend = api_pct * y / 100.0
+    if (aspend < 0 || ispend < 0) exit 1
+    printf "DERIVED_AUTO_SPEND=%.0f\nDERIVED_API_SPEND=%.0f\nDERIVED_AUTO_LIMIT=%.0f\nDERIVED_API_LIMIT=%.0f\n", aspend, ispend, x, y
+  }' 2>/dev/null) || return 0
+  [ -n "$assigns" ] || return 0
+  eval "$assigns"
 }
 
 # Detached refresh: survives parent AbortController kill (new session).
@@ -552,13 +588,13 @@ refresh_billing_main() {
     -d '{}' \
     "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage" 2>/dev/null) || return 1
 
-  local spend remaining limit auto_pct api_pct auto_spend api_spend auto_limit api_limit cycle_end
+  local included total_spend total_pct auto_pct api_pct auto_spend api_spend auto_limit api_limit cycle_end
   eval "$(printf '%s' "$resp" | jq -r '
     def sh: tostring | @sh;
     [
-      "spend=\((.planUsage.includedSpend // "") | sh)",
-      "remaining=\((.planUsage.remaining // "") | sh)",
-      "limit=\((.planUsage.limit // "") | sh)",
+      "included=\((.planUsage.includedSpend // "") | sh)",
+      "total_spend=\((.planUsage.totalSpend // .planUsage.includedSpend // "") | sh)",
+      "total_pct=\((.planUsage.totalPercentUsed // "") | sh)",
       "auto_pct=\((.planUsage.autoPercentUsed // "") | sh)",
       "api_pct=\((.planUsage.apiPercentUsed // "") | sh)",
       "auto_spend=\((.planUsage.autoSpend // "") | sh)",
@@ -569,7 +605,19 @@ refresh_billing_main() {
     ] | join("\n")
   ' 2>/dev/null)" || return 1
 
-  [ -n "$spend" ] && [ -n "$limit" ] || return 1
+  [ -n "${total_spend:-$included}" ] || return 1
+
+  # API does not currently emit autoSpend/apiSpend. Derive them from the
+  # percent fields and unclamped totalSpend; includedSpend freezes at limit.
+  if [ -z "${auto_spend:-}" ] || [ -z "${api_spend:-}" ]; then
+    derive_bucket_spends "${auto_pct}" "${api_pct}" "${total_pct}" "${total_spend:-$included}"
+    if [ -n "${DERIVED_AUTO_SPEND:-}" ]; then
+      auto_spend=$DERIVED_AUTO_SPEND
+      api_spend=$DERIVED_API_SPEND
+      [ -n "${auto_limit:-}" ] || auto_limit=$DERIVED_AUTO_LIMIT
+      [ -n "${api_limit:-}" ] || api_limit=$DERIVED_API_LIMIT
+    fi
+  fi
 
   local now
   now=$(date +%s)
@@ -577,9 +625,8 @@ refresh_billing_main() {
   local tmp="${CACHE_FILE}.tmp.$$"
   jq -n \
     --argjson updated_at "$now" \
-    --argjson spend "$spend" \
-    --argjson remaining "${remaining:-0}" \
-    --argjson limit "$limit" \
+    --arg total_spend "${total_spend:-$included}" \
+    --arg total_pct "${total_pct}" \
     --arg auto_pct "${auto_pct}" \
     --arg api_pct "${api_pct}" \
     --arg auto_spend "${auto_spend}" \
@@ -589,9 +636,8 @@ refresh_billing_main() {
     --arg billing_cycle_end "${cycle_end}" \
     '{
       updated_at: $updated_at,
-      spend: $spend,
-      remaining: $remaining,
-      limit: $limit,
+      total_spend: (if $total_spend == "" then null else ($total_spend | tonumber) end),
+      total_pct: (if $total_pct == "" then null else ($total_pct | tonumber) end),
       auto_pct: (if $auto_pct == "" then null else ($auto_pct | tonumber) end),
       api_pct: (if $api_pct == "" then null else ($api_pct | tonumber) end),
       auto_spend: (if $auto_spend == "" then null else ($auto_spend | tonumber) end),
@@ -689,60 +735,53 @@ REFRESH_LEFT=""
 # Line 3: refreshes in XdYh on the left, billing on the right
 CURSOR_BILLING=""
 OTHER_BILLING=""
-if [ -n "${SPEND:-}" ] && [ -n "${LIMIT:-}" ]; then
-  # Rough estimate (Other Models has no separate dollar fields):
-  #   Other Models ≈ apiPercentUsed% × plan limit
-  #   Cursor Models ≈ includedSpend − Other Models estimate
-  API_EST_CENTS=""
-  FP_EST_CENTS=""
-  case "${API_PCT:-}" in
-    ''|null) ;;
-    *)
-      if (( LIMIT > 0 )); then
-        API_EST_CENTS=$(awk -v pct="$API_PCT" -v lim="$LIMIT" 'BEGIN { printf "%.0f", pct * lim / 100 }')
-        FP_EST_CENTS=$(awk -v spend="$SPEND" -v api="$API_EST_CENTS" 'BEGIN { v = spend - api; if (v < 0) v = 0; printf "%.0f", v }')
-      fi
-      ;;
-  esac
-
-  case "${AUTO_PCT:-}" in
-    ''|null)
-      if [ -n "${AUTO_SPEND:-}" ] && [ "$AUTO_SPEND" != "null" ] && [ -n "${AUTO_LIMIT:-}" ] && [ "$AUTO_LIMIT" != "null" ]; then
-        CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s/%s' "$(format_usd_cents "$AUTO_SPEND")" "$(format_usd_cents "$AUTO_LIMIT")")
-      fi
-      ;;
-    *)
-      CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s' "$(format_pct "$AUTO_PCT")")
-      if [ -n "$FP_EST_CENTS" ]; then
-        CURSOR_BILLING="$CURSOR_BILLING $(printf '\033[90m≈\033[0m') $(format_usd_cents "$FP_EST_CENTS")"
-      fi
-      ;;
-  esac
-
-  case "${API_PCT:-}" in
-    ''|null)
-      if [ -n "${API_SPEND:-}" ] && [ "$API_SPEND" != "null" ] && [ -n "${API_LIMIT:-}" ] && [ "$API_LIMIT" != "null" ]; then
-        case "$API_LIMIT" in *[!0-9]*) ;; *)
-          if (( API_LIMIT > 0 )); then
-            OTHER_BILLING=$(printf '\033[90mOther\033[0m %s/%s' "$(format_usd_cents "$API_SPEND")" "$(format_usd_cents "$API_LIMIT")")
-          fi
-          ;;
-        esac
-      fi
-      if [ -z "$OTHER_BILLING" ]; then
-        OTHER_BILLING="$(format_usd_cents "$SPEND") / $(format_usd_cents "$LIMIT")"
-      fi
-      ;;
-    *)
-      OTHER_BILLING=$(printf '\033[90mOther\033[0m %s' "$(format_pct "$API_PCT")")
-      if [ -n "$API_EST_CENTS" ]; then
-        OTHER_BILLING="$OTHER_BILLING $(printf '\033[90m≈\033[0m') $(format_usd_cents "$API_EST_CENTS") / $(format_usd_cents "$LIMIT")"
-      else
-        OTHER_BILLING="$OTHER_BILLING / $(format_usd_cents "$LIMIT")"
-      fi
-      ;;
-  esac
+# Split from unclamped totalSpend when the cache has percents but no spends.
+# Do not use includedSpend or planUsage.limit: that pair is the included
+# allowance, not the Cursor/Other dollar pools.
+if [ -z "${AUTO_SPEND:-}" ] || [ "$AUTO_SPEND" = "null" ] || [ -z "${API_SPEND:-}" ] || [ "$API_SPEND" = "null" ]; then
+  derive_bucket_spends "${AUTO_PCT}" "${API_PCT}" "${TOTAL_PCT}" "${TOTAL_SPEND}"
+  if [ -n "${DERIVED_AUTO_SPEND:-}" ]; then
+    [ -n "${AUTO_SPEND:-}" ] && [ "$AUTO_SPEND" != "null" ] || AUTO_SPEND=$DERIVED_AUTO_SPEND
+    [ -n "${API_SPEND:-}" ] && [ "$API_SPEND" != "null" ] || API_SPEND=$DERIVED_API_SPEND
+    [ -n "${AUTO_LIMIT:-}" ] && [ "$AUTO_LIMIT" != "null" ] || AUTO_LIMIT=$DERIVED_AUTO_LIMIT
+    [ -n "${API_LIMIT:-}" ] && [ "$API_LIMIT" != "null" ] || API_LIMIT=$DERIVED_API_LIMIT
+  fi
 fi
+
+case "${AUTO_PCT:-}" in
+  ''|null)
+    if [ -n "${AUTO_SPEND:-}" ] && [ "$AUTO_SPEND" != "null" ] && [ -n "${AUTO_LIMIT:-}" ] && [ "$AUTO_LIMIT" != "null" ]; then
+      CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s/%s' "$(format_usd_cents "$AUTO_SPEND")" "$(format_usd_cents "$AUTO_LIMIT")")
+    fi
+    ;;
+  *)
+    CURSOR_BILLING=$(printf '\033[90mCursor\033[0m %s' "$(format_pct "$AUTO_PCT")")
+    CURSOR_USD=$(format_usd_cents "${AUTO_SPEND:-}")
+    if [ -n "$CURSOR_USD" ]; then
+      CURSOR_BILLING="$CURSOR_BILLING $(printf '\033[90m≈\033[0m') $CURSOR_USD"
+    fi
+    ;;
+esac
+
+case "${API_PCT:-}" in
+  ''|null)
+    if [ -n "${API_SPEND:-}" ] && [ "$API_SPEND" != "null" ] && [ -n "${API_LIMIT:-}" ] && [ "$API_LIMIT" != "null" ]; then
+      case "$API_LIMIT" in *[!0-9]*) ;; *)
+        if (( API_LIMIT > 0 )); then
+          OTHER_BILLING=$(printf '\033[90mOther\033[0m %s/%s' "$(format_usd_cents "$API_SPEND")" "$(format_usd_cents "$API_LIMIT")")
+        fi
+        ;;
+      esac
+    fi
+    ;;
+  *)
+    OTHER_BILLING=$(printf '\033[90mOther\033[0m %s' "$(format_pct "$API_PCT")")
+    OTHER_USD=$(format_usd_cents "${API_SPEND:-}")
+    if [ -n "$OTHER_USD" ]; then
+      OTHER_BILLING="$OTHER_BILLING $(printf '\033[90m≈\033[0m') $OTHER_USD"
+    fi
+    ;;
+esac
 
 BILLING=""
 if [ -n "$CURSOR_BILLING" ] && [ -n "$OTHER_BILLING" ]; then
