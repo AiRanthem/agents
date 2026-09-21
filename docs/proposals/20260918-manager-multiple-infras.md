@@ -2,118 +2,154 @@
 
 ## 摘要
 
-本设计让同一 SandboxManager 在构建时注册多个 Infra，并显式指定唯一默认项。入口默认使用 `sandboxcr`，Substrate 的连接配置不改变默认选择。Manager 通过统一的 `InfraOptions` 选择后端；一次操作始终使用同一后端，返回的 Sandbox 对象保留归属，后续操作沿用该绑定。
+同一 Sandbox Manager 可以注册多个 Infra 实现，并通过 `--default-infra` 指定唯一默认后端。内置 OpenKruise Infra 的公开标识为 `openkruise`，也是参数默认值。连接配置不改变默认选择，一次操作中的资源查找、授权检查和实际执行始终落在同一后端。
 
-E2B 对已有 Sandbox 从 Route 恢复 Infra，再显式传给 Manager，客户端仍可只提供 Sandbox ID。创建、列表、模板及无法从 Sandbox Route 确定归属的快照操作，通过 `x-e2b-kruise-infra` 选择后端，省略时使用默认 Infra；列表不跨后端聚合。内置标识严格为 `sandboxcr`、`substrate`，无效选择或归属冲突均失败，不回退其他后端。
+E2B 对创建、列表及没有源 Sandbox 的资源操作使用 `x-e2b-kruise-infra` 选择后端；省略时选择默认后端。已有 Sandbox 的归属来自 Route，客户端通常只需提供 Sandbox ID。公共 ID 冲突时，管理 API 可在授权后返回候选 Infra，由用户显式选择；Gateway 对已观测到的歧义拒绝流量访问。
 
-Substrate 的公共 Sandbox ID 直接采用服务端返回的完整 Actor `metadata.uid`，不使用 name、namespace 拼接值或短 ID。同一 Actor 在创建、列表、生命周期操作和 Manager 重启恢复后保持同一公共 ID；短 ID 开关仅影响 SandboxCR。
-
-Route 携带 Infra 信息，更新、删除与版本比较按来源隔离，并将信息传递到 Gateway。启用共享 API-key 配额时，任一已注册 Infra 缺少完整配额观测能力即拒绝启动；本次不补齐 Substrate 的该项能力。本次不设计 Gateway 转发、跨 Infra 公共 ID 唯一性机制或旧 Route 兼容，保持现有授权与 Route 可见性边界，不据此宣称具备完整上线条件。
+Route 保留现有数据字段和共用的 Sandbox CR 转换逻辑，增加 Infra 归属；资源记录、删除水位、内部查询和版本比较按来源隔离。所有 Infra 都必须提供起到顺序号作用的 `resourceVersion`。Manager 统一管理覆盖全部后端的 API-key 配额，并依赖完整的占用观测。本设计不新增 Gateway 转发、路由全量同步或重启恢复机制。
 
 ## 背景
 
-OpenKruise Agents 为调用方提供 Sandbox 的创建、查询、暂停、恢复和释放能力。E2B 兼容 API 负责协议解释与访问控制，Manager 负责与协议和后端无关的业务编排，Infra 负责具体后端上的资源操作。SandboxCR 使用 Kubernetes 资源及其控制器管理 Sandbox；Substrate 则通过自身的控制服务管理执行环境。
+OpenKruise Agents 通过 Sandbox Manager 提供 Sandbox 的创建、查询、暂停、恢复和释放能力。OpenKruise Infra 使用 Sandbox CR 及其控制器管理资源；其他后端实现可以通过相同的 Infra 接口接入 Manager。
 
-单个 Manager 绑定单个 Infra 时，每次请求无需区分资源来自哪个后端。支持多个 Infra 后，仅允许同时注册后端还不够：创建时的资源查找与执行必须落在同一后端，后续操作必须找回原后端，路由更新和删除也不能影响其他后端的同名资源。
+单后端模式中，请求和资源隐含属于同一个 Infra。多个后端并存后，仅允许注册多个实现还不够：创建时查询模板的后端必须与执行创建的后端一致；后续请求必须回到资源原来的后端；不同后端的同名资源不能相互覆盖路由或删除记录；原有 API-key 配额也不能因增加后端而被拆成多份。
 
-E2B 客户端通常通过 Sandbox ID 发起后续请求。E2B 已通过 Manager 读取 Route 中的归属信息来检查访问权限，因此可以复用这份记录恢复 Infra 归属。这样既能向 Manager 显式传递选择，也无需要求客户端在每次 Sandbox 操作中记住后端，更不需要另建一份持久化的 ID 到 Infra 映射。
-
-Substrate 的 Actor name 与 UID 是不同的身份信息。name 由调用方在创建时指定，用于后端资源定位；UID 由 Substrate 服务端分配并持久保存，在同一 Actor 的生命周期内保持不变。将 UID 直接作为公共 Sandbox ID，可以让 Manager 从后端观测恢复原有公共身份，避免仅保存在进程内的另一个 ID 在重启后丢失。
+本设计面向需要在同一管理入口接入不同后端实现的部署者和开发者。默认配置延续使用 OpenKruise 管理 Sandbox 的行为，显式选择则允许调用方访问其他已注册后端。Route 复用现有公共 ID 查询入口，同时表达资源归属，避免新增一份独立的 ID 到 Infra 持久化映射。
 
 ## 设计终态
 
-### 职责与交互边界
+### 职责与范围
 
-依赖方向保持为 API → Manager → Infra。E2B 解释请求头、执行协议层认证与授权、转换请求及错误；Manager 解析中立的 Infra 选择，执行生命周期、准入和配额等业务规则；Infra 提供后端能力与观测信息。E2B 不直接选择后端客户端执行资源操作，Manager 和 Infra 也不解释 HTTP 请求头。
+依赖方向保持为 API → Manager → Infra。API 层解释请求头、执行认证与授权、转换协议模型和错误；Manager 负责后端选择、Sandbox 生命周期编排、准入及配额；Infra 负责具体资源操作和后端观测。API 层不通过取得后端客户端或缓存来执行本次涉及的资源操作，Manager 和 Infra 不解释 HTTP 请求头。
 
-Sandbox 对象代表已经绑定具体 Infra 的操作对象。Route 则记录 Sandbox 的公共 ID、资源身份、状态、目标信息及访问控制信息，并新增 Infra 归属。二者共同使单次操作内的委派和跨请求的归属恢复保持一致。
+所有 Infra 都必须完整实现 Infra 接口。暂不支持的方法仍需实现，并在调用时明确报错；不能伪装成成功、返回另一后端的结果或使请求自动回退。本次不拆分必选与可选能力接口，不新增能力发现或通用插件框架。接口实现不等于所有功能可用；Manager 启动所需的基础依赖，以及启用配额所需的观测能力，仍须通过各自的启动校验。
 
-### 多 Infra 注册与默认选择
+本次支持不同后端实现并存，不支持同一种实现的多个命名实例。内置实现只有 OpenKruise Infra。公开标识与内部代码组织分离：公开名称统一为 `openkruise`，本次不重命名现有实现目录或 Go 包。
 
-SandboxManager 在构建阶段通过 Builder 的 `WithInfra` 注册多个 Infra，并在注册时显式指定该项是否为默认 Infra。注册另一个后端不覆盖已注册的后端。构建完成时必须恰好有一个注册项被指定为默认值；没有默认值或指定多个默认值，均构建失败。默认值不由注册顺序、后端类型或连接配置推导。
+### 注册与默认 Infra
 
-内置 Infra 的公开标识固定为 `sandboxcr` 和 `substrate`，分别表示 SandboxCR 与 Substrate。注册、操作选项、Sandbox 绑定及 Route 使用相同标识，值区分大小写，不做大小写归一化，也不接受 `sandbox-cr`、`kubernetes` 等别名。标识用于稳定表达后端归属，不是地址或凭据；标识合法但对应 Infra 未注册时，仍不能选择它。
+Manager 在构建阶段累积注册 Infra，每个注册项具有稳定、非空的标识。同一标识不能重复注册或覆盖已有实现。标识区分大小写，注册、请求选择、Sandbox 绑定及 Route 归属使用同一值，不自动转换大小写或推导别名。
 
-`sandbox-manager` 入口显式将 `sandboxcr` 注册为默认 Infra；双注册时，`substrate` 是非默认项。`--substrate-addr` 只提供构建 Substrate Infra 所需的连接信息，不承担全局后端切换或默认值选择职责。构建 Substrate Infra 时缺少必要连接信息，构建失败，不能以切换默认值或替换后端消解该错误。入口负责显式组装注册项，本次不新增默认值 flag。
+`sandbox-manager` 通过 `--default-infra` 选择唯一默认 Infra，参数默认值为 `openkruise`。该参数只能引用已注册项，不负责创建或注册后端。显式空值、未注册值、重复注册及注册后端初始化失败均使启动失败，不能静默跳过后端或改用另一个默认值。默认项不由注册顺序、连接地址或后端构建结果推导。
 
-Manager 管控接口通过嵌入操作选项的统一 `InfraOptions` 接收选择；需要选择 Infra 而未指定时，使用构建时的默认值。某次请求的显式选择不改变其他请求的默认值。
+连接配置、Infra 注册和默认选择各自独立。为一个后端提供连接信息，不会自动使其成为默认后端。注册集合和默认项在进程启动时确定，本次不提供运行时热切换或动态注册。
 
-创建、按 ID 查询和列表等 Manager 入口使用相同的选择规则。列表只查询选中的 Infra；省略选择时只查询默认 Infra，不聚合其他后端。这样调用方能够明确控制查询范围，而不会因注册了更多后端就改变原请求的含义。
+共享同一管理与路由范围的 Manager 副本必须使用一致的 Infra 标识及其后端归属；提供同一 API 入口的副本还应采用一致的默认项，避免未指定 Infra 的请求因副本不同而改变含义。
 
-### 单次操作与 Sandbox 归属
+Manager 通过中立的 Infra 操作选项接收选择。尚未绑定资源的操作省略选择时使用默认项；显式选择仅影响当前操作。改变启动默认值不会迁移已有 Sandbox，也不会重写其 Route 归属。
 
-一次操作中的资源查找、能力检查和实际执行必须使用同一 Infra。例如，在 SandboxCR 中找到模板，不能证明 Substrate 可以用该模板创建 Sandbox。模板、快照及其他后端资源的查找必须与实际创建保持同一选择。
+### 请求选择与 Sandbox 绑定
 
-Manager 从选定后端取得 Sandbox 后，返回的对象保留该 Infra 归属。创建结果、列表结果以及从后端观测重建的对象都遵循这一规则；重建时的归属来自提供观测的已注册后端。归属是操作对象身份的一部分，不能由用户可编辑的 metadata 改写。
+E2B 的原生路径与定制路径采用相同选择规则。
 
-暂停、恢复、删除及其他 Sandbox 对象操作沿用绑定的后端。需要额外 Infra 能力的操作，例如后端原生 Fork，也从源 Sandbox 所属的 Infra 取得该能力。如果操作同时携带 Sandbox 对象和显式 Infra 选择，两者必须一致，不能据此把已有对象改派到其他后端。
-
-未知 Infra、归属冲突、选定后端查找失败或不具备所需能力时，操作失败，不转查或改派其他后端。Sandbox ID 保持不透明，不通过解析 ID 来推断 Infra。
-
-默认值用于尚未取得绑定对象时的 Infra 选择。改变构建时的默认值，会改变直接调用 Manager 且省略选择的请求所查询的后端，但不会迁移已有 Sandbox。E2B 对已有 Sandbox 始终显式传入其 Route 中的 Infra，因此不受这种默认值变化影响。
-
-### Substrate Sandbox 的公共身份
-
-Substrate Infra 对外提供的 Sandbox ID 必须等于该 Actor 的完整 `metadata.uid`。不截断 UID，不增加 namespace 或其他前缀，也不以 `metadata.name`、调用方生成的 UUID 或 Manager 生成的短 ID 替代。只有取得有效的服务端 UID 后，才能对外交付该 Sandbox 的公共身份；缺少 UID 的观测不能用 name 补全身份或发布为有效 Route。
-
-Substrate 不使用短 ID。`--enable-short-sandbox-id` 及短 ID 前缀配置仅影响 SandboxCR；双注册时，无论这些配置如何取值，Substrate 的公共 ID 都保持为 Actor UID。身份分配策略仍由 Manager 按后端能力协调，E2B 只透传已确定的公共 ID。
-
-创建结果、列表结果、Sandbox 对象及其 Route 对同一 Actor 使用同一个 UID。暂停、恢复和 Manager 重启后的成功恢复不改变该值。从快照创建新 Actor 时，返回新 Actor 自己的 UID，不沿用源 Sandbox 的 UID。快照中表达源 Sandbox 身份的字段也使用源 Actor UID，不从源 Actor name 推导公共 ID。
-
-公共身份与后端操作地址分别保留。Substrate Infra 仍使用 Actor 的 `atespace + name` 调用后端资源操作，但不能将 name 当作 UID，也不能从公共 UID 反解析出 namespace 或 name。UID 不替代既有 owner、namespace 授权检查；后端归属仍通过 Route 的 Infra 字段恢复。
-
-例如，某 Actor 的 name 为 `worker-a`、UID 为 `u`，则创建响应、列表响应和 Route 的公共 Sandbox ID 均为 `u`。Manager 重启并成功恢复该 Actor 后，客户端继续使用 `u` 查询或恢复 Sandbox；启用 SandboxCR 的短 ID 开关不会改变这一结果。
-
-### E2B 跨请求维护 Infra 归属
-
-对于已有 Sandbox，E2B 从 Route 恢复其 Infra，再通过 `InfraOptions` 显式传给 Manager。客户端只需提供 Sandbox ID，无需提供 Infra 请求头。
-
-对于无法从 Sandbox Route 确定归属的请求，E2B 使用统一扩展请求头 `x-e2b-kruise-infra`。请求头的值遵循上述严格标识规则，并且必须对应已注册的 Infra。只有省略请求头才使用 Manager 的默认值；显式空值、未知值或未注册的 Infra 均导致请求失败，不回退默认值。原生 E2B 路径与定制路径采用相同规则。
-
-| 操作 | Infra 的来源 |
+| 操作 | Infra 来源 |
 | --- | --- |
-| 从模板或快照创建 Sandbox | 扩展请求头；省略时使用默认 Infra |
-| 列出 Sandbox | 扩展请求头；省略时只查询默认 Infra，不聚合 |
-| 查询、删除、暂停、恢复、连接或修改已有 Sandbox | 该 Sandbox 的 Route |
+| 从模板或快照创建 Sandbox | `x-e2b-kruise-infra`；省略时使用默认 Infra |
+| 列出 Sandbox | 请求头；省略时只查询默认 Infra，不跨后端聚合 |
+| 查询、删除、暂停、恢复、连接或修改已有 Sandbox | Sandbox 的 Route；显式请求头只能限定已有候选，不能改写归属 |
 | 为已有 Sandbox 创建快照或执行 Fork | 源 Sandbox 的 Route 及取得的绑定对象 |
-| 模板操作、快照列表及其他没有源 Sandbox Route 的资源操作 | 扩展请求头；省略时使用默认 Infra |
+| 模板操作、快照列表和无源 Sandbox 的快照操作 | 请求头；省略时使用默认 Infra |
+| 存储卷操作 | 请求头；省略时使用默认 Infra，归属检查与操作使用同一选择 |
 
-快照可以在源 Sandbox 删除后继续存在，模板也不一定对应某个已有 Sandbox。因此这些资源的操作不能依赖源 Sandbox 的 Route。调用方必须在关联请求中保持同一 Infra 选择，例如模板构建的发起与结果查询，以及使用快照创建 Sandbox。
+只有省略请求头才使用默认值；显式空值、无效值或未注册值均导致请求失败。没有源 Sandbox 的资源可能具有相同名称或 ID，调用方必须在关联请求中保持同一 Infra 选择。例如，快照可以在源 Sandbox 删除后继续存在，使用快照创建 Sandbox 不能依赖已经消失的源 Route。
 
-处理已有 Sandbox 时，E2B 先认证调用方，再通过 Manager 的既有 Route 查询边界，从同一份记录取得 owner、namespace 和 Infra。E2B 使用这份记录执行现有访问检查，并在本次请求中保持其 Infra 选择，随后显式调用 Manager。Manager 从该 Infra 取得 Sandbox 后，仍执行实际资源的归属与生命周期状态检查。选择到后端不等于获得资源操作权限。
+一次操作只选择一个 Infra。模板或快照查找、参数转换、资源归属检查和实际创建必须围绕同一后端的资源进行；Manager 根据该次操作执行共享配额准入。选中后端不存在资源、不支持操作或执行失败时，保留该失败，不继续尝试其他后端。
 
-如果请求同时携带 Infra 请求头，该值只用于检查是否有效且与 Route 一致。完成调用方的访问检查后，若请求头无效或两者冲突，则拒绝请求，不执行 Sandbox 操作。省略请求头时仍使用 Route 归属，不使用默认 Infra。Route 上的 Infra 缺失、为空、未知或未注册时同样失败，不能借助请求头补全，也不能回退到默认值。用户 metadata 和 Sandbox ID 的形式都不是归属来源。
+Manager 返回的 Sandbox 对象保留 Infra 绑定，包括创建结果、列表结果和从后端观测重建的对象。绑定来自注册关系和可信观测来源，不能由用户 metadata 覆盖。暂停、恢复、删除及其他对象操作沿用绑定；同时提供对象和显式选择时，两者必须一致。后台工作和内部去重也不得将不同 Infra 的资源当作同一对象。
 
-例如，默认 Infra 为 SandboxCR，客户端显式选择 Substrate 创建 Sandbox。后续另一客户端仅提供该 Sandbox ID 发起连接，E2B 从 Route 恢复 Substrate 并显式传给 Manager，取得的对象也绑定 Substrate。同一客户端不带请求头列出 Sandbox 时，列表仍只包含默认 SandboxCR 的结果。
+例如，默认项为 `openkruise`，请求显式选择另一个已注册 Infra 创建 Sandbox。后续不带请求头的 Sandbox 查询仍通过 Route 找回该后端；不带请求头的列表只返回 `openkruise` 的资源。
 
-入口默认 `sandboxcr` 意味着，无头创建、列表、模板及无源 Sandbox Route 的快照请求均选择 SandboxCR，即使已经注册 Substrate 并配置其地址。需要访问 Substrate 的这些请求必须显式携带 `x-e2b-kruise-infra: substrate`。本设计不保留“配置 Substrate 地址便使无头请求选择 Substrate”的行为。例如，两后端存在同名模板时，无头创建只使用 SandboxCR 的模板；只有 Substrate 存在该模板时，请求失败，不转查 Substrate。
+### 授权与公共 ID 冲突
 
-### Route 身份、生命周期与传播
+公共 Sandbox ID 保持不透明，不能通过解析 ID 推断 Infra。OpenKruise Infra 沿用既有公共 ID 和短 ID 行为；其他实现也必须提供在同一次资源交付期间稳定、可从后端观测恢复的公共 ID。默认 Infra 变化或 Manager 重启不得自行改写已有交付的 ID。
 
-Manager 接收每个已注册 Infra 的观测，并在发布 Route 时保留来源归属。Infra 信息必须在 Route 分发过程中保留，直到 Gateway 接收到它。所有 Route 生产者都遵循相同标识契约，包括 Gateway 本地 informer 产生的 SandboxCR 更新和删除，其归属明确为 `sandboxcr`。这是根据已知观测来源写入身份，不是为空字段补默认值。本次只规定信息契约，不设计 Gateway 据此如何解析目标地址、选择传输方式或转发流量。
+ID 生成方应保证共享 Route 查询范围内的公共 ID 唯一。重复处理只提供兜底，不替代防重机制，也不在本次引入统一发号服务。暂停、暂时无 IP 或存在 ID 冲突，都不是丢弃资源归属记录的理由。
 
-每次 Route 更新和删除都必须携带 Infra 身份。路由记录以及阻止旧观测重新生效的删除版本记录，均按 Infra 与其后端资源身份共同隔离；版本只在该范围内比较。因此，一个 Infra 中的同名资源更新或删除，不会覆盖另一个 Infra 的记录，也不会跨后端比较没有共同含义的资源版本。
+E2B 先认证调用方，再通过 Manager 查询 Route 候选并执行现有归属检查。这里的用户身份沿用资源 `owner` 所对应的 API-key 身份，不扩大为同一团队。取得后端 Sandbox 后仍检查实际资源归属和操作所需状态；Infra 选择本身不授予访问权限。
 
-Sandbox 暂停或没有 IP 时，Route 仍须保留 namespace、可用时的 owner 和 Infra 身份。流量是否就绪不决定该 Sandbox 是否仍可被管理。缺失、空或未知 Infra 的 Route 观测无效，不能据此更新或删除有效记录。Route 缺失时，E2B 保持既有 404 查询失败行为，不尝试默认 Infra，也不遍历后端查找。
+| 请求情形 | 管理 API 行为 |
+| --- | --- |
+| 无 Infra 请求头，存在唯一且可访问的 Route | 使用该 Route 的 Infra |
+| 无 Infra 请求头，存在多个不同 Infra 的候选，且全部属于当前调用身份并通过访问检查 | 返回 HTTP `409`、`sandbox_id_conflict` 错误标识及候选 Infra 列表，不执行操作 |
+| 无 Infra 请求头，冲突候选包含其他用户或归属不明的资源 | 返回 `404`，不披露冲突、候选数量或 Infra 列表 |
+| 有合法 Infra 请求头，指定后端内存在唯一且可访问的 Route | 使用该候选并继续正常授权与操作 |
+| 有合法 Infra 请求头，但指定后端无候选或调用方无权访问 | 返回 `404`，不转查其他 Infra |
+| 指定 Infra 内仍存在相同公共 ID 的多个资源 | 拒绝歧义访问；Infra 请求头不能进一步区分资源 |
+| 整条 Route 记录不存在 | 保持查询失败，不使用默认 Infra、不遍历后端查找，也不通过请求头创建归属记录 |
 
-重启恢复和路由分发需要使承接请求的 Manager 能取得这些信息，但本设计不新增“创建后立即在所有副本可见”或“恢复失败后仍可操作已有 Sandbox”的保证。恢复 Infra 也不会补回后端丢失的 owner；当既有恢复行为无法恢复每用户 owner 时，继续采用既有 namespace 授权回退规则，不将 Infra 归属恢复表述为更强的资源所有权保证。
+同一调用身份的跨 Infra 冲突响应保留既有错误字段，并提供以下信息：
 
-### 共享策略与进程级依赖
+```json
+{
+  "code": 409,
+  "error_code": "sandbox_id_conflict",
+  "message": "Specify x-e2b-kruise-infra to select a sandbox.",
+  "infras": ["openkruise", "backend-b"]
+}
+```
 
-多 Infra 注册不改变 Manager 对生命周期、准入和配额策略的所有权。API-key 配额是 Manager 进程级共享策略，覆盖所有已注册 Infra，不按默认值或请求选择拆分。启用共享配额时，准入计数与基于后端观测的校准必须覆盖全部已注册 Infra；任一后端缺少完整配额观测能力，进程就拒绝启动，并明确指出缺少能力的 Infra。不能静默只观察 SandboxCR，也不能让 Substrate 绕过共享配额。
+`backend-b` 仅为已注册扩展实现的示例标识。`error_code` 和 `infras` 表达本扩展的语义，客户端可据此让用户选择后携带请求头重试；本设计不要求已有 E2B SDK 自动处理选择交互。响应不得附带其他用户身份、后端连接信息或路由凭据。
 
-完整观测是安全校准的前提：若准入已经记录 Substrate 的占用，而校准只观察 SandboxCR，仍被 Substrate 使用的占用会被误判为泄漏并释放。因此即使默认值为 `sandboxcr`，也不能忽略已注册的 Substrate。本次不补齐 Substrate 的配额观测能力，包含 Substrate 的注册组合不能启用共享 API-key 配额。将来只有补齐全部参与后端的观测能力，才能支持该组合下的共享配额。
+候选选择、访问检查和本次请求使用的 Infra 必须保持一致，不能在后续处理时重新按默认项选择。因选择歧义或访问检查失败而拒绝的请求，不修改任何候选资源。用户可以通过显式 Infra 查询或删除自己有权访问的冲突资源，但不能把该选择用于修改另一候选的归属。
 
-上述启动约束针对实际启用的 API-key 配额：E2B 启用认证且配置配额 Redis 时适用。认证关闭或未配置配额 Redis 时，沿用配额不执行的既有行为。缺少后端观测能力属于启动配置不成立；运行时 Redis 传输失败继续沿用既有 fail-open 策略，本设计不改变该策略。
+### Route 模型与最小解耦
 
-Manager 的发现、主实例协调和 SandboxCR 短 ID 分配属于进程级职责，其依赖独立于单次 Sandbox 请求选择的 Infra 组装。选择没有 Kubernetes 缓存的 Substrate，不得因此关闭 Manager 的发现能力或切换进程使用的身份分配器；Substrate 操作本身不使用该短 ID 分配器。这里不规定新的协调服务或具体依赖注入方式。
+Route 继续承载公共 Sandbox ID、资源身份、owner、状态、目标信息及访问凭据，并增加 Infra 归属。`Namespace`、`Name`、`UID` 等现有字段仍可使用，它们表示适配后的资源身份，不要求每个后端都存在 Sandbox CR。公共 ID 是交付与查询身份，后端资源身份用于区分对象及其更新，二者不可互相替代。
 
-### 范围、前提与限制
+每个 Infra 通过 `GetRoute()` 提供统一 Route，把后端原生数据转换为共享状态和字段语义。共享 Route 存储不解释各后端原生状态、模板模型或连接配置。OpenKruise Infra 和 Gateway 本地 Sandbox informer 继续共用现有 Sandbox CR 转换逻辑，不各自复制规则，也不为复用转换而增加 Gateway 对 Manager Infra 的依赖。
 
-本设计确定多 Infra 注册、默认选择、Sandbox 对象绑定、E2B 归属恢复与 Route 信息传播的行为。不设计 Gateway 转发，不提供跨 Infra 列表聚合，不新增独立 ID 到 Infra 映射，不反解析 Sandbox ID，也不通过失败后的后端切换实现资源迁移。
+路由资源记录和删除水位以 `(Infra, Namespace, Name)` 隔离，`UID` 区分同名对象的不同资源实例。公共 ID 查询必须能够保留并识别多个资源候选，不能让后到的记录静默接管已有 ID。更新、删除和 ID 变更只影响对应资源；冲突候选删除或不再使用该 ID 后，根据剩余有效记录重新判断歧义。
 
-Substrate 的公共 UID 不包含 namespace 或 Actor name。依赖拆解公共 ID 来定位 Actor 的 Gateway 或其他消费者，需要另行适配这一身份契约；仅完成 Manager 的 UID 交付与 Route 传播，不代表这些消费者已能处理该 ID。本设计不扩展 Gateway 转发范围。
+内部按 ID 读取 Route 时也必须保持来源范围。例如，OpenKruise Infra 读取 Route 版本以判断本地 CR 缓存是否落后时，只能读取对应后端、对应资源的记录，不能将另一 Infra 的版本与本地 CR 比较。
 
-共享同一 Route 查询范围的 Sandbox 公共 ID 必须唯一。E2B 和流量消费者都先按公共 ID 取得 Route，之后才知道 Infra；即使下一步向 Manager 显式传入 Infra，也无法修复前一步的公共 ID 歧义。跨 Infra 的公共 ID 唯一性机制不在本次范围内，适用部署必须自行满足这一前提。
+所有生产者都写入正确归属，包括创建结果、后端观测、Manager 操作后的更新和删除，以及 Gateway 本地 informer 的更新和删除。OpenKruise 的已知观测来源明确写入 `openkruise`；Manager 根据注册来源绑定其他后端的观测，不信任用户可编辑字段中的 Infra 声明。归属信息在现有分发链路中保持完整。
 
-本设计不提供旧 Route 兼容默认值；缺少 Infra 的旧记录按无效归属处理。若部署需要兼容旧组件产生的记录，须另行确定兼容设计，不能据此放宽本合同。本文不宣称任意 ID 产生方或新旧版本组件可以安全混用，也不把已确定的委派机制等同于完整上线条件；适用部署仍须满足公共 ID 唯一性及所需 Route 信息可用的前提。
+### resourceVersion 顺序契约
+
+`resourceVersion` 是所有 Infra 都必须提供的顺序信息，承担 SEQ 的作用，不能因后端不是 Kubernetes 而省略。本次沿用现有规范正整数表示和比较方式，不增加任意版本格式或后端专属比较器。
+
+版本只在同一 Infra、同一资源键内比较。不同 Infra 或不同资源的版本没有比较意义。每个后端必须保证多个观察者对同一变化取得一致的版本，并能正确区分后续变化，包括同名资源删除、重建后的新旧顺序；不能在 Manager 重启后把版本重置为进程内计数，也不能用观察者本机时间代替后端顺序保证。
+
+更新只接受比当前资源记录或删除水位更高的版本；同版本重复更新不改变状态。删除不得撤销更高版本的记录，同版本删除可以结束该版本的资源记录。删除水位保留期间，删除之前的迟到更新不得使资源重新出现。
+
+例如，同一 Infra 中某资源的版本 `12` 已生效，随后收到版本 `11` 的更新或删除，都不能覆盖版本 `12`。另一 Infra 中同名资源的版本 `3` 不受影响。某资源在版本 `13` 删除后，版本 `12` 的迟到更新不能在删除水位仍有效时恢复它。
+
+沿用现有删除水位的有限保留规则：从首次建立起保留十分钟，后续删除可提高水位但不延长保留期。OpenKruise 本地 informer 对无法取得版本的既有 tombstone 处理例外继续限制在原来的可信来源和语义内；其他后端以及跨节点删除不能借此省略版本。
+
+<!-- known-limit: 删除水位过期后不保证拒绝任意久远的重放；若需要该保证，应单独设计持久化水位或带恢复边界的同步协议。 -->
+
+### 旧 Route 兼容与 Gateway 边界
+
+接收旧 Route 时，未填写 Infra 字段或字段为空，统一解释为 `openkruise`。这一兼容归属固定不变，不使用 `--default-infra`。新生产者必须显式写入 Infra；已填写的非空值不能因无法识别而改写为 `openkruise`。Manager 无法使用未注册的 Infra 执行资源操作，也不能通过请求头替缺失的 Route 创建记录。
+
+该兼容行为支持原有单 OpenKruise 后端部署中的版本过渡。启用多个后端前，共享路由范围内的 Manager 和 Gateway 必须都能识别 Infra 归属及来源隔离契约；旧组件忽略 Infra 字段时，不能宣称具备多后端隔离能力。
+
+Gateway 本次仅感知、保留 Infra 类型，并遵守共享 Route 的来源隔离和歧义保护。保留现有目标地址、传输及转发方式，不新增其他后端专属转发机制。已有自动流量唤醒仅作用于 `openkruise`，不得用其他 Infra 的资源身份操作本地 Sandbox CR；其他后端的唤醒机制不在本次范围内。
+
+Gateway 及现有代理入口对已观测到多个有效候选的公共 ID 拒绝流量访问，不根据到达顺序、默认 Infra 或请求头任意选一个，也不向流量调用方披露候选列表。管理 API 的 header 消歧不等于恢复流量访问。等待唤醒等异步操作后继续服务时，也不得从最初授权的资源身份切换到另一候选。
+
+本设计只要求 Infra 信息通过现有路由链路传播，不新增启动全量同步、定期全量校准或新的 Gateway 重启恢复协议。Manager 从后端重新观察资源时必须恢复同一公共 ID 和正确归属，但不新增所有副本立即可见的保证。
+
+<!-- known-limit: 冲突兜底基于节点已经观测到的候选，不是全局实时冲突检测；Gateway 对其他后端的完整恢复与可靠同步能力需另行设计，不能由本次字段传播推定已经具备。 -->
+
+### 共享配额与进程级依赖
+
+同一 API key 的配额覆盖全部已注册 Infra，不按默认项或单次请求选择拆分。例如，某 key 的 Sandbox 总数上限为十，在两个后端各占用六个不能因后端不同而被视为分别未超额。
+
+配额继续由 Manager 统一编排，沿用现有配额模型、Redis 原子计数和准入行为。用于标识一次配额占用的 lock 身份独立于公共 Sandbox ID，必须在同一配额主体范围内唯一，并在准入、回滚、删除释放和后端观测中保持一致；不同 Infra 的占用不得相互覆盖或释放。
+
+实际启用共享配额时，所有注册 Infra 都必须提供完整的占用列表、变化观测和健康状态。任一后端缺少所需能力、返回不支持或无法建立必要观测，启动失败并指出对应 Infra；不能只统计默认后端或仅统计 OpenKruise。认证关闭或未配置配额 Redis 时，沿用既有不执行配额的行为。
+
+Manager 将全部 Infra 的观测合并后，与共享账目进行校准。任一参与后端的列表失败或观测不完整，都不能把部分结果当成全集，推断其他后端的占用已经消失。运行中依据“未观察到资源”释放占用时，仍须满足完整、健康观测和既有等待窗口要求；失去主实例身份时停止校准写入。
+
+这一限制不阻止已经取得明确结果的直接释放：Manager 已接受对应 Sandbox 的删除或回收后，仍按既有 owner 和占用身份释放配额。观测事件路径继续遵守现有健康检查。Redis 传输失败的既有 fail-open 策略不变，本次不重新定义配额的生命周期范围或恢复操作的准入规则。
+
+Manager 的发现、主实例协调、共享配额和 OpenKruise 短 ID 分配属于进程级职责。其依赖不随单次请求选择的 Infra 切换，也不因默认后端变化而消失。OpenKruise 的短 ID 配置不强制改写其他后端的公共身份。
+
+### 非目标与适用边界
+
+本设计不提供同类 Infra 多实例、跨 Infra 列表聚合、跨后端资源迁移或自动故障切换。模板、快照和存储卷的选择不会隐式复制资源到其他后端。
+
+不新增独立 ID 到 Infra 持久化映射、统一 ID 发号服务、动态插件框架或全局实时冲突检测。后端必须满足稳定身份和有序版本契约；不能把未满足这些契约的实现，仅凭注册成功视为已完成接入。
+
+Gateway 的新后端转发、通用流量唤醒、全量路由恢复和同步协议均不在本次范围。现有 Route 数据可表达其他 Infra 的归属，不意味着所有数据面消费者已具备该后端的完整运行能力。
