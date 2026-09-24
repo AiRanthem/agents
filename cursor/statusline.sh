@@ -34,9 +34,11 @@ eval "$(printf '%s' "$input" | jq -r '
     "MODEL=\((.model.display_name // "Unknown") | sh)",
     "PARAMS=\((.model.param_summary // "") | sh)",
     "PCT=\(((.context_window.used_percentage // 0) | floor) | sh)",
+    "RAW_PCT=\((.context_window.used_percentage // "") | sh)",
     "CTX_SIZE=\((.context_window.context_window_size // "") | sh)",
     "SESSION_ID=\((.session_id // "") | sh)",
     "CWD=\((.cwd // .workspace.current_dir // "") | sh)",
+    "TOTAL_INPUT=\((.context_window.total_input_tokens // "") | sh)",
     "TOTAL_OUTPUT_RAW=\((.context_window.total_output_tokens // "") | sh)",
     "USAGE_JSON=\((.context_window.current_usage // null) | tojson | sh)"
   ] | join("\n")
@@ -46,7 +48,9 @@ WIDTH=${WIDTH:-80}
 MODEL=${MODEL:-Unknown}
 PARAMS=${PARAMS:-}
 PCT=${PCT:-0}
+RAW_PCT=${RAW_PCT:-}
 CTX_SIZE=${CTX_SIZE:-}
+TOTAL_INPUT=${TOTAL_INPUT:-}
 SESSION_ID=${SESSION_ID:-}
 CWD=${CWD:-}
 TOTAL_OUTPUT_RAW=${TOTAL_OUTPUT_RAW:-}
@@ -81,6 +85,63 @@ format_ctx_window() {
     *.0M) printf '%s' "${formatted%.0M}M" ;;
     *) printf '%s' "$formatted" ;;
   esac
+}
+
+# Last context-size token in a model name or param summary, e.g. 300k / 1M.
+extract_ctx_label() {
+  printf '%s\n' "$1" | sed -nE 's/.*(^|[^[:alnum:]])([0-9]+(\.[0-9]+)?)([kKmM])([^[:alnum:]]|$).*/\2\4/p' | head -1
+}
+
+ctx_label_to_tokens() {
+  local label=$1 whole frac unit mult scale i
+  [[ "$label" =~ ^([0-9]+)(\.([0-9]+))?([kKmM])$ ]] || return
+  whole="${BASH_REMATCH[1]}"
+  frac="${BASH_REMATCH[3]}"
+  unit="${BASH_REMATCH[4]}"
+  case "$unit" in
+    k|K) mult=1000 ;;
+    *) mult=1000000 ;;
+  esac
+  if [ -z "$frac" ]; then
+    printf '%s' $((whole * mult))
+    return
+  fi
+  scale=1
+  for ((i = 0; i < ${#frac}; i++)); do scale=$((scale * 10)); done
+  printf '%s' $((whole * mult + frac * mult / scale))
+}
+
+# CLI context_window_size is the model-family maximum. Opus short-context
+# selections (300k / 200k) still arrive as 1000000. Prefer the size token in
+# param_summary, then the model name, and rescale usage against that window.
+apply_configured_context_window() {
+  local params_norm payload label configured used pct
+  params_norm=$(normalize_param_summary "$PARAMS")
+  label=$(extract_ctx_label "$params_norm")
+  [ -z "$label" ] && label=$(extract_ctx_label "$MODEL")
+  [ -n "$label" ] || return 0
+  configured=$(ctx_label_to_tokens "$label")
+  case "$configured" in ''|*[!0-9]*) return 0 ;; esac
+  (( configured > 0 )) || return 0
+
+  payload=$CTX_SIZE
+  CTX_SIZE=$configured
+  case "$payload" in ''|null|*[!0-9]*) return 0 ;; esac
+  (( payload > 0 && payload != configured )) || return 0
+
+  used=""
+  case "$TOTAL_INPUT" in
+    ''|null|*[!0-9]*) ;;
+    *) used=$TOTAL_INPUT ;;
+  esac
+  if [ -z "$used" ]; then
+    case "$RAW_PCT" in ''|null) return 0 ;; esac
+    used=$(awk -v p="$RAW_PCT" -v w="$payload" 'BEGIN { printf "%d", int(p / 100.0 * w + 0.5) }')
+  fi
+  case "$used" in ''|*[!0-9]*) return 0 ;; esac
+  pct=$((used * 100 / configured))
+  (( pct > 100 )) && pct=100
+  PCT=$pct
 }
 
 format_usd_cents() {
@@ -690,6 +751,7 @@ fi
 accumulate_daily_tokens "$SESSION_ID" "$USAGE_JSON" "$TOTAL_OUTPUT_RAW" "$NOW" >/dev/null 2>&1 || true
 
 # Line 1: model + params | git branch (right)
+apply_configured_context_window
 MODEL=$(strip_ctx_size_label "$MODEL")
 LINE1_LEFT=$(printf '\033[36m%s\033[0m' "$MODEL")
 if [ -n "$PARAMS" ] && ! model_includes_params "$MODEL" "$PARAMS"; then
