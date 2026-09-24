@@ -11,7 +11,7 @@ Own **How** to realize the approved **Why** and **What**. Understand the contrac
 
 - **Plan mode** applies only when the active host instructions explicitly establish native Plan mode, as in Codex or Cursor. A planning request, missing write permission, or read-only tool does not establish this mode.
 - **Agent mode** is normal operation outside native Plan restrictions, subject to actual permissions. Once the contract and implementation choices are settled, execute the TODOs directly.
-- In Plan mode, never create or modify design files, including existing documents, temporary drafts, or delegated writes. Use the approved conversation as the contract when no design file exists; no design-document creation or path-approval task belongs in the final plan.
+- In Plan mode, never create or modify design files, including existing documents, temporary drafts, or delegated writes. Use the approved conversation as the contract when no design file exists; no design-document creation or path-approval task belongs in the final plan. The document-only `implementable` status is irrelevant to this mode.
 - Use the host's final-plan mechanism only once the implementation decomposition is ready. Questions, interim TODOs, decision approvals, and instructions to produce another plan are not final plans.
 
 ## Authority and approval boundaries
@@ -37,6 +37,10 @@ When a release, compatibility, or upgrade constraint must remain attached to an 
 ## Establish the contract and classify the work
 
 Read the complete approved requirements and decisions from the design document or current conversation, including Why, What, rationale, non-goals, and accepted limitations. If documents exist, read both members of an EN/CN pair, preserve intentionally deleted counterparts, and resolve meaning-changing conflicts before affected edits. A file is not a prerequisite: use and briefly restate the approved conversational contract without creating one. Read relevant repository instructions, code, tests, and useful history. Trace the whole affected behavior, not just the files expected to change.
+
+For direct Agent-mode implementation of a design, use a current `design_status: implementable` document as review evidence when available. Check whether later material changes or evidence invalidate that status. If there is no current status, including for a conversation-only design, stop before affected code edits; explain the missing review assurance and any concrete uncertainty, then ask whether the user wants to proceed with the approved contract. Continue when the user explicitly agrees, reusing an existing agreement for the same unchanged contract. That agreement waives only the missing review status, not an unresolved product decision, a demonstrated design defect, other approvals, or verification. Do not invoke the explicit-only `$review-design` without the user's request.
+
+Execution of an approved Plan-mode final plan does not reintroduce a status check. Confirmed correction targets from `$receiving-code-review` use their own confirmation handoff unless they materially revise Why/What.
 
 Keep a private mapping from every requirement, invariant, and non-goal to implementation and evidence. Compare intended changes with current behavior; a deliberate gap between current code and the target is expected, not itself a design defect.
 
@@ -66,11 +70,11 @@ When decomposition or coding reveals a design defect, stop affected implementati
 
 After agreement:
 
-- **Existing design, Agent mode:** Write the approved Why/What correction into the existing design, synchronizing both surviving language versions when applicable. Approval of that concrete correction authorizes its in-scope writeback; reuse it without asking again for the same edit. Preserve unrelated content and keep implementation TODOs out of the design.
+- **Existing design, Agent mode:** Write the approved Why/What correction into the existing design, synchronizing both surviving language versions when applicable. Set `design_status: review-pending` in the affected surviving documents. Approval of that concrete correction authorizes its in-scope writeback; reuse it without asking again for the same edit. Preserve unrelated content and keep implementation TODOs out of the design.
 - **Existing design, Plan mode:** Keep all design files unchanged. Restate the approved correction in the conversation as the current contract and retain the exact existing paths and agreed changes for synchronization in Agent mode before affected code edits. This deferred correction is limited to existing documents; it does not authorize creating a design file.
 - **No design document:** Restate the approved revised requirements and decisions in the conversation. No document creation or writeback is needed.
 
-Restart this skill from understanding Why/What and re-decompose the entire implementation against the corrected contract. Reassess existing code, TODOs, and review evidence; reuse only what still applies. Restarting means re-evaluating the workflow, not undoing unrelated or still-correct work. Resolve any newly exposed choices before reaching the mode-specific result.
+After a material Why/What correction, restart this skill from understanding Why/What and re-decompose the entire implementation against the corrected contract. For direct Agent-mode design work, apply the review-status warning and consent rule to the revised contract; a prior waiver for a different contract does not carry over. A Plan-mode conversational handoff and execution of its approved final plan continue from the approved correction without a status check. Reassess existing code, TODOs, and review evidence; reuse only what still applies. Restarting means re-evaluating the workflow, not undoing unrelated or still-correct work. Resolve any newly exposed choices before reaching the mode-specific result.
 
 ## Produce the mode-specific result
 

@@ -29,7 +29,7 @@ When criteria are missing or ambiguous, inspect the design and relevant current 
 
 ## Trim the design with the user
 
-Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
+Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. In Agent mode, when starting a POC without a current `implementable` status, explain the missing review assurance and obtain the user's explicit agreement before implementation; combine this with the acceptance and trimmed-design confirmation when useful. An approved Plan-mode final plan and its execution need no document status. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
 
 Present the user with three explicit groups and obtain confirmation before planning or implementation:
 

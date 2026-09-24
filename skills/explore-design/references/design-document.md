@@ -7,9 +7,10 @@ Read and apply this reference only in Agent mode, after identifying the active h
 Inspect applicable instructions, design directories, templates, metadata, naming patterns, and nearby documents. Reuse an already-approved exact path; otherwise obtain path approval together with the Why/What contract. Repository conventions inform the proposed path, not authorization.
 
 - New designs use `<base>-CN.md`, in natural Simplified Chinese.
-- Update the Chinese member of an existing pair without changing its English counterpart. Do not claim the pair is synchronized; meaning-changing differences must be resolved before implementation.
+- Update the Chinese member of an existing pair without changing its English design content. If a material revision invalidates an `implementable` status on the surviving English counterpart, include its path in the approved metadata-only scope and reset its status to `review-pending`. Do not claim the pair is synchronized; meaning-changing differences must be resolved before review can mark the design implementable.
 - Update an existing unsuffixed single-file design in place. Preserve its name and single-file form.
 - Follow repository formatting and metadata conventions, otherwise the conventions of the document's language.
+- Record `design_status: review-pending` in YAML frontmatter for a complete approved design, or `design_status: draft` for an explicitly requested unapproved draft. Revisions to a previously reviewed Why/What contract reset this field to `review-pending`; only `$review-design` may set it to `implementable` after independent review passes. Preserve unrelated frontmatter fields.
 - Write only approved design paths. Delegate writing only within those paths with non-overlapping ownership, and verify the resulting text yourself.
 
 ## Record the approved contract
@@ -28,4 +29,4 @@ Implementation TODOs, file-by-file edits, pseudocode, migration procedures, roll
 
 ## Validate
 
-Re-read against the approved requirements and decisions. Confirm the three sections, natural Simplified Chinese, observable target-state precision, and absence of implementation-process content. Check that only approved Chinese paths were written and run relevant narrow documentation checks. Report draft status or any remaining language-pair inconsistency honestly; document completion does not establish independent review or implementation.
+Re-read against the approved requirements and decisions. Confirm the three sections, natural Simplified Chinese, observable target-state precision, the appropriate `design_status` (`review-pending` or `draft`), and absence of implementation-process content. Check that only approved paths were written and run relevant narrow documentation checks. Report draft status or any remaining language-pair inconsistency honestly; document completion does not establish independent review or implementation.

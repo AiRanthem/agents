@@ -36,6 +36,8 @@
 
 2026-09-18：新增 `implement-poc` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/implement-poc`，指向本仓库 `skills/implement-poc`。
 
+2026-09-20：新增 `cleanup-worktree` 共享 skill，用于在所有相关远程 PR/MR 均实时验证为已合并且用户确认精确清理清单后，安全删除对应 worktree、远程分支和本地分支；安装独立用户级软链接 `~/.agents/skills/cleanup-worktree`，指向本仓库 `skills/cleanup-worktree`。
+
 ## 验证
 
 确认以下结果：

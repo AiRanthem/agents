@@ -1,6 +1,6 @@
 ---
 name: receiving-code-review
-description: Evaluate received code-review feedback against current code and requirements, rebut rejected portions before presenting accepted targets for user confirmation, then use implement-design to apply the confirmed corrections. Use when explicitly invoked; independent design acceptance belongs to review-implementation.
+description: Evaluate received code-review feedback against current code and requirements, rebut rejected portions before presenting accepted targets for user confirmation, then use implement-design to apply the confirmed corrections. Use when explicitly invoked; design readiness belongs to review-design and independent implementation acceptance belongs to review-implementation.
 ---
 
 # Receiving Code Review

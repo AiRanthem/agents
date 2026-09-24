@@ -1,0 +1,3 @@
+interface:
+  display_name: "Clean Up Completed Worktree"
+  short_description: "Verify merged changes and safely remove a completed worktree"

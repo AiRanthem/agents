@@ -1,11 +1,11 @@
 ---
 name: explore-design
-description: Explore requirements and design decisions with the user before implementation, grounded in repository evidence. Use when explicitly invoked with $explore-design or /explore-design, or when the user requests collaborative pre-implementation design or refinement. Do not trigger for ordinary discussion, coding, OpenSpec or ADR authoring, or post-hoc documentation.
+description: Explore requirements and design decisions with the user, grounded in repository evidence. In Plan mode hand approved Why/What to implement-design; in Agent mode write an approved design for review. Use when explicitly invoked with $explore-design or /explore-design, or when the user requests collaborative pre-implementation design or refinement. Do not trigger for ordinary discussion, coding, OpenSpec or ADR authoring, or post-hoc documentation.
 ---
 
 # Explore Design
 
-Work with the user to establish **Why** the change is needed and **What** the resulting system must do. Explore the repository while discussing requirements, compare choices, and obtain approval of the complete contract. `$implement-design` owns **How** to turn the current code into that target, including implementation choices, TODOs, and verification steps.
+Work with the user to establish **Why** the change is needed and **What** the resulting system must do. Explore the repository while discussing requirements, compare choices, and obtain approval of the complete contract. `$implement-design` owns **How**, including implementation choices, TODOs, and verification steps. In Agent mode, the design document remains `review-pending` until `$review-design` marks it `implementable`; exploration cannot set that status.
 
 ## Identify the host mode
 
@@ -49,6 +49,8 @@ Assess risk by consequences and reasoning difficulty, not line count. In particu
 
 When the user supplies design-review findings, read the current design, original requirements, confirmed decisions, and relevant repository evidence. Judge each finding on that evidence; adopt supported corrections, adapt partially valid suggestions, and preserve the design where a preference or unsupported claim does not justify a change. Apply the same exploration, discussion, convergence, and approval bar as for a new design.
 
+A material revision to a reviewed design document returns that document to pending review. Preserve the prior findings and accepted decisions as evidence, but do not carry its `implementable` status to the changed document.
+
 In the decision report, list proposed decision changes under **Added / 新增**, **Modified / 修改**, and **Removed / 删除**, explicitly saying when a category is empty. Briefly summarize the unchanged contract and explain any material review finding that was not adopted.
 
 ## Decision value and code cost
@@ -85,8 +87,10 @@ State the mode-specific action this approval enables. In Agent mode only, read [
 
 After approval:
 
-- **Plan mode:** Read and invoke `$implement-design` in the current conversation with the approved requirements and decisions. This handoff is part of the approved workflow; do not ask the user to invoke it again. It resolves How and emits the sole final implementation plan. If the skill is unavailable, report the missing capability conversationally; do not substitute a design document or approval plan.
-- **Agent mode:** Write the formal Simplified Chinese Why/What design at the approved path using the document instructions, validate it, and finish this skill. Implementation is a separate `$implement-design` phase.
+- **Plan mode:** Read and invoke `$implement-design` in the current conversation with the approved requirements and decisions. This handoff is part of the approved workflow; do not ask the user to invoke it again. It resolves How and emits the sole final implementation plan without requiring a design document or `implementable` status. If the skill is unavailable, report the missing capability conversationally; do not substitute a design document or approval plan.
+- **Agent mode:** Write the formal Simplified Chinese Why/What design at the approved path using the document instructions, validate it, and finish this skill with the path and current design identity ready for `$review-design`.
+
+In Agent mode, invoke `$review-design` next only if the user explicitly requested that skill; otherwise report the pending review. A review finding that changes Why/What returns here for discussion and approval.
 
 Before completion:
 
@@ -95,4 +99,4 @@ Before completion:
 - For Plan mode, confirm that exploration produced no design-file writes or new document tasks, and that only `$implement-design` produces the final plan after its implementation decisions are settled.
 - For Agent mode, check observable target-state precision and the document-specific requirements. Run only relevant narrow documentation checks.
 
-Keep pending questions in conversation. On Agent-mode completion, report the agreed contract, written path, and actual validation. On Plan-mode handoff, continue into `$implement-design` rather than ending with a design summary as the final plan. Do not claim independent review or implementation has occurred.
+Keep pending questions in conversation. On Agent-mode completion, report the agreed contract, written path, actual validation, and pending review without labeling the document `implementable`. On Plan-mode handoff, continue into `$implement-design` rather than ending with a design summary as the final plan. Do not claim independent review or implementation has occurred.

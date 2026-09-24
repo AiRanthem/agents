@@ -1,6 +1,6 @@
 interface:
   display_name: "Review Design"
   short_description: "Review designs against requirements and repository evidence"
-  default_prompt: "Use $review-design to independently review this design against its requirements and repository evidence, then assess implementation readiness."
+  default_prompt: "Use $review-design to independently review this design against its requirements and repository evidence, and mark its approved document implementable only if review passes."
 policy:
   allow_implicit_invocation: false

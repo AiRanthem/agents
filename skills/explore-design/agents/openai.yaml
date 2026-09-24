@@ -1,6 +1,6 @@
 interface:
   display_name: "Explore Design"
   short_description: "Discuss requirements and agree on design decisions"
-  default_prompt: "Use $explore-design to explore this need with me, agree on Why and What, and obtain approval before handing off to implementation planning in native Plan mode or writing the design in Agent mode."
+  default_prompt: "Use $explore-design to explore this need with me, agree on Why and What, and obtain approval before handing off to implementation planning in native Plan mode or writing a design for review in Agent mode."
 policy:
   allow_implicit_invocation: true

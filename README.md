@@ -43,11 +43,12 @@ $install 安装或更新这个 dev-kit
 | Skill | 用途 |
 | --- | --- |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
+| `$cleanup-worktree` | 核验所有相关远程上的 PR/MR 均已合并，经确认后安全清理对应 worktree 与分支。 |
 | `$rebase-worktree` | 将当前 Git worktree 安全 rebase 到指定分支并独立验证结果。 |
-| `$explore-design` | 在实现前探索或细化设计，并产出经确认的计划或中文设计文档。 |
-| `$review-design` | 根据需求和仓库证据独立评审设计的实现准备度。 |
-| `$implement-design` | 实现已确认的设计并提供测试和验证证据。 |
-| `$implement-poc` | 将已确认设计裁剪到明确验收场景，以最快方式实现、通过日志修复并验证可排障的 POC。 |
+| `$explore-design` | 探索或细化 Why/What；Plan mode 直接衔接实施规划，Agent mode 将设计文档标记为 `review-pending`。 |
+| `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |
+| `$implement-design` | 将已确认设计落实实现；Agent mode 缺评审状态时先警告并征得用户同意。 |
+| `$implement-poc` | 将已确认设计裁剪到明确验收场景，实现并验证可排障的 POC。 |
 | `$optimize-tests` | 在充分覆盖行为的前提下，主动清理、合并和精简指定范围内的测试代码，经确认后执行。 |
 | `$review-implementation` | 根据已确认设计独立验收完成的实现。 |
 | `$explain-design` | 将已确定的设计写成独立、易读且可长期留存的设计介绍，面向不熟悉仓库的技术专家；默认英文，可指定其他语言。 |
