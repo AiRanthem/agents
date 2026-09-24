@@ -28,7 +28,7 @@ import (
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Load applies defaults, validates inputs, and reads the configured peer
+// Load validates inputs and reads the configured peer
 // Secrets through a live uncached reader. Empty Inputs reads nothing and
 // returns plaintext materials. TLS ClientAuth on the returned server config is
 // left unset so each process can apply its receive policy. A non-empty
@@ -38,7 +38,6 @@ func Load(ctx context.Context, reader ctrlclient.Reader, inputs Inputs) (secretK
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	inputs.ApplyDefaults()
 	if err := inputs.Validate(); err != nil {
 		return nil, nil, nil, err
 	}
@@ -57,7 +56,7 @@ func Load(ctx context.Context, reader ctrlclient.Reader, inputs Inputs) (secretK
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		secretKey, err = loadPeerKey(keySecret, inputs.PeerKeyDataKey)
+		secretKey, err = loadPeerKey(keySecret)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -71,7 +70,7 @@ func Load(ctx context.Context, reader ctrlclient.Reader, inputs Inputs) (secretK
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		serverTLS, clientTLS, err = loadTLS(serverSecret, clientSecret, inputs)
+		serverTLS, clientTLS, err = loadTLS(serverSecret, clientSecret)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -102,44 +101,28 @@ func (s *loadedSecrets) get(ctx context.Context, ref types.NamespacedName) (*cor
 
 // loadPeerKey extracts the peer shared key (memberlist gossip key) from the
 // key Secret and returns a copy owned by the caller.
-func loadPeerKey(secret *corev1.Secret, dataKey string) ([]byte, error) {
-	key, err := requiredSecretData(secret, dataKey)
+func loadPeerKey(secret *corev1.Secret) ([]byte, error) {
+	key, err := requiredSecretData(secret, defaultPeerKeyDataKey)
 	if err != nil {
 		return nil, err
 	}
 	if len(key) != secretKeySize {
 		return nil, fmt.Errorf("peer key secret %s/%s data %q must be exactly %d bytes, got %d",
-			secret.Namespace, secret.Name, dataKey, secretKeySize, len(key))
+			secret.Namespace, secret.Name, defaultPeerKeyDataKey, secretKeySize, len(key))
 	}
 	return append([]byte(nil), key...), nil
 }
 
 // loadTLS builds the verified server and client TLS configs from the peer TLS
 // Secrets. The server certificate must not also verify as a client credential.
-func loadTLS(serverSecret, clientSecret *corev1.Secret, inputs Inputs) (serverTLS, clientTLS *tls.Config, err error) {
-	serverCert, err := loadKeyPair(serverSecret, inputs.ServerCertDataKey, inputs.ServerKeyDataKey)
+func loadTLS(serverSecret, clientSecret *corev1.Secret) (serverTLS, clientTLS *tls.Config, err error) {
+	inboundTrust, serverCert, err := loadPeerTLSBundle(serverSecret)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("load peer TLS server bundle: %w", err)
 	}
-	clientCert, err := loadKeyPair(clientSecret, inputs.ClientCertDataKey, inputs.ClientKeyDataKey)
+	outboundTrust, clientCert, err := loadPeerTLSBundle(clientSecret)
 	if err != nil {
-		return nil, nil, err
-	}
-	serverCA, err := requiredSecretData(serverSecret, inputs.ServerCADataKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	clientCA, err := requiredSecretData(clientSecret, inputs.ClientCADataKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	inboundTrust, err := certPoolFromPEM(serverCA)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse peer TLS server CA in %s/%s: %w", serverSecret.Namespace, serverSecret.Name, err)
-	}
-	outboundTrust, err := certPoolFromPEM(clientCA)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse peer TLS client CA in %s/%s: %w", clientSecret.Namespace, clientSecret.Name, err)
+		return nil, nil, fmt.Errorf("load peer TLS client bundle: %w", err)
 	}
 
 	serverLeaf, err := leafOf(serverCert)
@@ -202,28 +185,21 @@ func requiredSecretData(secret *corev1.Secret, key string) ([]byte, error) {
 	return value, nil
 }
 
-func loadKeyPair(secret *corev1.Secret, certKey, keyKey string) (tls.Certificate, error) {
-	certPEM, err := requiredSecretData(secret, certKey)
+// loadPeerTLSBundle adds the peer requirement for a certificate to the shared
+// loader's CA-only support. Certificate-purpose checks remain in loadTLS.
+func loadPeerTLSBundle(secret *corev1.Secret) (*x509.CertPool, tls.Certificate, error) {
+	bundle, err := tlsBundleFromSecret(secret)
 	if err != nil {
-		return tls.Certificate{}, err
+		return nil, tls.Certificate{}, err
 	}
-	keyPEM, err := requiredSecretData(secret, keyKey)
+	trust, cert, err := bundle.Parsed()
 	if err != nil {
-		return tls.Certificate{}, err
+		return nil, tls.Certificate{}, err
 	}
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("parse certificate/key pair in %s/%s: %w", secret.Namespace, secret.Name, err)
+	if cert == nil {
+		return nil, tls.Certificate{}, fmt.Errorf("peer TLS secret %s/%s certificate/key pair is required", secret.Namespace, secret.Name)
 	}
-	return cert, nil
-}
-
-func certPoolFromPEM(pemBytes []byte) (*x509.CertPool, error) {
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("no certificates found")
-	}
-	return pool, nil
+	return trust, *cert, nil
 }
 
 // leafOf returns the leaf certificate at the head of the certificate chain.

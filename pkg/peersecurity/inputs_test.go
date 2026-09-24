@@ -116,24 +116,6 @@ func TestValidateTLSPair(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults(t *testing.T) {
-	in := Inputs{PeerKeyDataKey: "custom"}
-	in.ApplyDefaults()
-	assert.Equal(t, "custom", in.PeerKeyDataKey)
-	assert.Equal(t, defaultCAKey, in.ServerCADataKey)
-	assert.Equal(t, defaultTLSCertKey, in.ServerCertDataKey)
-	assert.Equal(t, defaultTLSKeyKey, in.ServerKeyDataKey)
-	assert.Equal(t, defaultCAKey, in.ClientCADataKey)
-	assert.Equal(t, defaultClientCertKey, in.ClientCertDataKey)
-	assert.Equal(t, defaultClientKeyKey, in.ClientKeyDataKey)
-
-	// Pre-set client keys are kept.
-	preset := Inputs{ClientCertDataKey: "other.crt"}
-	preset.ApplyDefaults()
-	assert.Equal(t, "other.crt", preset.ClientCertDataKey)
-	assert.Equal(t, defaultClientKeyKey, preset.ClientKeyDataKey)
-}
-
 func TestConfigured(t *testing.T) {
 	tests := []struct {
 		name   string

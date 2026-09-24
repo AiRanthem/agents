@@ -80,12 +80,10 @@ func TestLoadPeerKey(t *testing.T) {
 	tests := []struct {
 		name    string
 		data    map[string][]byte
-		dataKey string
 		wantErr string
 		wantKey []byte
 	}{
-		{name: "32 bytes", data: map[string][]byte{"key": valid}, wantKey: valid},
-		{name: "custom key name", data: map[string][]byte{"token": valid}, dataKey: "token", wantKey: valid},
+		{name: "fixed key ignores other entries", data: map[string][]byte{"key": valid, "token": bytes32('x')}, wantKey: valid},
 		{name: "16 bytes rejected", data: map[string][]byte{"key": make([]byte, 16)}, wantErr: "exactly 32 bytes"},
 		{name: "24 bytes rejected", data: map[string][]byte{"key": make([]byte, 24)}, wantErr: "exactly 32 bytes"},
 		{name: "missing key", data: map[string][]byte{}, wantErr: "missing or empty"},
@@ -93,11 +91,7 @@ func TestLoadPeerKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dataKey := tt.dataKey
-			if dataKey == "" {
-				dataKey = defaultPeerKeyDataKey
-			}
-			key, err := loadPeerKey(secret("ns", "peer-key", tt.data), dataKey)
+			key, err := loadPeerKey(secret("ns", "peer-key", tt.data))
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -136,10 +130,32 @@ func TestLoadTLS(t *testing.T) {
 			clientData: clientData,
 		},
 		{
-			name:       "missing data key",
+			name:       "client uses cert-manager keys without overrides",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"ca.crt": caPEM, "tls.crt": clientCert, "tls.key": clientKey},
+		},
+		{
+			name:       "server supports fallback key names",
+			serverData: map[string][]byte{"ca.crt": caPEM, "client.crt": serverCert, "client.key": serverKey},
+			clientData: clientData,
+		},
+		{
+			name:       "client CA only is rejected",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
+			clientData: map[string][]byte{"ca.crt": caPEM},
+			wantErr:    "certificate/key pair is required",
+		},
+		{
+			name:       "invalid preferred server usage does not fall back",
+			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": clientCert, "tls.key": clientKey, "client.crt": serverCert, "client.key": serverKey},
+			clientData: clientData,
+			wantErr:    "ServerAuth",
+		},
+		{
+			name:       "server CA only is rejected",
 			serverData: map[string][]byte{"ca.crt": caPEM},
 			clientData: clientData,
-			wantErr:    "missing or empty",
+			wantErr:    "certificate/key pair is required",
 		},
 		{
 			name:       "server cert allows ClientAuth",
@@ -169,42 +185,18 @@ func TestLoadTLS(t *testing.T) {
 			name:       "invalid server CA PEM",
 			serverData: map[string][]byte{"ca.crt": []byte("not-a-pem"), "tls.crt": serverCert, "tls.key": serverKey},
 			clientData: clientData,
-			wantErr:    "parse peer TLS server CA",
+			wantErr:    "failed to parse TLS CA bundle",
 		},
 		{
 			name:       "invalid client CA PEM",
 			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
 			clientData: map[string][]byte{"ca.crt": []byte("not-a-pem"), "client.crt": clientCert, "client.key": clientKey},
-			wantErr:    "parse peer TLS client CA",
-		},
-		{
-			name:       "missing server key",
-			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert},
-			clientData: clientData,
-			wantErr:    "missing or empty",
-		},
-		{
-			name:       "mismatched server key pair",
-			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": clientKey},
-			clientData: clientData,
-			wantErr:    "parse certificate/key pair",
-		},
-		{
-			name:       "missing server CA after key pair",
-			serverData: map[string][]byte{"tls.crt": serverCert, "tls.key": serverKey},
-			clientData: clientData,
-			wantErr:    "missing or empty",
+			wantErr:    "failed to parse TLS CA bundle",
 		},
 		{
 			name:       "missing client certificate",
 			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
 			clientData: map[string][]byte{"ca.crt": caPEM, "client.key": clientKey},
-			wantErr:    "missing or empty",
-		},
-		{
-			name:       "missing client CA after key pair",
-			serverData: map[string][]byte{"ca.crt": caPEM, "tls.crt": serverCert, "tls.key": serverKey},
-			clientData: map[string][]byte{"client.crt": clientCert, "client.key": clientKey},
 			wantErr:    "missing or empty",
 		},
 		{
@@ -234,11 +226,10 @@ func TestLoadTLS(t *testing.T) {
 			wantErr: "parse peer TLS client intermediates",
 		},
 	}
-	inputs := tlsInputs("ns/server", "ns/client")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			serverTLS, clientTLS, err := loadTLS(
-				secret("ns", "server", tt.serverData), secret("ns", "client", tt.clientData), inputs)
+				secret("ns", "server", tt.serverData), secret("ns", "client", tt.clientData))
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -268,7 +259,6 @@ func TestLoadTLSSplitCA(t *testing.T) {
 		"client.key": clientKey,
 	}
 	validServer := map[string][]byte{"ca.crt": inboundPEM, "tls.crt": serverCert, "tls.key": serverKey}
-	inputs := tlsInputs("ns/server", "ns/client")
 
 	tests := []struct {
 		name       string
@@ -295,7 +285,7 @@ func TestLoadTLSSplitCA(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			serverTLS, clientTLS, err := loadTLS(
-				secret("ns", "server", tt.serverData), secret("ns", "client", clientData), inputs)
+				secret("ns", "server", tt.serverData), secret("ns", "client", clientData))
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -360,10 +350,11 @@ func TestLoadSecretReads(t *testing.T) {
 			wantKey: bytes32('x'),
 		},
 		{
-			name:    "same secret read once",
+			name:    "shared secret selects server certificate for client and fails",
 			objects: []ctrlclient.Object{secret("ns", "bundle", sharedData)},
 			inputs:  tlsInputs("ns/bundle", "ns/bundle"),
 			gets:    1,
+			wantErr: "ClientAuth",
 		},
 		{
 			name:    "missing TLS secret",
@@ -393,7 +384,7 @@ func TestLoadSecretReads(t *testing.T) {
 			name:    "TLS materials fail loadTLS",
 			objects: []ctrlclient.Object{secret("ns", "server", map[string][]byte{"ca.crt": caPEM}), secret("ns", "client", clientData)},
 			inputs:  tlsInputs("ns/server", "ns/client"),
-			wantErr: "missing or empty",
+			wantErr: "certificate/key pair is required",
 		},
 	}
 	for _, tt := range tests {
@@ -407,6 +398,9 @@ func TestLoadSecretReads(t *testing.T) {
 				},
 			})
 			key, serverTLS, clientTLS, err := Load(t.Context(), reader, tt.inputs)
+			if tt.gets > 0 {
+				assert.Equal(t, tt.gets, int(gets.Load()))
+			}
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -417,7 +411,6 @@ func TestLoadSecretReads(t *testing.T) {
 			require.NotNil(t, serverTLS)
 			require.NotNil(t, clientTLS)
 			assert.Equal(t, serverName, clientTLS.ServerName)
-			assert.Equal(t, tt.gets, int(gets.Load()))
 		})
 	}
 }
@@ -456,9 +449,7 @@ func TestLeafOfAndIntermediates(t *testing.T) {
 func tlsInputs(server, client string) Inputs {
 	serverRef, _ := utils.ParseSecretRef(server)
 	clientRef, _ := utils.ParseSecretRef(client)
-	in := Inputs{TLSServerSecret: serverRef, TLSClientSecret: clientRef}
-	in.ApplyDefaults()
-	return in
+	return Inputs{TLSServerSecret: serverRef, TLSClientSecret: clientRef}
 }
 
 func secret(namespace, name string, data map[string][]byte) *corev1.Secret {

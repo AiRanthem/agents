@@ -49,24 +49,20 @@ that channel in plaintext.
 
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `PEER_KEY_SECRET` | empty | `namespace/name` of the Secret holding the 32-byte memberlist key; empty keeps plaintext memberlist |
-| `PEER_KEY_SECRET_KEY` | `key` | Secret data key holding the memberlist key |
+| `PEER_KEY_SECRET` | empty | `namespace/name` of the Secret holding the 32-byte memberlist key under the fixed data key `key`; empty keeps plaintext memberlist |
 | `PEER_TLS_SERVER_SECRET` | empty | `namespace/name` of the Secret holding the agent-runtime server TLS bundle, used to receive peer HTTPS; must be set together with `PEER_TLS_CLIENT_SECRET` |
-| `PEER_TLS_SERVER_CA_KEY` | `ca.crt` | Secret data key for the CA trusted for inbound peer client certificates |
-| `PEER_TLS_SERVER_CERT_KEY` | `tls.crt` | Secret data key for the server certificate presented on inbound peer HTTPS |
-| `PEER_TLS_SERVER_KEY_KEY` | `tls.key` | Secret data key for the private key of the server certificate |
 | `PEER_TLS_CLIENT_SECRET` | empty | `namespace/name` of the Secret holding this gateway's own runtime client TLS bundle, used to send peer HTTPS; must be set together with `PEER_TLS_SERVER_SECRET` |
-| `PEER_TLS_CLIENT_CA_KEY` | `ca.crt` | Secret data key for the CA trusted for outbound peer server certificates |
-| `PEER_TLS_CLIENT_CERT_KEY` | `client.crt` | Secret data key for the client certificate presented on outbound peer HTTPS; set `tls.crt` when the referenced Secret uses the runtime mTLS file names |
-| `PEER_TLS_CLIENT_KEY_KEY` | `client.key` | Secret data key for the private key of the client certificate; set `tls.key` when the referenced Secret uses the runtime mTLS file names |
 | `PEER_ALLOWED_CLIENT_CNS` | empty | Comma-separated client identities allowed on inbound peer mTLS, matched against the client certificate CN or its DNS SANs. Empty allows any client trusted by the peer server CA. A non-empty value requires `PEER_TLS_SERVER_SECRET` and `PEER_TLS_CLIENT_SECRET` |
 
 Notes:
 
-- Data-key variables describe the Secret layout, not credentials, and are read only while the matching `*_SECRET` reference is set.
+- TLS Secret data keys are fixed: `ca.crt` supplies the CA bundle. For certificates and private keys, `tls.crt` plus `tls.key` take precedence; `client.crt` plus `client.key` are considered only when both `tls.*` entries are absent or empty. A partially present preferred pair, malformed PEM, or failed certificate-purpose check is an error and does not fall back. Values from the two pairs are never combined.
+- Peer TLS requires certificate and key material as well as the CA bundle. It keeps CA-chain validation, `ServerAuth` and `ClientAuth` purpose checks, runtime SNI-based server-name verification, and the check that an inbound server certificate cannot be used for peer client authentication.
+- Use separate Secrets for inbound server and outbound client credentials when one Secret contains a server pair under `tls.*` and a client pair under `client.*`. The shared loader selects `tls.*` first for both roles, so the old mixed layout now selects the server certificate for outbound client authentication and fails its `ClientAuth` check.
+- Peer TLS and memberlist data-key override flags and environment variables have been removed and are not compatible. The memberlist Secret always uses the data key `key`.
 - Both TLS references empty keeps plaintext peer HTTP; setting only one of them fails startup.
 - Names in `PEER_ALLOWED_CLIENT_CNS` are matched as raw comma-separated strings: entries are not trimmed or case-folded. A value of `,` enables the restriction but matches no identity.
-- The variables mirror the sandbox-manager flags (`--peer-key-secret`, `--peer-tls-*`, `--peer-allowed-client-cns`) with the same names, defaults, and meanings.
+- The remaining variables mirror the sandbox-manager flags for the memberlist Secret, peer TLS Secret references, and allowed client identities.
 - Startup self-check only proves this process's inbound and outbound material is locally consistent. It does not prove cluster-wide compatibility: every participant's server certificate must verify against every participant's clientSecret `ca.crt`, and every client certificate must verify against every participant's serverSecret `ca.crt`.
 
 ## 4. Customization

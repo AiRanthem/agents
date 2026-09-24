@@ -425,23 +425,13 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 		env                  map[string]string
 		wantErr              string
 		wantKeySecret        types.NamespacedName
-		wantCertDataKey      string
-		wantKeyDataKey       string
 		wantAllowedClientCNs string
 	}{
-		{name: "empty is plaintext", wantCertDataKey: "client.crt", wantKeyDataKey: "client.key"},
+		{name: "empty is plaintext"},
 		{
-			name:            "key secret",
-			env:             map[string]string{envPeerKeySecret: "sandbox-system/peer-key-secret"},
-			wantKeySecret:   types.NamespacedName{Namespace: "sandbox-system", Name: "peer-key-secret"},
-			wantCertDataKey: "client.crt",
-			wantKeyDataKey:  "client.key",
-		},
-		{
-			name:            "explicit client data keys win",
-			env:             map[string]string{envPeerTLSClientCertKey: "tls.crt", envPeerTLSClientKeyKey: "tls.key"},
-			wantCertDataKey: "tls.crt",
-			wantKeyDataKey:  "tls.key",
+			name:          "key secret",
+			env:           map[string]string{envPeerKeySecret: "sandbox-system/peer-key-secret"},
+			wantKeySecret: types.NamespacedName{Namespace: "sandbox-system", Name: "peer-key-secret"},
 		},
 		{
 			name: "allowlist with TLS refs",
@@ -450,15 +440,11 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 				envPeerTLSClientSecret:  "ns/client",
 				envPeerAllowedClientCNs: "sandbox-manager,sandbox-ingress-gateway",
 			},
-			wantCertDataKey:      "client.crt",
-			wantKeyDataKey:       "client.key",
 			wantAllowedClientCNs: "sandbox-manager,sandbox-ingress-gateway",
 		},
 		{
-			name:            "empty allowlist stays plaintext",
-			env:             map[string]string{envPeerAllowedClientCNs: ""},
-			wantCertDataKey: "client.crt",
-			wantKeyDataKey:  "client.key",
+			name: "empty allowlist stays plaintext",
+			env:  map[string]string{envPeerAllowedClientCNs: ""},
 		},
 		{
 			name:    "allowlist without TLS",
@@ -489,10 +475,8 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, key := range []string{
-				envPeerKeySecret, envPeerKeySecretKey,
+				envPeerKeySecret,
 				envPeerTLSServerSecret, envPeerTLSClientSecret,
-				envPeerTLSServerCAKey, envPeerTLSServerCertKey, envPeerTLSServerKeyKey,
-				envPeerTLSClientCAKey, envPeerTLSClientCertKey, envPeerTLSClientKeyKey,
 				envPeerAllowedClientCNs,
 			} {
 				t.Setenv(key, "")
@@ -508,9 +492,6 @@ func TestPeerSecurityFromEnv(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantKeySecret, in.PeerKeySecret)
-			assert.Equal(t, "key", in.PeerKeyDataKey)
-			assert.Equal(t, tt.wantCertDataKey, in.ClientCertDataKey)
-			assert.Equal(t, tt.wantKeyDataKey, in.ClientKeyDataKey)
 			assert.Equal(t, tt.wantAllowedClientCNs, in.AllowedClientCNs)
 		})
 	}

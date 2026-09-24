@@ -53,15 +53,8 @@ const (
 // --peer-* flags.
 const (
 	envPeerKeySecret        = "PEER_KEY_SECRET"        // #nosec G101 -- env-var name, not a credential
-	envPeerKeySecretKey     = "PEER_KEY_SECRET_KEY"    // #nosec G101 -- env-var name, not a credential
 	envPeerTLSServerSecret  = "PEER_TLS_SERVER_SECRET" // #nosec G101 -- env-var name, not a credential
 	envPeerTLSClientSecret  = "PEER_TLS_CLIENT_SECRET" // #nosec G101 -- env-var name, not a credential
-	envPeerTLSServerCAKey   = "PEER_TLS_SERVER_CA_KEY"
-	envPeerTLSServerCertKey = "PEER_TLS_SERVER_CERT_KEY"
-	envPeerTLSServerKeyKey  = "PEER_TLS_SERVER_KEY_KEY"
-	envPeerTLSClientCAKey   = "PEER_TLS_CLIENT_CA_KEY"
-	envPeerTLSClientCertKey = "PEER_TLS_CLIENT_CERT_KEY"
-	envPeerTLSClientKeyKey  = "PEER_TLS_CLIENT_KEY_KEY"
 	envPeerAllowedClientCNs = "PEER_ALLOWED_CLIENT_CNS"
 )
 
@@ -125,12 +118,10 @@ func normalizePort(port int, defaultPort int) int {
 // keys are read only while that reference is set, and both TLS references empty
 // keeps plaintext peer HTTP. PEER_ALLOWED_CLIENT_CNS is an optional inbound
 // identity restriction and requires the TLS pair when non-empty. The server
-// variables are the credentials this process presents on inbound peer HTTPS,
-// and PEER_TLS_SERVER_CA_KEY is the trust anchor verifying inbound peer client
-// certificates. The client variables are this process's own runtime client
-// bundle used for outbound peer HTTPS (never the sandbox manager's bundle),
-// and PEER_TLS_CLIENT_CA_KEY is the trust anchor verifying outbound peer
-// server certificates.
+// Secret supplies inbound credentials and ca.crt for verifying peer clients.
+// The client Secret supplies this process's own runtime client credentials
+// (never the sandbox manager's bundle) and ca.crt for verifying peer servers.
+// Both bundles use the shared TLS loader's fixed data-key precedence.
 func peerSecurityFromEnv() (peersecurity.Inputs, error) {
 	keySecret, err := utils.ParseSecretRef(os.Getenv(envPeerKeySecret))
 	if err != nil {
@@ -145,19 +136,11 @@ func peerSecurityFromEnv() (peersecurity.Inputs, error) {
 		return peersecurity.Inputs{}, fmt.Errorf("invalid %s: %w", envPeerTLSClientSecret, err)
 	}
 	in := peersecurity.Inputs{
-		PeerKeySecret:     keySecret,
-		PeerKeyDataKey:    os.Getenv(envPeerKeySecretKey),
-		TLSServerSecret:   serverSecret,
-		ServerCADataKey:   os.Getenv(envPeerTLSServerCAKey),
-		ServerCertDataKey: os.Getenv(envPeerTLSServerCertKey),
-		ServerKeyDataKey:  os.Getenv(envPeerTLSServerKeyKey),
-		TLSClientSecret:   clientSecret,
-		ClientCADataKey:   os.Getenv(envPeerTLSClientCAKey),
-		ClientCertDataKey: os.Getenv(envPeerTLSClientCertKey),
-		ClientKeyDataKey:  os.Getenv(envPeerTLSClientKeyKey),
-		AllowedClientCNs:  os.Getenv(envPeerAllowedClientCNs),
+		PeerKeySecret:    keySecret,
+		TLSServerSecret:  serverSecret,
+		TLSClientSecret:  clientSecret,
+		AllowedClientCNs: os.Getenv(envPeerAllowedClientCNs),
 	}
-	in.ApplyDefaults()
 	if err := in.Validate(); err != nil {
 		return peersecurity.Inputs{}, fmt.Errorf("invalid peer security environment variables: %w", err)
 	}

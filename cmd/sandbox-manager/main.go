@@ -149,15 +149,8 @@ func main() {
 	var quotaAntiDriftGrace time.Duration
 	var runtimeClientCertSecret string
 	var peerKeySecret string
-	var peerKeySecretKey string
 	var peerTLSServerSecret string
 	var peerTLSClientSecret string
-	var peerTLSServerCAKey string
-	var peerTLSServerCertKey string
-	var peerTLSServerKeyKey string
-	var peerTLSClientCAKey string
-	var peerTLSClientCertKey string
-	var peerTLSClientKeyKey string
 	var peerAllowedClientCNs string
 	var trafficTokenValidity time.Duration
 	var trafficTokenMinValidity time.Duration
@@ -218,30 +211,16 @@ func main() {
 	pflag.StringVar(&runtimeClientCertSecret, "runtime-client-cert-secret", "",
 		"namespace/name of the Secret holding the agent-runtime client TLS bundle. Leave it empty to disable the runtime mTLS.")
 	pflag.StringVar(&peerKeySecret, "peer-key-secret", "",
-		"namespace/name of the Secret holding the 32-byte memberlist key. Empty keeps plaintext memberlist.")
-	pflag.StringVar(&peerKeySecretKey, "peer-key-secret-key", "",
-		"Secret data key holding the memberlist key. Empty uses the default data key \"key\".")
+		"namespace/name of the Secret holding the 32-byte memberlist key in data key \"key\". Empty keeps plaintext memberlist.")
 	pflag.StringVar(&peerTLSServerSecret, "peer-tls-server-secret", "",
 		"namespace/name of the Secret holding the agent-runtime server TLS bundle, used to receive peer HTTPS. "+
 			"Must be set together with --peer-tls-client-secret; leave both empty to keep plaintext peer HTTP. "+
-			"The --peer-tls-server-*-key data keys are read only when this is set.")
-	pflag.StringVar(&peerTLSServerCAKey, "peer-tls-server-ca-key", "",
-		"Secret data key for the CA trusted for inbound peer client certificates. Empty uses \"ca.crt\".")
-	pflag.StringVar(&peerTLSServerCertKey, "peer-tls-server-cert-key", "",
-		"Secret data key for the server certificate presented on inbound peer HTTPS. Empty uses \"tls.crt\".")
-	pflag.StringVar(&peerTLSServerKeyKey, "peer-tls-server-key-key", "",
-		"Secret data key for the private key of the server certificate. Empty uses \"tls.key\".")
+			"Reads ca.crt and prefers tls.crt/tls.key over client.crt/client.key.")
 	pflag.StringVar(&peerTLSClientSecret, "peer-tls-client-secret", "",
 		"namespace/name of the Secret holding this process's agent-runtime client TLS bundle, used to send peer HTTPS "+
 			"(typically the same Secret as --runtime-client-cert-secret). "+
 			"Must be set together with --peer-tls-server-secret; leave both empty to keep plaintext peer HTTP. "+
-			"The --peer-tls-client-*-key data keys are read only when this is set.")
-	pflag.StringVar(&peerTLSClientCAKey, "peer-tls-client-ca-key", "",
-		"Secret data key for the CA trusted for outbound peer server certificates. Empty uses \"ca.crt\".")
-	pflag.StringVar(&peerTLSClientCertKey, "peer-tls-client-cert-key", "",
-		"Secret data key for the client certificate presented on outbound peer HTTPS. Empty uses \"client.crt\".")
-	pflag.StringVar(&peerTLSClientKeyKey, "peer-tls-client-key-key", "",
-		"Secret data key for the private key of the client certificate. Empty uses \"client.key\".")
+			"Reads ca.crt and prefers tls.crt/tls.key over client.crt/client.key.")
 	pflag.StringVar(&peerAllowedClientCNs, "peer-allowed-client-cns", "",
 		"Comma-separated client identities allowed on inbound peer mTLS, matched against the client certificate CN or its DNS SANs. "+
 			"Empty allows any client trusted by the peer server CA. A non-empty value requires --peer-tls-server-secret and --peer-tls-client-secret.")
@@ -313,19 +292,11 @@ func main() {
 		klog.Fatalf("Invalid --peer-tls-client-secret: %v", err)
 	}
 	peerSecurity := peersecurity.Inputs{
-		PeerKeySecret:     peerKeyRef,
-		PeerKeyDataKey:    peerKeySecretKey,
-		TLSServerSecret:   peerTLSServerRef,
-		TLSClientSecret:   peerTLSClientRef,
-		ServerCADataKey:   peerTLSServerCAKey,
-		ServerCertDataKey: peerTLSServerCertKey,
-		ServerKeyDataKey:  peerTLSServerKeyKey,
-		ClientCADataKey:   peerTLSClientCAKey,
-		ClientCertDataKey: peerTLSClientCertKey,
-		ClientKeyDataKey:  peerTLSClientKeyKey,
-		AllowedClientCNs:  peerAllowedClientCNs,
+		PeerKeySecret:    peerKeyRef,
+		TLSServerSecret:  peerTLSServerRef,
+		TLSClientSecret:  peerTLSClientRef,
+		AllowedClientCNs: peerAllowedClientCNs,
 	}
-	peerSecurity.ApplyDefaults()
 	if err := peerSecurity.Validate(); err != nil {
 		klog.Fatalf("Invalid peer security flags: %v", err)
 	}
