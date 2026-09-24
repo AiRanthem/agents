@@ -281,7 +281,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	if err := s.peerManager.Start(ctx, "", s.memberlistBindPort); err != nil {
-		_ = s.httpServer.Shutdown(ctx)
+		if shutdownErr := s.httpServer.Shutdown(ctx); shutdownErr != nil {
+			klog.ErrorS(shutdownErr, "Failed to shut down peer server after memberlist startup failure")
+		}
 		return err
 	}
 

@@ -76,10 +76,10 @@ func parseSecretConfig(data map[string][]byte) (secretConfig, error) {
 func loadSecretConfig(reader ctrlclient.Reader, ref string) (secretConfig, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), secretConfigLoadTimeout)
 	defer cancel()
-	secretRef, err := utils.ParseSecretRef(ref)
 	if ref == "" {
 		return secretConfig{}, fmt.Errorf("--secret-config must be in namespace/name form, got %q", ref)
 	}
+	secretRef, err := utils.ParseSecretRef(ref)
 	if err != nil {
 		return secretConfig{}, fmt.Errorf("--secret-config: %w", err)
 	}
