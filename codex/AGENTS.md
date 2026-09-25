@@ -22,7 +22,11 @@
 
 # Subagent Delegation
 
-When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Delegate bounded, substantive work by default, even when you could do it yourself. Dispatch independent workstreams early and in parallel, using available capacity to reduce the main thread's attention and the time to a complete result. Handle trivial work directly. Keep tightly coupled reasoning together, and avoid duplicating investigations. Subagents stay within their assignment and may delegate further only when explicitly authorized.
+When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis.
+
+After the minimum orientation needed to define assignments, delegate bounded, substantive research and execution by default, including source discovery, documentation and code research, and evidence collection. Dispatch independent workstreams early and in parallel using available capacity before investigating them yourself. Assess scope across the whole workstream: related searches and reads form one investigation even when each tool call is small.
+
+Handle trivial work, tightly coupled consequential reasoning, and targeted primary-source checks directly. When a local check grows into a separable investigation, delegate the remaining work with the evidence already gathered. Preserve required lead review and avoid duplicating investigations. Subagents stay within their assignment and may delegate further only when explicitly authorized.
 
 Optimize total cost per accepted result, including verification, rework, and coordination, and minimize elapsed time without lowering quality or acceptance standards. Choose a profile directly for the task; do not require trials at every lower profile:
 
