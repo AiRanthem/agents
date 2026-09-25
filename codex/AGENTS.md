@@ -22,21 +22,23 @@
 
 # Subagent Delegation
 
+When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Delegate bounded, substantive work by default, even when you could do it yourself. Dispatch independent workstreams early and in parallel, using available capacity to reduce the main thread's attention and the time to a complete result. Handle trivial work directly. Keep tightly coupled reasoning together, and avoid duplicating investigations. Subagents stay within their assignment and may delegate further only when explicitly authorized.
+
+Optimize total cost per accepted result, including verification, rework, and coordination, and minimize elapsed time without lowering quality or acceptance standards. Choose a profile directly for the task; do not require trials at every lower profile:
+
+* **Sol / high** — the default for substantive work requiring judgment, synthesis, or execution.
+* **Luna / high** — clearly simple, bounded work whose result is easy to verify.
+* **Sol / xhigh** — work needing deep analysis, or an unresolved reasoning gap after Sol / high.
+* **Astra / low** — a specific reason predicts Sol will lack the needed capability, or its approach or judgment has proved insufficient.
+
+Route independently of the main agent's model. Escalate only the unresolved part and preserve valid results. A missing fact, permission, or tool is not solved by changing models.
+
+Give each subagent the intended result, scope, constraints, acceptance criteria, and minimal sufficient context. Within that scope, the subagent should investigate, execute, check its work, and repair failures before returning a concise conclusion, artifact and evidence locations, and unresolved issues. Request an interim update only when a main-agent decision, blocker, or change of direction requires one.
+
+Reuse traceable, current evidence when it applies and covers the acceptance criteria. The executor should fill evidence gaps before handoff. The main agent handles small checks; delegate substantive independent verification, normally to Sol / high, when the user or workflow requires it or when consequential results cannot be accepted from existing evidence and a few checks. A verifier must inspect the actual artifact and necessary evidence, including how parts fit together, rather than relying on the executor's summary. Do not assign a verifier to every subagent. An executor cannot serve as its own independent verifier. After a repair, recheck the affected parts; the main agent need not repeat a full review. Stop verification once acceptance is met.
+
+Preserve results, then close completed threads that are no longer needed. When capacity is full, reclaim such threads before dispatching new work instead of taking over suitable subagent tasks. Reuse a suitable thread where its prior involvement does not compromise independence. If no thread can be reclaimed, continue independent work or wait for an event. When no close tool exists, state that limit and do not repeatedly attempt to spawn; completion or interruption does not close a thread.
+
 Use the event-driven waiting tool for subagent updates with a 600-second timeout (`timeout_ms: 600000` when supported). After a timeout, continue useful independent work or wait again; do not poll status or create work solely because the wait expired.
 
-When dispatching, reassigning, or escalating a subagent, report its task and the model and reasoning effort specified in the dispatch parameters, briefly explaining the profile choice or change. Do not inspect or verify the subagent's runtime settings.
-
-When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. When two or more independent workstreams exist, dispatch multiple subagents in parallel and use available worker capacity when this can shorten delivery or add useful independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
-
-Optimize expected end-to-end cost per correct result. Give each subagent a clear objective, relevant constraints, success criteria, and minimal sufficient context. Request concise, decision-relevant results with supporting evidence and material uncertainties.
-
-Route each delegated task directly to the lowest profile likely to complete it reliably:
-
-* **Luna / high** — clear, bounded, readily verifiable work.
-* **Luna / max** — substantial reasoning that remains well-scoped and reliably verifiable.
-* **Sol / high** — complex professional reasoning, judgment, synthesis, or context handling beyond Luna's reliable range.
-* **Astra / low** — genuinely hard or difficult-to-verify bounded problems where additional capability materially improves expected correctness.
-
-Use only these normal profiles, and route subagents independently of the main agent's model. Use **Astra / xhigh** only as an exceptional escalation for the smallest unresolved, consequential problem that remains genuinely uncertain.
-
-Prefer cheap verification over additional reasoning. If a result remains insufficient, escalate only the smallest unresolved part while preserving validated work.
+When dispatching, reassigning, or escalating a subagent, report its task and the model and reasoning effort specified in the dispatch parameters, briefly explaining the choice or change. Do not inspect or verify the subagent's runtime settings.
