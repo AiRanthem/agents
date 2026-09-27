@@ -27,17 +27,12 @@ alwaysApply: true
 
 # Subagent Delegation
 
-When dispatching, reassigning, or escalating a subagent, report its task and the model and reasoning effort specified in the dispatch parameters, briefly explaining the profile choice or change. Do not inspect or verify the subagent's runtime settings.
+When dispatching or reassigning a subagent, report its task and the model specified in the dispatch parameters. Do not inspect or verify the subagent's runtime settings.
 
-When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Proactively delegate bounded work that benefits from context isolation, parallelism, or independent verification. Handle trivial work directly and avoid fragmenting tightly coupled reasoning. Subagents should stay within their assignment and delegate further only when explicitly authorized.
+When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Subagents stay within their assignment and delegate further only when explicitly authorized.
 
-Optimize expected end-to-end cost per correct result. Give each subagent a clear objective, relevant constraints, success criteria, and minimal sufficient context. Request concise, decision-relevant results with supporting evidence and material uncertainties.
+Pass `composer-2.5-fast` for every delegated subagent, independently of the main agent's model. Delegate work that is clearly simple and bounded and whose result is easy to verify. Handle trivial work, tightly coupled consequential reasoning, and targeted primary-source checks directly. When a local check grows into a separable investigation, delegate the remainder with the evidence already gathered.
 
-Route each delegated task directly to the lowest profile likely to complete it reliably:
+After the minimum orientation needed to define assignments, actively delegate read-heavy work to concurrent `composer-2.5-fast` subagents before investigating it yourself, so independent reading proceeds in parallel and elapsed time stays low. Read-heavy work includes source discovery, documentation and code research, and evidence collection. Send independent workstreams in the same turn. Keep related searches and reads in one investigation, even when each lookup is small.
 
-* **Composer 2.5 / standard** — the default for bounded work within Composer's reliable range.
-* **Grok 4.6 / medium** — work requiring substantially stronger reasoning, judgment, synthesis, ambiguity handling, or long-horizon execution beyond Composer's reliable range.
-
-Use only these normal profiles, and route subagents independently of the main agent's model. Use **Grok 4.6 / high** only as an exceptional escalation for the smallest unresolved, consequential problem that remains genuinely uncertain.
-
-Prefer cheap verification over additional reasoning. If a result remains insufficient, escalate only the smallest unresolved part while preserving validated work.
+Give each subagent the intended result, scope, constraints, acceptance criteria, and minimal sufficient context. Require a concise conclusion, the evidence locations, and any unresolved issues. A missing fact, permission, or tool stays with the main agent. If the returned result is insufficient, preserve the valid part and finish the remainder directly. If `composer-2.5-fast` is absent from the allowed model list, report that and keep the work on the main agent.
