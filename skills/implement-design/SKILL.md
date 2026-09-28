@@ -30,13 +30,13 @@ Ask before adding or reshaping a data structure unless its change and shape were
 
 Explain the need, existing type or simpler representation considered, and smallest proposed shape. Batch related requests when useful. Local variables and ordinary anonymous values need no approval, but must not hide a type or schema that should be explicit. These rules also apply to test-only named types.
 
-Stop before an affected edit for an unapproved or decision-changing draft, unresolved product decision, translation conflict, infeasible contract, uncovered breaking change, or special release requirement. Continue only independent work that cannot constrain the pending decision. Never change the contract or weaken acceptance criteria to make a deviation appear compliant.
+Stop before an affected edit for an unapproved or decision-changing draft, unresolved product decision, contract conflict, infeasible contract, uncovered breaking change, or special release requirement. Continue only independent work that cannot constrain the pending decision. Never change the contract or weaken acceptance criteria to make a deviation appear compliant.
 
-When a release, compatibility, or upgrade constraint must remain attached to an existing design, propose a narrow **Implementation Notes / 实现注意事项** entry. Apply the contract-repair and mode boundaries below; exclude tasks or progress history.
+When a release, compatibility, or upgrade constraint must remain attached to an existing design, propose a narrow **Implementation Notes** entry in the document's language, including its heading. Apply the contract-repair and mode boundaries below; exclude tasks or progress history.
 
 ## Establish the contract and classify the work
 
-Read the complete approved requirements and decisions from the design document or current conversation, including Why, What, rationale, non-goals, and accepted limitations. If documents exist, read both members of an EN/CN pair, preserve intentionally deleted counterparts, and resolve meaning-changing conflicts before affected edits. A file is not a prerequisite: use and briefly restate the approved conversational contract without creating one. Read relevant repository instructions, code, tests, and useful history. Trace the whole affected behavior, not just the files expected to change.
+Read the complete approved requirements and decisions from the single authoritative design document or current conversation, including Why, What, rationale, non-goals, and accepted limitations. Resolve meaning-changing contract conflicts before affected edits. A file is not a prerequisite: use and briefly restate the approved conversational contract without creating one. Read relevant repository instructions, code, tests, and useful history. Trace the whole affected behavior, not just the files expected to change.
 
 For direct Agent-mode implementation of a design, use a current `design_status: implementable` document as review evidence when available. Check whether later material changes or evidence invalidate that status. If there is no current status, including for a conversation-only design, stop before affected code edits; explain the missing review assurance and any concrete uncertainty, then ask whether the user wants to proceed with the approved contract. Continue when the user explicitly agrees, reusing an existing agreement for the same unchanged contract. That agreement waives only the missing review status, not an unresolved product decision, a demonstrated design defect, other approvals, or verification. Do not invoke the explicit-only `$review-design` without the user's request.
 
@@ -70,7 +70,7 @@ When decomposition or coding reveals a design defect, stop affected implementati
 
 After agreement:
 
-- **Existing design, Agent mode:** Write the approved Why/What correction into the existing design, synchronizing both surviving language versions when applicable. Set `design_status: review-pending` in the affected surviving documents. Approval of that concrete correction authorizes its in-scope writeback; reuse it without asking again for the same edit. Preserve unrelated content and keep implementation TODOs out of the design.
+- **Existing design, Agent mode:** Write the approved Why/What correction into the single existing design document in its language. Set `design_status: review-pending` in that document. Approval of that concrete correction authorizes its in-scope writeback; reuse it without asking again for the same edit. Preserve unrelated content and keep implementation TODOs out of the design.
 - **Existing design, Plan mode:** Keep all design files unchanged. Restate the approved correction in the conversation as the current contract and retain the exact existing paths and agreed changes for synchronization in Agent mode before affected code edits. This deferred correction is limited to existing documents; it does not authorize creating a design file.
 - **No design document:** Restate the approved revised requirements and decisions in the conversation. No document creation or writeback is needed.
 

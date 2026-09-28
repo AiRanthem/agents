@@ -51,7 +51,7 @@ When the user supplies design-review findings, read the current design, original
 
 A material revision to a reviewed design document returns that document to pending review. Preserve the prior findings and accepted decisions as evidence, but do not carry its `implementable` status to the changed document.
 
-In the decision report, list proposed decision changes under **Added / 新增**, **Modified / 修改**, and **Removed / 删除**, explicitly saying when a category is empty. Briefly summarize the unchanged contract and explain any material review finding that was not adopted.
+In the decision report, list proposed decision changes under Added, Modified, and Removed, using headings in the report's language and explicitly saying when a category is empty. Briefly summarize the unchanged contract and explain any material review finding that was not adopted.
 
 ## Decision value and code cost
 
@@ -88,7 +88,7 @@ State the mode-specific action this approval enables. In Agent mode only, read [
 After approval:
 
 - **Plan mode:** Read and invoke `$implement-design` in the current conversation with the approved requirements and decisions. This handoff is part of the approved workflow; do not ask the user to invoke it again. It resolves How and emits the sole final implementation plan without requiring a design document or `implementable` status. If the skill is unavailable, report the missing capability conversationally; do not substitute a design document or approval plan.
-- **Agent mode:** Write the formal Simplified Chinese Why/What design at the approved path using the document instructions, validate it, and finish this skill with the path and current design identity ready for `$review-design`.
+- **Agent mode:** Write one formal Why/What design document in a single language at the approved path using the document instructions, validate it, and finish this skill with the path and current design identity ready for `$review-design`.
 
 In Agent mode, invoke `$review-design` next only if the user explicitly requested that skill; otherwise report the pending review. A review finding that changes Why/What returns here for discussion and approval.
 

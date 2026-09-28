@@ -6,16 +6,15 @@ Read and apply this reference only in Agent mode, after identifying the active h
 
 Inspect applicable instructions, design directories, templates, metadata, naming patterns, and nearby documents. Reuse an already-approved exact path; otherwise obtain path approval together with the Why/What contract. Repository conventions inform the proposed path, not authorization.
 
-- New designs use `<base>-CN.md`, in natural Simplified Chinese.
-- Update the Chinese member of an existing pair without changing its English design content. If a material revision invalidates an `implementable` status on the surviving English counterpart, include its path in the approved metadata-only scope and reset its status to `review-pending`. Do not claim the pair is synchronized; meaning-changing differences must be resolved before review can mark the design implementable.
-- Update an existing unsuffixed single-file design in place. Preserve its name and single-file form.
+- Maintain exactly one authoritative document per design, in one language. Use the user's requested language; otherwise preserve an existing document's language or use Simplified Chinese for a new design.
+- New designs use `<base>.md` unless repository naming conventions apply. Update an existing design in place, preserving its approved path.
 - Follow repository formatting and metadata conventions, otherwise the conventions of the document's language.
 - Record `design_status: review-pending` in YAML frontmatter for a complete approved design, or `design_status: draft` for an explicitly requested unapproved draft. Revisions to a previously reviewed Why/What contract reset this field to `review-pending`; only `$review-design` may set it to `implementable` after independent review passes. Preserve unrelated frontmatter fields.
 - Write only approved design paths. Delegate writing only within those paths with non-overlapping ownership, and verify the resulting text yourself.
 
 ## Record the approved contract
 
-Use these top-level sections:
+Use these top-level sections, with headings in the document's language:
 
 1. **摘要** — first in the document, written last; explain the problem, direction, and end state in under one minute.
 2. **背景** — the problem, benefits, and significance: Why.
@@ -25,8 +24,8 @@ Add Alternatives or Risks only for material content. An explicitly requested dra
 
 Stable facts about the existing system may explain the background. Keep transient snapshots, superseded designs, implementation history, and migration narratives out of the contract. Examples describe runtime outcomes, not test commands.
 
-Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes / 实现注意事项** only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
+Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes**, titled in the document's language, only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
 
 ## Validate
 
-Re-read against the approved requirements and decisions. Confirm the three sections, natural Simplified Chinese, observable target-state precision, the appropriate `design_status` (`review-pending` or `draft`), and absence of implementation-process content. Check that only approved paths were written and run relevant narrow documentation checks. Report draft status or any remaining language-pair inconsistency honestly; document completion does not establish independent review or implementation.
+Re-read against the approved requirements and decisions. Confirm one document in the selected language, the three sections, observable target-state precision, the appropriate `design_status` (`review-pending` or `draft`), and absence of implementation-process content. Check that only the approved path was written and run relevant narrow documentation checks. Report draft status honestly; document completion does not establish independent review or implementation.
