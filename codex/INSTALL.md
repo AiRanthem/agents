@@ -17,6 +17,17 @@
 
 仓库更新后重新执行安装流程。`AGENTS.md` 和专用 skill 软链接会直接使用仓库版本；新增 skill 需要补链。删除 skill 时，仅清理目标位于本目录 `skills/` 内的对应失效链接。hooks 需要重新合并并在内容变化后重新审核信任。
 
+## 子代理线程上限
+
+在 `~/.codex/config.toml` 的现有 `[agents]` 段中合并以下配置，保留其他字段；若存在旧别名 `max_threads`，移除该别名以避免重复配置：
+
+```toml
+[agents]
+max_concurrent_threads_per_session = 20
+```
+
+该值限制同时打开的子代理线程数，不含主线程。以 [OpenAI 配置参考](https://learn.chatgpt.com/docs/config-file/config-reference#configtoml) 为准。更新后验证 TOML 并运行 `codex --strict-config doctor --summary --no-color`；重新启动本地 Codex 会话加载配置。此设置不保证改变托管会话的并发限制。
+
 ## 验证
 
 2026-09-17：移除与全局委派规则重复的 `astra-lead` 及其用户级软链接；`SessionStart` / `compact` hook 恢复为只重载全局和仓库 `AGENTS.md`。
