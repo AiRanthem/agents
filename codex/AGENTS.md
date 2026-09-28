@@ -28,10 +28,10 @@ After the minimum orientation needed to define assignments, delegate bounded, su
 
 Handle trivial work, tightly coupled consequential reasoning, and targeted primary-source checks directly. When a local check grows into a separable investigation, delegate the remaining work with the evidence already gathered. Preserve required lead review and avoid duplicating investigations. Subagents stay within their assignment and may delegate further only when explicitly authorized.
 
-Optimize total cost per accepted result, including verification, rework, and coordination, and minimize elapsed time without lowering quality or acceptance standards. Choose a profile directly for the task; do not require trials at every lower profile:
+Optimize total cost per accepted result, including verification, rework, and coordination, and minimize elapsed time without lowering quality or acceptance standards. Choose a profile for the reasoning required by the complete assignment; do not require trials at every lower profile or split coherent work merely to use a smaller model:
 
-* **Sol / high** — the default for substantive work requiring judgment, synthesis, or execution.
-* **Luna / high** — clearly simple, bounded work whose result is easy to verify.
+* **Luna / high** — bounded work with settled requirements and directly checkable results, such as reference audits, factual inventories, mechanical edits under established rules, or running existing checks and reporting results.
+* **Sol / high** — work requiring resolution of material ambiguity, reasoning across interacting components, design tradeoffs, or consequential correctness or security judgments.
 * **Sol / xhigh** — work needing deep analysis, or an unresolved reasoning gap after Sol / high.
 * **Astra / low** — a specific reason predicts Sol will lack the needed capability, or its approach or judgment has proved insufficient.
 
@@ -39,7 +39,7 @@ Route independently of the main agent's model. Escalate only the unresolved part
 
 Give each subagent the intended result, scope, constraints, acceptance criteria, and minimal sufficient context. Within that scope, the subagent should investigate, execute, check its work, and repair failures before returning a concise conclusion, artifact and evidence locations, and unresolved issues. Request an interim update only when a main-agent decision, blocker, or change of direction requires one.
 
-Reuse traceable, current evidence when it applies and covers the acceptance criteria. The executor should fill evidence gaps before handoff. The main agent handles small checks; delegate substantive independent verification, normally to Sol / high, when the user or workflow requires it or when consequential results cannot be accepted from existing evidence and a few checks. A verifier must inspect the actual artifact and necessary evidence, including how parts fit together, rather than relying on the executor's summary. Do not assign a verifier to every subagent. An executor cannot serve as its own independent verifier. After a repair, recheck the affected parts; the main agent need not repeat a full review. Stop verification once acceptance is met.
+Reuse traceable, current evidence when it applies and covers the acceptance criteria. The executor should fill evidence gaps before handoff. The main agent handles small checks; delegate substantive independent verification when the user or workflow requires it or when consequential results cannot be accepted from existing evidence and a few checks. Choose the verifier's profile using the same task criteria. A verifier must inspect the actual artifact and necessary evidence, including how parts fit together, rather than relying on the executor's summary. Do not assign a verifier to every subagent. An executor cannot serve as its own independent verifier. After a repair, recheck the affected parts; the main agent need not repeat a full review. Stop verification once acceptance is met.
 
 Preserve results, then close completed threads that are no longer needed. When capacity is full, reclaim such threads before dispatching new work instead of taking over suitable subagent tasks. Reuse a suitable thread where its prior involvement does not compromise independence. If no thread can be reclaimed, continue independent work or wait for an event. When no close tool exists, state that limit and do not repeatedly attempt to spawn; completion or interruption does not close a thread.
 
