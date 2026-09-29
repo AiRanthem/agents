@@ -2,6 +2,6 @@
   "type": "command",
   "command": "~/.cursor/statusline.sh",
   "padding": 2,
-  "updateIntervalMs": 500,
+  "updateIntervalMs": 30000,
   "timeoutMs": 4000
 }
