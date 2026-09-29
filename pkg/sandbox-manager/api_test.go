@@ -55,6 +55,7 @@ import (
 	"github.com/openkruise/agents/pkg/sandboxroute"
 	"github.com/openkruise/agents/pkg/sandboxroute/refresh"
 	"github.com/openkruise/agents/pkg/utils"
+	"github.com/openkruise/agents/pkg/utils/expectations"
 	"github.com/openkruise/agents/pkg/utils/pagination"
 	"github.com/openkruise/agents/pkg/utils/testutils"
 	"github.com/openkruise/agents/pkg/utils/timeout"
@@ -487,6 +488,10 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 					if tt.prepareSandbox != nil {
 						tt.prepareSandbox(testSbx)
 					}
+					// A fixed UID would leave a process-wide resourceVersion expectation behind for repeated runs.
+					t.Cleanup(func() {
+						expectations.ResourceVersionExpectationDelete(testSbx)
+					})
 					CreateSandboxWithStatus(t, client, testSbx)
 				}
 				require.Eventually(t, func() bool {
@@ -517,6 +522,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				tt.opts.ClaimTimeout = 100 * time.Millisecond
 			}
 			var claimed infra.Sandbox
+			var claimErr error
 			err := retry.OnError(wait.Backoff{
 				Duration: 100 * time.Millisecond,
 				Factor:   1,
@@ -528,8 +534,14 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				if err == nil {
 					claimed = got
 				}
+				claimErr = err
 				return err
 			})
+			// retry.OnError replaces an interrupted error (e.g. one wrapping context.DeadlineExceeded)
+			// with the last retriable error, which is nil if none occurred; keep the real claim error.
+			if err == nil && claimed == nil {
+				err = claimErr
+			}
 
 			if tt.expectError != "" {
 				require.Error(t, err)
@@ -540,6 +552,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				}
 			} else {
 				require.NoError(t, err)
+				require.NotNil(t, claimed)
 				if tt.postCheck != nil {
 					tt.postCheck(t, manager, client, claimed)
 				}
