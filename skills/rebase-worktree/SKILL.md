@@ -1,73 +1,51 @@
 ---
 name: rebase-worktree
-description: Safely rebase the current Git worktree onto a user-specified branch or ref while preserving committed and uncommitted state, resolving semantic conflicts, restoring local changes, and independently verifying the result. Use for existing-worktree rebase requests; exclude merge, cherry-pick, worktree creation, push, and PR workflows.
+description: Rebase the current Git worktree onto a user-specified branch or ref, using a direct path when no conflict risk is known and recovery plus independent verification when evidence suggests conflicts. Use for existing-worktree rebase requests; exclude merge, cherry-pick, worktree creation, push, and PR workflows.
 ---
 
 # Rebase Worktree
 
-Rebase the current branch onto an exact target while preserving a recoverable pre-rebase state and demonstrating that the intended patch series and local work survive the rewrite.
+Rebase the current branch onto an exact target. Use the full recovery and verification flow only when concrete evidence suggests replay or local-state restoration may conflict, or when a conflict actually occurs.
 
 ## Keep authority and state explicit
 
-A request to rebase authorizes the local safety branch, stash, history rewrite, conflict resolution consistent with confirmed intent, local-state restoration, and relevant non-destructive verification. Refresh only the applicable remote ref when the request requires its current remote state or repository instructions require the refresh. Push, force-push, PR changes, sign-off rewrites, and deletion of recovery refs require separate user authorization.
+A request to rebase authorizes the local history rewrite, preservation and restoration of local work, conflict resolution consistent with confirmed intent, a safety branch when the full flow applies, and relevant non-destructive verification. Refresh only the applicable remote ref when the request requires its current remote state or repository instructions require the refresh. Push, force-push, PR changes, sign-off rewrites, and deletion of recovery refs require separate user authorization.
 
 Follow all applicable repository instructions and remote/ref restrictions. Preserve unrelated work and configuration. Never infer a target, replay boundary, merge policy, or semantic conflict decision when multiple reasonable interpretations remain.
 
-## Establish a stable operation
+## Establish the operation and choose the path
 
-- Identify the repository and worktree, current branch and `HEAD`, target ref and exact target OID, configured upstreams, relevant worktrees, merge base or fork point, and the commits intended for replay. Use `--onto` only when the intended old base and replay range are established.
-- Inspect staged, unstaged, untracked, ignored, and submodule state. Detect an in-progress rebase, merge, cherry-pick, revert, or bisect before changing refs or the index.
-- Stop for a detached `HEAD`, ambiguous or missing target, unclear replay range, active Git operation, or another process changing the target. Continue after the user resolves the consequential choice or the operation returns to a stable state.
-- Pin the target OID used by the rebase. If a permitted fetch changes the target, update the recorded OID and replay analysis before proceeding.
-- If the current branch already has the required base and no commits need replay, report the established state without creating recovery refs or changing the worktree.
+- Identify the repository and worktree, current branch and original `HEAD` OID, target ref and exact target OID, and commits intended for replay. Establish the old base before using `--onto`; preserve meaningful merge topology when required.
+- Check staged, unstaged, untracked, ignored, and submodule state, and whether a rebase, merge, cherry-pick, revert, or bisect is in progress. Stop for a detached `HEAD`, ambiguous or missing target, unclear replay range, active Git operation, or state that cannot be preserved safely.
+- Pin the target OID used by the rebase. If a permitted fetch changes the target, update the recorded OID and risk assessment before proceeding; stop if another process changes the target during the operation. If the branch already has the required base and no commits need replay, report that state without changing the worktree.
+- Assess conflict risk from the intended replay and local restoration with a small inspection of changed paths and relevant history. Overlap between upstream and replayed changes, semantic dependencies across files, or overlap between saved local changes and the resulting tree calls for the full flow. A dirty worktree alone does not. Do not treat the mere possibility inherent in every rebase as evidence of a conflict.
 
-## Freeze the pre-rebase state
+When none of those risks is known, rebase directly. Do not prepare an extra worktree or safety branch, run a trial rebase, or require a range diff, independent review, or broad test suite for this path.
 
-Create a collision-free local safety branch at the original `HEAD` and record its name and OID. Keep it outside the replayed branch. The eventual rebase must use `--no-update-refs` so configuration cannot move this safety branch.
+<!-- known-limit: Changed-path overlap is a heuristic and cannot rule out every per-commit or semantic conflict. If new evidence or a conflict appears, use the full flow. -->
 
-For a dirty worktree, create a uniquely named stash with `--include-untracked` and record the stash commit OID rather than relying only on a positional name such as `stash@{0}`. Record the staged, unstaged, and untracked path sets without exposing file contents or secrets. The frozen state is the original-tip safety branch plus this stash object.
+## Preserve local work and rebase
 
-- Preserve ignored files only when they are relevant and the user authorizes including them; do not default to `--all`.
-- Treat modified submodules and other state that stash cannot safely capture as unresolved until a concrete preservation method is approved.
-- Do not create a WIP commit in the replayed history. Create a separate snapshot commit only when the user explicitly requests that representation and it cannot enter the rebase range.
-- Verify that the safety branch still resolves to the original tip, the stash OID is readable when one was needed, and the primary worktree is clean before starting the rebase.
+For a dirty worktree on either path, create a uniquely named stash with `--include-untracked`; record its commit OID and the staged, unstaged, and untracked path sets. Preserve ignored files only when relevant and authorized; do not default to `--all`. Treat modified submodules and other state that stash cannot safely capture as unresolved until a concrete preservation method is established. Verify that the stash OID is readable and the worktree is clean before rebasing. Do not create a WIP commit in the replayed history.
 
-If any relevant state cannot be represented and recovered, stop before rewriting history.
+On the full path, first create a collision-free local safety branch at the recorded original `HEAD`, outside the replayed branch, and verify its OID. Keep its name and OID for recovery. On the direct path, the recorded original `HEAD` OID and any stash OID are sufficient until a conflict occurs.
 
-## Rebase and resolve semantics
+Choose ordinary rebase, `--onto`, or `--rebase-merges` from the established history and repository contract. Use `--no-autostash` and `--no-update-refs` so Git does not move other branches or take control of the recorded stash. Do not skip, drop, combine, or accept an empty commit without evidence that its intended change is already present or intentionally superseded.
 
-Choose ordinary rebase, `--onto`, or `--rebase-merges` from the established history and repository contract. Preserve meaningful merge topology and exclude unrelated commits. Run with `--no-autostash` and `--no-update-refs` so the recorded stash and safety branch remain under explicit control.
+If a direct rebase stops on a conflict, preserve the original `HEAD` and stash OIDs, abort the rebase, and verify that the original branch tip is restored. Then create the safety branch at that recorded original OID and continue under the full flow. If abort does not restore a stable state, stop with the original OID and stash recorded; never create a purported original-tip backup from the current conflicted `HEAD`.
 
-For each conflict, inspect the replayed commit, base stages, callers, tests, and both sides' current behavior. During rebase, do not assume `ours` and `theirs` mean the same thing as during a normal merge. Resolve mechanical conflicts that have one behavior-preserving result. When alternatives change behavior, ownership, compatibility, or scope, ask the user and summarize the resulting local code state and global system state for each viable option.
+After a successful rebase, verify that the pinned target is an ancestor of the new tip. Restore any stash by its recorded OID with its index state, preserving originally staged changes. Compare the final staged, unstaged, and untracked path sets with the recorded state and explain intentional differences. Confirm no rebase remains in progress and the index has no unresolved entries. Keep the stash object until verification is complete. If restoration conflicts on the direct path, create the safety branch at the recorded original OID, preserve the stash, and use the full flow's conflict resolution and verification for the already rebased tip.
 
-Do not skip, drop, combine, or accept an empty commit without evidence that its intended change is already present or intentionally superseded. Record every such decision. Abort with `git rebase --abort` when the safety snapshot becomes invalid or an essential conflict cannot be resolved; preserve the safety branch and stash for recovery.
+## Full flow when conflict risk exists
 
-After rebase completes, verify that the pinned target is an ancestor of the new tip and the safety branch still points to the recorded original tip before restoring local work.
+Before rebasing on this path, confirm that the safety branch points to the original tip and the worktree is clean after any stash. If state cannot be represented and recovered, stop before rewriting history. A separate snapshot commit is allowed only when the user explicitly requests it and it cannot enter the rebase range.
 
-## Restore the exact local state
+For each replay or restoration conflict, inspect the replayed commit, base stages, callers, tests, and both sides' current behavior. During rebase, `ours` and `theirs` have different roles from a normal merge. Resolve mechanical conflicts with one behavior-preserving result. When alternatives change behavior, ownership, compatibility, or scope, ask the user and summarize each viable option's local code and system behavior. Abort when an essential replay conflict cannot be resolved, preserving the safety branch and stash. Record decisions about any skipped, dropped, combined, or empty commits.
 
-Apply the recorded stash by OID with its index state so originally staged changes remain staged. Keep the stash object until the entire rebase has passed independent verification. If restoration conflicts, preserve the stash, resolve only semantically clear cases, and obtain the user's decision for changes that alter behavior or scope.
+Verify that the pinned target is an ancestor of the new tip and the safety branch still points to the original tip. Compare old and new series with `git range-diff` or equivalent commit-level evidence, accounting for every intended old commit, including reordered, split, combined, empty, or dropped commits. Verify the restored staged, unstaged, and untracked work semantically, including conflict resolutions, and check for unresolved conflict markers. Run risk-appropriate checks for the affected behavior.
 
-Compare the final staged, unstaged, and untracked path sets with the recorded state. Explain any intentional difference. An applied stash or clean command exit alone does not prove that local work was preserved.
-
-## Require independent verification
-
-Once the rebased tip and restored worktree are stable, dispatch one fresh read-only subagent that did not perform the rebase. Give it the repository/worktree path, original tip and base, safety branch and OID, stash OID when present, pinned target OID, new tip, conflict files and decisions, and verification already run. The subagent must not checkout branches, change refs or the index, apply a stash, resolve conflicts, or modify the shared worktree.
-
-The subagent must independently:
-
-- use `git range-diff` or equivalent commit-level evidence to account for every intended old commit in the new series, including reordered, split, combined, empty, or dropped commits;
-- inspect each conflict resolution and distinguish upstream integration from lost branch behavior;
-- verify the pinned target ancestry, unchanged safety ref, absence of unresolved conflict markers, and a stable final snapshot;
-- compare the frozen stash state with the restored staged, unstaged, and untracked work for semantic preservation; and
-- assess risk-appropriate tests, builds, formatting, generation, and static checks, running permitted read-only checks when existing evidence is insufficient.
-
-The primary agent must validate material findings against the repository and resolve them before claiming success. If no qualifying subagent is available, complete safe local checks and report that the branch was rebased but correctness is Unable to conclude because the independent gate is missing.
+Dispatch a fresh read-only subagent that did not perform the rebase for independent verification of the stable final snapshot, recovery refs, commit accounting, conflict resolutions, and local-state restoration. Give it the original tip and base, safety branch and OID, stash OID when present, pinned target and new tip, and the evidence already collected. It must not change refs, index, stash, or worktree. Resolve material findings before claiming independent verification. If no qualifying subagent is available, complete safe local checks and report that the rebase succeeded but correctness cannot be concluded without the independent gate.
 
 ## Report and retain recovery
 
-Report the repository/worktree, current branch, exact original tip, old base, pinned target, new tip, safety branch, stash OID and restoration state, rebase mode, conflicts and resolutions, range comparison, verification commands and results, subagent identity when known, findings, and remaining uncertainty.
-
-Use one of these outcomes: **Rebased and independently verified**, **Rebased but unable to conclude**, or **Aborted or blocked with recovery intact**. Claim the first only when the intended commits and local state are accounted for and all required checks pass.
-
-Leave the safety branch and stash in place unless the user separately authorizes their deletion. End after reporting the exact cleanup candidates; do not push or publish the rewritten history.
+For either path, report the worktree, branch, original tip, pinned target, new tip, rebase mode, local-state restoration, stash OID when present, checks and results, exact cleanup candidates, and any uncertainty. For the full path also report the safety branch, conflict decisions, commit comparison, and independent verifier. Do not claim independent verification unless it occurred. Leave any safety branch and stash in place unless the user separately authorizes deletion. Do not push or publish the rewritten history.

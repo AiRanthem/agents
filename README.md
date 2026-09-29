@@ -44,7 +44,7 @@ $install 安装或更新这个 dev-kit
 | --- | --- |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$cleanup-worktree` | 核验所有相关远程上的 PR/MR 均已合并，经确认后安全清理对应 worktree 与分支。 |
-| `$rebase-worktree` | 将当前 Git worktree 安全 rebase 到指定分支并独立验证结果。 |
+| `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
 | `$explore-design` | 探索或细化 Why/What；Plan mode 直接衔接实施规划，Agent mode 将设计文档标记为 `review-pending`。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |
 | `$implement-design` | 将已确认设计落实实现；Agent mode 缺评审状态时先警告并征得用户同意。 |
