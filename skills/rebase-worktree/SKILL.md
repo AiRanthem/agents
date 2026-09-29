@@ -9,7 +9,7 @@ Rebase the current branch onto an exact target. Use the full recovery and verifi
 
 ## Keep authority and state explicit
 
-A request to rebase authorizes the local history rewrite, preservation and restoration of local work, conflict resolution consistent with confirmed intent, a safety branch when the full flow applies, and relevant non-destructive verification. Refresh only the applicable remote ref when the request requires its current remote state or repository instructions require the refresh. Push, force-push, PR changes, sign-off rewrites, and deletion of recovery refs require separate user authorization.
+A request to rebase authorizes the local history rewrite, preservation and restoration of local work, conflict resolution consistent with confirmed intent, a safety branch when the full flow applies, and relevant non-destructive verification. Refresh only the applicable remote ref when the request requires its current remote state or repository instructions require the refresh. Push, force-push, PR changes, sign-off rewrites, and deletion of recovery refs require separate user authorization. Confirmation of an exact `cleanup-worktree` manifest that lists a recovery ref provides that authorization for the listed ref.
 
 Follow all applicable repository instructions and remote/ref restrictions. Preserve unrelated work and configuration. Never infer a target, replay boundary, merge policy, or semantic conflict decision when multiple reasonable interpretations remain.
 
@@ -48,4 +48,4 @@ Dispatch a fresh read-only subagent that did not perform the rebase for independ
 
 ## Report and retain recovery
 
-For either path, report the worktree, branch, original tip, pinned target, new tip, rebase mode, local-state restoration, stash OID when present, checks and results, exact cleanup candidates, and any uncertainty. For the full path also report the safety branch, conflict decisions, commit comparison, and independent verifier. Do not claim independent verification unless it occurred. Leave any safety branch and stash in place unless the user separately authorizes deletion. Do not push or publish the rewritten history.
+For either path, report the worktree, branch, original tip, pinned target, new tip, rebase mode, local-state restoration, stash OID when present, checks and results, exact cleanup candidates, and any uncertainty. For the full path also report the safety branch's full local ref and OID, conflict decisions, commit comparison, and independent verifier. Do not claim independent verification unless it occurred. Leave any safety branch and stash in place unless the user authorizes deletion. Do not push or publish the rewritten history.
