@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -1598,6 +1599,23 @@ func TestBuildCacheConfig(t *testing.T) {
 			assert.Nil(t, pvCfg.Namespaces, "PersistentVolume should have no namespace filter")
 			assert.Nil(t, pvCfg.Label, "PersistentVolume should have no label filter")
 			assert.Nil(t, pvCfg.UnsafeDisableDeepCopy, "UnsafeDisableDeepCopy should be nil for PersistentVolume (handled by DefaultUnsafeDisableDeepCopy)")
+
+			// Verify Pod is always present, restricted to sandbox-generated pods.
+			podCfg, podOk := getConfigByType(byObject, &corev1.Pod{})
+			require.True(t, podOk, "Pod should always be in byObject")
+			require.NotNil(t, podCfg.Label, "Pod should have a label filter")
+			assert.Equal(t,
+				labels.Set{utils.PodLabelCreatedBy: utils.CreatedBySandbox}.AsSelector().String(),
+				podCfg.Label.String(),
+				"Pod label filter should select only sandbox-generated pods")
+			if tt.wantCustomNs != "" {
+				require.NotNil(t, podCfg.Namespaces, "Pod Namespaces should mirror SandboxNamespace")
+				assert.Len(t, podCfg.Namespaces, 1, "Pod Namespaces should have exactly one entry")
+				_, nsOk := podCfg.Namespaces[tt.wantCustomNs]
+				assert.True(t, nsOk, "namespace %s should be in Pod Namespaces", tt.wantCustomNs)
+			} else {
+				assert.Nil(t, podCfg.Namespaces, "Pod should have no namespace filter when no SandboxNamespace")
+			}
 		})
 	}
 }
@@ -1610,4 +1628,15 @@ func TestCache_GetCache_ReturnsManagerCache(t *testing.T) {
 
 	require.Equal(t, c.GetMockManager().GetCache(), c.GetCache(),
 		"GetCache must return the underlying manager's cache")
+}
+
+// TestCache_Run_PreWarmsPodInformer covers the Run startup path: it forces the
+// Pod informer to exist via GetInformer before WaitForCacheSync, so the informer
+// is part of the startup sync gate rather than created lazily on the first pod
+// read. The mock manager's cache stubs both calls as no-ops, so Run must succeed.
+func TestCache_Run_PreWarmsPodInformer(t *testing.T) {
+	c, _, err := cachetest.NewTestCache(t)
+	require.NoError(t, err)
+
+	require.NoError(t, c.Run(t.Context()))
 }

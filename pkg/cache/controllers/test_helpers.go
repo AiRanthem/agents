@@ -50,8 +50,8 @@ import (
 // MockManager.GetCache(). Returning a non-nil value is required so production
 // code that injects the cache into downstream consumers (e.g., the e2b
 // key-storage factory) does not reject the test wiring as if no cache were
-// configured. The only methods exercised by the production cache lifecycle
-// in tests are IndexField and WaitForCacheSync; both are no-ops because the
+// configured. The methods exercised by the production cache lifecycle in tests
+// are IndexField, WaitForCacheSync, and GetInformer; all are no-ops because the
 // fake client built alongside MockManager already has indexes wired through
 // fake.WithIndex, and tests never block on real informer sync. Any other
 // method falls through to the embedded nil interface and panics, which is
@@ -70,6 +70,13 @@ func (*stubCtrlCache) IndexField(_ context.Context, _ client.Object, _ string, _
 // WaitForCacheSync returns true so cache.Run does not block on a fake
 // informer that will never sync.
 func (*stubCtrlCache) WaitForCacheSync(_ context.Context) bool { return true }
+
+// GetInformer returns a nil informer and no error. cache.Run pre-warms the Pod
+// informer through it, but there is no real informer to sync in tests and the
+// caller discards the returned informer, checking only the error.
+func (*stubCtrlCache) GetInformer(_ context.Context, _ client.Object, _ ...ctrlcache.InformerGetOption) (ctrlcache.Informer, error) {
+	return nil, nil
+}
 
 // Start blocks until ctx is done so cache.Run's mgr.Start goroutine has
 // something to exit cleanly when the test cancels its context.

@@ -141,6 +141,10 @@ type Cache struct {
 // C — Cluster-scoped resources (no namespace filtering):
 //
 //	PersistentVolume
+//
+// D — Sandbox pods (sandbox namespace + created-by selector):
+//
+//	Pod
 func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]ctrlcache.ByObject, error) {
 	// Parse label selector if configured
 	var labelSelector labels.Selector
@@ -194,6 +198,21 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 
 	// Namespace-scoped resources (sandbox namespace)
 	byObject[&corev1.PersistentVolumeClaim{}] = customObjConfig
+
+	// Sandbox pods, restricted to the ones the sandbox controller generated.
+	// Pods are the largest object population in a cluster and sandbox-manager
+	// only ever reads one to decide which identity label its TrafficPolicy
+	// selects on. SandboxLabelSelector must not be reused here: it matches
+	// Sandbox CRs, whose labels their pods do not carry.
+	podConfig := ctrlcache.ByObject{
+		Label: labels.Set{utils.PodLabelCreatedBy: utils.CreatedBySandbox}.AsSelector(),
+	}
+	if opts.SandboxNamespace != "" {
+		podConfig.Namespaces = map[string]ctrlcache.Config{
+			opts.SandboxNamespace: {},
+		}
+	}
+	byObject[&corev1.Pod{}] = podConfig
 
 	return byObject, nil
 }
@@ -292,9 +311,20 @@ func (c *Cache) Run(ctx context.Context) error {
 		}
 	}()
 	cache := c.mgr.GetCache()
-	if cache != nil && !cache.WaitForCacheSync(ctx) {
-		cancel()
-		return fmt.Errorf("timed out waiting for caches to sync")
+	if cache != nil {
+		// Force the Pod informer to start eagerly. No controller watches Pods, so
+		// left alone it is created lazily on the first pod read — after this sync
+		// gate — meaning the first TrafficPolicy reconcile would block on a full
+		// pod list-and-sync, and a missing pods RBAC grant would surface only then
+		// instead of as a startup failure.
+		if _, err := cache.GetInformer(ctx, &corev1.Pod{}); err != nil {
+			cancel()
+			return fmt.Errorf("failed to start pod informer: %w", err)
+		}
+		if !cache.WaitForCacheSync(ctx) {
+			cancel()
+			return fmt.Errorf("timed out waiting for caches to sync")
+		}
 	}
 	if c.health != nil {
 		c.health.MarkSynced()
