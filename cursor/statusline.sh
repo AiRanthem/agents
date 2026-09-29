@@ -219,13 +219,93 @@ model_includes_params() {
   return 1
 }
 
+# Display columns, not Unicode scalars. Wide characters (汉字, fullwidth)
+# occupy two columns in every terminal. Ambiguous characters (▓ · ≈) occupy
+# two columns in a CJK terminal and one otherwise; ░ is Neutral and stays one.
+# Shell LANG is often C.UTF-8 on a Chinese Mac, so the macOS UI language counts too.
+AMBIGUOUS_WIDE=0
+
+detect_ambiguous_wide() {
+  local loc apple
+  AMBIGUOUS_WIDE=0
+  loc="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+  case "$loc" in
+    zh_*|zh-*|ja_*|ja-*|ko_*|ko-*) AMBIGUOUS_WIDE=1; return ;;
+  esac
+  [ "$(uname -s)" = "Darwin" ] || return
+  apple=$(defaults read -g AppleLocale 2>/dev/null) || return
+  case "$apple" in
+    zh_*|zh-*|ja_*|ja-*|ko_*|ko-*) AMBIGUOUS_WIDE=1; return ;;
+  esac
+  apple=$(defaults read -g AppleLanguages 2>/dev/null) || return
+  case "$apple" in
+    *zh-*|*ja-*|*ko-*) AMBIGUOUS_WIDE=1 ;;
+  esac
+}
+
+# 0 if codepoint is East Asian Wide or Fullwidth.
+wide_cp() {
+  local cp=$1
+  (( cp >= 0x1100 && cp <= 0x115F )) && return 0
+  (( cp >= 0x2329 && cp <= 0x232A )) && return 0
+  (( cp >= 0x2E80 && cp <= 0xA4CF )) && return 0
+  (( cp >= 0xAC00 && cp <= 0xD7A3 )) && return 0
+  (( cp >= 0xF900 && cp <= 0xFAFF )) && return 0
+  (( cp >= 0xFE10 && cp <= 0xFE19 )) && return 0
+  (( cp >= 0xFE30 && cp <= 0xFE6F )) && return 0
+  (( cp >= 0xFF00 && cp <= 0xFF60 )) && return 0
+  (( cp >= 0xFFE0 && cp <= 0xFFE6 )) && return 0
+  (( cp >= 0x1F300 && cp <= 0x1F64F )) && return 0
+  (( cp >= 0x1F900 && cp <= 0x1F9FF )) && return 0
+  (( cp >= 0x20000 && cp <= 0x3FFFD )) && return 0
+  return 1
+}
+
+# 0 if codepoint is East Asian Ambiguous and this script may print or inherit it.
+# U+2591 ░ is Neutral and must stay out of this set.
+ambiguous_cp() {
+  local cp=$1
+  (( cp == 0xB7 || cp == 0xD7 || cp == 0xF7 || cp == 0x2248 )) && return 0
+  (( cp >= 0x2013 && cp <= 0x2014 )) && return 0
+  (( cp >= 0x2018 && cp <= 0x201D )) && return 0
+  (( cp == 0x2022 || cp == 0x2026 || cp == 0x2030 || cp == 0x203B || cp == 0x2103 || cp == 0x2122 )) && return 0
+  (( cp >= 0x2190 && cp <= 0x2193 )) && return 0
+  (( cp >= 0x2500 && cp <= 0x257F )) && return 0
+  (( cp >= 0x2580 && cp <= 0x258F )) && return 0
+  (( cp >= 0x2592 && cp <= 0x2595 )) && return 0
+  (( cp == 0x25A0 || cp == 0x25A1 || cp == 0x25CB || cp == 0x25CF || cp == 0x2605 || cp == 0x2606 )) && return 0
+  return 1
+}
+
 # Only the ANSI codes this script emits need stripping.
 visible_len() {
-  local s=$1
+  local s=$1 i ch cp n cols
+  # ${#} and ${s:i:1} follow the locale. Force UTF-8 so a C locale still
+  # counts scalars instead of bytes. local restores the caller's locale.
+  local LC_ALL=C.UTF-8
   s=${s//$'\033[36m'/}
   s=${s//$'\033[90m'/}
   s=${s//$'\033[0m'/}
-  printf '%s' "${#s}"
+  case "$s" in
+    *[![:ascii:]]*) ;;
+    *) printf '%s' "${#s}"; return ;;
+  esac
+  n=${#s}
+  cols=0
+  for ((i = 0; i < n; i++)); do
+    ch=${s:i:1}
+    printf -v cp '%d' "'${ch}"
+    if (( cp < 128 )); then
+      cols=$((cols + 1))
+    elif wide_cp "$cp"; then
+      cols=$((cols + 2))
+    elif (( AMBIGUOUS_WIDE == 1 )) && ambiguous_cp "$cp"; then
+      cols=$((cols + 2))
+    else
+      cols=$((cols + 1))
+    fi
+  done
+  printf '%s' "$cols"
 }
 
 print_lr() {
@@ -233,9 +313,8 @@ print_lr() {
   local left_len right_len pad
 
   [ -z "$right" ] && printf '%s\n' "$left" && return
-  [ -z "$left" ] && printf '%*s%s\n' "$width" "" "$right" && return
-
-  left_len=$(visible_len "$left")
+  left_len=0
+  [ -n "$left" ] && left_len=$(visible_len "$left")
   right_len=$(visible_len "$right")
   pad=$((width - left_len - right_len))
   (( pad < 1 )) && pad=1
@@ -749,6 +828,8 @@ fi
 
 # Daily cumulative tokens (before line 2 render).
 accumulate_daily_tokens "$SESSION_ID" "$USAGE_JSON" "$TOTAL_OUTPUT_RAW" "$NOW" >/dev/null 2>&1 || true
+
+detect_ambiguous_wide
 
 # Line 1: model + params | git branch (right)
 apply_configured_context_window
