@@ -468,8 +468,6 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	for k, v := range request.Extensions.Labels {
 		podLabels[k] = v
 	}
-	// Inject the sandbox-name label onto the pod
-	podLabels[agentsv1alpha1.LabelSandboxName] = sbx.GetName()
 	// Propagate allow-internet-access label to the pod as well.
 	podLabels[agentsv1alpha1.LabelAllowInternetAccess] = allowInternetAccess
 

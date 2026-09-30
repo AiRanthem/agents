@@ -372,16 +372,10 @@ wait_for_manager
 
 # Step 2: Port-forward (unless --no-port-forward)
 if [[ "$NO_PORT_FORWARD" != "true" ]]; then
-    if [[ "$WITH_GATEWAY" == "true" ]]; then
-        wait_for_gateway
-        # Port-forward gateway as unified entry point (80 -> 7788, which targets Envoy :10000)
-        sudo -E kubectl port-forward svc/sandbox-gateway 80:7788 -n sandbox-system &
-        PORT_FORWARD_PID=$!
-    else
-        # Port-forward sandbox-manager directly
-        sudo -E kubectl port-forward svc/sandbox-manager 80:7788 -n sandbox-system &
-        PORT_FORWARD_PID=$!
-    fi
+    wait_for_gateway
+    # Port-forward gateway as unified entry point (80 -> 7788, which targets Envoy :10000)
+    sudo -E kubectl port-forward svc/sandbox-gateway 80:7788 -n sandbox-system &
+    PORT_FORWARD_PID=$!
 fi
 
 # Step 3: Install Python deps
@@ -441,6 +435,9 @@ if [[ "$WITH_GATEWAY" != "true" ]]; then
 elif [[ -z "$PYTEST_MARKER_EXPR" ]]; then
     # The default gateway deployment has authentication and Runtime mTLS disabled.
     pytest_args+=(-m "not gateway_uuid_auth and not jwt_auth and not runtime_mtls")
+fi
+if [[ "${PEER_MTLS_E2E:-}" != "true" ]]; then
+    pytest_args+=(--ignore="$TEST_DIR/test_peer_mtls.py")
 fi
 if [[ "$AUTH_DISABLED" == "true" ]]; then pytest_args+=(--ignore="$TEST_DIR/test_apikey.py"); fi
 

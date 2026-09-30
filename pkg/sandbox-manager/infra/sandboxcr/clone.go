@@ -24,6 +24,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -50,6 +51,16 @@ var (
 	DefaultCreateSandboxTemplate    = createSandboxTemplate
 	DefaultCreateCheckpoint         = createCheckpoint
 )
+
+// deleteCheckpointLookupBackoff retries GetCheckpoint on delete cache misses
+// without waiting for phase=Succeeded. Shorter than utils.CacheBackoff so a
+// true NotFound fails in ~3s instead of ~100s.
+var deleteCheckpointLookupBackoff = wait.Backoff{
+	Duration: 100 * time.Millisecond,
+	Factor:   2.0,
+	Steps:    5,
+	Jitter:   1.1,
+}
 
 func ValidateAndInitCloneOptions(opts infra.CloneSandboxOptions) (infra.CloneSandboxOptions, error) {
 	if opts.User == "" {
@@ -122,6 +133,23 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	// out-of-band (e.g. by a janitor reconciler).
 	sbx, initRuntimeOpts, err := prepareSandboxFromCheckpoint(ctx, opts, tmpl, cp, cache)
 	if err != nil {
+		return nil, metrics, err
+	}
+	// Resolve the effective CSI mounts once, before any sandbox CR is created:
+	// a request-provided CSIMount wins over the annotation restored from the
+	// checkpoint. The limit check and the csi-mount step both act on this
+	// single resolved result so they can never count different mount sets, and
+	// an unparsable or unresolvable config fails fast before create.
+	if opts.CSIMount == nil {
+		opts.CSIMount, err = runtime.ResolveCSIMountFromAnnotation(ctx, sbx.Sandbox, sbx.Cache.GetClient(), sbx.Cache, sbx.storageRegistry)
+		if err != nil {
+			return nil, metrics, err
+		}
+	}
+	if err = enforceCSIMountLimit(opts.CSIMount); err != nil {
+		log.Error(err, "CSI mount limit exceeded",
+			"limit", csiMountCountLimit,
+			"count", len(opts.CSIMount.MountOptionList))
 		return nil, metrics, err
 	}
 	if opts.Admission != nil && opts.Admission.Acquire != nil {
@@ -229,15 +257,7 @@ func CloneSandbox(ctx context.Context, opts infra.CloneSandboxOptions, cache inf
 	}
 
 	// Step 8: csi mount
-	// If opts.CSIMount is not provided from request, try to resolve mount options from sandbox annotation.
-	if opts.CSIMount == nil {
-		var resolveErr error
-		opts.CSIMount, resolveErr = runtime.ResolveCSIMountFromAnnotation(ctx, sbx.Sandbox, sbx.Cache.GetClient(), sbx.Cache, sbx.storageRegistry)
-		if resolveErr != nil {
-			err = resolveErr
-			return
-		}
-	}
+	// opts.CSIMount was resolved once before create; only the mount happens here.
 	if opts.CSIMount != nil {
 		log.Info("starting to perform csi mount")
 		metrics.CSIMount, err = traceCSIMounts(ctx, sbx.Sandbox, *opts.CSIMount, rtOpts...)
@@ -291,6 +311,38 @@ func findCheckpointAndTemplateById(ctx context.Context, opts infra.CloneSandboxO
 	metrics.Total += metrics.GetTemplate
 	log.Info("checkpoint and template found", "cost", metrics.GetTemplate, "template", klog.KObj(template), "checkpoint", klog.KObj(checkpoint))
 	return template, checkpoint, metrics, nil
+}
+
+// findCheckpointForDelete locates a checkpoint by status.checkpointId for
+// deletion. Unlike findCheckpointAndTemplateById it retries cache misses
+// briefly and tolerates a missing SandboxTemplate.
+func findCheckpointForDelete(ctx context.Context, cache infracache.Provider, namespace, checkpointID string) (*v1alpha1.SandboxTemplate, *v1alpha1.Checkpoint, error) {
+	log := klog.FromContext(ctx).WithValues("checkpointID", checkpointID, "namespace", namespace)
+	var checkpoint *v1alpha1.Checkpoint
+	retryFunc := utils.RetryIfContextNotCanceled(ctx)
+	err := retry.OnError(deleteCheckpointLookupBackoff, retryFunc, func() error {
+		cp, err := cache.GetCheckpoint(ctx, infracache.GetCheckpointOptions{Namespace: namespace, CheckpointID: checkpointID})
+		if err != nil {
+			return err
+		}
+		checkpoint = cp
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	key := client.ObjectKey{Namespace: checkpoint.Namespace, Name: checkpoint.Name}
+	template := &v1alpha1.SandboxTemplate{}
+	err = utils.GetFromInformerOrApiServer(ctx, template, key, cache.GetClient(), cache.GetAPIReader())
+	if apierrors.IsNotFound(err) {
+		log.Info("sandbox template missing; deleting checkpoint only", "key", key)
+		return nil, checkpoint, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return template, checkpoint, nil
 }
 
 // waitCloneCreateLimiter blocks on opts.CreateLimiter (when set) and records
@@ -489,7 +541,9 @@ func createCheckpoint(ctx context.Context, c client.Client, cp *v1alpha1.Checkpo
 	return cp, nil
 }
 
-func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracache.Provider, opts infra.CreateCheckpointOptions) (string, error) {
+// CreateCheckpoint returns a ready checkpoint ID on success. Any error after
+// creation submits deletion before returning; cleanup failures are included in err.
+func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracache.Provider, opts infra.CreateCheckpointOptions) (checkpointID string, err error) {
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(sbx))
 	// Resolve the identity from the passed-in CR before any refresh so the
 	// checkpoint records the point-in-time identity the caller referenced.
@@ -497,6 +551,20 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 
 	// Step 1: Build the Checkpoint with GenerateName. The Checkpoint is the new
 	// owner of the SandboxTemplate; it carries no OwnerReferences itself.
+
+	// Labels are for manual selection by users with kubectl.
+	cpLabels := map[string]string{
+		v1alpha1.AnnotationOwner:           sbx.Annotations[v1alpha1.AnnotationOwner],
+		v1alpha1.CheckpointLabelSandboxUID: string(sbx.UID),
+	}
+	// The name label is written only to keep existing selectors working; new
+	// consumers should select by CheckpointLabelSandboxUID, which is always a
+	// valid label value. A sandbox name is not bounded by the 63-character
+	// label-value limit, so it is skipped when too long rather than making the
+	// whole Checkpoint invalid.
+	if len(validation.IsValidLabelValue(sbx.Name)) == 0 {
+		cpLabels[v1alpha1.CheckpointLabelSandboxName] = sbx.Name
+	}
 	cp := &v1alpha1.Checkpoint{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: sbx.Name + "-",
@@ -506,11 +574,7 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 				v1alpha1.AnnotationOwner:              sbx.Annotations[v1alpha1.AnnotationOwner],
 				v1alpha1.AnnotationSandboxID:          sandboxID,
 			},
-			// Labels are for manual selection by users with kubectl.
-			Labels: map[string]string{
-				v1alpha1.AnnotationOwner:  sbx.Annotations[v1alpha1.AnnotationOwner],
-				v1alpha1.LabelSandboxName: sbx.Name,
-			},
+			Labels: cpLabels,
 		},
 		Spec: v1alpha1.CheckpointSpec{
 			PodName:          ptr.To(sbx.Name),
@@ -534,13 +598,20 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 	// before creation.
 	PropagateAnnotationsToCheckpoint(sbx, cp)
 	log.Info("creating checkpoint")
-	cp, err := DefaultCreateCheckpoint(ctx, cache.GetClient(), cp)
+	cp, err = DefaultCreateCheckpoint(ctx, cache.GetClient(), cp)
 	if err != nil {
 		log.Error(err, "failed to create checkpoint")
 		return "", fmt.Errorf("failed to create checkpoint: %w", err)
 	}
 	log = log.WithValues("checkpoint", klog.KObj(cp))
 	log.Info("checkpoint created")
+	defer func() {
+		if err != nil {
+			if cleanupErr := cleanupAbandonedCheckpoint(ctx, cache.GetClient(), cp.Namespace, cp.Name); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("failed to delete abandoned checkpoint %s/%s: %w", cp.Namespace, cp.Name, cleanupErr))
+			}
+		}
+	}()
 
 	// Step 2: Build the SandboxTemplate with the Checkpoint's name and an
 	// OwnerReference pointing back at the Checkpoint, so deletion of the
@@ -583,16 +654,13 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 	log.Info("template created")
 
 	// Step 3: Wait for the Checkpoint to reach Succeeded.
-	// In the future, we can delete the failed Checkpoint and retry like ClaimSandbox
-	// Trace the wait phase as a dedicated span so it only covers the time spent
-	// waiting for the Checkpoint to succeed and records whether the wait failed.
 	waitCtx, waitSpan := tracing.StartManagerSpan(ctx, tracing.SpanManagerWaitForCheckpoint,
 		attribute.String(tracing.AttrCheckpointName, cp.Name),
 	)
 	err = cache.NewCheckpointTask(waitCtx, cp).Wait(opts.WaitSuccessTimeout)
 	tracing.EndSpan(waitCtx, waitSpan, err)
 	if err != nil {
-		log.Error(err, "failed to wait checkpoint ready")
+		log.Error(err, "checkpoint wait failed")
 		return "", fmt.Errorf("failed to wait checkpoint ready: %w", err)
 	}
 	fresh := &v1alpha1.Checkpoint{}
@@ -600,22 +668,61 @@ func CreateCheckpoint(ctx context.Context, sbx *v1alpha1.Sandbox, cache infracac
 		log.Error(err, "failed to refresh checkpoint after wait")
 		return "", fmt.Errorf("failed to refresh checkpoint: %w", err)
 	}
-	checkpointID := fresh.Status.CheckpointId
-	// Mirror the status-only ID into metadata so operators can find the
-	// Checkpoint with a kubectl label selector. Best-effort: the checkpoint is
-	// already usable, so a label failure must not fail the whole operation.
-	base := fresh.DeepCopy()
-	if fresh.Labels == nil {
-		fresh.Labels = make(map[string]string)
+	if fresh.DeletionTimestamp != nil || fresh.Status.Phase != v1alpha1.CheckpointSucceeded || fresh.Status.CheckpointId == "" {
+		return "", fmt.Errorf("checkpoint %s/%s is not ready after wait", fresh.Namespace, fresh.Name)
 	}
-	fresh.Labels[v1alpha1.CheckpointLabelID] = checkpointID
-	if err = retry.OnError(retry.DefaultBackoff, utils.RetryIfContextNotCanceled(ctx), func() error {
-		return cache.GetClient().Patch(ctx, fresh, client.MergeFrom(base))
-	}); err != nil {
-		log.Error(err, "failed to patch checkpoint ID label, continuing", "checkpointID", checkpointID)
+	if err = patchCheckpointIDLabel(ctx, cache.GetClient(), fresh); err != nil {
+		log.Error(err, "failed to patch checkpoint ID label, continuing", "checkpointID", fresh.Status.CheckpointId)
 	}
-	log.Info("checkpoint ready", "checkpointID", checkpointID)
-	return checkpointID, nil
+	log.Info("checkpoint ready", "checkpointID", fresh.Status.CheckpointId)
+	return fresh.Status.CheckpointId, nil
+}
+
+// cleanupAbandonedCheckpoint submits deletion after a failed creation request,
+// even if the request context has expired. Retries span DefaultCleanupTimeout so
+// a transient API failure within that budget still submits deletion.
+// The SandboxTemplate is garbage-collected via the Checkpoint ownerRef; physical
+// deletion may still wait for finalizers.
+func cleanupAbandonedCheckpoint(ctx context.Context, c client.Client, namespace, name string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultCleanupTimeout)
+	defer cancel()
+	log := klog.FromContext(cleanupCtx).WithValues("checkpoint", klog.KRef(namespace, name))
+	var lastErr error
+	err := wait.PollUntilContextCancel(cleanupCtx, time.Second, true, func(ctx context.Context) (bool, error) {
+		lastErr = client.IgnoreNotFound(DefaultDeleteCheckpointCR(ctx, c, namespace, name))
+		if lastErr != nil {
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		if lastErr != nil {
+			err = lastErr
+		}
+		log.Error(err, "failed to delete abandoned checkpoint")
+		return err
+	}
+	log.Info("abandoned checkpoint deletion submitted")
+	return nil
+}
+
+// patchCheckpointIDLabel mirrors status.checkpointId into a label so operators
+// can select the Checkpoint with kubectl. cp may share its Labels map with the
+// informer store (cache reads run with UnsafeDisableDeepCopy), so the mutation
+// is applied to a deep copy and cp only serves as the patch base.
+func patchCheckpointIDLabel(ctx context.Context, c client.Client, cp *v1alpha1.Checkpoint) error {
+	checkpointID := cp.Status.CheckpointId
+	if checkpointID == "" {
+		return nil
+	}
+	mutated := cp.DeepCopy()
+	if mutated.Labels == nil {
+		mutated.Labels = make(map[string]string)
+	}
+	mutated.Labels[v1alpha1.CheckpointLabelID] = checkpointID
+	return retry.OnError(retry.DefaultBackoff, utils.RetryIfContextNotCanceled(ctx), func() error {
+		return c.Patch(ctx, mutated, client.MergeFrom(cp))
+	})
 }
 
 func AsCheckpointInfo(cp *v1alpha1.Checkpoint) infra.CheckpointInfo {

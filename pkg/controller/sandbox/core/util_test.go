@@ -16,13 +16,17 @@ package core
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -540,12 +544,19 @@ func TestGeneratePodFromSandbox(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "labeled-sandbox",
 					Namespace: "default",
+					UID:       "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91",
 				},
 				Spec: agentsv1alpha1.SandboxSpec{
 					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
 						Template: &corev1.PodTemplateSpec{
 							ObjectMeta: metav1.ObjectMeta{
-								Labels:      map[string]string{"env": "prod"},
+								Labels: map[string]string{
+									"env": "prod",
+									// TrafficPolicy selects pods by these labels, so a
+									// template-supplied value must not survive.
+									agentsv1alpha1.LabelSandboxUID:  "spoofed-uid",
+									agentsv1alpha1.LabelSandboxName: "spoofed-name",
+								},
 								Annotations: map[string]string{"team": "platform"},
 							},
 							Spec: corev1.PodSpec{
@@ -566,6 +577,12 @@ func TestGeneratePodFromSandbox(t *testing.T) {
 				if pod.Labels[agentsv1alpha1.PodLabelTemplateHash] != "rev-abc" {
 					t.Errorf("label PodLabelTemplateHash = %s, want rev-abc", pod.Labels[agentsv1alpha1.PodLabelTemplateHash])
 				}
+				if got, want := pod.Labels[agentsv1alpha1.LabelSandboxUID], "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91"; got != want {
+					t.Errorf("label LabelSandboxUID = %s, want %s", got, want)
+				}
+				if got, want := pod.Labels[agentsv1alpha1.LabelSandboxName], "labeled-sandbox"; got != want {
+					t.Errorf("label LabelSandboxName = %s, want %s", got, want)
+				}
 				if pod.Annotations["team"] != "platform" {
 					t.Errorf("annotation team = %s, want platform", pod.Annotations["team"])
 				}
@@ -574,6 +591,75 @@ func TestGeneratePodFromSandbox(t *testing.T) {
 				}
 				if pod.Labels[utils.PodLabelCreatedBy] != utils.CreatedBySandbox {
 					t.Errorf("label CreatedBy missing or wrong: %s", pod.Labels[utils.PodLabelCreatedBy])
+				}
+			},
+		},
+		{
+			name: "inline template - sandbox name at the label-value limit keeps the name label",
+			sandbox: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      strings.Repeat("a", validation.LabelValueMaxLength),
+					Namespace: "default",
+					UID:       "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91",
+				},
+				Spec: agentsv1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "app", Image: "nginx:latest"},
+								},
+							},
+						},
+					},
+				},
+			},
+			revision: "rev-len",
+			wantErr:  false,
+			checkPod: func(t *testing.T, pod *corev1.Pod) {
+				if got, want := pod.Labels[agentsv1alpha1.LabelSandboxName], pod.Name; got != want {
+					t.Errorf("label LabelSandboxName = %s, want %s", got, want)
+				}
+				if got, want := pod.Labels[agentsv1alpha1.LabelSandboxUID], "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91"; got != want {
+					t.Errorf("label LabelSandboxUID = %s, want %s", got, want)
+				}
+			},
+		},
+		{
+			name: "inline template - sandbox name beyond the label-value limit drops the name label",
+			sandbox: &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      strings.Repeat("a", validation.LabelValueMaxLength+1),
+					Namespace: "default",
+					UID:       "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91",
+				},
+				Spec: agentsv1alpha1.SandboxSpec{
+					EmbeddedSandboxTemplate: agentsv1alpha1.EmbeddedSandboxTemplate{
+						Template: &corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{
+								Labels: map[string]string{
+									// The pod copies the template's label map, so a
+									// value already there survives unless deleted.
+									agentsv1alpha1.LabelSandboxName: "some-other-sandbox",
+								},
+							},
+							Spec: corev1.PodSpec{
+								Containers: []corev1.Container{
+									{Name: "app", Image: "nginx:latest"},
+								},
+							},
+						},
+					},
+				},
+			},
+			revision: "rev-len",
+			wantErr:  false,
+			checkPod: func(t *testing.T, pod *corev1.Pod) {
+				if got, ok := pod.Labels[agentsv1alpha1.LabelSandboxName]; ok {
+					t.Errorf("label LabelSandboxName = %s, want it absent", got)
+				}
+				if got, want := pod.Labels[agentsv1alpha1.LabelSandboxUID], "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91"; got != want {
+					t.Errorf("label LabelSandboxUID = %s, want %s", got, want)
 				}
 			},
 		},
@@ -843,6 +929,83 @@ func TestEnsureStopPaused(t *testing.T) {
 			}
 			if tt.validate != nil {
 				tt.validate(t, newStatus)
+			}
+		})
+	}
+}
+
+func TestEnsureStopPausedLastTransitionTime(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = clientgoscheme.AddToScheme(scheme)
+	_ = agentsv1alpha1.AddToScheme(scheme)
+
+	old := metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second))
+	tests := []struct {
+		name           string
+		seedStatus     metav1.ConditionStatus
+		seedReason     string
+		wantUnchanged  bool
+		wantTransition bool
+	}{
+		{
+			// Regression: refreshing LastTransitionTime on every reconcile while the
+			// sandbox stays Paused defeats the DeepEqual short-circuit and drives a
+			// status-write hot loop. An already-True condition must be a no-op.
+			name:          "already true - status unchanged, no timestamp refresh",
+			seedStatus:    metav1.ConditionTrue,
+			seedReason:    agentsv1alpha1.SandboxPausedReasonStopPauseSucceed,
+			wantUnchanged: true,
+		},
+		{
+			name:           "false to true - transition advances timestamp",
+			seedStatus:     metav1.ConditionFalse,
+			seedReason:     agentsv1alpha1.SandboxPausedReasonPending,
+			wantTransition: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := fake.NewClientBuilder().WithScheme(scheme).Build()
+			box := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-sandbox", Namespace: "default"},
+			}
+			newStatus := &agentsv1alpha1.SandboxStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(agentsv1alpha1.SandboxConditionPaused),
+						Status:             tt.seedStatus,
+						Reason:             tt.seedReason,
+						LastTransitionTime: old,
+					},
+				},
+			}
+			before := newStatus.DeepCopy()
+
+			if err := ensureStopPaused(context.Background(), cli, EnsureFuncArgs{
+				Pod:       nil,
+				Box:       box,
+				NewStatus: newStatus,
+			}, agentsv1alpha1.SandboxPausedReasonStopPauseSucceed); err != nil {
+				t.Fatalf("ensureStopPaused() unexpected error = %v", err)
+			}
+
+			cond := utils.GetSandboxCondition(newStatus, string(agentsv1alpha1.SandboxConditionPaused))
+			if cond == nil {
+				t.Fatal("Paused condition should exist")
+			}
+			if tt.wantUnchanged {
+				if !reflect.DeepEqual(before, newStatus) {
+					t.Errorf("status changed on an already-True condition (would trigger a hot-loop write):\nbefore=%#v\nafter=%#v", before.Conditions[0], newStatus.Conditions[0])
+				}
+			}
+			if tt.wantTransition {
+				if cond.Status != metav1.ConditionTrue {
+					t.Errorf("Expected Paused condition True, got %v", cond.Status)
+				}
+				if !cond.LastTransitionTime.After(old.Time) {
+					t.Errorf("Expected LastTransitionTime to advance on transition, got %v", cond.LastTransitionTime)
+				}
 			}
 		})
 	}

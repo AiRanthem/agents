@@ -1,0 +1,121 @@
+name: E2E-KruiseIntegration
+
+on:
+  push:
+    branches:
+      - master
+      - release-*
+  pull_request: {}
+  workflow_dispatch: {}
+
+# Declare default permissions as read only.
+permissions: read-all
+
+env:
+  # Common versions
+  GO_VERSION: '1.25'
+  KIND_VERSION: 'v0.22.0'
+  KIND_IMAGE: 'kindest/node:v1.32.0'
+  KIND_CLUSTER_NAME: 'ci-kruise-integration-testing'
+  # OpenKruise release that provides PodProbeMarker, the CRD the sandbox
+  # controller delegates probe execution to on real nodes.
+  KRUISE_VERSION: '1.9.0'
+  HELM_VERSION: 'v3.16.4'
+
+jobs:
+  kruise-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Setup Go
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b # v5.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Setup Kind Cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+        with:
+          node_image: ${{ env.KIND_IMAGE }}
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+          config: ./test/kind-conf.yaml
+          version: ${{ env.KIND_VERSION }}
+      - name: Build image
+        run: |
+          export IMAGE="agent-sandbox-controller:latest"
+          docker build -f dockerfiles/agent-sandbox-controller.Dockerfile --pull --no-cache . -t $IMAGE
+          kind load docker-image --name=${KIND_CLUSTER_NAME} $IMAGE || { echo >&2 "kind not installed or error loading image: $IMAGE"; exit 1; }
+      - name: Install OpenKruise
+        run: |
+          # Default values keep PodWebhook, PodProbeMarkerGate and KruiseDaemon
+          # enabled: the probe tests need the PodProbeMarker controller in
+          # kruise-manager and the probe executor in kruise-daemon.
+          curl -fsSL -o get-helm-3 "https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3"
+          chmod +x get-helm-3
+          HELM_INSTALL_DIR=/usr/local/bin ./get-helm-3 --version "${HELM_VERSION}"
+          helm repo add openkruise https://openkruise.github.io/charts/
+          helm repo update
+          # kruise-manager (~130 MB) is pulled by kubelet on every node with
+          # imagePullPolicy: Always (hardcoded in the chart). Anonymous
+          # docker.io pulls are throttled hard on shared runner IPs, so the
+          # pull blows past the 10-minute install timeout while small images
+          # (the nginx test pods) still succeed — only this workflow flakes.
+          # Pull the image from Google's Docker Hub mirror when it has the
+          # release cached, falling back to docker.io when it does not.
+          KRUISE_REPO="openkruise/kruise-manager"
+          if curl -fsSL -o /dev/null \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+            "https://mirror.gcr.io/v2/${KRUISE_REPO}/manifests/v${KRUISE_VERSION}"; then
+            KRUISE_REPO="mirror.gcr.io/${KRUISE_REPO}"
+          fi
+          echo "Using kruise-manager image from ${KRUISE_REPO}"
+          # Create kruise-system ourselves with the control-plane=openkruise
+          # label. The chart ships an equivalent Namespace template
+          # (installation.createNamespace), but it cannot be used with
+          # `helm install`: helm stores the release in the namespace before
+          # applying any manifest (so the namespace must pre-exist), while
+          # helm's --create-namespace creates an unlabelled namespace that
+          # the chart's template then conflicts with ("namespace already
+          # exists"). Pre-creating it ourselves replicates the chart's
+          # intended label, which puts kruise-system on the pod webhooks'
+          # (mpod/vpod.kb.io, failurePolicy: Fail) namespaceSelector
+          # exclusion list. Without the label the install deadlocks: the
+          # webhook blocks creation of kruise's own manager and daemon pods
+          # while the webhook service has no endpoints yet, and only a
+          # sub-second race (ReplicaSet controller vs webhook registration)
+          # can save it. Kruise's own pods are not pod-mutation targets, so
+          # excluding the namespace is safe.
+          kubectl create namespace kruise-system || true
+          kubectl label namespace kruise-system control-plane=openkruise
+          if ! helm install kruise openkruise/kruise --version "${KRUISE_VERSION}" \
+            --namespace kruise-system \
+            --set installation.createNamespace=false \
+            --set manager.image.repository="${KRUISE_REPO}" \
+            --wait --timeout 10m; then
+            echo '::group::kruise-system state after failed install'
+            kubectl -n kruise-system get pods -o wide || true
+            kubectl -n kruise-system get events --sort-by='.lastTimestamp' | tail -40 || true
+            kubectl -n kruise-system describe pods || true
+            echo '::endgroup::'
+            exit 1
+          fi
+          kubectl -n kruise-system rollout status daemonset/kruise-daemon --timeout=180s
+      - name: Install Kruise Agents
+        run: |
+          CONTROLLER_IMG=agent-sandbox-controller:latest make deploy-agent-sandbox-controller
+          # AutoPauseController is on by default; only the PodProbeMarker CRD
+          # access behind KruiseIntegration needs opting into. This workflow
+          # installs OpenKruise, so it is on.
+          kubectl -n sandbox-system patch deployment sandbox-controller-manager \
+            --type=json \
+            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=KruiseIntegration=true"}]'
+          # Wait for the rolling update triggered by the patch to complete before
+          # running wait-agent-sandbox-controller.sh, which only checks pod readiness
+          # and can falsely pass by seeing the OLD (pre-patch) pod.
+          kubectl -n sandbox-system rollout status deployment/sandbox-controller-manager --timeout=180s
+          bash hack/wait-agent-sandbox-controller.sh
+      - name: Run Kruise Integration E2E Tests
+        run: |
+          export KUBECONFIG=/home/runner/.kube/config
+          hack/run-agents-e2e-test.sh --print-info --focus 'PodProbeMarker probe delivery'

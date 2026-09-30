@@ -74,12 +74,29 @@ const (
 
 	// AutoPauseControllerGate enables probe-driven auto-pause/resume logic
 	// in the sandbox controller. When enabled, the controller injects
-	// Spec.Probes into the pod, reads probe results from Pod.Status.Conditions
-	// (populated by agent-runtime via PodProbeMarker Serverless protocol) and
-	// evaluates AutoPausePolicy to automatically pause/resume sandboxes.
-	// When disabled, no probe is injected and no pause/resume decision is made,
-	// so the whole feature can be rolled back without editing user Sandboxes.
+	// Spec.Probes into the pod, reads probe results from Pod.Status.Conditions,
+	// and evaluates AutoPausePolicy to automatically pause/resume sandboxes.
+	// When disabled, no probe is injected, no pause/resume decision is made,
+	// and no probe results are consumed. It defaults to on: the only cluster
+	// dependency, OpenKruise, is guarded separately by KruiseIntegrationGate,
+	// and Sandboxes without Spec.Probes are untouched either way.
 	AutoPauseControllerGate featuregate.Feature = "AutoPauseController"
+
+	// KruiseIntegrationGate enables the controller's access to OpenKruise
+	// cluster resources — today the PodProbeMarker CRD that delivers Spec.Probes
+	// to pods on real (non virtual-kubelet) nodes, where kruise-daemon executes
+	// them. It only matters while AutoPauseControllerGate is enabled.
+	//
+	// Enabled, it declares that the cluster runs OpenKruise: a missing
+	// PodProbeMarker CRD is logged and reported with a Warning event and keeps
+	// real-node reconciles failing, rather than degrading into silently
+	// undelivered probes. Disabled, no PodProbeMarker is read or written and no
+	// informer is started, so a cluster without OpenKruise still runs probes on
+	// virtual-kubelet nodes through the kruise.io/podprobe annotation; real-node
+	// probe conditions then stay Unknown and pause decisions fail closed. Markers
+	// left over from when the gate was on keep executing until their owning pod is
+	// garbage-collected.
+	KruiseIntegrationGate featuregate.Feature = "KruiseIntegration"
 )
 
 var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
@@ -96,7 +113,8 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	SandboxPauseCheckpointGate:             {Default: false, PreRelease: featuregate.Alpha},
 	CommitGate:                             {Default: false, PreRelease: featuregate.Alpha},
 	PoolAutoscalerGate:                     {Default: true, PreRelease: featuregate.Alpha},
-	AutoPauseControllerGate:                {Default: false, PreRelease: featuregate.Alpha},
+	AutoPauseControllerGate:                {Default: true, PreRelease: featuregate.Alpha},
+	KruiseIntegrationGate:                  {Default: false, PreRelease: featuregate.Alpha},
 }
 
 func init() {

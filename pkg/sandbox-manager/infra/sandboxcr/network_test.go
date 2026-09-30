@@ -17,11 +17,20 @@ limitations under the License.
 package sandboxcr
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
@@ -34,6 +43,9 @@ import (
 func TestBuildTrafficPolicy(t *testing.T) {
 	owner := &agentsv1alpha1.Sandbox{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-sandbox", UID: "test-uid"},
+	}
+	selector := metav1.LabelSelector{
+		MatchLabels: map[string]string{agentsv1alpha1.LabelSandboxName: "test-sandbox"},
 	}
 	tests := []struct {
 		name            string
@@ -198,7 +210,7 @@ func TestBuildTrafficPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tp := buildTrafficPolicy(tt.allowOutCIDRs, tt.allowOutDomains, tt.denyOut, "default", "test-sandbox-id", owner)
+			tp := buildTrafficPolicy(tt.allowOutCIDRs, tt.allowOutDomains, tt.denyOut, "default", "test-sandbox-id", owner, selector)
 			if tt.expectNil {
 				assert.Nil(t, tp)
 				return
@@ -234,7 +246,7 @@ func TestBuildTrafficPolicy(t *testing.T) {
 			// Verify metadata
 			assert.Equal(t, "tp-", tp.GenerateName)
 			assert.Equal(t, "default", tp.Namespace)
-			assert.Equal(t, "test-sandbox", tp.Spec.Selector.MatchLabels[agentsv1alpha1.LabelSandboxName])
+			assert.Equal(t, selector, tp.Spec.Selector)
 			assert.Equal(t, e2bPerSandboxTrafficPolicyPriority, tp.Spec.Priority)
 			// Verify OwnerReference is set
 			require.Len(t, tp.OwnerReferences, 1)
@@ -629,4 +641,235 @@ func TestUpdateNetworkPolicy_PreservesExternalAnnotations(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, []string{"1.2.3.4/32"}, result.AllowOut)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, result.DenyOut)
+}
+
+// TestTrafficPolicySelectorForPod pins the selector rule: select by
+// LabelSandboxUID whenever the pod carries it, fall back to LabelSandboxName for
+// pods generated before the controller stamped the UID label, and use the UID
+// when the name is too long to be a label value at all.
+func TestTrafficPolicySelectorForPod(t *testing.T) {
+	const uid = "3f2b8c1e-9d47-4a06-b1c2-8e5f0a7d3c91"
+
+	tests := []struct {
+		name      string
+		sbxName   string
+		podExists bool
+		podLabels map[string]string
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:      "pod carries the UID label",
+			sbxName:   "test-sandbox",
+			podExists: true,
+			podLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxUID:  uid,
+				agentsv1alpha1.LabelSandboxName: "test-sandbox",
+			},
+			wantKey:   agentsv1alpha1.LabelSandboxUID,
+			wantValue: uid,
+		},
+		{
+			name:      "legacy pod without the UID label",
+			sbxName:   "test-sandbox",
+			podExists: true,
+			podLabels: map[string]string{agentsv1alpha1.LabelSandboxName: "test-sandbox"},
+			wantKey:   agentsv1alpha1.LabelSandboxName,
+			wantValue: "test-sandbox",
+		},
+		{
+			name:      "no pod yet",
+			sbxName:   "test-sandbox",
+			wantKey:   agentsv1alpha1.LabelSandboxName,
+			wantValue: "test-sandbox",
+		},
+		{
+			name:      "name at the label-value limit on a legacy pod",
+			sbxName:   strings.Repeat("a", validation.LabelValueMaxLength),
+			podExists: true,
+			podLabels: map[string]string{
+				agentsv1alpha1.LabelSandboxName: strings.Repeat("a", validation.LabelValueMaxLength),
+			},
+			wantKey:   agentsv1alpha1.LabelSandboxName,
+			wantValue: strings.Repeat("a", validation.LabelValueMaxLength),
+		},
+		{
+			name:      "name one past the label-value limit on a pod without the UID label",
+			sbxName:   strings.Repeat("a", validation.LabelValueMaxLength+1),
+			podExists: true,
+			wantKey:   agentsv1alpha1.LabelSandboxUID,
+			wantValue: uid,
+		},
+		{
+			name:      "name far past the label-value limit with no pod",
+			sbxName:   strings.Repeat("a", 200),
+			wantKey:   agentsv1alpha1.LabelSandboxUID,
+			wantValue: uid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			owner := &agentsv1alpha1.Sandbox{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.sbxName, UID: uid},
+			}
+			var pod *corev1.Pod
+			if tt.podExists {
+				pod = &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{Name: tt.sbxName, Labels: tt.podLabels},
+				}
+			}
+
+			selector := trafficPolicySelectorForPod(owner, pod)
+
+			assert.Len(t, selector.MatchLabels, 1, "the selector must match on exactly one label")
+			assert.Equal(t, tt.wantValue, selector.MatchLabels[tt.wantKey])
+			for k, v := range selector.MatchLabels {
+				assert.Empty(t, validation.IsQualifiedName(k), "selector key %q is not a qualified name", k)
+				assert.Empty(t, validation.IsValidLabelValue(v), "selector value %q for key %q is not a valid label value", v, k)
+			}
+		})
+	}
+}
+
+// TestUpdateNetworkPolicy_RecomputesStaleSelector verifies that reconciling a
+// TrafficPolicy whose recorded selector no longer describes the pod converges
+// back to the derived one. The selector is derived from the pod's identity
+// labels on every reconcile, so recomputing it is what lets a policy matching
+// nothing start matching again after its pod is recreated.
+func TestUpdateNetworkPolicy_RecomputesStaleSelector(t *testing.T) {
+	infraInstance, fc := NewTestInfra(t)
+
+	sbx := createTestSandbox("network-stale-selector-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true)
+	CreateSandboxWithStatus(t, fc, sbx)
+	require.NoError(t, fc.Create(t.Context(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: sbx.Namespace,
+			Name:      sbx.Name,
+			Labels: map[string]string{
+				agentsv1alpha1.LabelSandboxUID:  string(sbx.UID),
+				agentsv1alpha1.LabelSandboxName: sbx.Name,
+			},
+		},
+	}))
+
+	var sandbox infra.Sandbox
+	require.Eventually(t, func() bool {
+		var err error
+		sandbox, err = infraInstance.GetSandbox(t.Context(), infra.GetSandboxOptions{
+			SandboxID: sandboxid.Resolve(sbx),
+			Namespace: sbx.Namespace,
+		})
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, sandbox.CreateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{
+		AllowOut: []string{"1.2.3.4"},
+	}))
+
+	sandboxID := sandboxid.Resolve(sbx)
+	listPolicies := func() *agentsv1alpha1.TrafficPolicy {
+		tpList := &agentsv1alpha1.TrafficPolicyList{}
+		require.NoError(t, fc.List(t.Context(), tpList,
+			ctrlclient.InNamespace(sbx.Namespace),
+			ctrlclient.MatchingFields{cache.IndexTrafficPolicySandboxID: sandboxID},
+		))
+		require.Len(t, tpList.Items, 1)
+		return &tpList.Items[0]
+	}
+
+	// Leave behind a selector the pod cannot satisfy: the pod carries the UID
+	// label, so a name-selected policy is stale for this sandbox.
+	stale := listPolicies()
+	stale.Spec.Selector = metav1.LabelSelector{
+		MatchLabels: map[string]string{agentsv1alpha1.LabelSandboxName: sbx.Name},
+	}
+	require.NoError(t, fc.Update(t.Context(), stale))
+
+	require.NoError(t, sandbox.UpdateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{
+		AllowOut: []string{"1.2.3.4"},
+		DenyOut:  []string{"10.0.0.0/8"},
+	}))
+
+	updated := listPolicies()
+	assert.Equal(t, metav1.LabelSelector{
+		MatchLabels: map[string]string{agentsv1alpha1.LabelSandboxUID: string(sbx.UID)},
+	}, updated.Spec.Selector, "the reconcile should re-derive the selector from the pod identity labels")
+
+	// The rules themselves must still be replaced.
+	result, err := sandbox.SelectNetworkPolicy(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, []string{"1.2.3.4/32"}, result.AllowOut)
+	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, result.DenyOut)
+}
+
+// podGetErrProvider is a cache.Provider test double whose GetClient returns a
+// client that fails every Pod Get with a non-NotFound error, driving the
+// TrafficPolicy selector's pod read into its error path. The embedded Provider
+// is nil: Create/UpdateNetworkPolicy only ever call GetClient on it.
+type podGetErrProvider struct {
+	cache.Provider
+	client ctrlclient.Client
+}
+
+func (p podGetErrProvider) GetClient() ctrlclient.Client { return p.client }
+
+// newPodGetErrClient builds a fake client wired with the cache's field indexes
+// (so a TrafficPolicy List still succeeds) whose Get fails for Pods only.
+func newPodGetErrClient(t *testing.T) ctrlclient.Client {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, agentsv1alpha1.AddToScheme(scheme))
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	for _, idx := range cache.GetIndexFuncs() {
+		builder = builder.WithIndex(idx.Obj, idx.FieldName, idx.Extract)
+	}
+	return builder.WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, c ctrlclient.WithWatch, key ctrlclient.ObjectKey, obj ctrlclient.Object, opts ...ctrlclient.GetOption) error {
+			if _, isPod := obj.(*corev1.Pod); isPod {
+				return fmt.Errorf("injected pod get failure")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}).Build()
+}
+
+// TestTrafficPolicySelector_PodGetError covers the non-NotFound branch: a pod
+// read that fails for any other reason must surface as an error rather than
+// silently falling back to a selector that may match nothing.
+func TestTrafficPolicySelector_PodGetError(t *testing.T) {
+	sbx := &Sandbox{Sandbox: createTestSandbox("selector-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true)}
+
+	_, err := sbx.trafficPolicySelector(t.Context(), newPodGetErrClient(t))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
+}
+
+// TestCreateNetworkPolicy_PodGetError covers CreateNetworkPolicy aborting when
+// the selector's pod read fails: the error propagates and no TrafficPolicy write
+// is attempted.
+func TestCreateNetworkPolicy_PodGetError(t *testing.T) {
+	sbx := &Sandbox{
+		Sandbox: createTestSandbox("create-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true),
+		Cache:   podGetErrProvider{client: newPodGetErrClient(t)},
+	}
+
+	err := sbx.CreateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{AllowOut: []string{"1.2.3.4"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
+}
+
+// TestUpdateNetworkPolicy_PodGetError covers UpdateNetworkPolicy aborting when
+// the selector's pod read fails, after the existing-policy List has succeeded.
+func TestUpdateNetworkPolicy_PodGetError(t *testing.T) {
+	sbx := &Sandbox{
+		Sandbox: createTestSandbox("update-err-sandbox", "test-user", agentsv1alpha1.SandboxRunning, true),
+		Cache:   podGetErrProvider{client: newPodGetErrClient(t)},
+	}
+
+	err := sbx.UpdateNetworkPolicy(t.Context(), infra.SandboxNetworkConfig{AllowOut: []string{"1.2.3.4"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pod")
 }
