@@ -779,6 +779,7 @@ func TestCommonControl_EnsureClaimClaiming_ResourceResizeFeatureGatePrecondition
 
 func TestCommonControl_EnsureClaimClaiming_ProbeOverlayFeatureGatePrecondition(t *testing.T) {
 	true_ := true
+	assert.False(t, utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate))
 
 	makeAvailableSandbox := func(name, sbsName string, sbsUID types.UID) *agentsv1alpha1.Sandbox {
 		return &agentsv1alpha1.Sandbox{
@@ -929,6 +930,14 @@ func TestCommonControl_EnsureClaimClaiming_ProbeOverlayFeatureGatePrecondition(t
 
 	t.Run("feature gate enabled lets claims with probes claim normally", func(t *testing.T) {
 		setGate(t, true)
+		require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+			string(features.SandboxClaimProbePoolReuseGate): true,
+		}))
+		t.Cleanup(func() {
+			require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+				string(features.SandboxClaimProbePoolReuseGate): false,
+			}))
+		})
 		sbs := makeSandboxSet()
 		sbx := makeAvailableSandbox("probe-gate-enabled-sbx", sbs.Name, sbs.UID)
 		claim := makeClaim("probe-gate-enabled", true)
@@ -1278,6 +1287,8 @@ func TestCommonControl_EnsureClaimCompleted(t *testing.T) {
 }
 
 func TestCommonControl_buildClaimOptions(t *testing.T) {
+	assert.False(t, utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate))
+
 	scheme := runtime.NewScheme()
 	_ = agentsv1alpha1.AddToScheme(scheme)
 
@@ -1334,6 +1345,7 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 		initObjs            []client.Object
 		expectError         bool
 		expectErrorContains string
+		probePoolReuse      bool
 		// runtimeTLSBundle is the bundle handed to NewCommonControl; nil keeps
 		// the control on the legacy plaintext runtime paths.
 		runtimeTLSBundle *runtimeclient.TLSBundle
@@ -1648,6 +1660,7 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 					Probes:          []agentsv1alpha1.Probe{activeProbe},
 				},
 			},
+			probePoolReuse: true,
 			// The policy references "Active" and the claim itself carries it,
 			// so no pool probe is needed.
 			sandboxSet:  &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
@@ -2467,6 +2480,16 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			probePoolReuseEnabled := tt.probePoolReuse
+			require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+				string(features.SandboxClaimProbePoolReuseGate): probePoolReuseEnabled,
+			}))
+			t.Cleanup(func() {
+				require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
+					string(features.SandboxClaimProbePoolReuseGate): false,
+				}))
+			})
+
 			var testClient client.Client
 			if len(tt.initObjs) > 0 {
 				testClient = fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.initObjs...).Build()
@@ -2484,8 +2507,11 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				assert.ErrorIs(t, err, ErrInvalidClaimSpec)
 				assert.Nil(t, opts.Modifier)
 			}
-			if !tt.expectError && tt.validate != nil {
-				tt.validate(t, opts)
+			if !tt.expectError {
+				assert.Equal(t, len(tt.claim.Spec.Probes) > 0 && !probePoolReuseEnabled, opts.RequireNewSandbox)
+				if tt.validate != nil {
+					tt.validate(t, opts)
+				}
 			}
 		})
 	}

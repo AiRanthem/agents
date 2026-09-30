@@ -596,6 +596,10 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	template, cnt := opts.Template, opts.CandidateCounts
 	ctx = logs.Extend(ctx, "action", "pickAnAvailableSandbox")
 	log := klog.FromContext(ctx).WithValues("template", template).V(utils.DebugLogLevel)
+	if opts.RequireNewSandbox {
+		log.Info("will create a new sandbox", "reason", "RequireNewSandbox")
+		return newSandboxFromSandboxSet(ctx, opts, cache)
+	}
 	objects, err := cache.ListSandboxesInPool(ctx, infracache.ListSandboxesInPoolOptions{Namespace: opts.Namespace, Pool: template})
 	if err != nil {
 		return nil, "", err
@@ -624,7 +628,7 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	// the probes the claim itself carries: candidates do not need to pre-declare
 	// those, they are merged onto the picked sandbox at claim time.
 	requiredProbeNames := autopause.RequiredProbeNames(opts.AutoPausePolicy, opts.Probes)
-	var missingProbeNames []string
+	missingProbeNames := make(map[string]struct{})
 	for _, obj := range objects {
 		if len(availableCandidates) >= cnt {
 			if opts.SpeculateCreatingDuration == 0 || len(speculatingCandidates) >= cnt {
@@ -644,7 +648,9 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 			continue
 		}
 		if missing := missingRequiredProbeNames(obj.Spec.Probes, requiredProbeNames); len(missing) > 0 {
-			missingProbeNames = missing
+			for _, name := range missing {
+				missingProbeNames[name] = struct{}{}
+			}
 			log.Info("skip sandbox without claim-required probes", "sandbox", klog.KObj(obj), "missingProbes", missing)
 			continue
 		}
@@ -729,7 +735,13 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate compatible with inplace resize: %v", resizeSkipReason))
 	}
 	if len(missingProbeNames) > 0 && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
-		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate declares required probes %v", missingProbeNames))
+		missing := make([]string, 0, len(missingProbeNames))
+		for _, name := range requiredProbeNames {
+			if _, ok := missingProbeNames[name]; ok {
+				missing = append(missing, name)
+			}
+		}
+		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate declares required probes %v", missing))
 	}
 	return nil, "", NoAvailableError(template, pickErr.Error())
 }

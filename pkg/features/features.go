@@ -52,6 +52,11 @@ const (
 	// without probes and the autoPausePolicy overlay are unaffected.
 	SandboxClaimProbeOverlayGate featuregate.Feature = "SandboxClaimProbeOverlay"
 
+	// SandboxClaimProbePoolReuseGate allows claims carrying probes to reuse
+	// existing pooled sandboxes. When disabled, those claims require a new
+	// sandbox so the requested probes are present from creation time.
+	SandboxClaimProbePoolReuseGate featuregate.Feature = "SandboxClaimProbePoolReuse"
+
 	// SandboxMultiClusterNaming enables embedding a cluster ID hash in the Sandbox generateName
 	// to prevent naming collisions across multiple clusters.
 	SandboxMultiClusterNaming featuregate.Feature = "SandboxMultiClusterNaming"
@@ -114,6 +119,7 @@ var defaultFeatureGates = map[featuregate.Feature]featuregate.FeatureSpec{
 	CachePodLabelSelectorGate:              {Default: true, PreRelease: featuregate.Alpha},
 	SandboxInPlaceResourceResizeGate:       {Default: true, PreRelease: featuregate.Alpha},
 	SandboxClaimProbeOverlayGate:           {Default: true, PreRelease: featuregate.Alpha},
+	SandboxClaimProbePoolReuseGate:         {Default: false, PreRelease: featuregate.Alpha},
 	SandboxMultiClusterNaming:              {Default: false, PreRelease: featuregate.Alpha},
 	SandboxUpgradeResumeFromFailedStepGate: {Default: true, PreRelease: featuregate.Alpha},
 	SecurityIdentityProviderGate:           {Default: false, PreRelease: featuregate.Alpha},
