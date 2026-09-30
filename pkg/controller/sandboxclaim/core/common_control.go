@@ -350,15 +350,21 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 	if claim.Spec.ReserveFailedSandbox {
 		reserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
 	}
+	// known-limit: Cold start ensures claim probes enter Sandbox spec at creation.
+	// Recycled Sandboxes reset spec only; existing VKPod execution config may remain stale.
+	// Future recycle support should recreate the Pod or reapply platform config.
+	requireNewSandbox := len(claim.Spec.Probes) > 0 &&
+		!utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate)
 
 	// storageAuthAnnotation holds the annotation key-value pair built by the
 	// BuildStorageAuthAnnotation hook (populated later, captured by reference).
 	var storageAuthKey, storageAuthValue string
 
 	opts := infra.ClaimSandboxOptions{
-		Namespace: claim.Namespace,
-		User:      string(claim.UID), // Use UID to ensure uniqueness across claim recreations
-		Template:  sandboxSet.Name,
+		Namespace:         claim.Namespace,
+		User:              string(claim.UID), // Use UID to ensure uniqueness across claim recreations
+		Template:          sandboxSet.Name,
+		RequireNewSandbox: requireNewSandbox,
 		Modifier: func(sbx infra.Sandbox) error {
 			// propagate annotations to sandbox
 			if len(claim.Spec.Annotations) > 0 {

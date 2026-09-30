@@ -38,7 +38,9 @@ spec:
   # Probes are merged by name onto the claimed Sandbox at claim time: a probe
   # with the same name replaces the version carried by the pool candidate,
   # new names are appended. AutoPausePolicy rules may reference probes
-  # declared here instead of on the target SandboxSet.
+  # declared here instead of on the target SandboxSet. With
+  # SandboxClaimProbePoolReuse disabled, a claim carrying probes requires a
+  # newly created Sandbox; enable the gate to reuse compatible pool candidates.
   # probes:
   #   - name: Active
   #     exec:
