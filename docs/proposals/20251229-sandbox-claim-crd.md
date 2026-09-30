@@ -194,6 +194,7 @@ The SandboxClaim CRD is designed to align with the E2B HTTP API's `NewSandboxReq
 | `envVars` | `envVars` | implementable | Environment variables for envd init |
 | `autoPause` | `pauseTime` | implementable | Absolute pause time; see `/docs/proposals/20260909-sandboxclaim-auto-pause-policy.md` |
 | `autoResume` | `autoPausePolicy.resume.onIngressTraffic` | implementable | Full `autoPausePolicy` overlay; see the same proposal |
+| — | `probes` | implementable | Optional probes are merged by name; `SandboxClaimProbePoolReuse` defaults to false and requires a newly created Sandbox for Claims carrying probes. See `/docs/proposals/20260909-sandboxclaim-auto-pause-policy.md` |
 | `secure` | N/A |  Future Work | Not implemented in E2B Api |
 
 

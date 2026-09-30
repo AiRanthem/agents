@@ -64,7 +64,13 @@ type SandboxClaimSpec struct {
 	// merged set must pass the same validation as SandboxSet probes and stay
 	// within the Sandbox probes limit, otherwise the claim completes with
 	// reason InvalidClaimSpec. Omitted or empty leaves the Sandbox probes
-	// unchanged.
+	// unchanged. Runtime reuse is controlled by the SandboxClaimProbePoolReuse
+	// gate: when disabled, a claim with probes requires a newly created Sandbox;
+	// when enabled, compatible pool candidates may be reused. The overall
+	// SandboxClaimProbeOverlay gate remains the capability switch. Virtual-kubelet
+	// platforms consume probes at Pod creation; real nodes use PodProbeMarker,
+	// requiring OpenKruise and the KruiseIntegration gate. See the
+	// SandboxClaim auto-pause proposal for the VK execution-layer recycle limit.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

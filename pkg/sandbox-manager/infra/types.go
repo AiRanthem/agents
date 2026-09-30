@@ -87,6 +87,9 @@ type ClaimSandboxOptions struct {
 	WaitReadyTimeout time.Duration `json:"waitReadyTimeout"`
 	// Create a Sandbox instance from the template if no available ones in SandboxSets
 	CreateOnNoStock bool `json:"createOnNoStock"`
+	// RequireNewSandbox bypasses pool candidates and creates from the template,
+	// regardless of CreateOnNoStock.
+	RequireNewSandbox bool `json:"requireNewSandbox"`
 	// A creating sandbox lasts for SpeculateCreatingDuration may be picked as a candidate when no available ones in SandboxSets.
 	// Set to 0 to disable speculation feature
 	SpeculateCreatingDuration time.Duration `json:"speculateCreatingDuration"`

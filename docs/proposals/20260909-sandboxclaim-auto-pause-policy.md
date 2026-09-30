@@ -5,8 +5,8 @@ authors:
 reviewers:
   - "@TBD"
 creation-date: 2026-09-09
-last-updated: 2026-09-11
-status: implementable
+last-updated: 2026-09-30
+design_status: review-pending
 see-also:
   - "/docs/proposals/20260626-sandbox-auto-pause.md"
   - "/docs/proposals/20260627-wake-on-traffic-via-spec-patch.md"
@@ -34,6 +34,7 @@ In scope:
 - `SandboxClaim.spec.pauseTime`: an absolute time, written to `Sandbox.spec.pauseTime`
 - `SandboxClaim.spec.autoPausePolicy`: reuses the existing `AutoPausePolicy` type and writes the entire value to `Sandbox.spec.autoPausePolicy`
 - `SandboxClaim.spec.probes`: reuses the existing `Probe` type and merges by name into the candidate's `Sandbox.spec.probes` (same-name entries are replaced and new names are appended)
+- `SandboxClaimProbePoolReuse` is a separate runtime compatibility gate for reusing warm/speculating candidates with Claim-supplied probes; it defaults to false. With probes present and this gate off, the controller requires a newly created Sandbox. With the gate on, existing candidate selection, compatibility filtering, and probe merge behavior remain in effect.
 - The Claim controller validates and overlays these fields before every claim attempt, at the same time as the existing labels, annotations, and `shutdownTime`
 
 Out of scope:
@@ -41,6 +42,7 @@ Out of scope:
 - Do not add an `autoPause` bool, relative timeout, or paused-retention annotation, and do not derive `shutdownTime` from `pauseTime`
 - Do not add an independent `autoResume` field; traffic wake-up is expressed through `autoPausePolicy.resume.onIngressTraffic`
 - Do not create a new SandboxClaim webhook; do not change the sandbox controller, gateway, recycle, or E2B HTTP (E2B does not expose probe configuration, keeping this capability exclusive to SandboxClaim)
+- Do not change `SandboxClaimProbeOverlay`, the existing overall capability gate: if it is disabled, a Claim carrying probes still completes with `FeatureGateDisabled`, regardless of `SandboxClaimProbePoolReuse`
 - Do not turn Claim into a continuous controller: after Completed, it still does not write back to already claimed Sandboxes
 
 ### Ownership and Data Flow
@@ -88,7 +90,7 @@ The Claim validates `autoPausePolicy` and `probes` when building the claim optio
 - Referenced probe names are evaluated against the set obtained by merging the current `SandboxSet.spec.probes` and `claim.probes` by name (template probes are ineffective for running pool members, consistent with the existing copy rules); when the Claim has no policy, the pool policy does not need to be revalidated—the merge can only add probe names, so references in the pool policy cannot become invalid
 - When the set obtained by merging the current `SandboxSet.spec.probes` and `claim.probes` by name exceeds 16, complete the Claim with `InvalidClaimSpec`: provide a clear error early instead of waiting for the apiserver to reject the Sandbox update
 - After Claim-level validation passes, recheck each candidate Sandbox's own `spec.probes` at claim time, excluding names supplied by the Claim: a Claim-supplied probe need not be declared by the candidate in advance and is merged in at claim time; an old candidate during a rolling update that lacks another referenced probe remains in the pool and waits for a compatible candidate, rather than receiving a policy it cannot execute
-- If merging a candidate Sandbox's existing probes with the Claim probes exceeds 16, skip that candidate and retry through the no-available-Sandbox path; the `createOnNoStock` creation path also treats this as a retryable `NoAvailableError`, rather than classifying a candidate-level limit violation as `InvalidClaimSpec`
+- When pool reuse is allowed (Claims without probes, or `SandboxClaimProbePoolReuse` enabled), if merging a candidate Sandbox's existing probes with the Claim probes exceeds 16, skip that candidate and retry through the no-available-Sandbox path. Every creation path also checks the merged limit and treats a violation as a retryable `NoAvailableError`, rather than `InvalidClaimSpec`. Claims carrying probes bypass candidates when the reuse gate is disabled.
 - A policy containing only `OnIngressTraffic` and no probe rules is valid
 - An empty policy (with no pause/resume rules), a `messageRegex` that cannot be compiled, and a reference to a nonexistent probe are all invalid
 
@@ -100,7 +102,7 @@ The observable results for invalid input are the same as for the existing reserv
 - Emit a Warning event, `InvalidClaimSpec`
 - Sandboxes successfully claimed before this reconcile retain their written state; they are not rolled back
 
-A candidate that lacks a probe referenced by the current valid policy, or whose probes exceed 16 after merging with the Claim probes, represents temporarily incompatible pool capacity, not an invalid Claim spec: do not claim that candidate in this round and retry through the existing no-available-Sandbox path; when `createOnNoStock` is enabled, a compatible instance can be created from the current SandboxSet if it can yield a compatible probe set.
+A candidate that lacks a probe referenced by the current valid policy, or whose probes exceed 16 after merging with the Claim probes, represents temporarily incompatible pool capacity, not an invalid Claim spec. When pool reuse is allowed, skip that candidate and retry through the existing no-available-Sandbox path; when `createOnNoStock` is enabled, a compatible instance can be created from the current SandboxSet. When the reuse gate is disabled and the Claim carries probes, the controller sets `RequireNewSandbox=true` to bypass all warm and speculating candidates and create directly, even when `CreateOnNoStock=false`.
 
 The apiserver still accepts objects whose field shapes are valid; cross-field rules do not rely on a new webhook. If an invalid policy is written to a Sandbox by bypassing validation, the existing Sandbox-side `ProbeValid=False` still rejects probe-driven pause, but that is not the primary Claim path.
 
@@ -109,11 +111,13 @@ The apiserver still accepts objects whose field shapes are valid; cross-field ru
 After the write completes, the Sandbox behaves as it does today when its spec is edited directly:
 
 - `pauseTime` is unconditionally executed by `checkTimers` and does not depend on `AutoPauseController`
-- Probe-driven pause/resume still requires that gate to be enabled, and the probe referenced by the rule must actually exist in the Sandbox spec (under this design, in the merged probes; the sandbox controller patches `kruise.io/podprobe` on the running Pod, and changes to `spec.probes` take effect while it is Running)
+- Probe-driven pause/resume requires `AutoPauseController` to be enabled and the referenced probes to be delivered. In the #1010 delivery baseline, virtual-kubelet platforms consume `kruise.io/podprobe` only at Pod creation. Real nodes use PodProbeMarker reconciled from `spec.probes`, requiring OpenKruise and `KruiseIntegration` (default: disabled). Creating a new Sandbox puts the merged probes in place before Pod creation; enabling pool reuse requires a delivery mechanism that supports the requested changes to existing Pods.
 - `OnIngressTraffic` is still executed by the gateway and does not enable the probe decision loop
 - `pauseTime` and `autoPausePolicy` coexist: whichever expires first pauses the Sandbox; even while a probe reports active, `pauseTime` still pauses it. Callers that need the probe to be the final authority should not set `pauseTime`
 
-Writing a policy from a Claim does not enable the feature gate. When the gate is disabled, the policy still appears in the Sandbox spec, but probe injection and probe decisions do not run; `pauseTime` still takes effect.
+Writing a policy from a Claim does not enable the probe decision gate. The #1010 delivery baseline (upstream commit `23dd81c6d62389f916eac32b4f1e8b1f2de3945e`) defaults `AutoPauseController` to enabled. `SandboxClaimProbePoolReuse` is a separate gate, defaults to false, and controls only whether a Claim carrying probes may reuse pool candidates. When it is off, `RequireNewSandbox=true` bypasses warm/speculating candidates and creates a new Sandbox even if `CreateOnNoStock=false`; when on, the existing candidate compatibility checks and merge remain active. The existing `SandboxClaimProbeOverlay` capability gate remains enabled by default: if it is disabled, a Claim carrying probes completes with `FeatureGateDisabled` unchanged. Claims without probes and Claims carrying only `autoPausePolicy` are unaffected by both Claim probe gates.
+
+When `AutoPauseController` is disabled, probe injection and probe-driven decisions do not run; `pauseTime` still takes effect. Cold starts do not remove the OpenKruise and `KruiseIntegration` dependency on real nodes.
 
 ### Compatibility and Upgrade
 
@@ -147,7 +151,7 @@ Writing a policy from a Claim does not enable the feature gate. When the gate is
 
 - Whole-value replacement removes pool rules that the caller did not copy. This is deliberate visibility, rather than a silent merge.
 - When `pauseTime` and a probe policy coexist, the timer can interrupt an Agent that is still working. This is consistent with the current Sandbox proposal; the caller chooses not to set both.
-- `AutoPauseController` is disabled by default: overlaying only the policy without enabling the gate means the probe path does not run, which can make it appear that “the Claim did not take effect.” The probe path checks the gate; `pauseTime` does not.
+- `AutoPauseController` defaults to enabled in the cited #1010 delivery baseline. The Claim probe gates do not change that controller gate.
 
 ## Claim-Supplied Probes
 
@@ -157,10 +161,12 @@ Implemented as part of this design: `SandboxClaim.spec.probes` is optional and i
 
 A probe-driven policy requires referenced probes to be declared in advance on the target SandboxSet. When different tenants need different probing logic (different exec commands or probe intervals), the SandboxSet must enumerate all probe variants (`MaxItems=16`), and every pool member executes all probes indiscriminately—even though most Claims do not use them and still consume resources. Claim-supplied probes allow each Claim to declare and execute only the probes it needs.
 
-### Technical Foundation (Already Supported by the Current Code)
+### Technical Foundation (#1010 Delivery Baseline)
 
-- The sandbox controller's `EnsureProbe` patches the `kruise.io/podprobe` annotation on a running Pod, so changes to `spec.probes` take effect while it is Running; probe results are added and removed in sync with `spec.probes`, and a probe condition left by the previous Claim is removed
-- Recycle's `resetSandboxForPool` already restores `spec.probes` and `spec.autoPausePolicy` from the SandboxSet verbatim, so probes written by a Claim do not leak to the next tenant
+- The sandbox controller injects the `kruise.io/podprobe` annotation when creating the Pod. Recycle's `resetSandboxForPool` restores the Sandbox spec probes and policy from the SandboxSet and clears the Claim deadlines.
+- On virtual-kubelet nodes, later annotation changes do not update probe execution. On real nodes, PodProbeMarker reconciliation applies `spec.probes` changes when `KruiseIntegration` is enabled and OpenKruise is installed.
+
+`known-limit:` The recycle behavior restores the Sandbox spec and clears the Claim deadlines, but does not repair stale probes in the VK execution layer. The sandbox controller injects `kruise.io/podprobe` when creating the Pod; VK does not reread later annotation changes for an existing Pod, and subsequent `Ensure` calls only log spec/annotation drift. A cold-created instance that returns to the pool can therefore still execute its old Claim probes when reused by a plain Claim. Follow-up work can recycle by rebuilding the Pod or guarantee that the platform reapplies the pool probe configuration; this proposal does not implement that lifecycle change.
 
 ### Implementation: Merge by Name, Not Whole-Value Replacement
 
@@ -194,7 +200,7 @@ Costs of merging and mitigations:
 
 ### Operational Switch
 
-This capability is controlled by the `SandboxClaimProbeOverlay` feature gate (enabled by default). When the gate is disabled, a Claim carrying `spec.probes` does not claim any Sandbox and completes with reason `FeatureGateDisabled` (no retry); Claims without probes and the `autoPausePolicy` overlay are unaffected. The switch takes effect at each claim attempt: a Claim that has not finished claiming (including an in-flight one) stops at its next reconcile and completes with `FeatureGateDisabled`; probes already merged onto claimed Sandboxes are not rolled back.
+The overall capability remains controlled by `SandboxClaimProbeOverlay` (enabled by default). When it is disabled, a Claim carrying `spec.probes` does not claim any Sandbox and completes with reason `FeatureGateDisabled` (no retry), unchanged by the reuse gate. Independently, `SandboxClaimProbePoolReuse` defaults to false and controls candidate selection: with Claim probes and this gate off, set `RequireNewSandbox=true` to bypass all warm/speculating candidates and create a new Sandbox directly, even if `CreateOnNoStock=false`. With the reuse gate on, preserve existing candidate filtering, required-probe checks, and merge semantics. Claims without probes and Claims carrying only `autoPausePolicy` are unaffected. Disabling either gate does not roll back probes already applied to claimed Sandboxes.
 
 ### Closed Open Questions
 
