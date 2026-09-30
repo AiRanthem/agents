@@ -14,7 +14,7 @@
 - `.agents/skills/install/`：仅用于安装、更新、修复或验证本 dev-kit 的仓库级 skill。
 - `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
 - `codex/`：Codex 全局指令和 hooks。
-- `cursor/`：Cursor 用户级规则、CLI status line 和 CLI 偏好。
+- `cursor/`：Cursor 用户级规则、`~/.cursor/skills` 入口、CLI status line 和 CLI 偏好。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
 
 ## 安装与更新
