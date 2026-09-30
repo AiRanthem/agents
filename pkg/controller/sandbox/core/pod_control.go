@@ -371,9 +371,10 @@ func generateBasePodFromSandbox(ctx context.Context, args PodGenerateArgs) (*cor
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, volumes...)
 
-	// Inject lifecycle probes as kruise.io/podprobe annotation (PodProbeMarker
-	// Serverless protocol). The agent-runtime sidecar reads this annotation,
-	// executes probes periodically, and writes results to Pod.Status.Conditions.
+	// Inject the kruise.io/podprobe annotation unless the pod is certain to land
+	// on a real node: virtual-kubelet platforms read it at pod start, so it has to
+	// be in place from creation. EnsureProbe picks the delivery mechanism once the
+	// pod is scheduled.
 	if args.ProbeManager != nil {
 		args.ProbeManager.InjectProbe(ctx, box, pod)
 	}

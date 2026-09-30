@@ -30,6 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	kruiseappsv1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
+
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
 
@@ -51,6 +53,7 @@ func init() {
 	_ = agentsv1alpha1.AddToScheme(scheme)
 	_ = appsv1.AddToScheme(scheme)
 	_ = batchv1.AddToScheme(scheme)
+	_ = kruiseappsv1alpha1.AddToScheme(scheme)
 
 	cfg := config.GetConfigOrDie()
 	c, err := client.New(cfg, client.Options{Scheme: scheme})

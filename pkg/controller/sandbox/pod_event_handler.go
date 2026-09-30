@@ -139,9 +139,9 @@ func isActivePodUpdate(oldObj, newObj *corev1.Pod) bool {
 	if oldObj.Status.Resize != newObj.Status.Resize {
 		return true
 	}
-	// Detect changes to probe conditions (agents.kruise.io/*) written by
-	// agent-runtime via PodProbeMarker Serverless protocol. This ensures the
-	// sandbox controller is reconciled when probe results change.
+	// Reconcile when probe results change. Probe conditions are written by the
+	// platform's executors — the serverless instance's daemon on virtual-kubelet
+	// nodes, kruise-daemon on real ones — not by this controller.
 	if hasProbeConditionChanged(&oldObj.Status, &newObj.Status) {
 		return true
 	}

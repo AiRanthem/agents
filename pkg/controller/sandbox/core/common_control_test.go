@@ -519,6 +519,9 @@ func TestCommonControl_EnsureSandboxUpdated(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(scheme).Build()
+			// EnsureProbe resolves the pod's node to pick the probe delivery
+			// mechanism, so the node the table places the pod on must exist.
+			require.NoError(t, fc.Create(context.TODO(), realNode("node-1")))
 			if tt.args.Pod != nil {
 				err := fc.Create(context.TODO(), tt.args.Pod)
 				if err != nil {
@@ -530,6 +533,7 @@ func TestCommonControl_EnsureSandboxUpdated(t *testing.T) {
 				recorder:             record.NewFakeRecorder(10),
 				inplaceUpdateControl: inplaceupdate.NewInPlaceUpdateControl(fc, inplaceupdate.DefaultGeneratePatchBodyFunc),
 				podControl:           NewPodControl(fc, record.NewFakeRecorder(10), GeneratePodFromSandbox),
+				probeManager:         NewPodProbeManager(fc, record.NewFakeRecorder(10)),
 				syncStatusFromPod:    defaultCommonSyncStatusFromPod,
 			}
 
@@ -719,12 +723,16 @@ func TestCommonControl_EnsureSandboxUpdated_InitializePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(scheme).Build()
+			// EnsureProbe resolves the pod's node to pick the probe delivery
+			// mechanism, so the node the table places the pod on must exist.
+			require.NoError(t, fc.Create(context.TODO(), realNode("node-1")))
 			control := &commonControl{
 				Client:               fc,
 				recorder:             record.NewFakeRecorder(10),
 				inplaceUpdateControl: inplaceupdate.NewInPlaceUpdateControl(fc, inplaceupdate.DefaultGeneratePatchBodyFunc),
 				initializer:          tt.initializer,
 				podControl:           NewPodControl(fc, record.NewFakeRecorder(10), GeneratePodFromSandbox),
+				probeManager:         NewPodProbeManager(fc, record.NewFakeRecorder(10)),
 				syncStatusFromPod:    defaultCommonSyncStatusFromPod,
 			}
 

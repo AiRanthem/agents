@@ -37,6 +37,7 @@ see-also:
 - [Upgrade Strategy](#upgrade-strategy)
   - [Rollout and Rollback](#rollout-and-rollback)
 - [Test Plan](#test-plan)
+- [Addendum: 2026-09 — Real-Node Probe Delivery via PodProbeMarker](#addendum-2026-09--real-node-probe-delivery-via-podprobemarker)
 - [Implementation History](#implementation-history)
 
 ## Summary
@@ -269,7 +270,7 @@ The auto-pause logic is integrated into the existing sandbox controller's `Recon
 1. **Probe phase** (executed when `Spec.Probes` is configured): While the sandbox is Running, the controller executes each probe at its configured `PeriodSeconds` and writes results to `SandboxStatus.Conditions` (standard K8s Conditions with type = `agents.kruise.io/<probe-name>`).
 2. **Decision phase** (executed only when `AutoPausePolicy.Pause`/`Resume` is configured): The controller reads probe results from Conditions, evaluates pause/resume rules, and manages `Spec.Paused`. If `Pause`/`Resume` is not configured, the controller only updates Conditions and does not auto-pause — upper-layer platforms read Conditions to decide.
 
-> **Why integrate into the existing controller?** Probe execution is delegated to the agent-runtime sidecar via the PodProbeMarker Serverless protocol. The controller reads results from `Pod.Status.Conditions` without executing probes inline — so there is no latency impact on the core reconcile path.
+> **Why integrate into the existing controller?** Probe execution is delegated to the platform's probe executors — a vendor-specific daemon inside the serverless instance, independent of agent-runtime — via the PodProbeMarker Serverless protocol. The controller reads results from `Pod.Status.Conditions` without executing probes inline — so there is no latency impact on the core reconcile path.
 
 ### Interaction with Existing E2B Timeout Mechanism
 
@@ -347,10 +348,14 @@ type SandboxSpec struct {
     // "activity detection" vs "cron task detection") are defined by
     // AutoPausePolicy.Pause/Resume, not by the probe itself.
     //
-    // Probe execution is delegated to the agent-runtime sidecar via the
-    // PodProbeMarker Serverless protocol (kruise.io/podprobe annotation).
-    // The controller reads results from Pod.Status.Conditions and mirrors
-    // them to SandboxStatus.Conditions for observability.
+    // Probe delivery depends on where the pod lands: on virtual-kubelet nodes
+    // the controller writes the probe definitions to the kruise.io/podprobe
+    // annotation at pod creation (PodProbeMarker Serverless protocol), where
+    // the vendor-specific daemon inside the serverless instance executes them;
+    // on real nodes the controller creates a PodProbeMarker CRD object that
+    // kruise-daemon executes. In both cases results arrive via
+    // Pod.Status.Conditions, which the controller mirrors to
+    // SandboxStatus.Conditions for observability.
     // +optional
     Probes []Probe `json:"probes,omitempty"`
 
@@ -692,7 +697,7 @@ The schema cannot express the cross-field rules this feature needs, so they live
 - **Admission.** The SandboxSet (`create`, `update`) and SandboxTemplate (`create`) validating webhooks reject `spec.probes` and `spec.autoPausePolicy` at write time — duplicate probe names, a probe name that is not a qualified Condition type suffix, non-`exec` handlers, an empty `exec.command`, a `messageRegex` that does not compile, a missing or negative `thresholdDuration`, a policy carrying no rule at all, and any rule referencing a probe absent from `spec.probes`.
 - **Reconcile.** Sandbox has no validating webhook, and the SandboxTemplate webhook is `failurePolicy: ignore` and covers `create` only, so admission is a fast-feedback path rather than a guarantee — editing a SandboxTemplate can still hand an invalid configuration to every Sandbox cloned from it afterwards. The controller runs the same rules on every Sandbox and reports failures on the `ProbeValid` condition, with a Warning Event on the first transition.
 
-`ProbeValid: False` is what the rest of the feature reads. When a probe itself is invalid, probe injection and the Pod probe annotation are skipped, and `calculatePauseTime` refuses to pause at all: once the probes stop being applied, any probe condition left behind is frozen, and a frozen `lastTransitionTime` always looks like the idle threshold has elapsed. A policy-only error is reported the same way but still lets the probes sync, so removing `spec.probes` while leaving a now-dangling policy behind clears the stale annotation and conditions instead of freezing them.
+`ProbeValid: False` is what the rest of the feature reads. When a probe itself is invalid, probe injection and the Pod probe annotation are skipped, and `calculatePauseTime` refuses to pause at all: once the probes stop being applied, any probe condition left behind is frozen, and a frozen `lastTransitionTime` always looks like the idle threshold has elapsed. A policy-only error is reported the same way but still lets the probes sync, so removing `spec.probes` while leaving a now-dangling policy behind clears the stale conditions instead of freezing them.
 
 Because `ProbeValid` is a single aggregate condition, a policy-only error also holds off the pause decision even though nothing is frozen in that case. That is deliberate: declining to pause on a half-fixed policy is the conservative direction, and the explicit rule checks in `calculatePauseTime` already reject most policy errors on their own. The resume decision never consults `ProbeValid` — a paused Sandbox has no Pod left to fix its configuration through, so blocking resume would strand it.
 
@@ -819,7 +824,7 @@ Hard-coded `activeProbe` and `cronProbe` fields with probe semantics embedded in
 
 | Risk | Impact | Mitigation |
 |------|------|----------|
-| **Probe latency blocking Reconcile** | Controller slows down; other Sandboxes starve | Probes execute asynchronously in the agent-runtime sidecar via PodProbeMarker; the controller reads results from `Pod.Status.Conditions` without blocking; probe timeout (`TimeoutSeconds`) is enforced by the sidecar |
+| **Probe latency blocking Reconcile** | Controller slows down; other Sandboxes starve | Probes execute asynchronously in the platform's probe executors via PodProbeMarker; the controller reads results from `Pod.Status.Conditions` without blocking; probe timeout (`TimeoutSeconds`) is enforced by the executor |
 | **Probe command hangs or times out** | Controller waits indefinitely | Each probe call has `TimeoutSeconds`; **single failure sets Condition status=Unknown (fail-closed, treated as active, no pause)**; after consecutive failures reach `FailureThreshold`, reason="Unhealthy", skip probe, and emit Warning Event |
 | **Probe script environment issues blur idle vs failure** | Probe timeout/error misclassified as idle, causing mistaken pause | Probe failures set Condition status=Unknown (not True); decision layer treats Unknown as active (fail-closed); after consecutive failures reach threshold, reason="Unhealthy" and probe is skipped |
 | **Stale `PauseTime` from the E2B timeout mechanism** | A `PauseTime` already in the past (set by the E2B API at create time) pauses a Sandbox the probes still report as active, and re-pauses one a resume rule has just woken | Both triggers are deliberately kept in force — see [Interaction with Existing E2B Timeout Mechanism](#interaction-with-existing-e2b-timeout-mechanism). Neither one is a hint the other can override: yielding `PauseTime` would silently drop the deadline its owner asked for. The paused-retention path moves `PauseTime` forward to the new `ShutdownTime` when it pauses; a caller combining a resume rule with `PauseTime` must keep `PauseTime` ahead of the resume schedule, or clear it. `ShutdownTime` remains the ultimate safety net. Future work: webhook validation rejects manual `Spec.Paused` modifications while `AutoPausePolicy` is active |
@@ -829,31 +834,34 @@ Hard-coded `activeProbe` and `cronProbe` fields with probe semantics embedded in
 
 - **API compatibility.** `AutoPausePolicy` and `Spec.Probes` are new optional fields. Existing Sandboxes without these fields are completely unaffected.
 - **Controller deployment.** The auto-pause logic is integrated into the existing sandbox controller within the agent-sandbox-controller binary. No new deployment is needed — just upgrade the image.
-- **Feature gate.** Feature gate `AutoPauseController` (default: `false`) controls the whole feature, not just the pause/resume decision: probe injection into the PodProbeMarker annotation and probe Condition sync are gated too, so turning it off stops the controller from producing probe results it no longer consumes, instead of leaving half the feature live. See [Rollout and Rollback](#rollout-and-rollback).
+- **Feature gates.** Feature gate `AutoPauseController` (default: `true`) controls the whole feature, not just the pause/resume decision: probe injection into the podprobe annotation and probe Condition sync are gated too, so turning it off stops the controller from producing probe results it no longer consumes, instead of leaving half the feature live. Feature gate `KruiseIntegration` (default: `false`) additionally controls all PodProbeMarker CRD access for real-node probe delivery — see the [addendum](#addendum-2026-09--real-node-probe-delivery-via-podprobemarker). See [Rollout and Rollback](#rollout-and-rollback).
 - **Status fields.** `Conditions` and `Schedules` are additive fields; old clients that ignore them are unaffected.
 - **No breaking changes.** No existing fields are modified or deleted. When `AutoPausePolicy` is not set, `Spec.Paused` continues to work as usual.
 - **Gradual adoption.** Start with Mode 2 (probe-only) to verify probe Condition results, then add `Pause`/`Resume` to enable Mode 1 (auto-pause).
 
 ### Rollout and Rollback
 
-The gate defaults to `false` and no manifest under `config/` sets `--feature-gates`, so upgrading the agent-sandbox-controller image alone changes nothing: the feature stays inert until an operator opts in. Enabling it is a controller-side flag, not a Sandbox edit:
+`AutoPauseController` defaults to `true`, but the feature only touches Sandboxes that set `Spec.Probes` — a field no existing Sandbox has — so upgrading the agent-sandbox-controller image alone changes nothing for current workloads. `KruiseIntegration` defaults to `false`, so real-node probe delivery stays off until the operator opts in and declares the OpenKruise dependency. Both are controller-side flags, not Sandbox edits:
 
 ```yaml
 # config/manager: agent-sandbox-controller container args
 args:
-  - --feature-gates=AutoPauseController=true
+  # KruiseIntegration is only needed when sandboxes land on real nodes;
+  # virtual-kubelet-only clusters leave it off and do not need OpenKruise.
+  - --feature-gates=KruiseIntegration=true
 ```
 
 Recommended order:
 
-1. **Upgrade the image with the gate off.** Confirms the new controller is behaviourally identical to the old one, so a problem at this step is never the auto-pause feature.
-2. **Enable the gate in one cluster, adopt Mode 2 first.** Add `Spec.Probes` to a few sandboxes without `AutoPausePolicy` and read the reported Conditions. This validates the probe contract — message format, `periodSeconds`, exit codes — while nothing can pause a sandbox yet.
+1. **Upgrade the image.** With `KruiseIntegration` off (the default) the new controller behaves like the old one on real nodes; a problem at this step is never the kruise integration.
+2. **Adopt Mode 2 first.** Add `Spec.Probes` to a few sandboxes without `AutoPausePolicy` and read the reported Conditions. This validates the probe contract — message format, `periodSeconds`, exit codes — while nothing can pause a sandbox yet. Enable `KruiseIntegration` when sandboxes land on real nodes; leave it off on virtual-kubelet-only clusters, where probes are delivered through the annotation and OpenKruise is not required.
 3. **Add `Pause`/`Resume` for Mode 1.** Only once the Conditions read correctly, since the decision layer's regex and timestamp parsing operate on exactly those messages.
 
-Rolling back means dropping the flag and restarting the controller. Two residues are deliberate and neither requires editing user Sandboxes:
+Rolling back means setting `--feature-gates=AutoPauseController=false` and restarting the controller. Three residues are deliberate and none requires editing user Sandboxes:
 
 - **Probe Conditions already written to `Sandbox.Status` stay.** The decision loop is off too, so nothing reads them, and they remain the last probe snapshot before the rollback — useful for diagnosing why the rollback was needed.
-- **Pods created while the gate was on keep their `kruise.io/podprobe` annotation.** `EnsureProbe` stops touching pods rather than stripping annotations, so agent-runtime inside those pods keeps executing probes and writing Pod Conditions until the pod is recreated. Those results are no longer mirrored onto the Sandbox and no longer drive any decision; to stop the probe execution itself, recreate the pod.
+- **Pods created while the gate was on keep their `kruise.io/podprobe` annotation.** `EnsureProbe` stops touching pods rather than stripping annotations, so the probe daemon inside those pods keeps executing probes and writing Pod Conditions until the pod is recreated. Those results are no longer mirrored onto the Sandbox and no longer drive any decision; to stop the probe execution itself, recreate the pod.
+- **PodProbeMarkers created while the gates were on stay.** Disabling `AutoPauseController` or `KruiseIntegration` stops all PodProbeMarker API access, so the controller neither deletes nor updates them — deliberately, because best-effort deletion would reintroduce an OpenKruise CRD dependency with the gate off (see the [addendum](#addendum-2026-09--real-node-probe-delivery-via-podprobemarker)). kruise-daemon keeps executing them until the owning pod is deleted and garbage collection removes the marker. Their results are no longer mirrored or consumed; to stop execution earlier, delete the marker manually or recreate the pod.
 
 ## Test Plan
 
@@ -887,6 +895,19 @@ Rolling back means dropping the flag and restarting the controller. Two residues
 - Verify scheduled-task-aware resume: create an OpenClaw cron job and check that the sandbox resumes before the task triggers.
 - Verify probe-only reporting mode: do not configure AutoPausePolicy, and confirm probe results are correctly reported via kubectl reading Conditions.
 
+## Addendum: 2026-09 — Real-Node Probe Delivery via PodProbeMarker
+
+The original design delivered probes solely through the PodProbeMarker Serverless protocol (`kruise.io/podprobe` annotation), executed by the probe daemon inside the pod — a vendor-specific component of the serverless instance, independent of agent-runtime. That protocol exists for serverless — virtual-kubelet — nodes, where kruise-daemon cannot run and only an in-pod executor can perform probes; on real nodes the native PodProbeMarker mechanism (CRD + kruise-daemon) is available. Probe delivery is therefore split by node type, decided once the pod is scheduled:
+
+- **Virtual-kubelet nodes** keep the Serverless protocol: the controller writes probe definitions to the `kruise.io/podprobe` annotation on the Pod, and the vendor-specific daemon inside the serverless instance executes them. Some serverless implementations only accept probe definitions at pod creation and never re-read the annotation afterwards, so `InjectProbe` writes it once, when the pod is created — unless the pod's scheduling constraints provably exclude virtual-kubelet nodes — and `EnsureProbe` does not patch it later: a post-creation write would add an API request and make the state look converged while the platform keeps running the probes it was handed at creation. Drift against the current `Spec.Probes` is logged instead, and applying a probe edit to a running serverless pod means recreating it.
+- **Real nodes** get a `PodProbeMarker` CRD object instead: one per Sandbox, named after the Sandbox, selecting the pod by the `agents.kruise.io/sandbox-uid` label the controller stamps on every pod it generates, and owned by the pod so Kubernetes garbage collection removes the marker when the pod is deleted. kruise-daemon (OpenKruise) executes the probes; the controller reconciles the marker's spec and owner across probe edits and pod recreation, and tolerates create-vs-cache races. The creation-time annotation is left on the pod: nothing on a real node reads it, and stripping it would cost a Patch per pod.
+
+In both cases results arrive via `Pod.Status.Conditions`, so the probe contract, the decision layer, and the `SandboxStatus.Conditions` mirroring are unchanged.
+
+**Dependency consequence — the `KruiseIntegration` gate.** Real-node delivery requires the OpenKruise PodProbeMarker CRD and kruise-daemon, so a new feature gate `KruiseIntegration` (default: `false`) declares that the cluster runs OpenKruise. With the gate disabled the controller performs no PodProbeMarker API access at all — no informer is started and no marker is read, created, updated, or deleted — so a cluster without OpenKruise installed can still run the probe feature on virtual-kubelet nodes through the annotation, while real-node pods get no probe delivery: their probe conditions stay Unknown and pause decisions fail closed (Unknown is treated as active, so nothing pauses on missing data). `AutoPauseController` remains the master gate for the whole feature. Enabling `KruiseIntegration` is the operator's declaration that the cluster runs OpenKruise, so a missing PodProbeMarker CRD is treated as a misconfiguration rather than something to degrade around: the reconcile keeps failing, with an explicit log and a Warning event on the Sandbox naming both remedies (install OpenKruise, or turn the gate off). Silently skipping marker delivery was rejected — a Sandbox whose probes never arrive looks healthy and simply never pauses.
+
+**Rollback.** Disabling either gate leaves existing markers in place: they keep executing until their owning pod is deleted and garbage-collects them. Deleting them at gate-off was rejected because it would require PodProbeMarker CRD access with the gate off, recreating the dependency the gate-off guarantee exists to avoid. See [Rollout and Rollback](#rollout-and-rollback) for the full residue list.
+
 ## Implementation History
 
 - [x] 2026-06-26: Initial proposal draft (SandboxCron CRD + embedded AutoPausePolicy).
@@ -899,6 +920,10 @@ Rolling back means dropping the flag and restarting the controller. Two residues
 - [x] 2026-07-08: `Pause`/`Resume` as independent fields (not array). `ThresholdDuration` (time-based, `*metav1.Duration`) using Condition's `lastTransitionTime` — no tracking field in `SandboxStatus`.
 - [x] 2026-07-09: Add "Interaction with Existing E2B Timeout Mechanism" — `checkTimers` skips `PauseTime` when `AutoPausePolicy` is active. Restore `TimeFormat` field on `Resume`. Rewrite document to focus on Mode 1 (probe-driven) and Mode 2 (probe-only); remove schedule-driven mode from scope.
 - [x] 2026-08-31: Let `Spec.PauseTime` and `AutoPausePolicy` both stay in force — remove the `checkTimers` guard that yielded the one-shot deadline to an active pause rule. Whichever comes due first pauses the Sandbox.
+- [x] 2026-09-29: Split probe delivery by node type — virtual-kubelet nodes keep the Serverless `kruise.io/podprobe` annotation (injected at pod creation), real nodes get a `PodProbeMarker` CRD object executed by kruise-daemon. Results still arrive via `Pod.Status.Conditions`; gate-off performs no PodProbeMarker API access. See the [2026-09 addendum](#addendum-2026-09--real-node-probe-delivery-via-podprobemarker).
+- [x] 2026-09-29: Introduce the `KruiseIntegration` feature gate (default: `false`) governing all PodProbeMarker CRD access, so clusters without OpenKruise can run the probe feature on virtual-kubelet nodes alone. Clarify that probe execution is performed by the platform's probe executors — a vendor-specific daemon inside the serverless instance on virtual-kubelet nodes, kruise-daemon on real nodes — and is independent of agent-runtime.
+- [x] 2026-09-29: Write the Serverless `kruise.io/podprobe` annotation only at pod creation — a post-creation patch is not re-read by serverless platforms, so drift is logged instead of written, and the annotation is left on real-node pods where it is inert rather than costing a Patch per pod. Report a missing PodProbeMarker CRD with an explicit log and a Warning event while keeping the reconcile failing. Select the marker's target pod by the `agents.kruise.io/sandbox-uid` label.
+- [x] 2026-09-30: Flip `AutoPauseController` to default `true`. With the OpenKruise CRD dependency guarded by `KruiseIntegration`, the default no longer risks per-reconcile failures on clusters without OpenKruise, and the feature only touches Sandboxes that opt in with `Spec.Probes`.
 - [ ] TODO: Community review and feedback.
 - [x] API type implementation + `make generate manifests`.
 - [x] Auto-pause controller implementation.
