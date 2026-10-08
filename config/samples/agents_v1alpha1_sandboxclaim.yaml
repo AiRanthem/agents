@@ -38,9 +38,14 @@ spec:
   # Probes are merged by name onto the claimed Sandbox at claim time: a probe
   # with the same name replaces the version carried by the pool candidate,
   # new names are appended. AutoPausePolicy rules may reference probes
-  # declared here instead of on the target SandboxSet. With
-  # SandboxClaimProbePoolReuse disabled, a claim carrying probes requires a
-  # newly created Sandbox; enable the gate to reuse compatible pool candidates.
+  # declared here instead of on the target SandboxSet. Reuse requires both
+  # AutoPauseController and KruiseIntegration plus a compatible candidate
+  # scheduled to a real node. Candidates without a node name, with an unreadable
+  # Node, or with type=virtual-kubelet are skipped. The platform must honor this
+  # Node label convention. With either gate off, existing warm and Creating
+  # candidates are skipped. createOnNoStock (default: true) allows creation;
+  # when false, the Claim retries until timeout. Gates do not reject this
+  # configuration, and Claim completion does not guarantee probe results ready.
   # probes:
   #   - name: Active
   #     exec:
