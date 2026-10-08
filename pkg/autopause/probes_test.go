@@ -20,8 +20,38 @@ import (
 	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
+
+func TestIsVirtualKubeletNode(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		want   bool
+	}{
+		{
+			name:   "virtual-kubelet node",
+			labels: map[string]string{"type": "virtual-kubelet"},
+			want:   true,
+		},
+		{name: "node without labels"},
+		{
+			name:   "node with another type",
+			labels: map[string]string{"type": "worker"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels}}
+			if got := IsVirtualKubeletNode(node); got != tt.want {
+				t.Errorf("IsVirtualKubeletNode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestPolicyProbeNames(t *testing.T) {
 	tests := []struct {

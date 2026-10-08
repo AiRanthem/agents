@@ -137,13 +137,6 @@ func (c *commonControl) EnsureClaimClaiming(ctx context.Context, args ClaimArgs)
 	}
 
 	// Step 7: Precondition
-	if len(claim.Spec.Probes) > 0 && !utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbeOverlayGate) {
-		msg := fmt.Sprintf("claim probe overlay is disabled by feature gate %s", features.SandboxClaimProbeOverlayGate)
-		log.Info(msg)
-		c.recorder.Event(claim, "Warning", "FeatureGateDisabled", msg)
-		TransitionToCompleted(args.NewStatus, "FeatureGateDisabled", msg)
-		return NoRequeue(), nil
-	}
 	if claim.Spec.InplaceUpdate != nil {
 		if res := claim.Spec.InplaceUpdate.Resources; res != nil && (len(res.Requests) > 0 || len(res.Limits) > 0) {
 			if !utilfeature.DefaultFeatureGate.Enabled(features.SandboxInPlaceResourceResizeGate) {
@@ -350,21 +343,20 @@ func (c *commonControl) buildClaimOptions(ctx context.Context, claim *agentsv1al
 	if claim.Spec.ReserveFailedSandbox {
 		reserveFailedSandboxFor = ptr.To(consts.ReserveFailedSandboxForever)
 	}
-	// known-limit: Cold start ensures claim probes enter Sandbox spec at creation.
-	// Recycled Sandboxes reset spec only; existing VKPod execution config may remain stale.
+	// known-limit: Recycled Sandboxes reset spec only; existing VKPod execution
+	// config may remain stale even when probe claims skip virtual-node candidates.
 	// Future recycle support should recreate the Pod or reapply platform config.
-	requireNewSandbox := len(claim.Spec.Probes) > 0 &&
-		!utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate)
 
 	// storageAuthAnnotation holds the annotation key-value pair built by the
 	// BuildStorageAuthAnnotation hook (populated later, captured by reference).
 	var storageAuthKey, storageAuthValue string
 
 	opts := infra.ClaimSandboxOptions{
-		Namespace:         claim.Namespace,
-		User:              string(claim.UID), // Use UID to ensure uniqueness across claim recreations
-		Template:          sandboxSet.Name,
-		RequireNewSandbox: requireNewSandbox,
+		Namespace: claim.Namespace,
+		User:      string(claim.UID), // Use UID to ensure uniqueness across claim recreations
+		Template:  sandboxSet.Name,
+		ProbeUpdatesEnabled: utilfeature.DefaultFeatureGate.Enabled(features.AutoPauseControllerGate) &&
+			utilfeature.DefaultFeatureGate.Enabled(features.KruiseIntegrationGate),
 		Modifier: func(sbx infra.Sandbox) error {
 			// propagate annotations to sandbox
 			if len(claim.Spec.Annotations) > 0 {

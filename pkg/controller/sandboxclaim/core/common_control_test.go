@@ -777,195 +777,143 @@ func TestCommonControl_EnsureClaimClaiming_ResourceResizeFeatureGatePrecondition
 	})
 }
 
-func TestCommonControl_EnsureClaimClaiming_ProbeOverlayFeatureGatePrecondition(t *testing.T) {
-	true_ := true
-	assert.False(t, utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate))
-
-	makeAvailableSandbox := func(name, sbsName string, sbsUID types.UID) *agentsv1alpha1.Sandbox {
+func TestCommonControl_EnsureClaimClaiming_ProbePoolReuse(t *testing.T) {
+	makeSandbox := func(nodeName string) *agentsv1alpha1.Sandbox {
+		true_ := true
 		return &agentsv1alpha1.Sandbox{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:              name,
+				Name:              "probe-gate-sandbox",
 				Namespace:         "default",
 				CreationTimestamp: metav1.Now(),
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: agentsv1alpha1.GroupVersion.String(),
-						Kind:       "SandboxSet",
-						Name:       sbsName,
-						UID:        sbsUID,
-						Controller: &true_,
-					},
-				},
-				Labels: map[string]string{
-					agentsv1alpha1.LabelSandboxTemplate: sbsName,
-				},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: agentsv1alpha1.GroupVersion.String(),
+					Kind:       "SandboxSet",
+					Name:       "probe-gate-template",
+					UID:        types.UID("probe-gate-sbs-uid"),
+					Controller: &true_,
+				}},
+				Labels: map[string]string{agentsv1alpha1.LabelSandboxTemplate: "probe-gate-template"},
 			},
 			Status: agentsv1alpha1.SandboxStatus{
 				Phase: agentsv1alpha1.SandboxRunning,
-				Conditions: []metav1.Condition{
-					{
-						Type:   string(agentsv1alpha1.SandboxConditionReady),
-						Status: metav1.ConditionTrue,
-					},
-				},
-				PodInfo: agentsv1alpha1.PodInfo{
-					PodIP: "10.0.0.1",
-				},
+				Conditions: []metav1.Condition{{
+					Type:   string(agentsv1alpha1.SandboxConditionReady),
+					Status: metav1.ConditionTrue,
+				}},
+				PodInfo:  agentsv1alpha1.PodInfo{PodIP: "10.0.0.1"},
+				NodeName: nodeName,
 			},
 		}
 	}
-
-	makeClaim := func(name string, withProbes bool) *agentsv1alpha1.SandboxClaim {
+	makeClaim := func(withProbes bool) *agentsv1alpha1.SandboxClaim {
 		claim := &agentsv1alpha1.SandboxClaim{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: "default",
-				UID:       types.UID(name + "-uid"),
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: "probe-gate-claim", Namespace: "default", UID: types.UID("probe-gate-claim-uid")},
 			Spec: agentsv1alpha1.SandboxClaimSpec{
 				TemplateName:    "probe-gate-template",
 				Replicas:        int32Ptr(1),
-				SkipInitRuntime: true, // skip InitRuntime to avoid connecting to pod
+				SkipInitRuntime: true,
+				CreateOnNoStock: false,
 			},
 		}
 		if withProbes {
 			claim.Spec.Probes = []agentsv1alpha1.Probe{{
-				Name: "Active",
-				Probe: corev1.Probe{
-					ProbeHandler: corev1.ProbeHandler{
-						Exec: &corev1.ExecAction{Command: []string{"true"}},
-					},
-				},
+				Name:  "Active",
+				Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"true"}}}},
 			}}
 		}
 		return claim
 	}
-
-	makeSandboxSet := func() *agentsv1alpha1.SandboxSet {
-		return &agentsv1alpha1.SandboxSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "probe-gate-template",
-				Namespace: "default",
-				UID:       types.UID("probe-gate-sbs-uid"),
-			},
-		}
-	}
-
-	setGate := func(t *testing.T, enabled bool) {
+	setExecutionGates := func(t *testing.T, autoPause, kruise bool) {
 		t.Helper()
+		const autoPauseGate = string(features.AutoPauseControllerGate)
+		const kruiseGate = string(features.KruiseIntegrationGate)
+		original := map[string]bool{
+			autoPauseGate: utilfeature.DefaultFeatureGate.Enabled(features.AutoPauseControllerGate),
+			kruiseGate:    utilfeature.DefaultFeatureGate.Enabled(features.KruiseIntegrationGate),
+		}
 		require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-			string(features.SandboxClaimProbeOverlayGate): enabled,
+			autoPauseGate: autoPause,
+			kruiseGate:    kruise,
 		}))
 		t.Cleanup(func() {
-			_ = utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-				string(features.SandboxClaimProbeOverlayGate): true,
-			})
+			require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(original))
 		})
 	}
 
-	t.Run("feature gate disabled transitions claim to completed without claiming", func(t *testing.T) {
-		setGate(t, false)
-		sbs := makeSandboxSet()
-		sbx := makeAvailableSandbox("probe-gate-sbx", sbs.Name, sbs.UID)
-		claim := makeClaim("probe-gate-disabled", true)
-		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
-		require.NoError(t, err)
+	tests := []struct {
+		name        string
+		autoPause   bool
+		kruise      bool
+		withProbes  bool
+		withSandbox bool
+		virtualNode bool
+		wantRetry   bool
+	}{
+		{
+			name:       "execution gates off keeps probe claim retryable when no stock exists",
+			withProbes: true,
+			wantRetry:  true,
+			// A disabled create-on-no-stock setting makes this distinguish a
+			// retryable no-progress claim from terminal feature-gate rejection.
+		},
+		{
+			name:        "execution gates on overlays probes onto a warm real-node sandbox",
+			autoPause:   true,
+			kruise:      true,
+			withProbes:  true,
+			withSandbox: true,
+		},
+		{
+			name:        "plain claim still reuses a virtual-kubelet sandbox when execution gates are off",
+			withSandbox: true,
+			virtualNode: true,
+		},
+	}
 
-		newStatus := &agentsv1alpha1.SandboxClaimStatus{
-			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
-		}
-		fakeRecorder := record.NewFakeRecorder(10)
-		control := NewCommonControl(fakeClient, fakeRecorder, cache, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setExecutionGates(t, tt.autoPause, tt.kruise)
+			sbs := &agentsv1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "probe-gate-template", Namespace: "default", UID: types.UID("probe-gate-sbs-uid")},
+			}
+			claim := makeClaim(tt.withProbes)
+			objects := []client.Object{claim, sbs}
+			var sbx *agentsv1alpha1.Sandbox
+			if tt.withSandbox {
+				nodeName := "real-node"
+				labels := map[string]string{}
+				if tt.virtualNode {
+					nodeName = "virtual-node"
+					labels["type"] = "virtual-kubelet"
+				}
+				objects = append(objects, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName, Labels: labels}})
+				sbx = makeSandbox(nodeName)
+				objects = append(objects, sbx)
+			}
+			cache, fakeClient, err := cachetest.NewTestCache(t, objects...)
+			require.NoError(t, err)
 
-		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
-			Claim:      claim,
-			SandboxSet: sbs,
-			NewStatus:  newStatus,
+			newStatus := &agentsv1alpha1.SandboxClaimStatus{Phase: agentsv1alpha1.SandboxClaimPhaseClaiming}
+			control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
+			strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{Claim: claim, SandboxSet: sbs, NewStatus: newStatus})
+			require.NoError(t, err)
+			if tt.wantRetry {
+				assert.Equal(t, RequeueAfter(ClaimRetryInterval), strategy)
+				assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseClaiming, newStatus.Phase)
+				assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
+				return
+			}
+			assert.Equal(t, RequeueImmediately(), strategy)
+			assert.Equal(t, int32(1), newStatus.ClaimedReplicas)
+			got := &agentsv1alpha1.Sandbox{}
+			require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(sbx), got))
+			assert.Equal(t, agentsv1alpha1.True, got.Labels[agentsv1alpha1.LabelSandboxIsClaimed])
+			if tt.withProbes {
+				require.Len(t, got.Spec.Probes, 1)
+				assert.Equal(t, "Active", got.Spec.Probes[0].Name)
+			}
 		})
-		require.NoError(t, err)
-		assert.Equal(t, NoRequeue(), strategy)
-		assert.Equal(t, agentsv1alpha1.SandboxClaimPhaseCompleted, newStatus.Phase)
-		assert.Contains(t, newStatus.Message, "disabled by feature gate")
-		assert.Equal(t, int32(0), newStatus.ClaimedReplicas)
-		cond := GetClaimCondition(newStatus, string(agentsv1alpha1.SandboxClaimConditionCompleted))
-		require.NotNil(t, cond)
-		assert.Equal(t, "FeatureGateDisabled", cond.Reason)
-
-		select {
-		case event := <-fakeRecorder.Events:
-			assert.Contains(t, event, "Warning FeatureGateDisabled")
-		default:
-			t.Fatalf("expected event containing %q", "Warning FeatureGateDisabled")
-		}
-
-		// The available sandbox must stay unclaimed: the gate short-circuits
-		// before any pick happens.
-		got := &agentsv1alpha1.Sandbox{}
-		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Namespace: sbx.Namespace, Name: sbx.Name}, got))
-		assert.NotEqual(t, agentsv1alpha1.True, got.Labels[agentsv1alpha1.LabelSandboxIsClaimed])
-	})
-
-	t.Run("feature gate disabled does not affect claims without probes", func(t *testing.T) {
-		setGate(t, false)
-		sbs := makeSandboxSet()
-		sbx := makeAvailableSandbox("probe-gate-plain-sbx", sbs.Name, sbs.UID)
-		claim := makeClaim("probe-gate-plain", false)
-		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
-		require.NoError(t, err)
-
-		newStatus := &agentsv1alpha1.SandboxClaimStatus{
-			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
-		}
-		control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
-
-		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
-			Claim:      claim,
-			SandboxSet: sbs,
-			NewStatus:  newStatus,
-		})
-		require.NoError(t, err)
-		assert.True(t, strategy.Immediate, "Expected RequeueImmediately when claimed > 0")
-		assert.Equal(t, int32(1), newStatus.ClaimedReplicas)
-	})
-
-	t.Run("feature gate enabled lets claims with probes claim normally", func(t *testing.T) {
-		setGate(t, true)
-		require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-			string(features.SandboxClaimProbePoolReuseGate): true,
-		}))
-		t.Cleanup(func() {
-			require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-				string(features.SandboxClaimProbePoolReuseGate): false,
-			}))
-		})
-		sbs := makeSandboxSet()
-		sbx := makeAvailableSandbox("probe-gate-enabled-sbx", sbs.Name, sbs.UID)
-		claim := makeClaim("probe-gate-enabled", true)
-		cache, fakeClient, err := cachetest.NewTestCache(t, claim, sbs, sbx)
-		require.NoError(t, err)
-
-		newStatus := &agentsv1alpha1.SandboxClaimStatus{
-			Phase: agentsv1alpha1.SandboxClaimPhaseClaiming,
-		}
-		control := NewCommonControl(fakeClient, record.NewFakeRecorder(10), cache, nil)
-
-		strategy, err := control.EnsureClaimClaiming(t.Context(), ClaimArgs{
-			Claim:      claim,
-			SandboxSet: sbs,
-			NewStatus:  newStatus,
-		})
-		require.NoError(t, err)
-		assert.True(t, strategy.Immediate, "Expected RequeueImmediately when claimed > 0")
-		assert.Equal(t, int32(1), newStatus.ClaimedReplicas)
-
-		// The gate stays open and the claim's probes must be merged onto the
-		// claimed sandbox, not block the claiming flow.
-		got := &agentsv1alpha1.Sandbox{}
-		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Namespace: sbx.Namespace, Name: sbx.Name}, got))
-		assert.Equal(t, agentsv1alpha1.True, got.Labels[agentsv1alpha1.LabelSandboxIsClaimed])
-		require.Len(t, got.Spec.Probes, 1)
-		assert.Equal(t, "Active", got.Spec.Probes[0].Name)
-	})
+	}
 }
 
 func TestCommonControl_EnsureClaimClaiming_ResizeIncompatibleSandboxRetries(t *testing.T) {
@@ -1287,8 +1235,6 @@ func TestCommonControl_EnsureClaimCompleted(t *testing.T) {
 }
 
 func TestCommonControl_buildClaimOptions(t *testing.T) {
-	assert.False(t, utilfeature.DefaultFeatureGate.Enabled(features.SandboxClaimProbePoolReuseGate))
-
 	scheme := runtime.NewScheme()
 	_ = agentsv1alpha1.AddToScheme(scheme)
 
@@ -1337,15 +1283,24 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 	for i := range autopause.MaxSandboxProbes {
 		maxPoolProbes = append(maxPoolProbes, agentsv1alpha1.Probe{Name: fmt.Sprintf("pool-%d", i)})
 	}
+	probePolicyClaim := &agentsv1alpha1.SandboxClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default", UID: "test-uid-probes"},
+		Spec: agentsv1alpha1.SandboxClaimSpec{
+			TemplateName:    "pool",
+			AutoPausePolicy: idlePolicy,
+			Probes:          []agentsv1alpha1.Probe{activeProbe},
+		},
+	}
 
 	tests := []struct {
-		name                string
-		claim               *agentsv1alpha1.SandboxClaim
-		sandboxSet          *agentsv1alpha1.SandboxSet
-		initObjs            []client.Object
-		expectError         bool
-		expectErrorContains string
-		probePoolReuse      bool
+		name                    string
+		claim                   *agentsv1alpha1.SandboxClaim
+		sandboxSet              *agentsv1alpha1.SandboxSet
+		initObjs                []client.Object
+		expectError             bool
+		expectErrorContains     string
+		autoPauseControllerGate bool
+		kruiseIntegrationGate   bool
 		// runtimeTLSBundle is the bundle handed to NewCommonControl; nil keeps
 		// the control on the legacy plaintext runtime paths.
 		runtimeTLSBundle *runtimeclient.TLSBundle
@@ -1609,9 +1564,6 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test-template", Namespace: "default"},
 			},
 			expectError: false,
-			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
-				assert.Equal(t, wakePolicy, opts.AutoPausePolicy)
-			},
 		},
 		{
 			name: "idle autoPausePolicy is valid when sandboxset defines the probe",
@@ -1633,9 +1585,6 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				},
 			},
 			expectError: false,
-			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
-				assert.Equal(t, idlePolicy, opts.AutoPausePolicy)
-			},
 		},
 		{
 			name: "autoPausePolicy referencing missing probe is rejected",
@@ -1651,24 +1600,32 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			expectErrorContains: "must reference a probe name defined in spec.probes",
 		},
 		{
-			name: "claim probes pass through and may satisfy the policy",
-			claim: &agentsv1alpha1.SandboxClaim{
-				ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "default", UID: "test-uid-probes"},
-				Spec: agentsv1alpha1.SandboxClaimSpec{
-					TemplateName:    "pool",
-					AutoPausePolicy: idlePolicy,
-					Probes:          []agentsv1alpha1.Probe{activeProbe},
-				},
-			},
-			probePoolReuse: true,
-			// The policy references "Active" and the claim itself carries it,
-			// so no pool probe is needed.
+			name:        "claim probes and policy pass through with both execution gates off",
+			claim:       probePolicyClaim,
 			sandboxSet:  &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
 			expectError: false,
-			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
-				assert.Equal(t, []agentsv1alpha1.Probe{activeProbe}, opts.Probes)
-				assert.Equal(t, idlePolicy, opts.AutoPausePolicy)
-			},
+		},
+		{
+			name:                    "claim probes and policy pass through with auto-pause gate only",
+			claim:                   probePolicyClaim,
+			sandboxSet:              &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			autoPauseControllerGate: true,
+			expectError:             false,
+		},
+		{
+			name:                  "claim probes and policy pass through with Kruise gate only",
+			claim:                 probePolicyClaim,
+			sandboxSet:            &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			kruiseIntegrationGate: true,
+			expectError:           false,
+		},
+		{
+			name:                    "claim probes and policy pass through with both execution gates on",
+			claim:                   probePolicyClaim,
+			sandboxSet:              &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
+			autoPauseControllerGate: true,
+			kruiseIntegrationGate:   true,
+			expectError:             false,
 		},
 		{
 			name: "claim probes without policy pass through",
@@ -1681,10 +1638,6 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 			},
 			sandboxSet:  &agentsv1alpha1.SandboxSet{ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"}},
 			expectError: false,
-			validate: func(t *testing.T, opts infra.ClaimSandboxOptions) {
-				assert.Equal(t, []agentsv1alpha1.Probe{activeProbe}, opts.Probes)
-				assert.Nil(t, opts.AutoPausePolicy)
-			},
 		},
 		{
 			name: "duplicate claim probe names are rejected",
@@ -2480,14 +2433,18 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			probePoolReuseEnabled := tt.probePoolReuse
+			const autoPauseGate = string(features.AutoPauseControllerGate)
+			const kruiseGate = string(features.KruiseIntegrationGate)
+			originalGates := map[string]bool{
+				autoPauseGate: utilfeature.DefaultFeatureGate.Enabled(features.AutoPauseControllerGate),
+				kruiseGate:    utilfeature.DefaultFeatureGate.Enabled(features.KruiseIntegrationGate),
+			}
 			require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-				string(features.SandboxClaimProbePoolReuseGate): probePoolReuseEnabled,
+				autoPauseGate: tt.autoPauseControllerGate,
+				kruiseGate:    tt.kruiseIntegrationGate,
 			}))
 			t.Cleanup(func() {
-				require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(map[string]bool{
-					string(features.SandboxClaimProbePoolReuseGate): false,
-				}))
+				require.NoError(t, utilfeature.DefaultMutableFeatureGate.SetFromMap(originalGates))
 			})
 
 			var testClient client.Client
@@ -2508,7 +2465,9 @@ func TestCommonControl_buildClaimOptions(t *testing.T) {
 				assert.Nil(t, opts.Modifier)
 			}
 			if !tt.expectError {
-				assert.Equal(t, len(tt.claim.Spec.Probes) > 0 && !probePoolReuseEnabled, opts.RequireNewSandbox)
+				assert.Equal(t, tt.autoPauseControllerGate && tt.kruiseIntegrationGate, opts.ProbeUpdatesEnabled)
+				assert.Equal(t, tt.claim.Spec.Probes, opts.Probes)
+				assert.Equal(t, tt.claim.Spec.AutoPausePolicy, opts.AutoPausePolicy)
 				if tt.validate != nil {
 					tt.validate(t, opts)
 				}

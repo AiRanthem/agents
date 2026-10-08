@@ -596,9 +596,8 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	template, cnt := opts.Template, opts.CandidateCounts
 	ctx = logs.Extend(ctx, "action", "pickAnAvailableSandbox")
 	log := klog.FromContext(ctx).WithValues("template", template).V(utils.DebugLogLevel)
-	if opts.RequireNewSandbox {
-		log.Info("will create a new sandbox", "reason", "RequireNewSandbox")
-		return newSandboxFromSandboxSet(ctx, opts, cache)
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	objects, err := cache.ListSandboxesInPool(ctx, infracache.ListSandboxesInPoolOptions{Namespace: opts.Namespace, Pool: template})
 	if err != nil {
@@ -624,12 +623,16 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	availableCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	speculatingCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	var resizeSkipReason error
+	var probeUpdateSkipReason error
 	// The claim-required probes derive from the claim's auto-pause policy minus
 	// the probes the claim itself carries: candidates do not need to pre-declare
 	// those, they are merged onto the picked sandbox at claim time.
 	requiredProbeNames := autopause.RequiredProbeNames(opts.AutoPausePolicy, opts.Probes)
 	missingProbeNames := make(map[string]struct{})
 	for _, obj := range objects {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		if len(availableCandidates) >= cnt {
 			if opts.SpeculateCreatingDuration == 0 || len(speculatingCandidates) >= cnt {
 				break
@@ -659,6 +662,19 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 		if len(obj.Spec.Probes)+len(opts.Probes) > autopause.MaxSandboxProbes && len(autopause.MergeProbes(obj.Spec.Probes, opts.Probes)) > autopause.MaxSandboxProbes {
 			log.Info("skip sandbox whose merged probes exceed the limit", "sandbox", klog.KObj(obj))
 			continue
+		}
+		if len(opts.Probes) > 0 {
+			if checkErr := checkCandidateProbeUpdates(ctx, obj, opts.ProbeUpdatesEnabled, cache.GetClient()); checkErr != nil {
+				if err := ctx.Err(); err != nil {
+					return nil, "", err
+				}
+				if errors.Is(checkErr, context.Canceled) || errors.Is(checkErr, context.DeadlineExceeded) {
+					return nil, "", checkErr
+				}
+				probeUpdateSkipReason = checkErr
+				log.Info("skip sandbox that cannot update probes", "sandbox", klog.KObj(obj), "reason", checkErr)
+				continue
+			}
 		}
 		state, _ := utils.GetSandboxState(obj)
 		switch state {
@@ -743,7 +759,29 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 		}
 		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate declares required probes %v", missing))
 	}
+	if probeUpdateSkipReason != nil && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
+		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate supports probe updates: %v", probeUpdateSkipReason))
+	}
 	return nil, "", NoAvailableError(template, pickErr.Error())
+}
+
+// checkCandidateProbeUpdates rejects pool candidates whose existing Pods cannot
+// receive claim probes. Node reads use the caller's informer-backed client.
+func checkCandidateProbeUpdates(ctx context.Context, sbx *v1alpha1.Sandbox, enabled bool, c client.Client) error {
+	if !enabled {
+		return errors.New("probe updates are disabled")
+	}
+	if sbx.Status.NodeName == "" {
+		return errors.New("sandbox has no scheduled node")
+	}
+	node := &corev1.Node{}
+	if err := c.Get(ctx, client.ObjectKey{Name: sbx.Status.NodeName}, node); err != nil {
+		return fmt.Errorf("cannot determine probe update support for node %s: %w", sbx.Status.NodeName, err)
+	}
+	if autopause.IsVirtualKubeletNode(node) {
+		return fmt.Errorf("node %s is a virtual-kubelet node", node.Name)
+	}
+	return nil
 }
 
 func missingRequiredProbeNames(probes []v1alpha1.Probe, required []string) []string {
