@@ -265,26 +265,28 @@ func TestTryClaimSandbox_QuotaDeniedCreateOnNoStockConsumesCreateLimiterBeforeAd
 	assert.False(t, limiter.Allow(), "create limiter should be consumed before quota admission on create path")
 }
 
-func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
+func TestTryClaimSandbox_ProbeUpdates(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		requireNew  bool
-		creating    bool
-		rateDenied  bool
-		quotaDenied bool
-		overLimit   bool
-		wantErr     string
+		name                string
+		probeUpdatesEnabled bool
+		createOnNoStock     bool
+		virtualKubelet      bool
+		quotaDenied         bool
+		overLimit           bool
+		wantCreate          bool
+		wantNoAvailable     bool
+		wantErr             string
 	}{
-		{name: "available pool candidate is bypassed", requireNew: true},
-		{name: "creating pool candidate is bypassed", requireNew: true, creating: true},
-		{name: "disabled option preserves warm reuse"},
-		{name: "create rate limiter still rejects", requireNew: true, rateDenied: true, wantErr: "sandbox creation is not allowed by rate limiter"},
-		{name: "admission still rejects", requireNew: true, quotaDenied: true, wantErr: "quota"},
-		{name: "merged probe limit still rejects", requireNew: true, overLimit: true, wantErr: "new sandbox merged probes exceed the Sandbox limit of 16 (17 probes)"},
+		{name: "real node candidate is reused", probeUpdatesEnabled: true},
+		{name: "virtual kubelet candidate falls back to creation", probeUpdatesEnabled: true, createOnNoStock: true, virtualKubelet: true, wantCreate: true},
+		{name: "virtual kubelet candidate stays retriable without creation", probeUpdatesEnabled: true, virtualKubelet: true, wantNoAvailable: true},
+		{name: "capability disabled falls back to creation", createOnNoStock: true, wantCreate: true},
+		{name: "admission still rejects", probeUpdatesEnabled: true, createOnNoStock: true, virtualKubelet: true, quotaDenied: true, wantErr: "quota"},
+		{name: "merged probe limit still rejects", probeUpdatesEnabled: true, createOnNoStock: true, virtualKubelet: true, overLimit: true, wantErr: "new sandbox merged probes exceed the Sandbox limit of 16 (17 probes)"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			testInfra, c := NewTestInfra(t)
-			const template = "require-new-template"
+			const template = "probe-update-template"
 			probe := v1alpha1.Probe{Name: "Active", Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{
 				Exec: &corev1.ExecAction{Command: []string{"claim-probe"}},
 			}}}
@@ -298,6 +300,11 @@ func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
 				}
 			}
 			require.NoError(t, c.Create(t.Context(), sbs))
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "claim-node"}}
+			if tt.virtualKubelet {
+				node.Labels = map[string]string{"type": "virtual-kubelet"}
+			}
+			require.NoError(t, c.Create(t.Context(), node))
 			candidate := &v1alpha1.Sandbox{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "pool-candidate", Namespace: "default",
@@ -310,10 +317,8 @@ func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
 					Phase:      v1alpha1.SandboxRunning,
 					Conditions: []metav1.Condition{{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}},
 					PodInfo:    v1alpha1.PodInfo{PodIP: "1.2.3.4"},
+					NodeName:   node.Name,
 				},
-			}
-			if tt.creating {
-				candidate.Status = v1alpha1.SandboxStatus{Phase: v1alpha1.SandboxPending}
 			}
 			CreateSandboxWithStatus(t, c, candidate)
 			before := candidate.DeepCopy()
@@ -347,22 +352,25 @@ func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
 			t.Cleanup(func() { DefaultCreateSandbox = originalCreate })
 			opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
 				Namespace: "default", Template: template, User: "test-user",
-				RequireNewSandbox: tt.requireNew, SpeculateCreatingDuration: time.Second,
+				ProbeUpdatesEnabled: tt.probeUpdatesEnabled, CreateOnNoStock: tt.createOnNoStock,
 				Probes: []v1alpha1.Probe{probe}, AutoPausePolicy: policy,
 				WaitReadyTimeout: time.Second,
 			})
 			require.NoError(t, err)
 			limiter := rate.NewLimiter(rate.Every(time.Hour), 1)
-			if tt.rateDenied {
-				require.True(t, limiter.Allow())
-			}
 			quota := newAdmissionQuotaTracker(t, 0)
 			if tt.quotaDenied {
 				opts.Admission = quota.admission()
 			}
 			claimed, metrics, err := TryClaimSandbox(t.Context(), opts, &testInfra.pickCache, testInfra.Cache, testInfra.claimLockChannel, limiter)
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
+			if tt.wantNoAvailable || tt.wantErr != "" {
+				require.Error(t, err)
+				if tt.wantNoAvailable {
+					var retriable retriableError
+					require.ErrorAs(t, err, &retriable)
+				} else {
+					require.ErrorContains(t, err, tt.wantErr)
+				}
 				assert.Nil(t, claimed)
 				assert.Zero(t, createdCount)
 				if tt.quotaDenied {
@@ -373,7 +381,7 @@ func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				require.NotNil(t, claimed)
-				if tt.requireNew {
+				if tt.wantCreate {
 					assert.Equal(t, infra.LockTypeCreate, metrics.LockType)
 					assert.NotEqual(t, candidate.Name, claimed.GetName())
 					assert.Equal(t, 1, createdCount)
@@ -387,10 +395,10 @@ func TestTryClaimSandbox_RequireNewSandbox(t *testing.T) {
 				assert.Equal(t, []v1alpha1.Probe{probe}, stored.Spec.Probes)
 				assert.Equal(t, policy, stored.Spec.AutoPausePolicy)
 			}
-			if tt.requireNew {
+			if tt.wantCreate || tt.wantNoAvailable || tt.wantErr != "" {
 				unchanged := &v1alpha1.Sandbox{}
 				require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(candidate), unchanged))
-				assert.Equal(t, before, unchanged, "bypassed pool candidate must remain unchanged")
+				assert.Equal(t, before, unchanged, "ineligible pool candidate must remain unchanged")
 			}
 		})
 	}
@@ -4441,6 +4449,7 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 				Phase:      v1alpha1.SandboxRunning,
 				Conditions: []metav1.Condition{{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}},
 				PodInfo:    v1alpha1.PodInfo{PodIP: "1.2.3.4"},
+				NodeName:   "test-node",
 			},
 		}
 	}
@@ -4467,6 +4476,11 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 
 	setup := func(t *testing.T) (*Infra, client.Client) {
 		testInfra, c := NewTestInfra(t)
+		require.NoError(t, c.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "test-node"}}))
+		require.Eventually(t, func() bool {
+			node := &corev1.Node{}
+			return testInfra.Cache.GetClient().Get(t.Context(), client.ObjectKey{Name: "test-node"}, node) == nil
+		}, time.Second, 10*time.Millisecond)
 		// Rollout in progress: template memory raised to 1Gi, old sandboxes still lower.
 		sbs := &v1alpha1.SandboxSet{
 			ObjectMeta: metav1.ObjectMeta{Name: template, Namespace: "default"},
@@ -4631,7 +4645,7 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 			AutoPausePolicy: requiresActiveProbe,
 			// The claim carries the "Active" probe itself, so candidates
 			// without it stay eligible: it is merged on at claim time.
-			Probes: []v1alpha1.Probe{{Name: "Active"}},
+			Probes: []v1alpha1.Probe{{Name: "Active"}}, ProbeUpdatesEnabled: true,
 		})
 		require.NoError(t, err)
 
@@ -4649,11 +4663,12 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		waitPool(t, testInfra, 1)
 
 		opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
-			Namespace:       "default",
-			User:            "test-user",
-			Template:        template,
-			Probes:          newProbes("claim", 1),
-			CreateOnNoStock: true,
+			Namespace:           "default",
+			User:                "test-user",
+			Template:            template,
+			Probes:              newProbes("claim", 1),
+			ProbeUpdatesEnabled: true,
+			CreateOnNoStock:     true,
 		})
 		require.NoError(t, err)
 
@@ -4673,10 +4688,11 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		replacement := candidate.Spec.Probes[0].DeepCopy()
 		replacement.Exec.Command = []string{"replacement"}
 		opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
-			Namespace: "default",
-			User:      "test-user",
-			Template:  template,
-			Probes:    []v1alpha1.Probe{*replacement},
+			Namespace:           "default",
+			User:                "test-user",
+			Template:            template,
+			Probes:              []v1alpha1.Probe{*replacement},
+			ProbeUpdatesEnabled: true,
 		})
 		require.NoError(t, err)
 
@@ -4714,6 +4730,182 @@ func TestPickAnAvailableSandbox_CandidateCompatibilityUsesCandidateSpec(t *testi
 		var retriable retriableError
 		assert.True(t, errors.As(err, &retriable))
 	})
+}
+
+func TestPickAnAvailableSandbox_ProbeUpdates(t *testing.T) {
+	const template = "probe-update-pool"
+	probe := v1alpha1.Probe{Name: "Active", Probe: corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+		Exec: &corev1.ExecAction{Command: []string{"true"}},
+	}}}
+	probePolicy := &v1alpha1.AutoPausePolicy{Pause: &v1alpha1.PausePolicy{
+		WhenProbedIdleState: &v1alpha1.ProbedIdleStateRule{Probe: probe.Name},
+	}}
+	candidate := func(name, nodeName, revision string, phase v1alpha1.SandboxPhase) v1alpha1.Sandbox {
+		return v1alpha1.Sandbox{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "default",
+				Labels: map[string]string{v1alpha1.LabelTemplateHash: revision},
+			},
+			Status: v1alpha1.SandboxStatus{Phase: phase, NodeName: nodeName},
+		}
+	}
+	running := v1alpha1.SandboxRunning
+	pending := v1alpha1.SandboxPending
+	tests := []struct {
+		name                string
+		candidates          []v1alpha1.Sandbox
+		probeUpdatesEnabled bool
+		claimHasProbes      bool
+		claimHasPolicy      bool
+		poolHasProbe        bool
+		candidateCounts     int
+		speculate           bool
+		getErr              error
+		cancelOnNodeGet     bool
+		wantCandidate       string
+		wantLock            infra.LockType
+		wantNoAvailable     bool
+		wantCanceled        bool
+		wantNodeGets        int
+	}{
+		{name: "available virtual kubelet candidate is skipped", candidates: []v1alpha1.Sandbox{candidate("vk-available", "vk-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantNoAvailable: true, wantNodeGets: 1},
+		{name: "creating virtual kubelet candidate is skipped", candidates: []v1alpha1.Sandbox{candidate("vk-creating", "vk-node", "current", pending)}, probeUpdatesEnabled: true, claimHasProbes: true, speculate: true, wantNoAvailable: true, wantNodeGets: 1},
+		{name: "available real node candidate is accepted", candidates: []v1alpha1.Sandbox{candidate("real-available", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantCandidate: "real-available", wantLock: infra.LockTypeUpdate, wantNodeGets: 1},
+		{name: "creating real node candidate is accepted", candidates: []v1alpha1.Sandbox{candidate("real-creating", "real-node", "current", pending)}, probeUpdatesEnabled: true, claimHasProbes: true, speculate: true, wantCandidate: "real-creating", wantLock: infra.LockTypeSpeculate, wantNodeGets: 1},
+		{name: "missing node is skipped", candidates: []v1alpha1.Sandbox{candidate("unknown-node", "missing-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantNoAvailable: true, wantNodeGets: 1},
+		{name: "node get error is skipped", candidates: []v1alpha1.Sandbox{candidate("node-get-error", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, getErr: errors.New("node lookup failed"), wantNoAvailable: true, wantNodeGets: 1},
+		{name: "node get cancellation aborts selection", candidates: []v1alpha1.Sandbox{candidate("node-get-canceled", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, cancelOnNodeGet: true, wantCanceled: true, wantNodeGets: 1},
+		{name: "empty node name is skipped", candidates: []v1alpha1.Sandbox{candidate("no-node-name", "", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantNoAvailable: true},
+		{name: "disabled capability skips probe-bearing candidates", candidates: []v1alpha1.Sandbox{candidate("disabled-vk", "vk-node", "current", running)}, claimHasProbes: true, wantNoAvailable: true},
+		{name: "no claim probes leave virtual kubelet candidate eligible", candidates: []v1alpha1.Sandbox{candidate("no-probes-vk", "vk-node", "current", running)}, probeUpdatesEnabled: true, wantCandidate: "no-probes-vk", wantLock: infra.LockTypeUpdate},
+		{name: "policy-only claim does not inspect node capability", candidates: []v1alpha1.Sandbox{candidate("policy-only-real", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasPolicy: true, poolHasProbe: true, wantCandidate: "policy-only-real", wantLock: infra.LockTypeUpdate},
+		{name: "virtual kubelet before real node does not consume candidate count", candidates: []v1alpha1.Sandbox{candidate("a-vk", "vk-node", "current", running), candidate("b-real", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, candidateCounts: 1, wantCandidate: "b-real", wantLock: infra.LockTypeUpdate, wantNodeGets: 2},
+		{name: "available candidate precedes creating candidate", candidates: []v1alpha1.Sandbox{candidate("a-creating", "real-node", "current", pending), candidate("b-available", "real-node", "old", running)}, probeUpdatesEnabled: true, claimHasProbes: true, candidateCounts: 1, speculate: true, wantCandidate: "b-available", wantLock: infra.LockTypeUpdate, wantNodeGets: 2},
+		{name: "current revision candidate keeps priority", candidates: []v1alpha1.Sandbox{candidate("a-old", "real-node", "old", running), candidate("b-current", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, candidateCounts: 2, wantCandidate: "b-current", wantLock: infra.LockTypeUpdate, wantNodeGets: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testInfra, fc := NewTestInfra(t)
+			cacheClient, ok := testInfra.Cache.GetClient().(client.WithWatch)
+			require.True(t, ok)
+			apiReader, ok := fc.(client.WithWatch)
+			require.True(t, ok)
+			var nodeGetCount, apiReaderNodeGetCount atomic.Int32
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			testInfra.Cache = &apiReaderOverrideCache{
+				Provider: testInfra.Cache,
+				apiReader: interceptor.NewClient(apiReader, interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*corev1.Node); ok {
+							apiReaderNodeGetCount.Add(1)
+							return errors.New("selection must use cached node reads")
+						}
+						return c.Get(ctx, key, obj, opts...)
+					},
+				}),
+				client: interceptor.NewClient(cacheClient, interceptor.Funcs{
+					Get: func(getCtx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*corev1.Node); ok {
+							nodeGetCount.Add(1)
+							if tt.cancelOnNodeGet {
+								cancel()
+								return context.Canceled
+							}
+							if tt.getErr != nil {
+								return tt.getErr
+							}
+						}
+						return c.Get(getCtx, key, obj, opts...)
+					},
+				}),
+			}
+
+			sbs := &v1alpha1.SandboxSet{
+				ObjectMeta: metav1.ObjectMeta{Name: template, Namespace: "default"},
+				Spec: v1alpha1.SandboxSetSpec{EmbeddedSandboxTemplate: v1alpha1.EmbeddedSandboxTemplate{
+					Template: &corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "test"}}}},
+				}},
+				Status: v1alpha1.SandboxSetStatus{UpdateRevision: "current"},
+			}
+			require.NoError(t, fc.Create(t.Context(), sbs))
+			require.NoError(t, fc.Status().Update(t.Context(), sbs))
+			require.NoError(t, fc.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "real-node"}}))
+			require.NoError(t, fc.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "vk-node", Labels: map[string]string{"type": "virtual-kubelet"}}}))
+			for i := range tt.candidates {
+				candidate := tt.candidates[i].DeepCopy()
+				candidate.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Minute))
+				candidate.Labels[v1alpha1.LabelSandboxTemplate] = template
+				candidate.Labels[v1alpha1.LabelSandboxIsClaimed] = "false"
+				candidate.OwnerReferences = GetSbsOwnerReference()
+				candidate.Spec.EmbeddedSandboxTemplate = *sbs.Spec.EmbeddedSandboxTemplate.DeepCopy()
+				if candidate.Status.Phase == v1alpha1.SandboxRunning {
+					candidate.Status.Conditions = []metav1.Condition{{Type: string(v1alpha1.SandboxConditionReady), Status: metav1.ConditionTrue}}
+					candidate.Status.PodInfo = v1alpha1.PodInfo{PodIP: "1.2.3.4"}
+				}
+				if tt.poolHasProbe {
+					candidate.Spec.Probes = []v1alpha1.Probe{probe}
+				}
+				CreateSandboxWithStatus(t, fc, candidate)
+			}
+			require.Eventually(t, func() bool {
+				_, setErr := testInfra.Cache.PickSandboxSet(t.Context(), infracache.PickSandboxSetOptions{Namespace: "default", Name: template})
+				pool, poolErr := testInfra.Cache.ListSandboxesInPool(t.Context(), infracache.ListSandboxesInPoolOptions{Namespace: "default", Pool: template})
+				return setErr == nil && poolErr == nil && len(pool) == len(tt.candidates)
+			}, time.Second, 10*time.Millisecond)
+			nodeGetCount.Store(0)
+			if tt.name == "virtual kubelet before real node does not consume candidate count" {
+				pool, err := testInfra.Cache.ListSandboxesInPool(t.Context(), infracache.ListSandboxesInPoolOptions{Namespace: "default", Pool: template})
+				require.NoError(t, err)
+				require.Len(t, pool, 2)
+				assert.Equal(t, "a-vk", pool[0].Name, "the virtual-kubelet candidate must be encountered first")
+			}
+
+			claimProbes := []v1alpha1.Probe(nil)
+			if tt.claimHasProbes {
+				claimProbes = []v1alpha1.Probe{probe}
+			}
+			claimPolicy := (*v1alpha1.AutoPausePolicy)(nil)
+			if tt.claimHasPolicy {
+				claimPolicy = probePolicy
+			}
+			speculateDuration := time.Duration(0)
+			if tt.speculate {
+				speculateDuration = time.Second
+			}
+			opts, err := ValidateAndInitClaimOptions(infra.ClaimSandboxOptions{
+				Namespace: "default", User: "test-user", Template: template,
+				Probes: claimProbes, AutoPausePolicy: claimPolicy,
+				ProbeUpdatesEnabled: tt.probeUpdatesEnabled, CandidateCounts: tt.candidateCounts,
+				SpeculateCreatingDuration: speculateDuration,
+			})
+			require.NoError(t, err)
+			pickCtx := t.Context()
+			if tt.cancelOnNodeGet {
+				pickCtx = ctx
+			}
+			sbx, lockType, pickErr := pickAnAvailableSandbox(pickCtx, opts, &testInfra.pickCache, testInfra.Cache)
+			assert.Equal(t, int32(tt.wantNodeGets), nodeGetCount.Load())
+			assert.Zero(t, apiReaderNodeGetCount.Load(), "node capability must be read through the cache client")
+			if tt.wantCanceled {
+				require.ErrorIs(t, pickErr, context.Canceled)
+				assert.Nil(t, sbx)
+				return
+			}
+			if tt.wantNoAvailable {
+				require.Error(t, pickErr)
+				var retriable retriableError
+				require.ErrorAs(t, pickErr, &retriable)
+				assert.Nil(t, sbx)
+				return
+			}
+			require.NoError(t, pickErr)
+			require.NotNil(t, sbx)
+			assert.Equal(t, tt.wantCandidate, sbx.GetName())
+			assert.Equal(t, tt.wantLock, lockType)
+		})
+	}
 }
 
 func TestModifyPickedSandbox_InitRuntime(t *testing.T) {

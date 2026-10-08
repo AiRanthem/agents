@@ -17,8 +17,22 @@ limitations under the License.
 package autopause
 
 import (
+	corev1 "k8s.io/api/core/v1"
+
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 )
+
+// VirtualKubeletNodeLabelKey and VirtualKubeletNodeLabelValue define the
+// node label used to identify virtual-kubelet nodes.
+const (
+	VirtualKubeletNodeLabelKey   = "type"
+	VirtualKubeletNodeLabelValue = "virtual-kubelet"
+)
+
+// IsVirtualKubeletNode reports whether the node carries the virtual-kubelet label.
+func IsVirtualKubeletNode(node *corev1.Node) bool {
+	return node.Labels[VirtualKubeletNodeLabelKey] == VirtualKubeletNodeLabelValue
+}
 
 // PolicyProbeNames returns the deduplicated names of the probes the policy
 // rules reference, in declaration order. A nil policy references none.

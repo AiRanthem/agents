@@ -67,6 +67,11 @@ type ClaimSandboxOptions struct {
 	// Spec.Probes); other Infrastructure implementations ignore it. A nil value
 	// keeps the probes the picked sandbox already carries.
 	Probes []v1alpha1.Probe `json:"-"`
+	// ProbeUpdatesEnabled declares that probe delivery can update existing Pods
+	// for this call. Claims carrying Probes may reuse a pool candidate only when
+	// this is true and the candidate is scheduled on a real node. False still
+	// allows creation when CreateOnNoStock is true; it does not reject Probes.
+	ProbeUpdatesEnabled bool `json:"-"`
 	// ReserveFailedSandboxFor controls how long failed sandboxes are kept for debugging.
 	//   nil                          — backend default (DefaultReserveFailedSandboxFor)
 	//   ReserveFailedSandboxNever    — delete immediately
@@ -87,9 +92,6 @@ type ClaimSandboxOptions struct {
 	WaitReadyTimeout time.Duration `json:"waitReadyTimeout"`
 	// Create a Sandbox instance from the template if no available ones in SandboxSets
 	CreateOnNoStock bool `json:"createOnNoStock"`
-	// RequireNewSandbox bypasses pool candidates and creates from the template,
-	// regardless of CreateOnNoStock.
-	RequireNewSandbox bool `json:"requireNewSandbox"`
 	// A creating sandbox lasts for SpeculateCreatingDuration may be picked as a candidate when no available ones in SandboxSets.
 	// Set to 0 to disable speculation feature
 	SpeculateCreatingDuration time.Duration `json:"speculateCreatingDuration"`
