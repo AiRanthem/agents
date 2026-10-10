@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -408,6 +410,104 @@ func waitForResumeUpdate(controller *Controller, waitForResumeHook bool) WhenFun
 		entry, ok := value.(*cacheutils.WaitEntry[*agentsv1alpha1.Sandbox])
 		return ok && entry.Action == cacheutils.WaitActionResume
 	}
+}
+
+func TestIsConnectV2Request(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/sandboxes/abc/connect", want: false},
+		{path: "/kruise/api/sandboxes/abc/connect", want: false},
+		{path: "/v2/sandboxes", want: false},
+		{path: "/v2/sandboxes/abc/connect", want: true},
+		{path: "/kruise/api/v2/sandboxes/abc/connect", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			assert.Equal(t, tt.want, isConnectV2Request(req))
+		})
+	}
+}
+
+func TestParseConnectSandboxRequest(t *testing.T) {
+	const maxTimeout = 3600
+	tests := []struct {
+		name       string
+		body       string
+		nilBody    bool
+		v2         bool
+		want       int
+		wantCode   int
+		wantSubstr string
+	}{
+		{name: "v1 timeout", body: `{"timeout":30}`, want: 30},
+		{name: "v1 missing timeout", body: `{}`, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
+		{name: "v1 empty body", body: ``, wantSubstr: "EOF"},
+		{name: "v1 zero timeout", body: `{"timeout":0}`, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
+		{name: "v1 negative timeout", body: `{"timeout":-1}`, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
+		{name: "v1 memory false", body: `{"timeout":30,"memory":false}`, wantCode: http.StatusBadRequest, wantSubstr: "disk-only resume is not enabled"},
+		{name: "v2 omitted timeout", body: `{}`, v2: true, want: models.DefaultTimeoutSeconds},
+		{name: "v2 empty body", body: ``, v2: true, want: models.DefaultTimeoutSeconds},
+		{name: "v2 nil body", nilBody: true, v2: true, want: models.DefaultTimeoutSeconds},
+		{name: "v2 explicit timeout", body: `{"timeout":60}`, v2: true, want: 60},
+		{name: "v2 memory true defaults timeout", body: `{"memory":true}`, v2: true, want: models.DefaultTimeoutSeconds},
+		{name: "v2 memory false", body: `{"memory":false}`, v2: true, wantCode: http.StatusBadRequest, wantSubstr: "disk-only resume is not enabled"},
+		{name: "v2 zero timeout", body: `{"timeout":0}`, v2: true, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 1 and 3600"},
+		{name: "v2 above max", body: `{"timeout":3601}`, v2: true, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 1 and 3600"},
+		{name: "v2 invalid json", body: `{`, v2: true, wantSubstr: "unexpected EOF"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req *http.Request
+			if tt.nilBody {
+				req = httptest.NewRequest(http.MethodPost, "/v2/sandboxes/sbx/connect", nil)
+				req.Body = nil
+			} else {
+				req = httptest.NewRequest(http.MethodPost, "/v2/sandboxes/sbx/connect", strings.NewReader(tt.body))
+			}
+			got, apiErr := parseConnectSandboxRequest(req, maxTimeout, tt.v2)
+			if tt.wantSubstr != "" {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, tt.wantCode, apiErr.Code)
+				assert.Contains(t, apiErr.Message, tt.wantSubstr)
+				return
+			}
+			require.Nil(t, apiErr)
+			assert.Equal(t, tt.want, got.TimeoutSeconds)
+		})
+	}
+}
+
+func TestConnectSandboxV2OmitsTimeout(t *testing.T) {
+	controller, _, teardown := Setup(t)
+	defer teardown()
+	user := adminTestUser()
+	templateName := "test-template-v2-connect"
+
+	cleanup := CreateSandboxPool(t, controller, templateName, 1)
+	defer cleanup()
+
+	createResp, apiErr := controller.CreateSandbox(NewRequest(t, nil, models.NewSandboxRequest{
+		TemplateID: templateName,
+		Timeout:    60,
+		Metadata: map[string]string{
+			models.ExtensionKeySkipInitRuntime: agentsv1alpha1.True,
+		},
+	}, nil, user))
+	require.Nil(t, apiErr)
+	require.Equal(t, models.SandboxStateRunning, createResp.Body.State)
+
+	req := NewRequest(t, nil, map[string]any{}, map[string]string{
+		"sandboxID": createResp.Body.SandboxID,
+	}, user)
+	req.URL.Path = "/v2/sandboxes/" + createResp.Body.SandboxID + "/connect"
+	now := time.Now()
+	connectResp, apiErr := controller.ConnectSandbox(req)
+	require.Nil(t, apiErr)
+	assert.Equal(t, http.StatusOK, connectResp.Code)
+	AssertEndAt(t, now.Add(time.Duration(models.DefaultTimeoutSeconds)*time.Second), connectResp.Body.EndAt)
 }
 
 func TestConnectSandbox(t *testing.T) {
