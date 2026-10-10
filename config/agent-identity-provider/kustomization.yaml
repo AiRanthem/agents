@@ -1,0 +1,6 @@
+# Not referenced by config/default: the identity path is opt-in, so this
+# component is applied deliberately rather than installed with the rest.
+resources:
+  - deployment.yaml
+  - rbac.yaml
+  - serviceaccount.yaml

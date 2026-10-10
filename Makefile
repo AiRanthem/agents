@@ -85,6 +85,10 @@ build: generate fmt vet manifests ## Build manager binary.
 build-okactl: ## Build okactl CLI binary.
 	go build -o bin/okactl ./cmd/okactl
 
+.PHONY: build-agent-identity-provider
+build-agent-identity-provider: ## Build agent-identity-provider binary.
+	go build -o bin/agent-identity-provider ./cmd/agent-identity-provider
+
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
