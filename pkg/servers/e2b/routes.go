@@ -64,9 +64,9 @@ func (sc *Controller) registerRoutes() {
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/pause", sc.PauseSandbox, traceOperation(traceOpPause), sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/resume", sc.ResumeSandbox, traceOperation(traceOpResume), sc.CheckApiKey)
 	// e2b SDK 2.51.0 connects through POST /v2/sandboxes/{sandboxID}/connect.
-	// The body is optional there; ConnectSandbox applies the v2 timeout default.
+	// ConnectSandboxV2 accepts an omitted body and applies the 300-second default.
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/connect", sc.ConnectSandbox, traceOperation(traceOpResume), sc.CheckApiKey)
-	RegisterE2BRoute(sc.mux, http.MethodPost, "/v2/sandboxes/{sandboxID}/connect", sc.ConnectSandbox, traceOperation(traceOpResume), sc.CheckApiKey)
+	RegisterE2BRoute(sc.mux, http.MethodPost, "/v2/sandboxes/{sandboxID}/connect", sc.ConnectSandboxV2, traceOperation(traceOpResume), sc.CheckApiKey)
 	web.RegisterRoute(sc.mux, http.MethodPost, adapters.CustomPrefix+"/api/sandboxes/{sandboxID}/traffic-access-token", sc.RefreshTrafficAccessToken, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/timeout", sc.SetSandboxTimeout, sc.CheckApiKey)
 	RegisterE2BRoute(sc.mux, http.MethodPost, "/sandboxes/{sandboxID}/snapshots", sc.CreateSnapshot, sc.CheckApiKey)
