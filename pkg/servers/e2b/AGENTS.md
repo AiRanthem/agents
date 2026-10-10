@@ -9,11 +9,6 @@ behavior and delegates protocol-independent use cases to Manager.
   validation, inspect the relevant section of the upstream
   [E2B OpenAPI specification](https://github.com/e2b-dev/E2B/blob/main/spec/openapi.yml).
 - Keep native and customized endpoint paths behaviorally equivalent.
-- e2b SDK 2.51.0 creates with `POST /v2/sandboxes` and connects with
-  `POST /v2/sandboxes/{sandboxID}/connect`. Keep those routes aligned with the
-  v1 handlers. v2 connect accepts an omitted body and applies the 300-second
-  timeout default; `memory: false` stays rejected because disk-only resume is
-  not implemented.
 - Preserve established public error categories and status mappings. Backend
   details remain Manager concerns and must not leak into API responses.
 - Preserve the established Sandbox lookup contract: lookup failures remain
