@@ -18,9 +18,12 @@ package e2b
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -155,7 +158,8 @@ func buildPauseTimeoutOptions(opts timeout.Options, now time.Time, pausedRetenti
 // ResumeSandbox is DEPRECATED and kept only for old SDK compatibility.
 //
 // E2B exposes one "connect" behavior, but different SDK versions call different endpoints:
-// - New SDK: calls ConnectSandbox directly.
+// - e2b >= 2.51.0: POST /v2/sandboxes/{sandboxID}/connect. The body is optional and an omitted timeout defaults to 300s.
+// - Earlier SDKs that call connect directly: POST /sandboxes/{sandboxID}/connect with a required timeout.
 // - Old SDK: first calls SetSandboxTimeout; that path returns 500 on this flow, then falls back to ResumeSandbox.
 //
 // The post-Resume timeout write reuses updateConnectTimeout with UpdatePolicyExtendOnly,
@@ -272,7 +276,7 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 		return web.ApiResponse[*models.Sandbox]{}, &web.ApiError{Code: http.StatusUnauthorized, Message: "User not found"}
 	}
 
-	request, apiErr := ParseSetTimeoutRequest(r, sc.maxTimeout)
+	request, apiErr := sc.parseConnectRequest(r)
 	if apiErr != nil {
 		return web.ApiResponse[*models.Sandbox]{}, apiErr
 	}
@@ -332,6 +336,73 @@ func (sc *Controller) ConnectSandbox(r *http.Request) (web.ApiResponse[*models.S
 		Code: statusCode,
 		Body: body,
 	}, nil
+}
+
+// connectV2PathMarker matches POST /v2/sandboxes/{sandboxID}/connect, including
+// the customized mount under /kruise/api.
+const connectV2PathMarker = "/v2/sandboxes/"
+
+func isConnectV2Request(r *http.Request) bool {
+	return strings.Contains(r.URL.Path, connectV2PathMarker)
+}
+
+// parseConnectRequest reads the connect body. v1 requires timeout. v2 (e2b SDK
+// 2.51.0) omits the body or the timeout field and expects the API default of
+// 300 seconds. memory=false asks for a disk-only resume, which this API does
+// not implement; rejecting it avoids restoring memory after the caller asked
+// not to.
+func (sc *Controller) parseConnectRequest(r *http.Request) (models.SetTimeoutRequest, *web.ApiError) {
+	return parseConnectSandboxRequest(r, sc.maxTimeout, isConnectV2Request(r))
+}
+
+func parseConnectSandboxRequest(r *http.Request, maxTimeout int, v2 bool) (models.SetTimeoutRequest, *web.ApiError) {
+	var body struct {
+		Timeout *int  `json:"timeout"`
+		Memory  *bool `json:"memory"`
+	}
+	reader := r.Body
+	if reader == nil {
+		reader = http.NoBody
+	}
+	if err := json.NewDecoder(reader).Decode(&body); err != nil {
+		if !(v2 && errors.Is(err, io.EOF)) {
+			return models.SetTimeoutRequest{}, &web.ApiError{
+				Message: err.Error(),
+			}
+		}
+	}
+	if body.Memory != nil && !*body.Memory {
+		return models.SetTimeoutRequest{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: "disk-only resume is not enabled",
+		}
+	}
+
+	var timeoutSeconds int
+	switch {
+	case body.Timeout != nil:
+		timeoutSeconds = *body.Timeout
+	case v2:
+		timeoutSeconds = models.DefaultTimeoutSeconds
+	default:
+		return models.SetTimeoutRequest{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: fmt.Sprintf("timeout should between 0 and %d", maxTimeout),
+		}
+	}
+	// v1 and v2 both reject a non-positive timeout. v2's documented minimum is 1,
+	// so its error names that bound; v1 keeps the historical "between 0" text.
+	if timeoutSeconds <= 0 || timeoutSeconds > maxTimeout {
+		lowerBound := 0
+		if v2 {
+			lowerBound = 1
+		}
+		return models.SetTimeoutRequest{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: fmt.Sprintf("timeout should between %d and %d", lowerBound, maxTimeout),
+		}
+	}
+	return models.SetTimeoutRequest{TimeoutSeconds: timeoutSeconds}, nil
 }
 
 // updateConnectTimeout writes the post-Resume / running-sandbox timeout under
