@@ -28,7 +28,7 @@ Ask before adding or reshaping a data structure unless its change and shape were
 - adding, removing, or changing fields, methods, variants, or inheritance;
 - adding or changing public, stored, wire, configuration, or database schemas.
 
-Explain the need, existing type or simpler representation considered, and smallest proposed shape. Batch related requests when useful. Local variables and ordinary anonymous values need no approval, but must not hide a type or schema that should be explicit. These rules also apply to test-only named types.
+Explain the need, existing type or simpler representation considered, and proposed shape with its ownership and maintenance tradeoffs. Batch related requests when useful. Local variables and ordinary anonymous values need no approval, but must not hide a type or schema that should be explicit. These rules also apply to test-only named types.
 
 Stop before an affected edit for an unapproved or decision-changing draft, unresolved product decision, contract conflict, infeasible contract, uncovered breaking change, or special release requirement. Continue only independent work that cannot constrain the pending decision. Never change the contract or weaken acceptance criteria to make a deviation appear compliant.
 
@@ -58,15 +58,15 @@ Classification controls reasoning and acceptance depth, not permission to omit r
 
 In either mode, break the change into ordered, actionable TODOs describing how the current code reaches the approved target. Ground them in actual components, files, and function boundaries where useful. Include dependencies, affected behavior and ownership, required generated outputs, meaningful verification, and applicable acceptance and handoff work. Each TODO describes implementation progress and a completion outcome, not a request to design or plan the work later.
 
-- Discuss implementation alternatives, required type/shape approvals, tradeoffs, and newly exposed constraints with the user before treating the TODOs as ready. Explain the smallest sufficient approach and use existing approvals. Resolve incidental local coding choices yourself within that contract; do not demand approval for every private expression or helper.
+- Discuss implementation alternatives, required type/shape approvals, tradeoffs, and newly exposed constraints with the user before treating the TODOs as ready. Recommend the approach that satisfies the contract with clear responsibilities and maintainable code, and use existing approvals. Resolve incidental local coding choices yourself within that contract; do not demand approval for every private expression or helper.
 - When a code-related choice requires user input, present only viable options. For each one, summarize two outcomes: **Local state**—how the affected components, types, control flow, and ownership will look after the change; and **Global state**—how callers, interfaces, runtime behavior, operations, compatibility, and likely follow-on work will look afterward. Include only differences that help the user decide, then recommend one option with a brief reason.
 - Use an available, permitted user-input tool; otherwise ask conversationally and wait for the answer. Continue only independent investigation while a decision is pending. Silence, timeout, or an empty answer does not settle an implementation choice or approve a contract change.
 - Settle the implementation approach, interfaces, data shapes requiring approval, failure handling, and decision-changing uncertainty before publishing the final plan or beginning code edits. Do not hide an unresolved choice in “decide during implementation.” Line-by-line edits and implementation pseudocode are unnecessary.
-- Apply the existing simplicity and code-cost rules when comparing approaches. Surface a discovered requirement conflict or infeasible guarantee as a design defect and use the repair loop below.
+- Apply the governing code-quality criteria when comparing approaches, including the effects on callers, ownership, and maintenance. Surface a discovered requirement conflict or infeasible guarantee as a design defect and use the repair loop below.
 
 ## Repair the contract and restart when necessary
 
-When decomposition or coding reveals a design defect, stop affected implementation and explain the concrete scenario, violated requirement, and smallest proposed correction. Discuss the resulting requirement or decision changes with the user and obtain agreement; do not silently weaken the contract.
+When decomposition or coding reveals a design defect, stop affected implementation and explain the concrete scenario, violated requirement, and proposed correction. Discuss the resulting requirement or decision changes with the user and obtain agreement; do not silently weaken the contract.
 
 After agreement:
 
@@ -99,9 +99,9 @@ Use subagents only for bounded independent work cheaper to summarize than to ret
 
 The implementation owner retains contract interpretation, approval handling, architecture and data-shape decisions, integration, critical test scope, and completion reporting. Inspect every delegated diff and verify material claims against primary evidence. A delegated command result may be reused when its actual inputs and environment still match.
 
-## Implement the smallest complete behavior
+## Implement clear, complete behavior
 
-Apply the governing engineering principles to deliver the smallest complete change that satisfies the approved contract.
+Apply the governing code-quality criteria to deliver complete behavior that satisfies the approved contract and is clear to read and maintain.
 
 - Immediately after writing or modifying each function, self-review it before continuing. Stop when it satisfies the contract, is clear to read, and has no evident unnecessary complexity.
 - Respect repository placement, naming, ownership, and dependency direction. Add comments for reasons, invariants, or non-obvious failure and compatibility behavior, not syntax narration.

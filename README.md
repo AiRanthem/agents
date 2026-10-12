@@ -64,7 +64,7 @@ $review-design 评审 docs/proposal.md
 
 Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 配置为仅允许显式调用，后两者保留原安装的调用策略。
 
-在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；例如 `ponytail-review` 的有效简洁性要求已由工程原则和现有评审覆盖，不单独吸收。审计本地安装快照不代表已核查上游最新版本。
+在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；代码质量由通用代码质量要求和现有评审覆盖。审计本地安装快照不代表已核查上游最新版本。
 
 ## 维护约束
 

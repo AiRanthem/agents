@@ -34,7 +34,7 @@ At least one actual review execution must be independent of implementation. A le
 
 Every review must also dispatch one fresh read-only subagent dedicated to implementation quality. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code to evaluate the final implementation. Keep this assignment separate from broad correctness, security, and test review so it focuses on:
 
-- whether the behavior is expressed with the smallest clear change and reuses suitable repository or platform capabilities;
+- whether the behavior has clear responsibilities, readable code, maintainable structure, and suitable reuse of repository or platform capabilities;
 - unnecessary lines, files, branches, abstractions, dependencies, indirection, duplication, and generated churn;
 - naming, control flow, locality, ownership, dependency direction, consistency, and ease of understanding and maintenance; and
 - concrete simplifications supported by the design, callers, or existing repository patterns.
