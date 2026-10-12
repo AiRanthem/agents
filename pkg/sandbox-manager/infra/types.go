@@ -67,6 +67,8 @@ type ClaimSandboxOptions struct {
 	RuntimeConfig []v1alpha1.RuntimeConfig `json:"runtimeConfig"`
 	// Set InitRuntime to non-nil value to init the agent-runtime
 	InitRuntime *config.InitRuntimeOptions `json:"initRuntime"`
+	// MemoryPersistence overrides memory persistence for this Sandbox; nil inherits its current setting.
+	MemoryPersistence *bool `json:"memoryPersistence,omitempty"`
 	// Set CSIMount to non-nil value to mount a CSI volume
 	CSIMount *config.CSIMountOptions `json:"CSIMount"`
 	// Max ClaimTimeout duration
@@ -117,6 +119,8 @@ type CloneSandboxOptions struct {
 	Modifier           func(sbx Sandbox) error `json:"-"`
 	CreateLimiter      *rate.Limiter           `json:"-"`
 	SkipWaitCheckpoint bool                    `json:"skipWaitCheckpoint"`
+	// MemoryPersistence overrides memory persistence for this Sandbox; nil inherits its current setting.
+	MemoryPersistence *bool `json:"memoryPersistence,omitempty"`
 	// See ReserveFailedSandboxFor on ClaimSandboxOptions.
 	ReserveFailedSandboxFor *time.Duration `json:"reserveFailedSandboxFor"`
 	// Name sets ObjectMeta.Name on the cloned sandbox (exact name).

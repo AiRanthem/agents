@@ -848,6 +848,7 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 			return terminalMutationError{stage: "modifier", err: err}
 		}
 	}
+	setMemoryPersistence(sbx, opts.MemoryPersistence)
 	if opts.InplaceUpdate != nil {
 		if opts.InplaceUpdate.Image != "" {
 			sbx.SetImage(opts.InplaceUpdate.Image)

@@ -353,9 +353,10 @@ func (sc *Controller) connectSandbox(r *http.Request, request models.SetTimeoutR
 
 // connectSandboxBody is the JSON shape shared by ConnectSandbox and ConnectSandboxV2.
 // The two parsers apply different timeout rules to it.
+// known-limit: memory is ignored; selecting a restore mode per connect would
+// require backend resume support beyond the creation-time persistence policy.
 type connectSandboxBody struct {
-	Timeout *int  `json:"timeout"`
-	Memory  *bool `json:"memory"`
+	Timeout *int `json:"timeout"`
 }
 
 func readConnectSandboxBody(r *http.Request) (connectSandboxBody, error) {
@@ -368,27 +369,12 @@ func readConnectSandboxBody(r *http.Request) (connectSandboxBody, error) {
 	return body, err
 }
 
-// memory=false asks for a disk-only resume. This API does not implement it, so
-// both parsers reject it instead of restoring memory after the caller asked not to.
-func rejectDiskOnlyConnect(memory *bool) *web.ApiError {
-	if memory != nil && !*memory {
-		return &web.ApiError{
-			Code:    http.StatusBadRequest,
-			Message: "disk-only resume is not enabled",
-		}
-	}
-	return nil
-}
-
 // parseConnectSandboxRequest reads POST /sandboxes/{sandboxID}/connect.
 // timeout is required. A non-positive value keeps the historical "between 0" error.
 func parseConnectSandboxRequest(r *http.Request, maxTimeout int) (models.SetTimeoutRequest, *web.ApiError) {
 	body, err := readConnectSandboxBody(r)
 	if err != nil {
 		return models.SetTimeoutRequest{}, &web.ApiError{Message: err.Error()}
-	}
-	if apiErr := rejectDiskOnlyConnect(body.Memory); apiErr != nil {
-		return models.SetTimeoutRequest{}, apiErr
 	}
 	if body.Timeout == nil || *body.Timeout <= 0 || *body.Timeout > maxTimeout {
 		return models.SetTimeoutRequest{}, &web.ApiError{
@@ -405,9 +391,6 @@ func parseConnectSandboxV2Request(r *http.Request, maxTimeout int) (models.SetTi
 	body, err := readConnectSandboxBody(r)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return models.SetTimeoutRequest{}, &web.ApiError{Message: err.Error()}
-	}
-	if apiErr := rejectDiskOnlyConnect(body.Memory); apiErr != nil {
-		return models.SetTimeoutRequest{}, apiErr
 	}
 	timeoutSeconds := models.DefaultTimeoutSeconds
 	if body.Timeout != nil {
