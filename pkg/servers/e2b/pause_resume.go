@@ -390,7 +390,12 @@ func parseConnectSandboxRequest(r *http.Request, maxTimeout int) (models.SetTime
 func parseConnectSandboxV2Request(r *http.Request, maxTimeout int) (models.SetTimeoutRequest, *web.ApiError) {
 	body, err := readConnectSandboxBody(r)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return models.SetTimeoutRequest{}, &web.ApiError{Message: err.Error()}
+		// A non-empty body that fails to decode is caller input. An empty body
+		// is io.EOF and falls through to the default timeout below.
+		return models.SetTimeoutRequest{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		}
 	}
 	timeoutSeconds := models.DefaultTimeoutSeconds
 	if body.Timeout != nil {

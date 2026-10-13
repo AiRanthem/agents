@@ -317,6 +317,7 @@ func (sc *Controller) parseCreateSandboxRequest(r *http.Request) (models.NewSand
 	var request models.NewSandboxRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		return request, &web.ApiError{
+			Code:    http.StatusBadRequest,
 			Message: err.Error(),
 		}
 	}

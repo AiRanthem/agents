@@ -785,7 +785,7 @@ func TestParseCreateSandboxRequest(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/sandboxes", strings.NewReader("{"))
 		_, apiErr := ctrl.parseCreateSandboxRequest(req)
 		require.NotNil(t, apiErr)
-		assert.Equal(t, 0, apiErr.Code)
+		assert.Equal(t, http.StatusBadRequest, apiErr.Code)
 		assert.NotEmpty(t, apiErr.Message)
 	})
 

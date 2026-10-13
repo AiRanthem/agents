@@ -440,7 +440,7 @@ func TestParseConnectSandboxRequest(t *testing.T) {
 		{name: "v2 memory false ignored", body: `{"memory":false}`, parse: parseV2, want: models.DefaultTimeoutSeconds},
 		{name: "v2 zero timeout", body: `{"timeout":0}`, parse: parseV2, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 1 and 3600"},
 		{name: "v2 above max", body: `{"timeout":3601}`, parse: parseV2, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 1 and 3600"},
-		{name: "v2 invalid json", body: `{`, parse: parseV2, wantSubstr: "unexpected EOF"},
+		{name: "v2 invalid json", body: `{`, parse: parseV2, wantCode: http.StatusBadRequest, wantSubstr: "unexpected EOF"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
