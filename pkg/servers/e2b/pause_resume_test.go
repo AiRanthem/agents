@@ -428,7 +428,8 @@ func TestParseConnectSandboxRequest(t *testing.T) {
 	}{
 		{name: "v1 timeout", body: `{"timeout":30}`, parse: parseV1, want: 30},
 		{name: "v1 missing timeout", body: `{}`, parse: parseV1, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
-		{name: "v1 empty body", body: ``, parse: parseV1, wantSubstr: "EOF"},
+		{name: "v1 empty body", body: ``, parse: parseV1, wantCode: http.StatusBadRequest, wantSubstr: "EOF"},
+		{name: "v1 invalid json", body: `{`, parse: parseV1, wantCode: http.StatusBadRequest, wantSubstr: "unexpected EOF"},
 		{name: "v1 zero timeout", body: `{"timeout":0}`, parse: parseV1, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
 		{name: "v1 negative timeout", body: `{"timeout":-1}`, parse: parseV1, wantCode: http.StatusBadRequest, wantSubstr: "timeout should between 0 and 3600"},
 		{name: "v1 memory false ignored", body: `{"timeout":30,"memory":false}`, parse: parseV1, want: 30},

@@ -111,7 +111,7 @@ func TestConnectRouteTraceOperation(t *testing.T) {
 				rec := httptest.NewRecorder()
 				controller.mux.ServeHTTP(rec, req)
 
-				// 在鉴权阶段检查标签，确保尚未查询 Sandbox 状态时就已统一标记。
+				// Check the trace label during authentication, before any Sandbox state lookup.
 				require.Equal(t, http.StatusUnauthorized, rec.Code)
 				assert.Equal(t, []string{"invalid-key"}, storage.calls)
 				assert.Equal(t, []string{traceOpResume}, storage.operations)

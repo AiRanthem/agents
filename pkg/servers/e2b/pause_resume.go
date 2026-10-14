@@ -370,11 +370,16 @@ func readConnectSandboxBody(r *http.Request) (connectSandboxBody, error) {
 }
 
 // parseConnectSandboxRequest reads POST /sandboxes/{sandboxID}/connect.
-// timeout is required. A non-positive value keeps the historical "between 0" error.
+// timeout is required. A body that fails to decode is caller input and returns
+// 400, including an empty body. A non-positive value keeps the historical
+// "between 0" error.
 func parseConnectSandboxRequest(r *http.Request, maxTimeout int) (models.SetTimeoutRequest, *web.ApiError) {
 	body, err := readConnectSandboxBody(r)
 	if err != nil {
-		return models.SetTimeoutRequest{}, &web.ApiError{Message: err.Error()}
+		return models.SetTimeoutRequest{}, &web.ApiError{
+			Code:    http.StatusBadRequest,
+			Message: err.Error(),
+		}
 	}
 	if body.Timeout == nil || *body.Timeout <= 0 || *body.Timeout > maxTimeout {
 		return models.SetTimeoutRequest{}, &web.ApiError{
