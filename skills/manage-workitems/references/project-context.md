@@ -8,11 +8,13 @@ When the project declares `main_workspace`, read `.project/main-workspace.md` an
 
 ## Load only what the task needs
 
+Project and item creation end at metadata, necessary background and requirement skeletons. Supplied requirements do not authorize design. Keep incomplete requirement details unresolved; do not load source code or automatically route to splitting, design or development to fill them. Enter design only when the user explicitly requests it.
+
 Read root `AGENTS.md` and `.project/context.md`, then resolve the item with `project_context.py`. Its queries describe the local clone, not a live cross-machine view. When current remote state matters, fetch only the configured branch and inspect that revision; label any local-only snapshot. Never infer that an unowned local item is unclaimed remotely. Publication always refreshes the authority and verifies guards. Read the complete selected requirement and current spec when designing, reviewing or implementing. The index supplies paths, not replacement contracts.
 
 | Task | Load next |
 | --- | --- |
-| Create/edit an item or dependency | [schema](schema.md); [persistence](persistence.md) before writing |
+| Create/edit an item or dependency | `manage-workitems`; [schema](schema.md); [persistence](persistence.md) before writing |
 | Design, split, implement or complete | [workflow](workflow.md) and the relevant skill |
 | Reuse or produce repository evidence | [evidence](evidence.md) |
 | Enabled Aone backend | [aone](aone.md) only when configuring or synchronizing |

@@ -1,9 +1,11 @@
 ---
 name: develop-workitem
-description: Prepare or resume design and implementation for one work item only inside a managed project workspace. Coordinate its worktree, design review, exclusive development claim and implementation review. Do not activate outside a managed project or create a duplicate development for a claimed item.
+description: Prepare or resume requested design and implementation for one work item inside a managed project workspace. Coordinate its worktree, design review, exclusive development claim and implementation review. Does not handle project or requirement creation; do not activate outside a managed project or duplicate a claimed development.
 ---
 
 # Develop Work Item
+
+Use this workflow for the user's requested design or implementation phase. Project creation and requirement recording stay with `create-project` and `manage-workitems`; do not prepare a worktree or start design merely because an item exists. Enter design only when the user explicitly requests it, including an explicit invocation of this skill's design workflow.
 
 Load [project context](../manage-workitems/references/project-context.md), [workflow](../manage-workitems/references/workflow.md) and the role-specific context for the selected item. Read the complete current requirement and design when applicable; use [evidence](../manage-workitems/references/evidence.md) to avoid repeating discovery.
 
@@ -17,9 +19,9 @@ Select a suitable existing local repository or clone the configured code reposit
 
 ## Design
 
-Start `explore-design` from the item's requirements. Before prerequisites deliver, allow read-only exploration and an initial `spec.md`, with its actual approval state and explicit dependency assumptions. Preserve decisions and evidence at checkpoints.
+For an explicitly requested design phase, start `explore-design` from the item's requirements and align its behavior, ownership, shared contracts and acceptance with related items. Stable items can complete design before prerequisites deliver, including as part of an authorized design phase covering all decomposed items. Record assumed upstream capabilities, interfaces and behavior; retain explicit open decisions for uncertain scope. Preserve the spec's actual approval state, decisions and evidence at checkpoints. Apply the shared workflow's design cadence within the requested item scope.
 
-After prerequisites deliver, update the review target to include their actual delivered code and invalidate affected assumptions. Leave the design awaiting a user-started `review-design` in a fresh context. Do not automatically launch design review. Findings return to exploration or, for oversized scope, `split-workitem`. Only a current independent pass establishes `implementable`.
+After this item's prerequisites deliver, compare their actual results with the dependency assumptions and refresh the review target to include their delivered code. Resolve affected contract decisions through `explore-design` and user alignment while preserving unaffected design work. Leave the design awaiting a user-started `review-design` in a fresh context. Eligible independent items can be reviewed in parallel, without waiting for unrelated designs or deliveries. Do not automatically launch design review. Findings return to exploration or, for oversized scope, `split-workitem`. Only a current independent pass establishes `implementable`.
 
 ## Implement and hand off
 

@@ -42,7 +42,7 @@ $install 安装或更新这个 dev-kit
 
 | Skill | 用途 |
 | --- | --- |
-| `$create-project` | 创建独立 Git 分支承载的项目工作区，选择可选 Aone 后端，生成上下文和恢复入口。 |
+| `$create-project` | 创建独立 Git 分支承载的项目工作区，准备元数据、必要背景和需求骨架，选择可选 Aone 后端。 |
 | `$delete-project` | 核对并删除选定的本机项目工作区，保留远程分支和 Aone 历史。 |
 | `$manage-workitems` | 在项目中创建、查询、更新、归档抽象工作项；通过 Git 和已启用后端持久化。 |
 | `$split-workitem` | 将项目大需求拆为可独立交付的工作项，用无环依赖图表达交付顺序。 |
@@ -72,7 +72,7 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 项目使用时始终从项目根目录启动 agent。项目的 `worktrees/` 通过空占位文件保留，源码内容被忽略，Git 状态由各代码仓库自行管理。也可关联 OKAWorkspace 这类业务主工作区，将源码工作树放在主工作区 `worktrees/<项目标识>/` 下；项目保存必要约束、业务上下文和技能的入口，本机绝对路径单独绑定。创建时可选择主工作区的远程仓库，用独立空分支存储项目，主工作区原检出保持原分支。详见 [主工作区关联](skills/manage-workitems/references/main-workspace.md)。
 
-先用 `$create-project` 选择存储远程与专用分支，再用 `$manage-workitems` 记录需求。大需求可提前拆解；每个开发项获得自己的设计审查后再实现。前置未交付时允许只读设计，交付后由用户在新上下文显式启动 `$review-design`。实现阶段会通过新 subagent 调用 `$review-implementation`，代码留给用户最终检查、提交和推送。
+创建阶段只做到“元数据 + 需求骨架”：`$create-project` 建立存储远程、专用分支和必要背景；用户同时提供需求时，用 `$manage-workitems` 创建 `new` 工作项，未明确的内容保留为待确认。创建完成即收尾，不自动调查源码、拆解、生成设计或准备开发工作树。只有用户明确要求设计时才进入设计；大需求可在用户要求拆解后处理。每个开发项获得自己的设计审查后再实现。已请求的设计可在前置未交付时只读探索，交付后由用户在新上下文显式启动 `$review-design`。实现阶段会通过新 subagent 调用 `$review-implementation`，代码留给用户最终检查、提交和推送。
 
 项目文档在任务收尾时按批次同步；只有最终 Git 推送与所有启用后端都核实成功才算持久化完成。跨机器认领与发布使用 Python 3/Git helper，查询使用可重建的本地索引，源码证据按需加载和验证。Aone 首版采用 agent 驱动的 `a1` CLI 与持久化回执，没有无人值守事务引擎。克隆项目可恢复文档和已发布代码分支，未提交或未推送代码仍在原机器。协议入口见 [project-context.md](skills/manage-workitems/references/project-context.md)。
 
