@@ -49,7 +49,7 @@ $install 安装或更新这个 dev-kit
 | `$develop-workitem` | 准备工作树、探索设计、衔接独立审查，并在远程认领后实现项目工作项。 |
 | `$complete-workitem` | 核实项目工作项的实际交付，解锁依赖并单独记录工作树清理结果。 |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
-| `$cleanup-worktree` | 核验至少一个相关 PR/MR 已合并到远程主干，经确认后安全清理对应 worktree、分支及可核实的 rebase 备份分支。 |
+| `$cleanup-worktree` | 核验非忽略文件已提交并推送、工作树干净且可从远程恢复，按授权清理本地 worktree 和分支，保留远程恢复引用。 |
 | `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
 | `$explore-design` | 探索或细化 Why/What；Plan mode 直接衔接实施规划，Agent mode 将设计文档标记为 `review-pending`。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |

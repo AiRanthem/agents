@@ -38,7 +38,7 @@
 
 2026-09-20：新增 `cleanup-worktree` 共享 skill；安装独立用户级软链接 `~/.agents/skills/cleanup-worktree`，指向本仓库 `skills/cleanup-worktree`。
 
-2026-09-29：更新 `cleanup-worktree` 的远程主干合并门禁与 `rebase-worktree` 备份分支清理约定；现有用户级软链接继续指向本仓库，无需调整链接或机器配置。
+`cleanup-worktree` 按非忽略文件已提交并推送、工作树干净和远程可恢复判断清理资格；保留远程引用。现有用户级软链接直接读取仓库中的技能，无需调整链接或机器配置。
 
 ## 验证
 
