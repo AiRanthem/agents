@@ -7,6 +7,10 @@ description: Create a Git branch and worktree for a briefly described task, publ
 
 Create one local branch and linked worktree for the user's task, publish the corresponding remote branch, and configure upstream tracking as part of the same operation. Leave existing worktrees unchanged.
 
+## Project workitems
+
+When creating a worktree for an item in a valid project workspace, load [the shared project context](../manage-workitems/references/project-context.md) and follow its selected-item and persistence rules. Require the item's durable preparation owner before creating a new worktree or branch. Resolve its existing worktree with `project_runtime.py worktree-path <id>`; otherwise choose a location beneath `worktree-root` and persist the path relative to the configured project/main-workspace base. Read the associated main-workspace constraints and target repository's instructions. Repository provisioning belongs to `develop-workitem`; this skill does not clone it. Resume the existing development instead of creating another. In other workspaces, infer paths using the generic rules below.
+
 - Inspect the repository's remotes, fetch and push mappings, tracking and default branches, existing worktrees, related branch names, and sibling directory names. Infer the upstream base, publishing remote and destination, branch name, and worktree location from the task and established conventions; do not assume `origin`, `main`, or a fixed directory layout.
 - Fetch and prune the chosen upstream remote, then base the new branch directly on its refreshed remote-tracking branch. Do not pull, rebase, or reset an existing worktree.
 - Refuse to overwrite a colliding path, local branch, or remote destination branch. Ask one concise question only when a material choice remains ambiguous.

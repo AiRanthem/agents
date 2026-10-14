@@ -7,6 +7,12 @@ description: Audit a completed development worktree across relevant remotes, ver
 
 Prove that the development work reached a remote trunk, present one exact cleanup manifest with its effects, and execute the confirmed deletion without losing local work or touching unrelated resources.
 
+## Project workitems
+
+When cleaning a worktree for an item in a valid project workspace, load [the shared project context](../manage-workitems/references/project-context.md) and follow project workflow, evidence, and persistence rules. A project item's `done` delivery record is not by itself proof that this skill's cleanup gate passed: preserve the existing authoritative merged-request and work-accounting requirements, and report when direct source integration has no qualifying PR/MR evidence path. Project cleanup can remove only the confirmed local worktree and local branch; never delete its remote branch or other remote ref. Record project state through the designated runtime only after the cleanup result is verified. Keep the exact manifest, user confirmation, local safety checks, and pre-mutation refresh required below. Outside a valid project workspace, retain the generic cleanup behavior.
+
+Resolve project item paths with `project_runtime.py worktree-path <id>` before preparing the manifest. Associated main-workspace worktrees may be outside the project root. Preserve that main workspace, its shared environment/source repositories and sibling projects; an unavailable or conflicting binding prevents removing the affected worktree.
+
 ## Establish scope and request direction
 
 Identify the target worktree, local branch, `HEAD`, upstream, fork point, corresponding remote source refs, and a surviving worktree for execution. Inspect configured fetch and push URLs, refspec mappings, branch configuration, and worktree use; do not assume `origin`, matching branch names, or a single provider. Keep searches and output limited to candidate refs after discovering the mappings.
@@ -64,7 +70,7 @@ Before mutation, changes to relevant request states, branch OIDs, worktree conte
 
 Immediately before mutation, refresh the relevant outgoing request states, discovered incoming request states/effects, and exact proposed remote refs. Repeat local safety, OID, protection and worktree-use checks, including safety refs. Preserve disclosed gaps and exclusions. Stop before partial cleanup if a gate or confirmed item changed. Record surviving worktrees and candidate refs for final comparison close to this mutation boundary.
 
-- Operate from a surviving worktree. Delete only confirmed remote source refs through the resolved mappings, never force-push. Verify each exact remote ref is absent before removing its local recovery copy.
+- Operate from a surviving worktree. In generic mode, delete only confirmed remote source refs through the resolved mappings, never force-push, and verify each exact remote ref is absent before removing its local recovery copy. In project mode, retain every remote ref and remove only confirmed local resources.
 - Remove registered worktrees with `git worktree remove`, not `rm -rf`, `git clean`, or forced removal for unresolved contents. Delete confirmed local branches normally when ancestry permits; use forced local deletion only when the confirmed provider state, per-commit patch comparison, and target tree jointly prove that a squash or rebase merge preserved the work.
 - Remove only administrative metadata made stale by these exact deletions. Do not delete unrelated tracking refs, tags, stashes, other worktrees, request objects, or configuration. Observe and report any provider-driven request transition after deleting a source or target; do not call request-mutation APIs or reopen a request without authorization.
 - If an operation fails or an unexpected change affects remaining cleanup safety, stop and report the partial state and recovery options. Do not broaden deletion or recreate resources automatically.

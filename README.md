@@ -38,10 +38,16 @@ $install 安装或更新这个 dev-kit
 
 ## 使用 skills
 
-安装完成后，可在任意工作目录中使用 `$skill-name` 显式调用 skill：
+安装完成后，可用 `$skill-name` 显式调用 skill。项目管理技能除创建、删除项目外，只在有 `.project/project.json` 的有效项目工作区生效：
 
 | Skill | 用途 |
 | --- | --- |
+| `$create-project` | 创建独立 Git 分支承载的项目工作区，选择可选 Aone 后端，生成上下文和恢复入口。 |
+| `$delete-project` | 核对并删除选定的本机项目工作区，保留远程分支和 Aone 历史。 |
+| `$manage-workitems` | 在项目中创建、查询、更新、归档抽象工作项；通过 Git 和已启用后端持久化。 |
+| `$split-workitem` | 将项目大需求拆为可独立交付的工作项，用无环依赖图表达交付顺序。 |
+| `$develop-workitem` | 准备工作树、探索设计、衔接独立审查，并在远程认领后实现项目工作项。 |
+| `$complete-workitem` | 核实项目工作项的实际交付，解锁依赖并单独记录工作树清理结果。 |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$cleanup-worktree` | 核验至少一个相关 PR/MR 已合并到远程主干，经确认后安全清理对应 worktree、分支及可核实的 rebase 备份分支。 |
 | `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
@@ -63,6 +69,12 @@ $review-design 评审 docs/proposal.md
 ```
 
 Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 配置为仅允许显式调用，后两者保留原安装的调用策略。
+
+项目使用时始终从项目根目录启动 agent。项目的 `worktrees/` 通过空占位文件保留，源码内容被忽略，Git 状态由各代码仓库自行管理。也可关联 OKAWorkspace 这类业务主工作区，将源码工作树放在主工作区 `worktrees/<项目标识>/` 下；项目保存必要约束、业务上下文和技能的入口，本机绝对路径单独绑定。创建时可选择主工作区的远程仓库，用独立空分支存储项目，主工作区原检出保持原分支。详见 [主工作区关联](skills/manage-workitems/references/main-workspace.md)。
+
+先用 `$create-project` 选择存储远程与专用分支，再用 `$manage-workitems` 记录需求。大需求可提前拆解；每个开发项获得自己的设计审查后再实现。前置未交付时允许只读设计，交付后由用户在新上下文显式启动 `$review-design`。实现阶段会通过新 subagent 调用 `$review-implementation`，代码留给用户最终检查、提交和推送。
+
+项目文档在任务收尾时按批次同步；只有最终 Git 推送与所有启用后端都核实成功才算持久化完成。跨机器认领与发布使用 Python 3/Git helper，查询使用可重建的本地索引，源码证据按需加载和验证。Aone 首版采用 agent 驱动的 `a1` CLI 与持久化回执，没有无人值守事务引擎。克隆项目可恢复文档和已发布代码分支，未提交或未推送代码仍在原机器。协议入口见 [project-context.md](skills/manage-workitems/references/project-context.md)。
 
 在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；代码质量由通用代码质量要求和现有评审覆盖。审计本地安装快照不代表已核查上游最新版本。
 

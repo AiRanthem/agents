@@ -1,6 +1,6 @@
 ---
 name: review-design
-description: Independently challenge a candidate or confirmed design against original requirements and repository evidence before implementation. Invoke only when the user explicitly names $review-design or /review-design. Mark an approved design document implementable only after review passes; do not implement, rewrite the design, approve product decisions, or replace implementation review.
+description: Independently challenge a candidate or confirmed design against original requirements and repository evidence before implementation. Invoke only when the user explicitly names $review-design or /review-design, including a separate explicit project-workitem review session. Mark an approved design document implementable only after review passes; do not implement, rewrite the design, approve product decisions, or replace implementation review.
 disable-model-invocation: true
 ---
 
@@ -8,10 +8,14 @@ disable-model-invocation: true
 
 Determine whether a design is coherent, supported, sufficiently precise, and feasible to implement safely. Find concrete mistakes and omissions; do not invent objections to demonstrate independence.
 
+## Project workitems
+
+When invoked in a valid project workspace, load [the shared project context](../manage-workitems/references/project-context.md) and its required project review, persistence, and evidence rules. Review the complete original requirements and `workitems/<id>/spec.md` as the sole Why/What contract. Publish the review record and any approved `design_status` change to the designated project fields or artifacts through the project runtime; do not create a separate ad hoc report. Assess primary evidence independently before consulting prior reviews or cached evidence, which may be reused only while their source pointers and contract inputs match. A project design review still requires the user's explicit invocation in a separate session; never start it automatically from exploration or implementation. In other workspaces, use the generic document and status behavior below.
+
 ## Boundaries and inputs
 
 - Follow applicable user, repository, and harness instructions. Reuse established context and authorization.
-- Keep the assessment read-only except for the status-field updates defined below in Agent mode. Do not modify design content, code, instructions, tasks, plans, or review artifacts; do not commit, post, or change external systems.
+- Keep the assessment read-only except for the status-field updates defined below in generic Agent mode and authorized project review persistence. In project mode, write only the approved spec `design_status` field and designated review record through the project runtime and within the authorized item; do not edit contract content or source code. Otherwise do not modify design content, code, instructions, tasks, plans, or review artifacts; do not commit, post, or change external systems.
 - Read original requirements and candidate or confirmed Why/What decisions from documents or conversation, and relevant repository instructions. Review one authoritative document per design, in its selected language. Identify the exact reviewed contract, its approval state, and its document path and status when present. A conversational design may be reviewed, but cannot receive document status without an approved design file.
 - Infer the intended design and repository target only when the evidence supports one safe interpretation. Ask only when an unresolved choice materially changes the assessment; continue independent checks.
 - An unresolved contract conflict, product choice, or decision-changing draft blocks only conclusions dependent on it. Clearly distinguish missing information from a demonstrated defect.

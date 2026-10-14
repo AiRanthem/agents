@@ -1,0 +1,3 @@
+interface:
+  display_name: "Complete Project Work Item"
+  short_description: "Verify project delivery and clean up local worktrees"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Create Project"
+  short_description: "Create a durable Git-backed project workspace"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Manage Project Work Items"
+  short_description: "Persist and query requirements inside a project"

@@ -2,6 +2,8 @@
 
 Read and apply this reference only in Agent mode, after identifying the active host mode. It does not apply to Plan-mode discussion, approval, or implementation planning.
 
+For a valid project workspace, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, retain the standard three contract sections and project schema's `design_status`, and keep process data in its designated fields or artifacts. Direct split-workitem exploration can end with an authorized handoff without writing a spec. Do not create a second standalone design document. Plan mode remains read-only.
+
 ## Confirm the path
 
 Inspect applicable instructions, design directories, templates, metadata, naming patterns, and nearby documents. Reuse an already-approved exact path; otherwise obtain path approval together with the Why/What contract. Repository conventions inform the proposed path, not authorization.

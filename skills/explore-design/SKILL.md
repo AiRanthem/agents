@@ -7,6 +7,10 @@ description: Explore requirements and design decisions with the user, grounded i
 
 Work with the user to establish **Why** the change is needed and **What** the resulting system must do. Explore the repository while discussing requirements, compare choices, and obtain approval of the complete contract. `$implement-design` owns **How**, including implementation choices, TODOs, and verification steps. In Agent mode, the design document remains `review-pending` until `$review-design` marks it `implementable`; exploration cannot set that status.
 
+## Project workitems
+
+When the active workspace is a valid project workspace recognized from its workspace root, follow [the shared project context](../manage-workitems/references/project-context.md) and the referenced project workflow. The project `workitems/<id>/spec.md` is the sole Why/What artifact for that item; retain the standard sections and `design_status`. Keep requirements, decisions, handoff and reviews in their designated records. Before prerequisites deliver, allow read-only code exploration and a preliminary spec with its actual approval state and explicit assumptions; it cannot be `implementable`. Refresh the relevant code baseline after delivery, before formal review. Direct `split-workitem` exploration may produce an agreed decomposition without a spec. Project rules replace only generic document path and persistence handling; other workspaces retain the generic behavior.
+
 ## Identify the host mode
 
 - **Plan mode** means the host's native Plan mode, as supported by hosts such as Codex and Cursor. Use this branch only when the active host instructions explicitly establish that you are in Plan mode.
@@ -89,6 +93,8 @@ After approval:
 
 - **Plan mode:** Read and invoke `$implement-design` in the current conversation with the approved requirements and decisions. This handoff is part of the approved workflow; do not ask the user to invoke it again. It resolves How and emits the sole final implementation plan without requiring a design document or `implementable` status. If the skill is unavailable, report the missing capability conversationally; do not substitute a design document or approval plan.
 - **Agent mode:** Write one formal Why/What design document in a single language at the approved path using the document instructions, validate it, and finish this skill with the path and current design identity ready for `$review-design`.
+
+In a valid project workspace, use the project spec and workflow handoff instead of creating a separate generic design document. Do not automatically invoke `$review-design`; project design review is a separate user-invoked session.
 
 In Agent mode, invoke `$review-design` next only if the user explicitly requested that skill; otherwise report the pending review. A review finding that changes Why/What returns here for discussion and approval.
 

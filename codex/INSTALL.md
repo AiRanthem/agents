@@ -6,10 +6,12 @@
 
 * `AGENTS.md` 保存主 Agent 与子 Agent 共用的通用规则。
 * `prompts/delegation.md` 是主 Agent 委派策略的唯一正文，Astra 和 Sol 主控共用；模型档位只在这里维护。
-* `hooks/session-start.py` 从自身软链接的真实路径读取上述正文，按官方 `SessionStart` JSON 格式输出 `additionalContext`，不按模型分支、不拼入共享 `AGENTS.md`。输入不是 `SessionStart` 时不输出上下文；输入错误或正文缺失、为空时返回非零状态并报告错误。
-* `hooks.json` 在 `startup`、`resume`、`clear`、`fork`、`compact` 时注入委派策略；另一个 `compact` handler 保留重新读取全局和仓库指令的提醒。
+* `hooks/session-start.py` 根据 stdin JSON 的 `model`（当前模型 slug）判断注入范围：以 `gpt-` 开头且按 `-` 分段包含完整 `luna` 段的型号不输出委派上下文，覆盖 Luna 的后续代际和版本后缀；其他模型或缺少该字段时注入。正文从自身软链接的真实路径读取，按官方 `SessionStart` JSON 格式输出 `additionalContext`，不拼入共享 `AGENTS.md`。输入不是 `SessionStart` 时不输出上下文；需要注入时，输入错误或正文缺失、为空会返回非零状态并报告错误。
+* `hooks.json` 在 `startup`、`resume`、`clear`、`fork`、`compact` 时调用模型判断脚本；另一个 `compact` handler 始终保留重新读取全局和仓库指令的提醒，包括 Luna 主会话。
 
-依赖 `python3` 和 Codex 0.159.2 的事件语义：用户派出的子 Agent 启动走 `SubagentStart`，恢复或压缩不触发 `SessionStart`。完整历史 fork 会继承主 hook 上下文，因此委派策略要求 `fork_turns: "none"`，由主 Agent 提供最小充分任务上下文；本配置不添加 `SubagentStart` 委派 hook。依据 [官方 hooks 文档](https://learn.chatgpt.com/docs/hooks#sessionstart) 和 [对应版本的 hook 分派源码](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/core/src/hook_runtime.rs#L128)，后者还明确支持主会话的 `fork` 来源。升级 Codex 时重新检查此边界及 [历史继承源码](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/core/src/agent/control/spawn.rs#L130)。这是平台分派与委派参数共同保证的范围，不是脚本从模型或会话 ID 推断身份。
+依赖 `python3`。模型字段依据 [官方 hook 输入文档](https://learn.chatgpt.com/docs/hooks#common-input-fields)、[Codex 0.162.1 的 SessionStart schema](https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/hooks/schema/generated/session-start.command.input.schema.json) 和 [hook 分派源码](https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/core/src/hook_runtime.rs)：`model` 来自当前 turn context，不读取默认配置或历史 transcript 推测。用户派出的子 Agent 启动走 `SubagentStart`，恢复或压缩不触发 `SessionStart`；主会话支持上述五个来源。完整历史 fork 会继承主 hook 上下文，因此委派策略要求 `fork_turns: "none"`，由主 Agent 提供最小充分任务上下文；本配置不添加 `SubagentStart` 委派 hook。升级 Codex 时重新检查此边界及 [历史继承源码](https://github.com/openai/codex/blob/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d/codex-rs/core/src/agent/control/spawn.rs)。
+
+模型判断只在匹配的会话边界运行。在会话内切换模型不会重新触发 `SessionStart`，也不会撤回已有委派上下文；需要立即按新模型应用注入范围时，开启新会话。
 
 ## 安装
 
@@ -47,6 +49,6 @@ max_concurrent_threads_per_session = 20
 * `~/.codex/skills` 中不存在指向本目录已删除 skill 的失效链接。
 * `~/.codex/hooks/session-start.py` 的软链接目标正确，能够读取仓库中的委派正文。
 * `~/.codex/hooks.json` 保留原有无关 hooks 及其顺序，并包含本目录声明的两个 `SessionStart` handler。
-* 五个来源均匹配委派 handler；`SubagentStart` 不匹配本配置。脚本通过安装链接调用，输出有效 JSON 和完整策略；非 `SessionStart` 输入无上下文，错误输入或缺失正文报告失败。
+* 五个来源均匹配委派 handler；`SubagentStart` 不匹配本配置。脚本通过安装链接调用：Luna 家族（包括后续代际和版本后缀）无委派输出，相似名称（如 `gpt-7-lunatic`）、其他模型或缺少模型字段时输出有效 JSON 和完整策略；非 `SessionStart` 输入无上下文，需要注入时错误输入或缺失、为空的正文报告失败。Luna 在 `compact` 时仍收到独立的指令重读提醒。
 * 共享 `AGENTS.md` 不包含委派正文或指向它的加载指令；档位和 `fork_turns` 隔离约束只在 `prompts/delegation.md` 维护。
 * `codex --strict-config doctor --summary --no-color` 加载配置且无新增失败；实际信任状态通过 `/hooks` 核实。脚本检查和源码证据不等同于真实模型会话、子代理或自动压缩的端到端验证。
