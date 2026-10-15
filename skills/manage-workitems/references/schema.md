@@ -1,6 +1,6 @@
 # Project record schema, version 1
 
-Management paths below are relative to the project root; development paths use the configured worktree base. Use UTF-8 JSON and Markdown. IDs are stable safe identifiers; generate work-item IDs with `project_runtime.py new-id`. IDs never depend on a mutable title. Extra fields may record project-specific facts but must not redefine the core fields.
+Management paths below are relative to the project root; development paths use the configured worktree base. Use UTF-8 JSON and Markdown. IDs are stable safe identifiers. Extra fields may record project-specific facts but must not redefine the core fields.
 
 ## Project
 
@@ -47,18 +47,32 @@ An associated project adds these fields; existing standalone records remain vali
 
 `main_workspace` is absent for a standalone project. Its `id` is a stable safe identifier, `name` is nonempty, and `repository` is either null or a clone URL and full Git ref for recovery. The associated project's `.project/main-workspace.md` holds required instruction paths, scoped context/skill routes and sourced constraint snapshots; see [association](main-workspace.md). Actual absolute roots belong only in `.project-local/main-workspace.json` as `{ "id": "oka", "root": "/local/main/workspace" }`.
 
-Omitted `worktrees` means `{ "base": "project", "path": "worktrees" }`. The base is `project` or `main_workspace`; the latter requires an association and a dedicated subdirectory in the main workspace’s actual layout. Paths are normalized relative POSIX and contain no traversal or symlink components. A project-base path is `worktrees` or beneath it. A main-base path has at least two components and excludes `.git`, `.project` and `.project-local`; for example `worktrees/example-project` or `development/trees/example-project`. `development.worktree` uses the same base and must be strictly beneath that configured directory, e.g. `worktrees/example-project/wi-example`. Resolve it through `project_runtime.py worktree-path <id>`; `worktree-root` resolves the containing directory. Metadata remains readable without a machine binding; resolving main-workspace destinations requires a verified binding.
+Omitted `worktrees` means `{ "base": "project", "path": "worktrees" }`. The base is `project` or `main_workspace`; the latter requires an association and a dedicated subdirectory in the main workspace’s actual layout. Paths are normalized relative POSIX and contain no traversal or symlink components. A project-base path is `worktrees` or beneath it. A main-base path has at least two components and excludes `.git`, `.project` and `.project-local`; for example `worktrees/example-project` or `development/trees/example-project`. `development.worktree` uses the same base and must be strictly beneath that configured directory, e.g. `worktrees/example-project/1-quota-lock`. Resolve it through `project_runtime.py worktree-path <id>`; `worktree-root` resolves the containing directory. Metadata remains readable without a machine binding; resolving main-workspace destinations requires a verified binding.
 
 New projects track an empty `worktrees/.gitkeep` and ignore all other contents; code Git state belongs to each code repository. The placeholder survives cloning, including when code is placed externally. The original whole-directory ignore form remains valid for existing standalone projects. Do not change an existing development's location by merely editing configuration.
 
 ## Work item
 
+### Identity and hierarchy
+
+New IDs are `<code>-<phrase>`, for example `1-quota-lock` or `123-quota-release`. Each character of the code is one hierarchy level: `123` identifies root item `1`, its second child `12`, and that child's third child. Sibling positions use `1` through `9`, then uppercase `A` through `Z` (`A` = 10, `Z` = 35). There is no zero or padding. The phrase is a concise English description in lowercase ASCII words separated by hyphens; it starts with a letter and may contain digits. The complete ID is at most 128 characters.
+
+The code is unique within the project, including archived and cancelled items. For a child, its immediate code prefix must identify an existing parent and `split_from` must contain that parent's full ID. A root has `split_from: null`. This hierarchy records decomposition provenance; `depends_on` alone expresses delivery prerequisites. Sibling position is neither execution order nor priority.
+
+Generate candidates from the project root with `project_runtime.py new-id <phrase> [<phrase> ...]`. Use `--parent <full-id>` to append one level beneath an existing numbered parent. A batch allocates sibling positions after the highest existing position, counting archived and cancelled items. The command reads local item metadata, writes nothing and reserves nothing. Publication establishes the allocation; handle conflicts through [persistence](persistence.md).
+
+Published IDs and their directories remain stable when titles, status or presentation order change. Preserve existing safe IDs and their references; an item without a hierarchy code remains addressable by full ID or title. Creating numbered children under such an item requires an explicitly agreed identity migration; the helper does not rename records or infer missing ancestors.
+
+known-limit: one character per level permits 35 roots and 35 direct children per parent. A full level stops allocation; increasing this capacity requires an agreed encoding change that preserves unambiguous levels and existing references.
+
+### Record
+
 `workitems/<id>/item.json`:
 
 ```json
 {
-  "id": "wi-example",
-  "title": "One independently deliverable outcome",
+  "id": "1-quota-lock",
+  "title": "统一配额锁",
   "kind": "development",
   "status": "new",
   "archived": false,
@@ -77,9 +91,9 @@ New projects track an empty `worktrees/.gitkeep` and ignore all other contents; 
 | `kind` | `development` has at most one development; `aggregate` has no code repository or worktree. An oversized incoming development item can await decomposition. |
 | `status` | `new`, `in_progress` (alignment/design), `developing` (exclusive implementation claim), `awaiting_delivery`, `done`, `cancelled`. |
 | `depends_on` | Prerequisite item IDs. Every prerequisite must actually deliver before implementation. No self edges, missing targets or cycles. |
-| `split_from` | Original item ID for provenance. Does not imply a dependency. |
+| `split_from` | Original item ID for provenance. For a numbered child, this is the immediate hierarchy parent's full ID; numbered roots use null. Does not imply a dependency. |
 | `owner` | `null` or `{ "machine": "local-identity", "session": "session-id", "token": "unique-claim-token" }`. One writer for an item; developing always has an owner. The token is coordination data, not a credential. |
-| `development` | `null` or `{ "worktree": "worktrees/wi-example", "branch": "feature/example", "base_commit": "full-code-commit-id" }`. The path is relative to `worktrees.base` and strictly below `worktrees.path`; optional published remote/ref and base_ref make recovery precise. |
+| `development` | `null` or `{ "worktree": "worktrees/1-quota-lock", "branch": "feature/quota-lock", "base_commit": "full-code-commit-id" }`. The path is relative to `worktrees.base` and strictly below `worktrees.path`; optional published remote/ref and base_ref make recovery precise. |
 | `delivery` | Required evidence kinds, `pending` or `delivered`, and evidence objects with `kind` and `reference`. Add ref/commit/PR/release and checked-at facts as needed. |
 | `cleanup` | `not_applicable`, `pending`, or `done`. Independent of delivery and dependency readiness. |
 

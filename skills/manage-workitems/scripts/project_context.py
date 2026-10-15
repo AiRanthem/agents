@@ -18,8 +18,10 @@ from typing import Any, Iterator
 
 try:  # Imported when used as a script or as a module in tests.
     from project_runtime import ProjectError, find_project
+    from workitem_ids import parse_id
 except ImportError:  # pragma: no cover - test loader can inject the sibling module.
     from .project_runtime import ProjectError, find_project
+    from .workitem_ids import parse_id
 
 
 ROLES = ("manage", "explore", "review-design", "implement", "review-implementation")
@@ -405,6 +407,24 @@ def _match(item: dict[str, Any], query: str) -> bool:
     return query.casefold() in haystack.casefold()
 
 
+def _resolve_item(entries: list[dict[str, Any]], selector: str) -> dict[str, Any]:
+    """Prefer the canonical ID, otherwise require one exact metadata match."""
+    for entry in entries:
+        if entry["id"] == selector:
+            return entry
+    matches = []
+    for entry in entries:
+        parsed = parse_id(entry["id"])
+        if (parsed is not None and selector in parsed) or entry["metadata"]["title"] == selector:
+            matches.append(entry)
+    if not matches:
+        raise ContextError(f"work item not found: {selector}")
+    if len(matches) > 1:
+        candidates = "\n".join(f"{entry['id']}: {entry['metadata']['title']}" for entry in matches)
+        raise ContextError(f"ambiguous work item selector {selector!r}:\n{candidates}")
+    return matches[0]
+
+
 def _page(rows: list[Any], limit: int, offset: int) -> dict[str, Any]:
     total = len(rows)
     page = rows[offset : offset + limit]
@@ -450,9 +470,7 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
             rows = [row for row in rows if _match(row, args.query)]
         result = _page(rows, args.limit, args.offset)
     elif args.command == "show":
-        entry = next((row for row in index["items"] if row["id"] == args.item), None)
-        if entry is None:
-            raise ContextError(f"work item not found: {args.item}")
+        entry = _resolve_item(index["items"], args.item)
         result = {"metadata": entry["metadata"], "metadata_path": entry["path"], "body_paths": _body_paths(root, entry)}
     elif args.command == "context":
         project = index["project"]
@@ -461,9 +479,8 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
             # This project-owned navigation document explains how to bind the
             # separate main workspace; inspect its path without reading its body.
             _validate_main_workspace_marker(root)
-        entry = next((row for row in index["items"] if row["id"] == args.item), None)
-        if entry is None:
-            raise ContextError(f"work item not found: {args.item}")
+        entry = _resolve_item(index["items"], args.item)
+        canonical_id = entry["id"]
         role = args.role
         meta = entry["metadata"]
         body_paths = [] if role == "manage" else _body_paths(root, entry)
@@ -484,7 +501,7 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
             if name in paths_by_name:
                 selected[name] = paths_by_name[name]
                 order.append(paths_by_name[name])
-        deferred = [path for path in body_paths if path.startswith(f"workitems/{args.item}/reviews/")] if role in ("review-design", "review-implementation") else []
+        deferred = [path for path in body_paths if path.startswith(f"workitems/{canonical_id}/reviews/")] if role in ("review-design", "review-implementation") else []
         if role in ("review-design", "review-implementation"):
             review_order = order
             if role == "review-design":
@@ -494,7 +511,7 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
                     if name in paths_by_name
                 ]
             result = {
-                "item": args.item,
+                "item": canonical_id,
                 "role": role,
                 "entrypoint": entry["path"],
                 "preread_order": review_order,
@@ -503,7 +520,7 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
             }
         else:
             result = {
-                "item": args.item,
+                "item": canonical_id,
                 "role": role,
                 "inputs": selected,
                 "preread_order": order,
@@ -568,9 +585,9 @@ def parser() -> argparse.ArgumentParser:
     listing.add_argument("--limit", type=_positive_int, default=50)
     listing.add_argument("--offset", type=_nonnegative_int, default=0)
     show = sub.add_parser("show", help="show work item metadata and body paths")
-    show.add_argument("item")
+    show.add_argument("item", help="full item ID, hierarchy code, exact phrase or title")
     context = sub.add_parser("context", help="show role-specific input paths")
-    context.add_argument("item")
+    context.add_argument("item", help="full item ID, hierarchy code, exact phrase or title")
     context.add_argument("--role", choices=ROLES, required=True)
     search = sub.add_parser("search-evidence", help="search evidence metadata")
     search.add_argument("query")

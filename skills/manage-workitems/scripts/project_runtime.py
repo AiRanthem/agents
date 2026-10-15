@@ -18,6 +18,11 @@ import sys
 import tempfile
 import uuid
 
+try:  # Support direct scripts and package-module entrypoints.
+    from workitem_ids import allocate_ids, hierarchy_errors
+except ImportError:  # pragma: no cover - exercised by the module CLI smoke check.
+    from .workitem_ids import allocate_ids, hierarchy_errors
+
 
 STATUSES = {"new", "in_progress", "developing", "awaiting_delivery", "done", "cancelled"}
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -111,6 +116,29 @@ def find_project(path):
 
 def _identifier(value):
     return isinstance(value, str) and bool(IDENTIFIER.fullmatch(value))
+
+
+def new_ids(root, slugs, parent=None):
+    """Read current local metadata only and print-ready candidate IDs; no reservation."""
+    root = find_project(root)
+    _no_links(root, "workitems")
+    directory = root / "workitems"
+    if directory.exists() and not directory.is_dir():
+        raise ProjectError("workitems must be a directory")
+    items = {}
+    for path in sorted(directory.glob("*/item.json")):
+        _no_links(root, path.relative_to(root).as_posix())
+        if not path.is_file():
+            raise ProjectError(f"item metadata must be a regular file: {path}")
+        metadata = read_json(path)
+        identifier = path.parent.name
+        if not _identifier(identifier) or not isinstance(metadata, dict) or metadata.get("id") != identifier:
+            raise ProjectError(f"item metadata id must be safe and match its directory: {path}")
+        items[identifier] = metadata
+    try:
+        return allocate_ids(items, slugs, parent)
+    except ValueError as exc:
+        raise ProjectError(str(exc)) from exc
 
 
 def _nonempty(value):
@@ -543,6 +571,7 @@ def _validate_files(root, files):
         parts = PurePosixPath(name).parts
         if parts[0] == "workitems" and len(parts) > 1:
             need(parts[1] in items, f"{name}: missing item.json")
+    errors.extend(hierarchy_errors(items))
     graph = {}
     for identifier, item in items.items():
         dependencies = item.get("depends_on")
@@ -965,8 +994,9 @@ def main(argv=None):
     parser.add_argument("--root", default=".", help="project directory (default: current directory)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="check management schema, paths and dependency DAG; does not verify external delivery")
-    identifier = commands.add_parser("new-id", help="print an opaque collision-resistant local id; no filesystem writes")
-    identifier.add_argument("--prefix", default="wi", help="safe identifier prefix (default: wi)")
+    identifier = commands.add_parser("new-id", help="print locally available hierarchical id candidates; no writes or reservation")
+    identifier.add_argument("slugs", nargs="+", help="short lowercase ASCII phrase for each new item")
+    identifier.add_argument("--parent", help="existing parent's full canonical hierarchical id (default: root level)")
     digest = commands.add_parser("digest", help="hash item business files (normalized item.json without owner), excluding sync receipts")
     digest.add_argument("item", help="workitem id")
     commands.add_parser("worktree-root", help="resolve the configured worktree directory; requires the local binding for an external base; no writes")
@@ -991,9 +1021,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "new-id":
-            if not _identifier(args.prefix) or len(args.prefix) > 80:
-                raise ProjectError("prefix must be a safe identifier of at most 80 characters")
-            print(args.prefix + "-" + uuid.uuid4().hex)
+            print("\n".join(new_ids(args.root, args.slugs, args.parent)))
         elif args.command == "validate":
             errors = validate_project(args.root)
             if errors:

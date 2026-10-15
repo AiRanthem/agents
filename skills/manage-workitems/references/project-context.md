@@ -1,6 +1,6 @@
 # Project context and routing
 
-Project mode applies only when the current management Git root contains a valid regular `.project/project.json` with `schema_version: 1`. Run helpers from this root. A nested code repository, an arbitrary directory with a similarly named file, and a linked code worktree do not activate project management. `create-project` and `delete-project` may operate from outside the workspace on an explicitly selected root.
+Project mode applies only when the current management Git root contains a valid regular `.project/project.json` with `schema_version: 1`. Run helpers from this root. A nested code repository, an arbitrary directory with a similarly named file, and a linked code worktree do not activate project management. `create-project`, `upgrade-project` and `delete-project` may operate from outside the workspace on an explicitly selected root.
 
 Keep agent sessions rooted at the project, including delegated sessions. Pass the project root, item ID, task role, permitted writes and relevant code workdir to a subagent; do not copy the entire workspace into its prompt. Read the code repository's applicable instructions before using its worktree. A code checkout's instructions govern its code, while the project protocol governs project records.
 
@@ -12,9 +12,14 @@ Project and item creation end at metadata, necessary background and requirement 
 
 Read root `AGENTS.md` and `.project/context.md`, then resolve the item with `project_context.py`. Its queries describe the local clone, not a live cross-machine view. When current remote state matters, fetch only the configured branch and inspect that revision; label any local-only snapshot. Never infer that an unowned local item is unclaimed remotely. Publication always refreshes the authority and verifies guards. Read the complete selected requirement and current spec when designing, reviewing or implementing. The index supplies paths, not replacement contracts.
 
+Users may refer to an item by its full ID, hierarchy code, short English phrase or title. `show <selector>` and `context <selector> --role <role>` accept these exact selectors and return the canonical ID; for example `show 12`, `show quota-lock` or `show '统一配额锁'`. A full ID takes precedence; other selectors must identify exactly one item. For a description rather than an exact selector, use `list --query <keywords>` and, when necessary, search relevant requirement/spec text. Present ambiguous candidates with their IDs and titles and ask which one is intended. Use the resolved full ID in persisted references, delegated tasks, `digest` and `worktree-path`; never construct paths from an unresolved selector.
+
+In user-facing lists, dependency descriptions and completion reports, show the full ID together with the title, such as `12-quota-lock（统一配额锁）`. Explain hierarchy through the code while retaining the independent delivery dependency graph. Follow [schema](schema.md) for allocation and stable identity.
+
 | Task | Load next |
 | --- | --- |
 | Create/edit an item or dependency | `manage-workitems`; [schema](schema.md); [persistence](persistence.md) before writing |
+| Refresh existing project management prompts | [upgrade-project](../../upgrade-project/SKILL.md); current installed templates and relevant shared protocol |
 | Design, split, implement or complete | [workflow](workflow.md) and the relevant skill |
 | Reuse or produce repository evidence | [evidence](evidence.md) |
 | Enabled Aone backend | [aone](aone.md) only when configuring or synchronizing |

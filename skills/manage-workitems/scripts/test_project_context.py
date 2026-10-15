@@ -102,6 +102,55 @@ class ProjectContextTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_exact_selectors_return_canonical_item_and_review_paths(self):
+        canonical = "1A-shared-quota"
+        write_json(self.root / f"workitems/{canonical}/item.json", item(canonical, "共享配额"))
+        directory = self.root / "workitems" / canonical
+        (directory / "requirement.md").write_text("Requirement")
+        (directory / "reviews").mkdir()
+        review = f"workitems/{canonical}/reviews/old.md"
+        (self.root / review).write_text("Prior review")
+        for selector in (canonical, "1A", "shared-quota", "共享配额"):
+            with self.subTest(selector=selector):
+                args = project_context.parser().parse_args(["--path", str(self.root), "show", selector])
+                shown = project_context.command(args)
+                self.assertEqual(shown["metadata"]["id"], canonical)
+                self.assertEqual(shown["metadata_path"], f"workitems/{canonical}/item.json")
+                for role in ("manage", "explore", "review-design", "review-implementation", "implement"):
+                    args = project_context.parser().parse_args(["--path", str(self.root), "context", selector, "--role", role])
+                    payload = project_context.command(args)
+                    self.assertEqual(payload["item"], canonical)
+                    if role.startswith("review-"):
+                        self.assertEqual(payload["deferred_inputs"], [review])
+                        self.assertEqual(payload["entrypoint"], f"workitems/{canonical}/item.json")
+
+    def test_ambiguous_slug_or_title_lists_candidates_and_full_id_wins(self):
+        for identifier in ("1-shared", "2-shared"):
+            write_json(self.root / f"workitems/{identifier}/item.json", item(identifier, "同名标题"))
+        for selector in ("shared", "同名标题"):
+            args = project_context.parser().parse_args(["--path", str(self.root), "show", selector])
+            with self.subTest(selector=selector), self.assertRaises(project_context.ContextError) as caught:
+                project_context.command(args)
+            message = str(caught.exception)
+            self.assertIn("ambiguous", message)
+            self.assertIn("1-shared: 同名标题", message)
+            self.assertIn("2-shared: 同名标题", message)
+        write_json(self.root / "workitems/3-other/item.json", item("3-other", "1-shared"))
+        args = project_context.parser().parse_args(["--path", str(self.root), "show", "1-shared"])
+        self.assertEqual(project_context.command(args)["metadata"]["id"], "1-shared")
+
+    def test_legacy_ids_and_titles_remain_readable_and_partial_matches_fail(self):
+        legacy = "wi-4a1f5d26eabc"
+        write_json(self.root / f"workitems/{legacy}/item.json", item(legacy, "旧工作项"))
+        for selector in (legacy, "旧工作项", "one", "First"):
+            args = project_context.parser().parse_args(["--path", str(self.root), "show", selector])
+            expected = legacy if selector in (legacy, "旧工作项") else "one"
+            self.assertEqual(project_context.command(args)["metadata"]["id"], expected)
+        for selector in ("4a1f5d26eabc", "First partial", "旧工作"):
+            args = project_context.parser().parse_args(["--path", str(self.root), "show", selector])
+            with self.subTest(selector=selector), self.assertRaisesRegex(project_context.ContextError, "not found"):
+                project_context.command(args)
+
     def test_management_context_does_not_read_worktree_or_evidence(self):
         original = project_context._read_bytes
         read_paths = []

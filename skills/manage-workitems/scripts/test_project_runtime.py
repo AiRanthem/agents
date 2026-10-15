@@ -8,8 +8,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import project_runtime as runtime
+from workitem_ids import ALPHABET
 
 
 def git(directory, *args):
@@ -94,6 +96,116 @@ class WorkspaceTest(unittest.TestCase):
 
     def remote_head(self):
         return git(self.remote, "rev-parse", "refs/heads/main")
+
+    def add_item(self, root, identifier, **changes):
+        record = item(identifier)
+        record.update(changes)
+        self.write(root, f"workitems/{identifier}/item.json", text(record))
+        return record
+
+    def new_item_bundle(self, identifier):
+        name = f"workitems/{identifier}/item.json"
+        return {"checks": {name: None}, "writes": {name: text(item(identifier))},
+                "message": "new item", "session": "test", "token": None}
+
+    def test_hierarchical_allocation_uses_all_metadata_and_never_reserves(self):
+        self.assertEqual(runtime.new_ids(self.a, ["quota-lock", "pool-binding"]),
+                         ["1-quota-lock", "2-pool-binding"])
+        self.add_item(self.a, "1-quota-lock", title="配额锁")
+        for character in ALPHABET[:9]:
+            self.add_item(self.a, f"1{character}-child", split_from="1-quota-lock",
+                          archived=True, status="cancelled")
+        self.assertEqual(runtime.new_ids(self.a, ["shared-quota", "other"], "1-quota-lock"),
+                         ["1A-shared-quota", "1B-other"])
+        self.add_item(self.a, "1A-shared-quota", split_from="1-quota-lock")
+        self.assertEqual(runtime.new_ids(self.a, ["worker"], "1A-shared-quota"), ["1A1-worker"])
+        self.assertEqual(runtime.new_ids(self.a, ["next"]), ["2-next"])
+        self.assertEqual(runtime.new_ids(self.a, ["next"]), ["2-next"])
+        self.assertFalse((self.a / ".project-local").exists())
+
+    def test_new_ids_reject_invalid_parent_slug_and_exhaustion_atomically(self):
+        for parent in ("missing", "1", "A"):
+            with self.subTest(parent=parent), self.assertRaises(runtime.ProjectError):
+                runtime.new_ids(self.a, ["child"], parent)
+        with self.assertRaisesRegex(runtime.ProjectError, "explicitly migrate"):
+            runtime.new_ids(self.a, ["child"], "A")
+        for slug in ("Upper", "-bad", "a--b", "é", "a_thing", "1-first", "a" * 128):
+            with self.subTest(slug=slug), self.assertRaises(runtime.ProjectError):
+                runtime.new_ids(self.a, ["good", slug])
+        for character in ALPHABET[:-1]:
+            self.add_item(self.a, f"{character}-root")
+        self.assertEqual(runtime.new_ids(self.a, ["last"]), ["Z-last"])
+        with self.assertRaisesRegex(runtime.ProjectError, "35-item limit"):
+            runtime.new_ids(self.a, ["last", "overflow"])
+        self.add_item(self.a, "Z-root", archived=True, status="cancelled")
+        with self.assertRaisesRegex(runtime.ProjectError, "35-item limit"):
+            runtime.new_ids(self.a, ["overflow"])
+
+    def test_new_id_cli_reads_metadata_only_and_emits_no_partial_batch(self):
+        script = Path(runtime.__file__).resolve()
+        self.add_item(self.a, "1-root")
+        (self.a / "workitems/1-root/requirement.md").write_bytes(b"\xffnot UTF-8")
+        result = subprocess.run([sys.executable, str(script), "--root", str(self.a),
+                                 "new-id", "child", "sibling", "--parent", "1-root"],
+                                text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "11-child\n12-sibling\n")
+        self.assertFalse((self.a / ".project-local").exists())
+        result = subprocess.run([sys.executable, str(script), "--root", str(self.a),
+                                 "new-id", "valid", "BAD"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("invalid slug", result.stderr)
+
+    def test_new_ids_reject_unsafe_metadata_without_reading_link_targets(self):
+        outside = self.directory / "outside"
+        outside.mkdir()
+        (outside / "item.json").write_text(text(item("1-outside")))
+        (self.a / "workitems/1-outside").symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(runtime, "read_json", wraps=runtime.read_json) as reader:
+            with self.assertRaisesRegex(runtime.ProjectError, "symlink"):
+                runtime.new_ids(self.a, ["safe"])
+        self.assertFalse(any(call.args[0].parent.name == "1-outside" for call in reader.call_args_list))
+
+    def test_hierarchy_parent_and_dependency_dag_are_independent(self):
+        self.add_item(self.a, "1-parent", kind="aggregate", repository=None,
+                      depends_on=["11-child"])
+        self.add_item(self.a, "11-child", split_from="1-parent")
+        self.add_item(self.a, "111-grandchild", split_from="11-child", depends_on=["A"])
+        self.assertEqual(runtime.validate_project(self.a), [])
+        self.add_item(self.a, "111-grandchild", split_from="1-parent")
+        self.assertTrue(any("split_from must be full hierarchy parent id 11-child" in error
+                            for error in runtime.validate_project(self.a)))
+        self.add_item(self.a, "111-grandchild", split_from="11-child", depends_on=["111"])
+        self.assertTrue(any("dangling dependency 111" in error for error in runtime.validate_project(self.a)))
+        self.add_item(self.a, "1-parent", split_from="A")
+        self.add_item(self.a, "21-orphan", split_from="1-parent")
+        self.add_item(self.a, "11-duplicate", split_from="1-parent", archived=True)
+        errors = runtime.validate_project(self.a)
+        for expected in ("hierarchy root split_from must be null", "missing hierarchy parent code 2", "duplicate hierarchy code 11"):
+            self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_stale_code_collision_rejects_publish_then_refresh_reallocates(self):
+        first_id = runtime.new_ids(self.a, ["first"])[0]
+        stale_id = runtime.new_ids(self.b, ["second"])[0]
+        first = self.publish(self.a, self.new_item_bundle(first_id))
+        stale_bundle = self.new_item_bundle(stale_id)
+        with self.assertRaisesRegex(runtime.ProjectError, "duplicate hierarchy code 1"):
+            self.publish(self.b, stale_bundle)
+        self.assertEqual(self.remote_head(), first["commit"])
+        self.assertEqual(git(self.b, "rev-parse", "HEAD"), self.base)
+        self.assertEqual(git(self.b, "status", "--porcelain"), "")
+        self.assertFalse((self.b / f"workitems/{stale_id}").exists())
+        self.assertEqual(stale_bundle, self.new_item_bundle(stale_id))
+        git(self.b, "fetch", "origin", "main")
+        git(self.b, "merge", "--ff-only", "origin/main")
+        fresh_id = runtime.new_ids(self.b, ["second"])[0]
+        self.assertEqual(fresh_id, "2-second")
+        second = self.publish(self.b, self.new_item_bundle(fresh_id))
+        self.assertEqual(self.remote_head(), second["commit"])
+        self.assertTrue((self.b / f"workitems/{first_id}/item.json").exists())
+        self.assertTrue((self.b / f"workitems/{fresh_id}/item.json").exists())
+        self.assertEqual(runtime.validate_project(self.b), [])
 
     def test_disjoint_stale_clones_publish_merged_tree(self):
         a_bundle = self.bundle(self.a, "A", {"title": "A updated"})

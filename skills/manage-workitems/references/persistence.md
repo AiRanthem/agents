@@ -10,9 +10,9 @@ Example bundle shape (hashes shown here are explanatory placeholders):
 
 ```json
 {
-  "checks": {"workitems/wi-example/item.json": "sha256-of-observed-bytes", "workitems/wi-example/requirement.md": null},
-  "writes": {"workitems/wi-example/item.json": "complete JSON text", "workitems/wi-example/requirement.md": "Complete requirement text\n"},
-  "message": "Align wi-example acceptance",
+  "checks": {"workitems/1-quota-lock/item.json": "sha256-of-observed-bytes", "workitems/1-quota-lock/requirement.md": null},
+  "writes": {"workitems/1-quota-lock/item.json": "complete JSON text", "workitems/1-quota-lock/requirement.md": "Complete requirement text\n"},
+  "message": "Align 1-quota-lock acceptance",
   "session": "current-session-id",
   "token": "current-owner-token"
 }
@@ -23,6 +23,8 @@ Every write has an observed SHA-256 guard, or `null` when absence was observed. 
 The helper obtains the latest selected remote ref, checks all guards/ownership, validates the prospective complete DAG, creates a commit with an alternate index, and non-force pushes exactly that ref. It then fetches that ref again and checks commit inclusion, intended writes, remaining guards and storage authority. Success returns both the candidate `commit` and `verified_remote_commit`; an unrelated later remote commit may legitimately be present. It refuses a dirty/staged management checkout, an in-progress Git operation, unsafe paths or a changed storage authority. It fast-forwards the local checkout to the verified remote state; it never auto-stashes, resets, force-pushes or overwrites a conflicting item.
 
 Disjoint stale-clone changes may replay against a newer remote revision when every guard still holds. A concurrent same-item claim has one winner. Non-fast-forward or ambiguous transport outcomes require fetching the selected ref and verifying exact ancestry/content before any retry. Do not interpret failed push output as proof the remote was unchanged. Preserve the bundle and intended commit identity for recovery.
+
+Hierarchy codes are allocated by successful Git publication, without a separate reservation or lock. The merged-tree validator rejects duplicate codes even when their phrases and file paths differ, such as `12-alpha` and `12-beta`. If a candidate loses to another published allocation, verify that its own publication did not succeed, refresh the selected remote state, and regenerate the unpublished IDs and all corresponding paths, dependencies and `split_from` references together. Publish the revised batch with fresh byte guards; never renumber the winning records or create an external backend item before its Git identity is durable.
 
 ## Checkpoint protocol
 

@@ -1,6 +1,6 @@
 # Project workflow
 
-Use the installed `manage-workitems/references/workflow.md` for the version 1 protocol. This file records only project-specific delivery conventions and constraints.
+Use the installed `manage-workitems/references/workflow.md` for the current project-management protocol. This file records project-specific delivery conventions and constraints, with the essential workflow entrypoints below.
 
 {{DELIVERY_CONVENTIONS}}
 

@@ -4,7 +4,7 @@ This directory is the management workspace for project `{{PROJECT_ID}}`. Start a
 
 If `main_workspace` is configured, read `.project/main-workspace.md`, resolve the local binding, and explicitly read its required original instructions. Load associated business context and skills by the task's routes; pass the verified main root and necessary instructions to subagents.
 
-Use the installed project skills: `manage-workitems` for abstract requirements, `split-workitem` for decomposition, `develop-workitem` for design/implementation, and `complete-workitem` for delivery/cleanup. Their shared `manage-workitems/references/project-context.md` defines the protocol. Read only the selected role/item context; the full selected requirement and spec remain authoritative.
+Use the installed project skills: `manage-workitems` for abstract requirements, `split-workitem` for decomposition, `develop-workitem` for design/implementation, `complete-workitem` for delivery/cleanup, and `upgrade-project` to refresh these project management prompts against current shared sources. Their shared `manage-workitems/references/project-context.md` defines the protocol. Read only the selected role/item context; the full selected requirement and spec remain authoritative.
 
 Project and item creation produce metadata, necessary background and requirement skeletons. Record supplied requirements as `new` items and leave missing details unresolved. Finish creation after persistence; enter design only on an explicit user request. Do not automatically start decomposition, source-code investigation or design because a requirement was supplied.
 
