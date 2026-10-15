@@ -108,6 +108,19 @@ class WorkspaceTest(unittest.TestCase):
         return {"checks": {name: None}, "writes": {name: text(item(identifier))},
                 "message": "new item", "session": "test", "token": None}
 
+    def batch_item_bundle(self, root, changes, session, token):
+        checks = {}
+        writes = {}
+        for identifier, update in changes.items():
+            name = f"workitems/{identifier}/item.json"
+            old_bytes = (root / name).read_bytes()
+            updated = json.loads(old_bytes)
+            updated.update(update)
+            checks[name] = hashlib.sha256(old_bytes).hexdigest()
+            writes[name] = text(updated)
+        return {"checks": checks, "writes": writes, "message": "batch update items",
+                "session": session, "token": token}
+
     def test_hierarchical_allocation_uses_all_metadata_and_never_reserves(self):
         self.assertEqual(runtime.new_ids(self.a, ["quota-lock", "pool-binding"]),
                          ["1-quota-lock", "2-pool-binding"])
@@ -231,6 +244,73 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(self.remote_head(), published)
         self.assertEqual(git(self.b, "rev-parse", "HEAD"), self.base)
         self.assertIsNone(runtime.read_json(self.b / "workitems/A/item.json")["owner"])
+
+    def test_shared_development_claims_items_and_hands_off_as_one_writer(self):
+        owner = {"machine": "machine", "session": "shared-session", "token": "shared-token"}
+        development = {"worktree": "worktrees/shared-A-B", "branch": "feature/shared-A-B",
+                       "base_commit": self.base}
+        claim = self.batch_item_bundle(
+            self.a,
+            {identifier: {"status": "developing", "owner": owner, "development": development}
+             for identifier in ("A", "B")},
+            owner["session"], owner["token"])
+        claimed = self.publish(self.a, claim)["commit"]
+        for identifier in ("A", "B"):
+            record = runtime.read_json(self.a / f"workitems/{identifier}/item.json")
+            self.assertEqual(record["owner"], owner)
+            self.assertEqual(record["development"], development)
+
+        git(self.b, "fetch", "origin", "main")
+        git(self.b, "merge", "--ff-only", "origin/main")
+        competing = self.batch_item_bundle(self.b, {"B": {"title": "competing write"}},
+                                           "other-session", "other-token")
+        with self.assertRaisesRegex(runtime.ProjectError, "item B is owned by another session/token"):
+            self.publish(self.b, competing)
+        self.assertEqual(self.remote_head(), claimed)
+        self.assertEqual(git(self.b, "rev-parse", "HEAD"), claimed)
+        self.assertEqual(runtime.read_json(self.b / "workitems/B/item.json")["title"], "B")
+
+        handed_off = self.batch_item_bundle(
+            self.a, {identifier: {"status": "awaiting_delivery"} for identifier in ("A", "B")},
+            owner["session"], owner["token"])
+        self.publish(self.a, handed_off)
+        released = self.batch_item_bundle(
+            self.a, {identifier: {"owner": None} for identifier in ("A", "B")},
+            owner["session"], owner["token"])
+        self.publish(self.a, released)
+        for identifier in ("A", "B"):
+            record = runtime.read_json(self.a / f"workitems/{identifier}/item.json")
+            self.assertEqual(record["status"], "awaiting_delivery")
+            self.assertIsNone(record["owner"])
+            self.assertEqual(record["development"], development)
+        self.assertEqual(runtime.validate_project(self.a), [])
+
+    def test_shared_development_claim_is_atomic_when_one_item_has_another_owner(self):
+        existing_owner = {"machine": "other-machine", "session": "other-session", "token": "other-token"}
+        development = {"worktree": "worktrees/B", "branch": "feature/B", "base_commit": self.base}
+        existing = self.bundle(self.b, "B", {"status": "developing", "owner": existing_owner,
+                                                "development": development},
+                               existing_owner["session"], existing_owner["token"])
+        self.publish(self.b, existing)
+        git(self.a, "fetch", "origin", "main")
+        git(self.a, "merge", "--ff-only", "origin/main")
+
+        shared_owner = {"machine": "machine", "session": "shared-session", "token": "shared-token"}
+        shared_development = {"worktree": "worktrees/shared-A-B", "branch": "feature/shared-A-B",
+                              "base_commit": self.base}
+        claim = self.batch_item_bundle(
+            self.a,
+            {identifier: {"status": "developing", "owner": shared_owner,
+                          "development": shared_development} for identifier in ("A", "B")},
+            shared_owner["session"], shared_owner["token"])
+        before = self.remote_head()
+        with self.assertRaisesRegex(runtime.ProjectError, "item B is owned by another session/token"):
+            self.publish(self.a, claim)
+        self.assertEqual(self.remote_head(), before)
+        self.assertEqual(git(self.a, "rev-parse", "HEAD"), before)
+        self.assertIsNone(runtime.read_json(self.a / "workitems/A/item.json")["owner"])
+        self.assertEqual(runtime.read_json(self.a / "workitems/B/item.json")["owner"], existing_owner)
+        self.assertEqual(git(self.a, "status", "--porcelain"), "")
 
     def test_owner_requires_matching_session_and_token_and_explicit_release(self):
         owner = {"machine": "machine", "session": "a", "token": "token-a"}

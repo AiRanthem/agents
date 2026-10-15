@@ -21,6 +21,7 @@ In user-facing lists, dependency descriptions and completion reports, show the f
 | Create/edit an item or dependency | `manage-workitems`; [schema](schema.md); [persistence](persistence.md) before writing |
 | Refresh existing project management prompts | [upgrade-project](../../upgrade-project/SKILL.md); current installed templates and relevant shared protocol |
 | Design, split, implement or complete | [workflow](workflow.md) and the relevant skill |
+| Publish a checkpoint or recover a failed publication | [publish-cookbook](publish-cookbook.md); [persistence](persistence.md) for ordering and ownership |
 | Reuse or produce repository evidence | [evidence](evidence.md) |
 | Enabled Aone backend | [aone](aone.md) only when configuring or synchronizing |
 | Clone, interrupted sync or machine handoff | [recovery](recovery.md) |
