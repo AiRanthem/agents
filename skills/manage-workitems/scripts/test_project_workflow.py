@@ -43,6 +43,7 @@ class WorkflowTest(unittest.TestCase):
         from types import SimpleNamespace
         self.fake_development = SimpleNamespace(
             instruction_files=lambda *args, **kwargs: [],
+            reservation_for_discard=lambda *args, **kwargs: None,
             prepare=lambda root, item, project, **kwargs: item.get("development") or {"worktree": "worktrees/" + item["id"], "branch": "feature/" + item["id"], "base_commit": "a" * 40},
             worktree_location=lambda *args: self.directory / "fake-code",
             snapshot=lambda *args: {"head": "a" * 40, "tree": "b" * 40, "dirty_digest": "c" * 64, "clean": True},
@@ -428,6 +429,71 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.record()["status"], "done")
         self.assertEqual(self.record()["delivery"]["evidence"][-1]["reference"], source_commit)
 
+    def test_discard_real_reservation_reprepares_at_current_base_without_old_resources(self):
+        import project_development as development
+        self.development_patch.stop()
+        code_remote = self.directory / "code-remote.git"
+        code_remote.mkdir()
+        fixtures.git(code_remote, "init", "--bare", "--initial-branch=main", "--quiet")
+        code = self.directory / "code"
+        code.mkdir()
+        fixtures.git(code, "init", "--initial-branch=main", "--quiet")
+        self.configure(code)
+        (code / "AGENTS.md").write_text("Current code instructions.\n")
+        fixtures.git(code, "add", ".")
+        fixtures.git(code, "commit", "--quiet", "-m", "base")
+        fixtures.git(code, "remote", "add", "origin", str(code_remote))
+        fixtures.git(code, "push", "--quiet", "-u", "origin", "main")
+        self.project["repositories"] = [{"id": "code", "url": str(code_remote), "base_ref": "refs/heads/main", "base_remote": "origin"}]
+        self.write(self.a, ".project/project.yaml", store.dump_yaml(self.project))
+        self.write(self.a, ".project-local/repositories.yaml", store.dump_yaml({"code": str(code)}))
+        self.commit("bind real code")
+        self.designed()
+        old = self.record()["development"]
+        old_location = self.a / old["worktree"]
+        reservation = development._reservation_path(self.a, development._identity(self.project, self.record()))
+        old_reservation = reservation.read_bytes()
+        fixtures.git(code, "worktree", "remove", str(old_location))
+        discarded = self.begin("cleanup-record", cleanup_status="done", reference="Actual Git removal", discard_development=True, approval_source="User discards the old unfinished implementation")
+        self.assertEqual(self.finish(discarded)["status"], "published")
+        self.assertEqual(reservation.read_bytes(), old_reservation)
+        ordinary = self.begin("cleanup-record", cleanup_status="done", reference="Still absent")
+        self.assertEqual(self.finish(ordinary)["status"], "published")
+        historical = self.a / ("workitems/A/records/" + discarded["ticket"] + ".yaml")
+        self.assertTrue(historical.exists())
+        self.assertEqual(store.load_yaml(historical.read_bytes())["reservation_snapshot"], store.load_yaml(old_reservation))
+        (code / "next.txt").write_text("Current target branch.\n")
+        fixtures.git(code, "add", ".")
+        fixtures.git(code, "commit", "--quiet", "-m", "new target baseline")
+        fixtures.git(code, "push", "--quiet", "origin", "main")
+        current_base = fixtures.git(code, "rev-parse", "HEAD")
+        foreign = store.load_yaml(old_reservation)
+        foreign["branch"] = "feature/unrelated"
+        reservation.write_text(store.dump_yaml(foreign))
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "fresh-reviewer"}):
+            blocked = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
+            self.assertEqual(blocked["status"], "blocked", blocked)
+            self.assertIn("reservation", blocked["message"])
+            self.assertEqual(store.load_yaml(reservation.read_bytes()), foreign)
+            self.assertFalse(old_location.exists())
+            reservation.write_bytes(old_reservation)
+            review = workflow.resume(self.a, blocked["ticket"], publish=self.publisher)
+            self.assertEqual(review["status"], "ready", review)
+            self.assertFalse(historical.exists())
+            self.assertTrue((self.a / ("workitems/A/records/" + ordinary["ticket"] + ".yaml")).exists())
+            fresh = self.record()["development"]
+            self.assertEqual(fresh["base_commit"], current_base)
+            self.assertNotEqual(fresh["branch"], old["branch"])
+            self.assertEqual(fresh["worktree"], old["worktree"])
+            self.assertNotIn("development_discard_record", self.record()["workflow"])
+            self.assertTrue((old_location / "next.txt").exists())
+            self.assertEqual(fixtures.git(code_remote, "rev-parse", old["publish_ref"]), old["base_commit"])
+            self.edit(review, "Independent design review against current code baseline.\n")
+            self.assertEqual(workflow.finish(self.a, review["ticket"], options={"result": "pass", "provenance": "Fresh independent review"}, publish=self.publisher)["status"], "published")
+        started = self.begin("development-start")
+        self.assertEqual(self.finish(started)["status"], "published")
+        self.assertEqual(fixtures.git(old_location, "rev-parse", "HEAD"), current_base)
+
     def test_scoped_reads_and_unrelated_changes_do_not_stale_ticket(self):
         self.write(self.a, "workitems/B/spec.md", "Unrelated spec\n" * 100)
         upstream = self.record("B")
@@ -527,6 +593,148 @@ class WorkflowTest(unittest.TestCase):
         blocked = workflow.begin(self.a, "kind-update", "A", options={"kind": "aggregate"}, publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked")
         self.assertEqual(self.record()["kind"], "development")
+
+    def test_cleaned_metadata_missing_checkout_preflight_and_recovery(self):
+        import project_development as development
+        item = self.record()
+        item.update(cleanup="pending", development={"worktree": "worktrees/removed", "branch": "feature/removed", "base_commit": "a" * 40})
+        self.install(item)
+        self.fake_development.instruction_files = development.instruction_files
+        self.fake_development.worktree_location = development.worktree_location
+        self.fake_development.prepare = mock.Mock(side_effect=AssertionError("metadata must not prepare code"))
+        blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertNotIn("next_command", blocked)
+        self.assertIsNone(self.record()["owner"])
+        self.assertEqual(self.calls, [])
+        item["cleanup"] = "done"
+        self.install(item)
+        result = self.begin("context-update")
+        self.edit(result, "Removed implementation; retained requirement and design.\n")
+        self.assertEqual(self.finish(result)["status"], "published")
+        self.assertIsNone(self.record()["owner"])
+        self.assertEqual(self.record()["development"], item["development"])
+        self.assertFalse((self.a / "worktrees/removed").exists())
+        self.fake_development.prepare.assert_not_called()
+        # Original associated instructions remain mandatory even after cleanup.
+        self.project["main_workspace"] = {"id": "main", "name": "Main", "repository": None}
+        self.write(self.a, ".project/project.yaml", store.dump_yaml(self.project))
+        self.write(self.a, ".project/main-workspace.md", "Original instructions apply.\n")
+        main = self.directory / "main"
+        main.mkdir()
+        (main / "AGENTS.md").symlink_to(self.a / "AGENTS.md")
+        self.write(self.a, ".project-local/main-workspace.json", fixtures.text({"id": "main", "root": str(main)}))
+        calls = len(self.calls)
+        blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertIsNone(self.record()["owner"])
+        self.assertEqual(len(self.calls), calls)
+
+    def test_metadata_changed_after_preflight_retains_ticket_without_auto_resume(self):
+        original = self.fake_development.instruction_files
+        calls = []
+        def changed(*args, **kwargs):
+            calls.append(True)
+            if len(calls) > 1:
+                raise runtime.ProjectError("original instruction vanished")
+            return original(*args, **kwargs)
+        self.fake_development.instruction_files = changed
+        blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertNotIn("next_command", blocked)
+        self.assertIsNotNone(self.record()["owner"])
+        self.fake_development.instruction_files = original
+        resumed = workflow.resume(self.a, blocked["ticket"], publish=self.publisher)
+        self.assertEqual(resumed["status"], "ready", resumed)
+        self.edit(resumed, "Recovered context.\n")
+        self.assertEqual(self.finish(resumed)["status"], "published")
+        self.assertIsNone(self.record()["owner"])
+
+    def test_cleanup_discard_preserves_contract_and_clears_old_credentials(self):
+        self.designed()
+        started = self.begin("development-start", skip_design_review=True, approval_source="User allows this simple contract")
+        self.assertEqual(self.finish(started)["status"], "published")
+        report = self.directory / "review.md"
+        report.write_text("Independent implementation review.\n")
+        reviewed = self.begin("development-finish", result="pass", provenance="Independent review", reviewer_session="independent", review_file=str(report))
+        self.assertEqual(self.finish(reviewed)["status"], "published")
+        before = self.record()
+        docs = {path: (self.a / path).read_bytes() for path in [*workflow._documents(before).values(), workflow._spec(before)] if (self.a / path).exists()}
+        ordinary = self.begin("cleanup-record", cleanup_status="done", reference="Worktree removed")
+        self.assertEqual(self.finish(ordinary)["status"], "published")
+        self.assertEqual(self.record()["development"], before["development"])
+        self.assertEqual(self.record()["design"], before["design"])
+        discarded = self.begin("cleanup-record", cleanup_status="done", reference="Removed old implementation", discard_development=True, approval_source="User discards this unfinished implementation")
+        self.assertEqual(self.finish(discarded)["status"], "published")
+        after = self.record()
+        for key in ("repository", "kind", "depends_on", "delivery"):
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(after["design"]["approval"], before["design"]["approval"])
+        self.assertEqual(after["design"]["version"], before["design"]["version"])
+        self.assertEqual(after["design"]["state"], "review-pending")
+        self.assertNotIn("review", after["design"])
+        self.assertNotIn("design_waiver", after["workflow"])
+        self.assertIsNone(after["development"])
+        self.assertIsNone(after["owner"])
+        self.assertEqual(after["status"], "in_progress")
+        for path, text in docs.items():
+            self.assertEqual((self.a / path).read_bytes(), text, path)
+        record_path = self.a / ("workitems/A/records/" + discarded["ticket"] + ".yaml")
+        historical = store.load_yaml(record_path.read_bytes())
+        self.assertEqual(historical["development_snapshot"], before["development"])
+        self.assertEqual(historical["approval_source"], "User discards this unfinished implementation")
+        self.assertNotIn("token", record_path.read_text())
+        for old in (before["design"]["review"]["id"], before["development"]["review"]["id"], before["workflow"]["design_waiver"]["id"], ordinary["ticket"]):
+            self.assertFalse((self.a / ("workitems/A/records/" + old + ".yaml")).exists())
+        blocked = workflow.begin(self.a, "development-start", "A", publish=self.publisher)
+        self.assertEqual(blocked["status"], "blocked", blocked)
+        self.assertIn("independent design review", blocked["message"])
+
+    def test_cleanup_discard_rejects_invalid_options_owner_and_recreated_tree(self):
+        import project as command
+        parsed = command.parser().parse_args(["begin", "cleanup-record", "A", "--cleanup-status", "done", "--reference", "Removed", "--discard-development", "--approval-source", "Explicit discard"])
+        valid = command._begin_options(parsed)
+        self.assertIs(valid["discard_development"], True)
+        plain = command.parser().parse_args(["begin", "cleanup-record", "A", "--cleanup-status", "done", "--reference", "Removed"])
+        self.assertNotIn("discard_development", command._begin_options(plain))
+        item = self.record()
+        item["development"] = {"worktree": "worktrees/A", "branch": "feature/A", "base_commit": "a" * 40}
+        self.install(item)
+        for invalid in ({"approval_source": None}, {"cleanup_status": "pending"}, {"mode": "skipped"}, {"discard_development": "true"}):
+            with self.subTest(invalid=invalid):
+                blocked = workflow.begin(self.a, "cleanup-record", "A", options={**valid, **invalid}, publish=self.publisher)
+                self.assertEqual(blocked["status"], "blocked", blocked)
+                self.assertIsNone(self.record()["owner"])
+        location = self.directory / "fake-code"
+        location.mkdir()
+        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["status"], "blocked")
+        self.assertIsNone(self.record()["owner"])
+        location.rmdir()
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "foreign"}):
+            item["owner"] = workflow._identity(self.a)
+        self.install(item)
+        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["code"], "owner_conflict")
+        item["owner"] = None
+        item.update(status="done", delivery={"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "sha"}]})
+        self.install(item)
+        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["status"], "blocked")
+        self.assertIsNone(self.record()["owner"])
+        item.update(status="in_progress", delivery={"required": ["merged"], "status": "pending", "evidence": []})
+        self.install(item)
+        ready = self.begin("cleanup-record", **valid)
+        location.mkdir()
+        self.assertEqual(self.finish(ready)["status"], "blocked")
+        self.assertEqual(self.record()["development"], item["development"])
+        location.rmdir()
+        self.assertEqual(self.finish(ready)["status"], "published")
+        self.assertEqual(self.record()["design"]["state"], "draft")
+        cancelled = self.record("B")
+        cancelled.update(status="cancelled", development={"worktree": "worktrees/B", "branch": "feature/B", "base_commit": "a" * 40})
+        self.install(cancelled)
+        discarded = self.begin("cleanup-record", "B", **valid)
+        self.assertEqual(self.finish(discarded)["status"], "published")
+        self.assertEqual(self.record("B")["status"], "cancelled")
+        self.assertIsNone(self.record("B")["development"])
 
     def test_awaiting_delivery_can_add_actual_implementation_review_without_design_pass(self):
         item = self.record()

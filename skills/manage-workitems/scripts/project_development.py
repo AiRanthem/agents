@@ -109,7 +109,7 @@ def instruction_files(root, item, project, *, allow_missing_development=False):
     Associated main instructions apply to every operation. Code instructions are
     included when a fixed worktree or program-maintained checkout binding exists;
     abstract management reads never clone a repository to discover instructions.
-    Cleanup metadata may explicitly allow an absent recorded worktree after its
+    Metadata checkpoints may explicitly allow an absent recorded worktree after its
     normalized path has been checked; this option does not verify cleanup itself.
     """
     root = Path(root).resolve()
@@ -405,28 +405,85 @@ def _existing_record(root, item, project, checkout, configuration):
     return normalized, original is not None
 
 
-def _reservation(root, identity, branch, relative, configuration):
+def _reservation_path(root, identity):
     name = hashlib.sha256(identity.encode()).hexdigest()
     relative_path = ".project-local/development/" + name + ".yaml"
     runtime._no_links(root, relative_path)
-    path = root / relative_path
-    if path.exists():
-        try:
-            record = store.load_yaml(path.read_bytes(), str(path))
-        except (OSError, store.StoreError) as exc:
-            raise ProjectError(str(exc)) from exc
-        if not isinstance(record, dict) or record.get("identity") != identity or record.get("configuration") != configuration:
-            raise ProjectError("development reservation identity/configuration differs; manual recovery required")
-        return record
-    record = {"identity": identity, "branch": branch, "worktree": relative, "configuration": configuration}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Exclusive creation ensures a competing local caller cannot replace the reservation.
-    try:
-        with path.open("x") as stream:
-            stream.write(store.dump_yaml(record))
-    except FileExistsError as exc:
-        raise ProjectError("development reservation changed concurrently; retry from published ownership") from exc
+    return root / relative_path
+
+
+def reservation_for_discard(root, item, project):
+    """Capture only the exact local reservation belonging to recorded development."""
+    identity = _identity(project, item)
+    path = _reservation_path(Path(root), identity)
+    if not path.exists():
+        return None
+    record = store.load_yaml(path.read_bytes(), str(path))
+    development = item["development"]
+    configuration = {key: development.get(key) for key in
+                     ("base_remote", "base_ref", "base_url", "publish_remote", "publish_url")}
+    expected = {"identity": identity, "branch": development["branch"],
+                "worktree": development["worktree"], "configuration": configuration}
+    if record != expected or any(value is None for value in configuration.values()):
+        raise ProjectError("development reservation differs from recorded development; manual recovery required")
     return record
+
+
+def _discard_record(root, item):
+    identifier = (item.get("workflow") or {}).get("development_discard_record")
+    if identifier is None:
+        return None
+    if not runtime._identifier(identifier):
+        raise ProjectError("invalid development discard record id")
+    relative = "workitems/" + item["id"] + "/records/" + identifier + ".yaml"
+    runtime._no_links(root, relative)
+    record = store.load_yaml((root / relative).read_bytes(), relative)
+    if (not isinstance(record, dict) or record.get("id") != identifier or record.get("item") != item["id"] or
+            record.get("kind") != "cleanup" or record.get("status") != "done" or record.get("mode") != "verify" or
+            not record.get("approval_source") or not isinstance(record.get("development_snapshot"), dict)):
+        raise ProjectError("development discard requires its published verified cleanup record")
+    return record
+
+
+def _reservation(root, identity, branch, relative, configuration, discarded=None):
+    path = _reservation_path(root, identity)
+    desired = {"identity": identity, "branch": branch, "worktree": relative, "configuration": configuration}
+    previous = None
+    if path.exists():
+        previous = path.read_bytes()
+        record = store.load_yaml(previous, str(path))
+        if discarded is not None:
+            if record == desired:
+                return record
+            if record != discarded.get("reservation_snapshot"):
+                raise ProjectError("development reservation differs from the discarded snapshot; manual recovery required")
+        else:
+            if not isinstance(record, dict) or record.get("identity") != identity or record.get("configuration") != configuration:
+                raise ProjectError("development reservation identity/configuration differs; manual recovery required")
+            return record
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if previous is None:
+        # Exclusive creation ensures a competing local caller cannot replace the reservation.
+        try:
+            with path.open("x") as stream:
+                stream.write(store.dump_yaml(desired))
+        except FileExistsError as exc:
+            raise ProjectError("development reservation changed concurrently; retry from published ownership") from exc
+    else:
+        # known-limit: published ownership excludes protocol participants, but a
+        # direct local writer can race the byte check and replace. Strict cross-writer
+        # CAS needs a shared locking/atomic coordination protocol.
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(store.dump_yaml(desired))
+        try:
+            runtime._no_links(root, path.relative_to(root).as_posix())
+            if path.read_bytes() != previous:
+                raise ProjectError("development reservation changed concurrently; manual recovery required")
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return desired
 
 
 def prepare(root, item, project, *, options=None):
@@ -465,13 +522,15 @@ def prepare(root, item, project, *, options=None):
                     _git(checkout, "config", "branch." + branch + "." + key, value)
         return normalized
     owner = item.get("owner") or {}
-    suffix = hashlib.sha256((owner.get("token") or owner.get("session") or identity).encode()).hexdigest()[:12]
+    discarded = _discard_record(root, item)
+    generation = "\0" + discarded["id"] if discarded is not None else ""
+    suffix = hashlib.sha256(((owner.get("token") or owner.get("session") or identity) + generation).encode()).hexdigest()[:12]
     branch = options.get("branch") or repo.get("branch_pattern", "feature/{project}/{item}-{session}").format(
         project=project["id"], item=item["id"], session=suffix)
     _ref(checkout, "refs/heads/" + branch)
     base_name, container = runtime._layout(root, project)
     relative = options.get("worktree") or (container / item["id"]).as_posix()
-    reserved = _reservation(root, identity, branch, str(relative), configuration)
+    reserved = _reservation(root, identity, branch, str(relative), configuration, discarded)
     if (options.get("branch") and options["branch"] != reserved["branch"]) or (options.get("worktree") and options["worktree"] != reserved["worktree"]):
         raise ProjectError("requested branch/worktree differs from existing development reservation")
     branch = reserved["branch"]

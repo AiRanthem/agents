@@ -37,10 +37,13 @@ OPERATIONS = {
     "development-finish": {"result", "provenance", "reviewer_session", "review_file"},
     "delivery-record": {"kind", "reference", "commit", "provenance"},
     "context-update": set(), "log-record": set(),
-    "cleanup-record": {"cleanup_status", "reference", "mode", "approval_source"},
+    "cleanup-record": {"cleanup_status", "reference", "mode", "approval_source", "discard_development"},
     "kind-update": {"kind", "repository"},
     "rename": {"title"}, "dependency-update": {"depends_on"}, "archive": {"archived"},
 }
+METADATA_OPERATIONS = {"requirement-update", "decision-record", "context-update", "log-record",
+                       "rename", "dependency-update", "archive", "cleanup-record", "kind-update"}
+CODE_PREPARATION_OPERATIONS = {"design-update", "design-review", "development-start"}
 TICKET = re.compile(r"[0-9a-f]{32}\Z")
 
 
@@ -308,7 +311,9 @@ def _read_payload(root, files, item, operation):
         for path in sorted(paths):
             if path in files and str(Path(root) / path) not in {entry["path"] for entry in result}:
                 result.append({"path": str(Path(root) / path), "content": files[path].decode("utf-8")})
-    instruction_options = {"allow_missing_development": True} if operation in {"cleanup-record", "kind-update"} else {}
+    allow_missing = (operation in {"cleanup-record", "kind-update"} or
+                     operation in METADATA_OPERATIONS and item.get("cleanup") == "done")
+    instruction_options = {"allow_missing_development": True} if allow_missing else {}
     for path in _development_module().instruction_files(root, item, store.project(files), **instruction_options):
         path = Path(path)
         if str(path) not in {entry["path"] for entry in result}:
@@ -376,7 +381,28 @@ def _options(operation, options):
             _text(options.get("approval_source"), "explicit user design-review waiver source")
         elif "approval_source" in options:
             raise ProjectError("approval_source requires explicit skip_design_review")
+    if operation == "cleanup-record" and "discard_development" in options:
+        if type(options["discard_development"]) is not bool:
+            raise ProjectError("discard_development must be an explicit boolean")
+        if options["discard_development"]:
+            _text(options.get("reference"), "cleanup reference")
+            _text(options.get("approval_source"), "explicit user development discard approval source")
+            if options.get("cleanup_status") != "done" or options.get("mode", "verify") != "verify":
+                raise ProjectError("discard_development requires cleanup_status done and mode verify")
     return options
+
+
+def _validate_discard(root, files, item, options):
+    if not options.get("discard_development"):
+        return
+    if item.get("kind") != "development" or not item.get("development"):
+        raise ProjectError("discard_development requires recorded development on a development item")
+    if item.get("status") == "done" or item.get("delivery", {}).get("status") == "delivered":
+        raise ProjectError("delivered development cannot be discarded")
+    location = _development_module().worktree_location(root, item, store.project(files))
+    if Path(location).exists() or Path(location).is_symlink():
+        raise ProjectError("cleanup is not complete: recorded code worktree still exists")
+    return _development_module().reservation_for_discard(root, item, store.project(files))
 
 
 def _new_item(items, options, operation):
@@ -483,6 +509,12 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
         review_source = {"path": str(source), "sha256": _hash(source.read_bytes())}
     if operation == "development-finish" and review_source is None:
         raise ProjectError("implementation review requires an actual review_file")
+    if operation == "cleanup-record":
+        _validate_discard(root, files, item, options)
+    if operation in METADATA_OPERATIONS:
+        # These checkpoints never provision code. Reject unreadable instructions
+        # before publishing an ownership claim that cannot yield an edit.
+        _read_payload(root, files, item, operation)
     ticket = secrets.token_hex(16)
     directory = _local(root, "edits", ticket)
     manifest = {"ticket": ticket, "operation": operation, "item": item, "identity": identity,
@@ -524,7 +556,12 @@ def _continue_context(root, directory, manifest, files, publish):
         return _prepare_context(root, directory, manifest, files, publish)
     except (ProjectError, store.StoreError, OSError, UnicodeError, ValueError) as exc:
         result = _failure(exc)
-        result.update(ticket=manifest["ticket"], next_command=_resume_command(root, manifest["ticket"]))
+        result["ticket"] = manifest["ticket"]
+        # known-limit: inputs can change after metadata preflight. Retain its
+        # ticket for an explicitly requested recovery, not automatic continuation;
+        # a unified failure lifecycle needs a separate cancel/release contract.
+        if manifest["operation"] not in METADATA_OPERATIONS:
+            result["next_command"] = _resume_command(root, manifest["ticket"])
         return result
 
 
@@ -534,13 +571,15 @@ def _prepare_context(root, directory, manifest, files, publish):
     item = store.item(files, identifier) if operation not in {"create", "fix"} else manifest["item"]
     _ownership(item, identity)
     manifest["item"] = item
-    if operation in {"design-update", "design-review", "development-start"} and item.get("repository"):
+    if operation in CODE_PREPARATION_OPERATIONS and item.get("repository"):
         development = dict(item.get("development") or {})
         development.update(_development_module().prepare(root, item, store.project(files), options=options))
         if development != item.get("development"):
             item["development"] = development
+            item.setdefault("workflow", {}).pop("development_discard_record", None)
             item["cleanup"] = "pending"
             writes = store.write_item(files, item)
+            writes.update(retention.prune_records(store.apply_writes(files, writes), [identifier]))
             checks = _checks(files, item, operation)
             manifest.update(state="context-publication-pending", context_writes=writes,
                             context_message="Prepare code context " + identifier, checks=checks)
@@ -625,7 +664,7 @@ def _begin_command(root, manifest):
 
 def _stale(root, manifest, message):
     result = {"status": "stale", "ticket": manifest["ticket"], "message": message}
-    sensitive = {"approval_source", "skip_design_review", "result", "provenance", "review_file", "reviewer_session"}
+    sensitive = {"approval_source", "skip_design_review", "discard_development", "result", "provenance", "review_file", "reviewer_session"}
     if (manifest["operation"] in {"design-review", "development-finish"} or
             sensitive.intersection(manifest["options"]) or manifest.get("review_source")):
         result.update(status="blocked", code="stale_evidence", action_code="stale_evidence",
@@ -781,6 +820,7 @@ def _prepare_finish(root, manifest, files, drafts):
         if item.get("status") != "developing":
             item["development"] = _development_module().prepare(root, item, store.project(files), options=options)
             item["development"]["author_session"] = identity["session"]
+        item.setdefault("workflow", {}).pop("development_discard_record", None)
         item["status"] = "developing"
         item["owner"] = identity
         item["cleanup"] = "pending"
@@ -825,6 +865,7 @@ def _prepare_finish(root, manifest, files, drafts):
     elif operation == "log-record":
         _text(writes[documents["logs"]], "log body")
     elif operation == "cleanup-record":
+        reservation = _validate_discard(root, files, item, options)
         status = options.get("cleanup_status")
         if status not in {"pending", "done", "not_applicable"}:
             raise ProjectError("cleanup_status must be pending, done or not_applicable")
@@ -846,8 +887,25 @@ def _prepare_finish(root, manifest, files, drafts):
         base = "workitems/" + identifier + "/records/" + manifest["ticket"]
         record = {"id": manifest["ticket"], "kind": "cleanup", "item": identifier, "status": status, "mode": mode,
                   "reference": options["reference"], "session": identity["session"], "created_at": manifest["created_at"]}
-        if mode != "verify":
+        if mode != "verify" or options.get("discard_development"):
             record["approval_source"] = options["approval_source"]
+        if options.get("discard_development"):
+            record["development_snapshot"] = copy.deepcopy(item["development"])
+            if reservation is not None:
+                record["reservation_snapshot"] = reservation
+            item.setdefault("workflow", {})["development_discard_record"] = record["id"]
+            _invalidate_implementation(item)
+            item["development"] = None
+            if item.get("status") != "cancelled":
+                item["status"] = "in_progress"
+            design = _design(item)
+            design.pop("review", None)
+            approval = design.get("approval")
+            valid_approval = (isinstance(approval, dict) and
+                              all(approval.get(key) == value for key, value in _approval_binding(files, item).items()))
+            if not valid_approval:
+                design.pop("approval", None)
+            design["state"] = "review-pending" if valid_approval else "draft"
         writes[base + ".yaml"] = store.dump_yaml(record)
         writes[base + ".md"] = "# Cleanup disposition\n\n" + options["reference"] + "\n"
         item.setdefault("workflow", {})["cleanup_record"] = record["id"]

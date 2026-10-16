@@ -67,8 +67,8 @@ def _current_roots(files, identifier):
         sections[key] = value or {}
     roots = (sections["design"].get("review"), sections["development"].get("review"),
              sections["delivery"].get("record"), sections["workflow"].get("design_waiver"),
-             sections["workflow"].get("cleanup_record"))
-    kinds = ("design-review", "development-finish", "delivery-record", "user_design_review_waiver", "cleanup")
+             sections["workflow"].get("cleanup_record"), sections["workflow"].get("development_discard_record"))
+    kinds = ("design-review", "development-finish", "delivery-record", "user_design_review_waiver", "cleanup", "cleanup")
     return [(root, kind) for root, kind in zip(roots, kinds) if root is not None]
 
 

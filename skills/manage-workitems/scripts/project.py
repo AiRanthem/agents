@@ -671,6 +671,7 @@ def parser():
                  "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode"):
         begin.add_argument("--" + name)
     begin.add_argument("--skip-design-review", action="store_true", default=None)
+    begin.add_argument("--discard-development", action="store_true", default=None)
     begin.add_argument("--kind", action="append")
     begin.add_argument("--reference", action="append")
     begin.add_argument("--delivery-required", action="append")

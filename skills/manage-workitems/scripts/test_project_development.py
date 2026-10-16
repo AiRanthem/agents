@@ -237,6 +237,53 @@ class DevelopmentTests(unittest.TestCase):
         with self.assertRaisesRegex(development.ProjectError, "normalized relative path"):
             development.instruction_files(self.root, self.item, self.project, allow_missing_development=True)
 
+    def test_cleaned_metadata_payload_keeps_missing_checkout_fallback_scoped(self):
+        self.item["development"] = {"worktree": "worktrees/removed", "branch": "feature/removed", "base_commit": git(self.code, "rev-parse", "HEAD")}
+        for cleanup in ("pending", "done"):
+            self.item["cleanup"] = cleanup
+            for operation in workflow.METADATA_OPERATIONS:
+                with self.subTest(cleanup=cleanup, operation=operation):
+                    if cleanup == "done" or operation in {"cleanup-record", "kind-update"}:
+                        self.read_payload(operation)
+                    else:
+                        with self.assertRaisesRegex(development.ProjectError, "checkout root"):
+                            self.read_payload(operation)
+        for operation in ("design-update", "design-review", "development-start", "development-finish", "delivery-record"):
+            with self.subTest(operation=operation), self.assertRaisesRegex(development.ProjectError, "checkout root"):
+                self.read_payload(operation)
+        self.assertFalse((self.root / "worktrees/removed").exists())
+
+    def test_discard_reservation_reprepares_default_and_explicit_location_at_current_base(self):
+        for mode in ("default", "explicit"):
+            with self.subTest(mode=mode):
+                self.item = {"id": "1-" + mode, "repository": "code", "development": None}
+                self.item["development"] = self.prepare()
+                original = copy.deepcopy(self.item["development"])
+                reservation = development.reservation_for_discard(self.root, self.item, self.project)
+                git(self.code, "worktree", "remove", str(self.worktree()))
+                self.item["development"] = None
+                self.item["workflow"] = {"development_discard_record": "discarded"}
+                record = {"id": "discarded", "item": self.item["id"], "kind": "cleanup", "status": "done", "mode": "verify",
+                          "approval_source": "User explicitly discards old development", "development_snapshot": original,
+                          "reservation_snapshot": reservation}
+                path = self.root / ("workitems/" + self.item["id"] + "/records/discarded.yaml")
+                path.parent.mkdir(parents=True)
+                path.write_text(store.dump_yaml(record))
+                self.assertFalse((self.root / original["worktree"]).exists())
+                current = self.commit(self.code, "New target baseline " + mode + "\n")
+                git(self.code, "push", "upstream", "main")
+                options = {"branch": "feature/restarted", "worktree": "worktrees/restarted"} if mode == "explicit" else {}
+                prepared = self.prepare(**options)
+                self.assertEqual(prepared["base_commit"], current)
+                self.assertNotEqual(prepared["branch"], original["branch"])
+                if mode == "explicit":
+                    self.assertEqual(prepared["branch"], options["branch"])
+                    self.assertEqual(prepared["worktree"], options["worktree"])
+                    self.assertFalse((self.root / original["worktree"]).exists())
+                self.assertEqual(git(self.remote, "rev-parse", original["publish_ref"]), original["base_commit"])
+                # Preparation can be retried before its development metadata is published.
+                self.assertEqual(self.prepare(**options), prepared)
+
     def test_instruction_lookup_never_provisions_unknown_code_checkout(self):
         self.assertEqual(development.instruction_files(self.root, self.item, self.project), [])
         self.assertFalse((self.root / ".project-local").exists())

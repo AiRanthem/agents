@@ -20,7 +20,7 @@ The program creates and maintains YAML. Work-item agents read the returned prose
 | `workitems/<id>/logs.md` | Current operational context and handoff, maintained as one complete Markdown document. |
 | `workitems/<id>/records/<record-id>.md` and `.yaml` | Current pointer-bound review, delivery, waiver or cleanup evidence, paired with program-owned bindings. |
 
-Agent-authored Markdown is opaque to the program. For decision and log updates, write the complete current document, remove superseded statements, and retain constraints that still apply. The program replaces the file; it does not append events or infer semantic staleness. Git history is the audit trail for prior document versions. Keep only evidence pairs required by current review, delivery, waiver or cleanup pointers, plus artifacts needed to resume pending operations; when a pointer is invalidated, its evidence pair is removed in the same publication.
+Agent-authored Markdown is opaque to the program. For decision and log updates, write the complete current document, remove superseded statements, and retain constraints that still apply. The program replaces the file; it does not append events or infer semantic staleness. Git history is the audit trail for prior document versions. Keep only evidence pairs required by current review, delivery, waiver or cleanup pointers, plus artifacts needed to resume pending operations; when a pointer is invalidated, its evidence pair is removed in the same publication. Explicit development discard retains its cleanup snapshot through `workflow.development_discard_record` until fresh code preparation is recorded; ordinary cleanup may replace `cleanup_record` without losing that pending reservation evidence.
 
 ## Identity and hierarchy
 
