@@ -1,13 +1,7 @@
 # Recover this workspace
 
-Clone branch `{{STORAGE_BRANCH}}` from `{{STORAGE_URL}}` into a dedicated directory and start the agent there. Read root `AGENTS.md` and `.project/context.md`; verify `.project/project.json` against the selected remote/ref.
+Restore the dedicated branch `{{STORAGE_BRANCH}}` from `{{STORAGE_URL}}` and start the agent at this project's management root. Read its generated `AGENTS.md`. If shared skills are missing, install the dev-kit from `{{DEVKIT_SOURCE}}` using its installation contract. Credentials and unpublished code are not restored by cloning project records.
 
-If shared skills are missing, install the project's dev-kit from `{{DEVKIT_SOURCE}}` using its installation instructions. Do not copy credentials into this repository. Python 3 and Git are required; configured Aone also requires authenticated `a1`.
+Use installed `manage-workitems/scripts/project.py status`. Report its facts; for `partial`, run only the returned resume command. `published` or `no_op` ends the operation; `blocked` permits only the returned begin command for `code: stale_ticket`; expired tickets carrying authorization or review evidence return `code: stale_evidence` without a continuation command; otherwise report its listed blockers or missing facts. Keep local identity/recovery data; no timeout or new session authorizes takeover.
 
-Run the installed `manage-workitems/scripts/project_runtime.py validate`, then select an item with `project_context.py`. Its local index can be rebuilt. Follow `manage-workitems/references/recovery.md` for claims, backend reconciliation and worktree recovery.
-
-Use `upgrade-project` when this project's management prompts need to follow updated shared skills. It preserves project-specific facts and constraints; data and work-item identity migrations are separate operations.
-
-When a main workspace is configured, use `.project/main-workspace.md` to restore or locate it and save a verified local binding before main-dependent operations. Load its original instructions and required skills; cloning this project restores their references, not its environment or repositories.
-
-Resolve each code location through the runtime's `worktree-path` command, then restore its recorded repository and published branch there. The tracked `worktrees/.gitkeep` retains the project directory while code contents stay ignored. Uncommitted or unpublished code remains on its original machine. Existing ownership must be explicitly handed off; no automatic takeover occurs after a timeout. Recheck relevant review evidence and dependency delivery before resuming implementation.
+Use `upgrade-project` for deterministic migration and generated instruction refresh. Project documents contain only current effective instructions and knowledge; Git retains prior versions. Preserve current approval, delivery and unresolved recovery credentials. Required original main-workspace instructions and code-worktree paths come from the program; read the originals before dependent work. Missing bindings, originals or unpublished code must be restored through the stated inputs rather than guessed.

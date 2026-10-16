@@ -87,6 +87,14 @@ class MakeBundleTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.bundle("--new", self.req_path)
 
+    def test_schema_v2_uses_fixed_project_commands(self):
+        (self.root / ".project/project.yaml").write_text("schema_version: 2\n")
+        git(self.root, "add", ".project/project.yaml")
+        git(self.root, "commit", "--quiet", "-m", "schema v2")
+        with self.assertRaisesRegex(SystemExit, "schema-v2 projects require project.py"):
+            self.bundle("--write", self.req_path)
+        self.assertFalse((self.root / "bundle.json").exists())
+
     def test_intents_have_prospective_digest_unique_ids_and_retain_baseline(self):
         baseline = {"title": "previous readback", "body": "previous body"}
         self.commit_sync({"state": "verified", "baseline_fields": baseline, "space_id": "456"})

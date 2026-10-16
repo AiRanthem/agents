@@ -6,7 +6,9 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
+import project_store as store
 
 
 SCRIPT = Path(__file__).with_name("project_context.py")
@@ -23,7 +25,8 @@ def find_project(path: Path) -> Path:
     if current.is_file():
         current = current.parent
     for candidate in (current, *current.parents):
-        if (candidate / ".project" / "project.json").is_file():
+        if ((candidate / ".project" / "project.json").is_file() or
+                (candidate / ".project" / "project.yaml").is_file()):
             return candidate
     raise ProjectError(f"no project marker found from {path}")
 
@@ -43,17 +46,37 @@ runtime.ProjectError = ProjectError
 runtime.find_project = find_project
 runtime.read_json = read_json
 runtime.validate_project = validate_project
-sys.modules["project_runtime"] = runtime
-spec = importlib.util.spec_from_file_location("project_context", SCRIPT)
+
+
+def working_files(root: Path, paths):
+    result = {}
+    for name in paths:
+        path = root / name
+        if path.is_symlink():
+            raise ProjectError(f"symlink path forbidden: {name}")
+        if path.is_file():
+            result[name] = path.read_bytes()
+    return result
+
+
+runtime._working_files = working_files
+spec = importlib.util.spec_from_file_location("_project_context_under_test", SCRIPT)
 project_context = importlib.util.module_from_spec(spec)
 assert spec.loader
-sys.modules[spec.name] = project_context
-spec.loader.exec_module(project_context)
+# Isolate the lightweight query fixture. Leaving either fake module in
+# sys.modules makes subsequently collected integration tests use a stub runtime.
+with mock.patch.dict(sys.modules, {"project_runtime": runtime, spec.name: project_context}):
+    spec.loader.exec_module(project_context)
 
 
 def write_json(path: Path, value) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+def write_yaml(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(store.dump_yaml(value), encoding="utf-8")
 
 
 def item(item_id: str, title: str, status: str = "new") -> dict:
@@ -337,14 +360,17 @@ class ProjectContextTests(unittest.TestCase):
         self.assertEqual(payload["entrypoint"], "workitems/one/item.json")
         self.assertNotIn("evidence_metadata", payload)
         self.assertNotIn("SECRET OLD REVIEW FINDING", json.dumps(payload))
-        self.assertFalse(any(path.endswith(".md") for path in read_paths))
+        self.assertIn("Requirement body", payload["documents"]["requirement"]["text"])
+        self.assertIn("Spec body", payload["documents"]["spec"]["text"])
+        self.assertIn("Handoff body", payload["documents"]["context"]["text"])
+        self.assertFalse(any("reviews/old.md" in path for path in read_paths))
         self.assertEqual(payload["preread_order"][0], "workitems/one/item.json")
 
     def test_design_reviewer_gets_contract_paths_before_deferred_reviews(self):
         args = project_context.parser().parse_args(["--path", str(self.root), "context", "one", "--role", "review-design"])
         payload = project_context.command(args)
         self.assertEqual(payload["entrypoint"], "workitems/one/item.json")
-        self.assertEqual(payload["preread_order"][:2], ["workitems/one/requirement.md", "workitems/one/spec.md"])
+        self.assertEqual(payload["preread_order"][:3], ["workitems/one/item.json", "workitems/one/requirement.md", "workitems/one/spec.md"])
         self.assertIn("workitems/one/reviews/old.md", payload["deferred_inputs"])
         self.assertNotIn("SECRET OLD REVIEW FINDING", json.dumps(payload))
 
@@ -389,6 +415,141 @@ class ProjectContextTests(unittest.TestCase):
         (self.root / "evidence/e1.md").unlink()
         args = project_context.parser().parse_args(["--path", str(self.root), "search-evidence", "implementation"])
         with self.assertRaisesRegex(project_context.ContextError, "cannot inspect project path"):
+            project_context.command(args)
+
+    def v2_workspace(self) -> tuple[Path, dict[str, dict]]:
+        root = Path(self.temp.name) / "v2"
+        project = {
+            "schema_version": 2, "id": "demo-v2", "name": "Demo v2",
+            "storage": {"remote": "origin", "branch": "projects/demo", "url": "https://example.invalid/demo.git"},
+            "backends": {"aone": None},
+            "repositories": [{"id": "repo-a", "url": "https://example.invalid/repo.git", "base_ref": "refs/heads/main"}],
+        }
+        write_yaml(root / ".project/project.yaml", project)
+        items = {
+            "1-base": {"status": "done", "depends_on": [], "delivery_status": "delivered"},
+            "11-middle": {"status": "done", "depends_on": ["1-base"], "delivery_status": "delivered"},
+            "2-fix": {"status": "new", "depends_on": [], "delivery_status": "pending", "fixes": "1-base"},
+            "111-target": {"status": "new", "depends_on": ["11-middle"], "delivery_status": "pending"},
+        }
+        files = {".project/project.yaml": (root / ".project/project.yaml").read_bytes()}
+        for identifier, setup in items.items():
+            record = {
+                "id": identifier, "title": identifier, "kind": "development", "status": setup["status"],
+                "depends_on": setup["depends_on"], "repository": "repo-a", "owner": None,
+                "development": None, "fixes": setup.get("fixes"),
+                "delivery": {"required": ["merged"], "status": setup["delivery_status"],
+                             "evidence": ([{"kind": "merged", "reference": "commit"}]
+                                          if setup["delivery_status"] == "delivered" else [])},
+                "documents": {"requirement": "requirement.md", "context": "context.md",
+                              "decision": "decision.md", "logs": "logs.md"},
+                "design": {"file": "spec.md", "version": 1, "state": "draft"},
+            }
+            for name, content in store.write_item(files, record).items():
+                files[name] = content.encode("utf-8")
+        for name, data in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        for identifier, doc, content in (
+            ("111-target", "requirement.md", "Full requirement"),
+            ("111-target", "context.md", "Current context"),
+            ("111-target", "decision.md", "Approved decision"),
+            ("111-target", "logs.md", "Progress log"),
+            ("111-target", "spec.md", "Current design"),
+        ):
+            (root / "workitems" / identifier / doc).write_text(content, encoding="utf-8")
+        (root / "evidence/e1.md").parent.mkdir(parents=True, exist_ok=True)
+        (root / "evidence/e1.md").write_text("Evidence body", encoding="utf-8")
+        return root, items
+
+    def test_v2_state_and_receipt_yaml_invalidate_cache_and_show_current_owner(self):
+        root, _ = self.v2_workspace()
+        first, rebuilt = project_context.get_index(root)
+        self.assertTrue(rebuilt)
+        target = next(entry for entry in first["items"] if entry["id"] == "111-target")
+        self.assertEqual(target["path"], "workitems/111-target/metadata.yaml")
+        self.assertIsNone(target["metadata"]["owner"])
+
+        state_path = root / ".project/state/111-target.yaml"
+        state = store.load_yaml(state_path.read_bytes())
+        state["owner"] = {"machine": "m", "session": "s", "token": "current"}
+        write_yaml(state_path, state)
+        second, rebuilt = project_context.get_index(root)
+        self.assertTrue(rebuilt)
+        target = next(entry for entry in second["items"] if entry["id"] == "111-target")
+        self.assertEqual(target["metadata"]["owner"]["token"], "current")
+
+        receipt_path = root / ".project/sync/111-target.yaml"
+        receipt = {"intent_id": "i1", "state": "pending", "external_id": "external-1"}
+        write_yaml(receipt_path, receipt)
+        third, rebuilt = project_context.get_index(root)
+        self.assertTrue(rebuilt)
+        self.assertEqual(third["receipts"][0]["metadata"]["external_id"], "external-1")
+        receipt["external_id"] = "external-2"
+        write_yaml(receipt_path, receipt)
+        args = project_context.parser().parse_args(["--path", str(root), "show", "111-target"])
+        shown = project_context.command(args)
+        self.assertTrue(shown["index_rebuilt"])
+        self.assertEqual(shown["metadata_path"], "workitems/111-target/metadata.yaml")
+        self.assertEqual(shown["receipt"]["metadata_path"], ".project/sync/111-target.yaml")
+        self.assertEqual(shown["receipt"]["metadata"]["external_id"], "external-2")
+
+    def test_v2_context_returns_role_documents_and_transitive_fix_blockers(self):
+        root, _ = self.v2_workspace()
+        args = project_context.parser().parse_args(["--path", str(root), "context", "111-target", "--role", "implement"])
+        payload = project_context.command(args)
+        self.assertEqual(payload["inputs"]["metadata.yaml"], "workitems/111-target/metadata.yaml")
+        self.assertEqual(payload["inputs"]["requirement.md"], "workitems/111-target/requirement.md")
+        self.assertEqual(payload["documents"]["requirement"]["text"], "Full requirement")
+        self.assertEqual(payload["documents"]["spec"]["text"], "Current design")
+        self.assertEqual(payload["documents"]["context"]["text"], "Current context")
+        self.assertEqual(payload["readiness"]["blockers"]["dependencies"], [])
+        self.assertEqual(payload["readiness"]["blockers"]["fixes"], ["2-fix"])
+        self.assertTrue(payload["readiness"]["dependency_ready"])
+        self.assertTrue(payload["readiness"]["blocked"])
+
+    def test_v2_yaml_evidence_search_and_read_queries_do_not_write_cache(self):
+        root, _ = self.v2_workspace()
+        write_yaml(root / "evidence/e1.yaml", {
+            "id": "e1", "repository": "repo-a", "topic": "implementation", "summary": "YAML record",
+            "kind": "fact", "sources": [{"path": "src/main.py"}], "scope": "commit abc",
+            "inputs": {}, "body": "evidence/e1.md",
+        })
+        args = project_context.parser().parse_args(["--path", str(root), "search-evidence", "implementation"])
+        payload = project_context.command(args)
+        self.assertEqual(payload["results"][0]["id"], "e1")
+        self.assertFalse((root / ".project-local").exists())
+
+    def test_v2_exposes_only_current_referenced_reports_without_indexing_prose(self):
+        root, _ = self.v2_workspace()
+        identifier = "111-target"
+        prefix = f"workitems/{identifier}/records/"
+        review = {"id": "current-review", "item": identifier, "kind": "design-review",
+                  "report": prefix + "current-review.md"}
+        state = root / f".project/state/{identifier}.yaml"
+        write_yaml(state, {"design": {"review": review}})
+        write_yaml(root / (prefix + "current-review.yaml"), review)
+        (root / (prefix + "current-review.md")).write_text("Current review", encoding="utf-8")
+        # An unreferenced malformed machine record and its prose are never read.
+        (root / (prefix + "obsolete.yaml")).write_text("[malformed", encoding="utf-8")
+        (root / (prefix + "obsolete.md")).write_text("Historical finding", encoding="utf-8")
+        legacy = root / f"workitems/{identifier}/reviews/old.md"
+        legacy.parent.mkdir()
+        legacy.write_text("Old review", encoding="utf-8")
+        index, _ = project_context.get_index(root, include_evidence=False)
+        self.assertFalse(any("/records/" in name for name in index["sources"]))
+        args = project_context.parser().parse_args(["--path", str(root), "show", identifier])
+        with mock.patch.object(project_context, "_read_bytes", wraps=project_context._read_bytes) as reads:
+            shown = project_context.command(args)
+        self.assertIn(prefix + "current-review.md", shown["body_paths"])
+        self.assertNotIn(prefix + "obsolete.md", shown["body_paths"])
+        self.assertNotIn(legacy.relative_to(root).as_posix(), shown["body_paths"])
+        self.assertTrue(all(call.args[1].suffix != ".md" for call in reads.call_args_list))
+        args = project_context.parser().parse_args(["--path", str(root), "context", identifier, "--role", "review-design"])
+        self.assertEqual(project_context.command(args)["deferred_inputs"], [prefix + "current-review.md"])
+        (root / (prefix + "current-review.md")).unlink()
+        with self.assertRaisesRegex(project_context.ContextError, "cannot inspect"):
             project_context.command(args)
 
 

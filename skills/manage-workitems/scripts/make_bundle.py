@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Assemble guarded publication writes against one immutable Git snapshot.
+"""Assemble schema-v1 bundles for isolated publication validation by maintainers.
+
+Schema-v2 project operations use project.py's fixed command workflow.
 
 --base REV defaults to HEAD; fetch the selected remote revision before invoking
 this helper when needed. --write/--new read intended UTF-8 content from disk.
@@ -183,6 +185,8 @@ def main(argv=None):
     root = Path(args.root).resolve()
     try:
         snapshot = Snapshot(root, _commit(root, args.base))
+        if snapshot.get(".project/project.yaml") is not None:
+            raise runtime.ProjectError("schema-v2 projects require project.py; make_bundle supports schema-v1 validation only")
         snapshots = {snapshot.commit: snapshot}
         checks, writes = {}, {}
 

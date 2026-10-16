@@ -236,8 +236,8 @@ class WorkspaceTest(unittest.TestCase):
     def test_same_item_claim_conflicts_without_takeover(self):
         owner_a = {"machine": "machine", "session": "a", "token": "token-a"}
         owner_b = {"machine": "machine", "session": "b", "token": "token-b"}
-        first = self.bundle(self.a, "A", {"owner": owner_a}, "a")
-        second = self.bundle(self.b, "A", {"owner": owner_b}, "b")
+        first = self.bundle(self.a, "A", {"owner": owner_a}, "a", "token-a")
+        second = self.bundle(self.b, "A", {"owner": owner_b}, "b", "token-b")
         published = self.publish(self.a, first)["commit"]
         with self.assertRaisesRegex(runtime.ProjectError, "byte check conflict"):
             self.publish(self.b, second)
@@ -314,7 +314,7 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_owner_requires_matching_session_and_token_and_explicit_release(self):
         owner = {"machine": "machine", "session": "a", "token": "token-a"}
-        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, "a"))
+        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, "a", "token-a"))
         current_head = self.remote_head()
         for session, token in (("b", "token-a"), ("a", "wrong")):
             with self.assertRaisesRegex(runtime.ProjectError, "owned by another"):
@@ -323,7 +323,7 @@ class WorkspaceTest(unittest.TestCase):
             self.publish(self.a, self.bundle(self.a, "A", {"owner": {**owner, "session": "b"}}, "a", "token-a"))
         self.assertEqual(self.remote_head(), current_head)
         self.publish(self.a, self.bundle(self.a, "A", {"owner": None}, "a", "token-a"))
-        self.publish(self.a, self.bundle(self.a, "A", {"owner": {**owner, "session": "b"}}, "b"))
+        self.publish(self.a, self.bundle(self.a, "A", {"owner": {**owner, "session": "b"}}, "b", "token-a"))
 
     def test_merged_dependency_cycle_stops_before_push(self):
         first = self.bundle(self.a, "A", {"depends_on": ["B"]})
@@ -390,13 +390,32 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual(git(self.a, "status", "--porcelain"), "")
         self.assertEqual(self.remote_head(), self.base)
 
+    def test_pre_push_rejections_are_retained_without_becoming_recovery_candidates(self):
+        bundle = self.bundle(self.a, "A", {"title": "unsubmitted intent"})
+        bundle["checks"]["workitems/A/item.json"] = "0" * 64
+        for _ in range(3):
+            with self.assertRaisesRegex(runtime.ProjectError, "byte check conflict"):
+                self.publish(self.a, bundle)
+        journals = sorted((self.a / ".project-local/publish").glob("*/journal.json"))
+        retained = {path: path.read_bytes() for path in journals}
+        self.assertEqual(len(journals), 3)
+        self.assertTrue(all(runtime.publication_disposition(runtime.read_json(path)) == "rejected_before_push"
+                            for path in journals))
+        self.assertEqual(runtime.resume_publication(self.a, session="test")["code"], "publication_none_pending")
+        result = runtime.resume_publication(self.a, session="test", journal=journals[0])
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertEqual(result["code"], "publication_rejected_before_push")
+        self.assertEqual({path: path.read_bytes() for path in journals}, retained)
+        self.assertEqual(self.remote_head(), self.base)
+        self.assertEqual(git(self.a, "rev-parse", "HEAD"), self.base)
+
     def test_successful_push_with_server_ref_rollback_is_not_publication_success(self):
         hook = self.remote / "hooks/post-receive"
         hook.write_text('#!/bin/sh\nwhile read old new ref; do git update-ref "$ref" "$old" "$new"; done\nexit 0\n')
         hook.chmod(0o755)
         owner = {"machine": "m", "session": "test", "token": "t"}
         with self.assertRaisesRegex(runtime.ProjectError, "candidate is not contained"):
-            self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}))
+            self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, token="t"))
         self.assertEqual(self.remote_head(), self.base)
         self.assertEqual(git(self.a, "rev-parse", "HEAD"), self.base)
         self.assertIsNone(runtime.read_json(self.a / "workitems/A/item.json")["owner"])
@@ -422,7 +441,7 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_post_receive_owner_change_invalidates_nonwrite_item_guard(self):
         owner = {"machine": "m", "session": "test", "token": "t"}
-        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}))
+        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, token="t"))
         original = self.remote_head()
         git(self.remote, "config", "user.name", "Server Test")
         git(self.remote, "config", "user.email", "server@example.invalid")
@@ -569,7 +588,7 @@ for line in sys.stdin:
         receipt = {"intent_id": "intent-1", "content_sha256": runtime.item_digest(self.a, "A"),
                    "state": "verified", "external_id": "aone-1", "baseline_fields": {"title": "A"},
                    "git_source_commit": self.base, "checked_at": "2026-10-14T00:00:00Z"}
-        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, "a", extra={receipt_path: text(receipt)}))
+        self.publish(self.a, self.bundle(self.a, "A", {"owner": owner}, "a", "t", extra={receipt_path: text(receipt)}))
         self.assertEqual(runtime.validate_project(self.a), [])
         wrong = self.bundle(self.a, "A", {}, "other", "t", extra={receipt_path: text({**receipt, "state": "unknown"})})
         with self.assertRaisesRegex(runtime.ProjectError, "owned by another"):
@@ -831,6 +850,17 @@ for line in sys.stdin:
             self.publish(self.a, bundle)
         self.assertEqual(git(self.a, "rev-parse", "HEAD"), local_head)
         self.assertEqual(self.remote_head(), self.base)
+
+
+class PublicationDispositionTest(unittest.TestCase):
+    def test_any_candidate_or_later_push_evidence_keeps_failed_outcome_pending(self):
+        self.assertEqual(runtime.publication_disposition({"state": "failed"}), "rejected_before_push")
+        for evidence in ({"candidate": None}, {"candidate": "a" * 40},
+                         {"verified_remote_commit": "a" * 40}, {"recovery_attempts": 0}):
+            with self.subTest(evidence=evidence):
+                self.assertEqual(runtime.publication_disposition({"state": "failed", **evidence}), "pending")
+        self.assertEqual(runtime.publication_disposition({"state": "prepared"}), "pending")
+        self.assertEqual(runtime.publication_disposition({"state": "published"}), "published")
 
 
 if __name__ == "__main__":

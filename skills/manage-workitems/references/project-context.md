@@ -1,43 +1,27 @@
 # Project context and routing
 
-Project mode applies only when the current management Git root contains a valid regular `.project/project.json` with `schema_version: 1`. Run helpers from this root. A nested code repository, an arbitrary directory with a similarly named file, and a linked code worktree do not activate project management. `create-project`, `upgrade-project` and `delete-project` may operate from outside the workspace on an explicitly selected root.
+Project mode applies at a management Git root with valid `.project/project.yaml` schema 2. A code repository or linked worktree does not become a project because it is nested beneath one. Schema-1 `.project/project.json` projects allow diagnostic reading and explicit migration only. Creation, upgrade and deletion may target an explicitly selected project from outside it.
 
-Keep agent sessions rooted at the project, including delegated sessions. Pass the project root, item ID, task role, permitted writes and relevant code workdir to a subagent; do not copy the entire workspace into its prompt. Read the code repository's applicable instructions before using its worktree. A code checkout's instructions govern its code, while the project protocol governs project records.
+Start project sessions at the management root and read its `AGENTS.md`. Use the installed [project.py](../scripts/project.py) through the [fixed command workflow](commands.md). For a requested write, the program returns the complete read payload, editable Markdown paths and exact finish command. Read those inputs; do not select additional project documents or reproduce the program's gates and persistence checks. Program-generated item instructions and returned original main-workspace instructions retain their own scopes.
 
-When the project declares `main_workspace`, read `.project/main-workspace.md` and follow [main-workspace association](main-workspace.md). Resolve the local binding, explicitly load the required main-workspace instructions, then load business context and skill bodies only for the task. Supply these roots and required instruction paths to subagents. Do not assume physical nesting or a shared storage remote automatically loads the business context.
+Requirements and design work use the complete selected current requirement and spec from the returned payload. Reading a requirement does not authorize design, decomposition, source exploration or implementation. Reuse explicit authorization for the same scope without asking again. Native Plan mode remains read-only; Agent-mode project checkpoints may publish metadata, while code submission requires its own user instruction.
 
-## Load only what the task needs
-
-Project and item creation end at metadata, necessary background and requirement skeletons. Supplied requirements do not authorize design. Keep incomplete requirement details unresolved; do not load source code or automatically route to splitting, design or development to fill them. Enter design only when the user explicitly requests it.
-
-Read root `AGENTS.md` and `.project/context.md`, then resolve the item with `project_context.py`. Its queries describe the local clone, not a live cross-machine view. When current remote state matters, fetch only the configured branch and inspect that revision; label any local-only snapshot. Never infer that an unowned local item is unclaimed remotely. Publication always refreshes the authority and verifies guards. Read the complete selected requirement and current spec when designing, reviewing or implementing. The index supplies paths, not replacement contracts.
-
-Users may refer to an item by its full ID, hierarchy code, short English phrase or title. `show <selector>` and `context <selector> --role <role>` accept these exact selectors and return the canonical ID; for example `show 12`, `show quota-lock` or `show '统一配额锁'`. A full ID takes precedence; other selectors must identify exactly one item. For a description rather than an exact selector, use `list --query <keywords>` and, when necessary, search relevant requirement/spec text. Present ambiguous candidates with their IDs and titles and ask which one is intended. Use the resolved full ID in persisted references, delegated tasks, `digest` and `worktree-path`; never construct paths from an unresolved selector.
-
-In user-facing lists, dependency descriptions and completion reports, show the full ID together with the title, such as `12-quota-lock（统一配额锁）`. Explain hierarchy through the code while retaining the independent delivery dependency graph. Follow [schema](schema.md) for allocation and stable identity.
-
-| Task | Load next |
+| Requested task | Skill |
 | --- | --- |
-| Create/edit an item or dependency | `manage-workitems`; [schema](schema.md); [persistence](persistence.md) before writing |
-| Refresh existing project management prompts | [upgrade-project](../../upgrade-project/SKILL.md); current installed templates and relevant shared protocol |
-| Design, split, implement or complete | [workflow](workflow.md) and the relevant skill |
-| Publish a checkpoint or recover a failed publication | [publish-cookbook](publish-cookbook.md); [persistence](persistence.md) for ordering and ownership |
-| Reuse or produce repository evidence | [evidence](evidence.md) |
-| Enabled Aone backend | [aone](aone.md) only when configuring or synchronizing |
-| Clone, interrupted sync or machine handoff | [recovery](recovery.md) |
-| Associated main workspace, external worktree layout or context restoration | [main-workspace association](main-workspace.md) |
+| Record requirements, rename, change dependencies or archive | [manage-workitems](../SKILL.md) |
+| Create a separate project repository | [create-project](../../create-project/SKILL.md) |
+| Deterministic project migration and instruction refresh | [upgrade-project](../../upgrade-project/SKILL.md) |
+| Decompose a requirement into usable deliverables | [split-workitem](../../split-workitem/SKILL.md) |
+| Requested design or implementation | [develop-workitem](../../develop-workitem/SKILL.md) |
+| Verify actual delivery or separately requested cleanup | [complete-workitem](../../complete-workitem/SKILL.md) |
+| Remove the selected local project | [delete-project](../../delete-project/SKILL.md) |
 
-The shared helper entrypoints are `scripts/project_context.py` and `scripts/project_runtime.py` relative to this skill directory. Resolve the installed skill's physical location; do not assume a machine-specific absolute path. Both require Python 3 and Git on macOS/Linux. Run a helper's `--help` before an unfamiliar command. Do not copy installed skills into every project.
+Report full IDs and titles, such as `123-quota-lock（统一配额锁）`. The program resolves full IDs, codes, phrases and exact titles; report ambiguity instead of constructing paths from a guess. Each code level describes decomposition, while the dependency DAG determines delivery prerequisites.
 
-known-limit: local serialization uses Unix `flock`; native Windows is unsupported in this version. A Windows port needs equivalent cross-process locking and the same concurrency tests before publication is enabled.
+Shared project knowledge is global and may remain valid without an item pointer. Use the direct knowledge commands in [the command contract](commands.md#operations); they do not use the work-item `begin` workflow. Each read returns a unique draft path without creating it. Keep the complete current Markdown body and explicit typed metadata, use returned guards for replacements or removal, and preserve pending or stale drafts as uncommitted work.
 
-## Ownership of records
+[Schema](schema.md) defines record ownership; [workflow](workflow.md) defines lifecycle evidence and authorization. [Main-workspace association](main-workspace.md) describes the separate business context boundary. [Recovery](recovery.md), [Aone](aone.md) and [persistence](persistence.md) describe program responsibilities and the facts to report when execution stops; they do not add agent-selected recovery procedures.
 
-- `.project/project.json` identifies the project, storage authority, backends, code repositories and optional main-workspace association/layout. `.project/context.md` is the overall background; `.project/main-workspace.md` routes associated business constraints and skills.
-- `workitems/<id>/requirement.md` is the current abstract requirement. `spec.md` is the sole full design; its `design_status` frontmatter carries `draft`, `review-pending` or `implementable`.
-- `decisions.md` captures approved choices, requirement changes and unresolved questions; `reviews/` holds review evidence and findings; `handoff.md` records current progress and next actions. Keep superseded process out of the spec.
-- `evidence/` holds concise reusable source evidence. `.project-local/` contains ignored indexes, pending drafts and machine/worktree bindings. The tracked empty `worktrees/.gitkeep` retains the directory; its other contents are ignored code managed by their own repositories. Configured main-workspace worktrees live in their dedicated external location. Use the runtime's `worktree-root`/`worktree-path` commands to resolve destinations.
+When delegation is authorized for the task, pass the project root, item ID, role, code workdir and required original instruction paths. Each reviewer starts from the returned current inputs and primary repository evidence; do not load obsolete review files or treat another review's conclusions as evidence of an assessment. Code commands use an explicit code workdir and that repository's applicable instructions. A project metadata checkpoint cannot authorize extra source writes, remote deletion or takeover.
 
-Native Plan mode remains read-only: return the intended handoff and pending changes without creating records, claims, commits or remote writes. In Agent mode, authorized project metadata checkpoints may be committed and pushed. Code commits and code pushes after branch creation remain user actions unless separately requested.
-
-Stop the affected operation for a missing/invalid project marker, conflicting owner, invalid dependency graph, stale implementation approval, or unresolved persistence outcome. Continue independent read-only work when useful and report precisely what is pending.
+known-limit: local serialization uses Unix `flock`; native Windows requires equivalent cross-process locking and concurrency validation before writes are enabled.

@@ -38,12 +38,12 @@ $install 安装或更新这个 dev-kit
 
 ## 使用 skills
 
-安装完成后，可用 `$skill-name` 显式调用 skill。项目管理技能除创建、删除项目外，只在有 `.project/project.json` 的有效项目工作区生效：
+安装完成后，可用 `$skill-name` 显式调用 skill。项目管理技能在 schema v2（`.project/project.yaml`）项目中使用；创建、迁移和删除可显式指定项目路径。v1（`.project/project.json`）只支持诊断读取与显式迁移：
 
 | Skill | 用途 |
 | --- | --- |
 | `$create-project` | 创建独立 Git 分支承载的项目工作区，准备元数据、必要背景和需求骨架，选择可选 Aone 后端。 |
-| `$upgrade-project` | 将存量项目的 `AGENTS.md` 和管理提示词适配当前共享技能与模板，保留项目特有约束；可重复执行，不自动迁移工作项数据。 |
+| `$upgrade-project` | 确定性迁移项目结构并刷新程序生成的管理指令，保留 ID、依赖与当前有效业务约束；Git 历史追溯旧版本，重复执行无变化。 |
 | `$delete-project` | 核对并删除选定的本机项目工作区，保留远程分支和 Aone 历史。 |
 | `$manage-workitems` | 在项目中创建、查询、更新、归档抽象工作项；通过 Git 和已启用后端持久化。 |
 | `$split-workitem` | 将项目大需求拆为可独立交付的工作项，用无环依赖图表达交付顺序。 |
@@ -75,11 +75,17 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 新工作项使用“层级编号 + 英文短语”的 ID，汇报时附中文标题，例如 `123-quota-lock（统一配额锁）`。`123` 表示第 1 个根项下的第 2 个子项下的第 3 个子项；每层用 `1`–`9`、`A`–`Z`，`A` 表示第 10 项。可以用完整 ID、编号、短语或标题定位工作项。编号表达拆分归属，交付顺序仍由依赖图决定；以远端发布成功的编号为准，冲突方刷新后重新分配尚未发布的编号。详见 [编号约定](skills/manage-workitems/references/schema.md#identity-and-hierarchy)。
 
-创建阶段只做到“元数据 + 需求骨架”：`$create-project` 建立存储远程、专用分支和必要背景；用户同时提供需求时，用 `$manage-workitems` 创建 `new` 工作项，未明确的内容保留为待确认。创建完成即收尾，不自动调查源码、拆解、生成设计或准备开发工作树。只有用户明确要求设计时才进入设计；大需求可在用户要求拆解后处理。每个开发项获得自己的设计审查后再实现。已请求的设计可在前置未交付时只读探索，交付后由用户在新上下文显式启动 `$review-design`。实现阶段会通过新 subagent 调用 `$review-implementation`，代码留给用户最终检查、提交和推送。
+创建阶段只做到“元数据 + 需求骨架”：程序建立存储远程、专用分支和必要背景；用户同时提供需求时记录目标、范围、验收和交付义务，未知内容保持待确认。创建完成即收尾。设计与独立设计评审分别需要用户明确请求。实现通常要求当前独立设计评审；用户明确指定某个简单需求可跳过时，用 `development-start --skip-design-review --approval-source <实际用户来源>` 记录当前合同的限定豁免，不伪造评审通过。实现独立评审、owner、依赖与交付证据仍保留，代码提交和推送需要用户授权。
 
-项目文档在任务收尾时按批次同步；只有最终 Git 推送与所有启用后端都核实成功才算持久化完成。跨机器认领与发布使用 Python 3/Git helper，查询使用可重建的本地索引，源码证据按需加载和验证。Aone 首版采用 agent 驱动的 `a1` CLI 与持久化回执，没有无人值守事务引擎。克隆项目可恢复文档和已发布代码分支，未提交或未推送代码仍在原机器。协议入口见 [project-context.md](skills/manage-workitems/references/project-context.md)。
+项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 
-共享项目技能更新后，在存量项目根目录执行 `$upgrade-project`，也可以显式指定项目路径。它读取当前安装版本的模板和协议，语义更新项目管理提示词，保留业务背景、交付约束和主工作区入口；已经适配时不产生修改或空提交。工作项 ID、数据结构和代码迁移需要单独指定。
+统一入口是 `skills/manage-workitems/scripts/project.py`。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
+
+工作项正文固定为 `requirement.md`（目标、范围、验收、交付）、`spec.md`（完整当前设计，无机器状态 frontmatter）、`decision.md`（当前有效决定）、`context.md`（当前事实、验证与交接）和 `logs.md`（当前运行摘要与交接）；decision/log 由 Agent 写成完整 Markdown，程序替换文件且不追加机器事件。Git 历史追溯旧版本；records 只保留当前 review、delivery、waiver、cleanup 指针所需的成对 Markdown/YAML 工件，以及待恢复操作材料。设计版本按原始字节生成，首版为 1，变化递增，相同不变。后台同步回执由程序维护。实际 Git 与已启用后端均核实完成后才算持久化；未知外部创建不会盲目重试。Git/Aone 没有原子事务，Aone 没有已验证的字段 CAS。见 [记录契约](skills/manage-workitems/references/schema.md)。
+
+交付后发现缺陷，用 `begin fix ORIGINAL --title TITLE --slug SLUG` 创建独立关联修复项，原项保持 `done` 状态及当前交付证据。未交付的 fix 阻塞原项下游的新实现、交付及 aggregate 完成，活跃会话在下次检查点也受此约束；修复交付后仍需重新核实适用基线与评审。
+
+共享项目技能更新后，在项目根目录执行 `$upgrade-project`，也可显式指定路径。它调用确定性的 `migrate`，仅用户要求预览时使用 `--dry-run`，保留 ID、DAG、owner 和当前有效业务约束；未完成同步或活跃 owner 会明确阻断。迁移只保留当前有效项目内容和仍被当前状态引用的证据；旧正文由 Git 历史追溯。若程序要求整理当前业务指令，复用现有用户维护授权，按当前来源写完整正文；不确定的真实业务变化或权限才报告具体缺口。相同来源哈希不产生修改或空提交。克隆只恢复已发布记录与代码分支，未提交或未推送代码仍在原机器。
 
 在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；代码质量由通用代码质量要求和现有评审覆盖。审计本地安装快照不代表已核查上游最新版本。
 

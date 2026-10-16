@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate and publish a small Git-backed project workspace.
 
-This helper owns structural validation and optimistic Git publication. Human review,
-delivery verification and external-service reconciliation remain agent decisions.
+This helper owns structural validation and optimistic Git publication. Business
+transitions and external reconciliation use the higher-level workflow commands.
 """
 
 import argparse
@@ -20,8 +20,10 @@ import uuid
 
 try:  # Support direct scripts and package-module entrypoints.
     from workitem_ids import allocate_ids, hierarchy_errors
+    import project_store as store
 except ImportError:  # pragma: no cover - exercised by the module CLI smoke check.
     from .workitem_ids import allocate_ids, hierarchy_errors
+    from . import project_store as store
 
 
 STATUSES = {"new", "in_progress", "developing", "awaiting_delivery", "done", "cancelled"}
@@ -103,9 +105,10 @@ def find_project(path):
     _no_links(lexical_root, start.relative_to(lexical_root).as_posix())
     if relative.parts and relative.parts[0] in {"worktrees", ".project-local", ".git"}:
         raise ProjectError("project commands are not enabled inside local or code worktrees")
-    marker = root / ".project/project.json"
-    if not marker.is_file() or marker.is_symlink() or (root / ".project").is_symlink():
-        raise ProjectError("the current Git root has no regular .project/project.json marker")
+    markers = [root / f".project/project.{extension}" for extension in ("json", "yaml")]
+    present = [marker for marker in markers if marker.exists() or marker.is_symlink()]
+    if len(present) != 1 or not present[0].is_file() or present[0].is_symlink() or (root / ".project").is_symlink():
+        raise ProjectError("the current Git root requires exactly one regular project.json or project.yaml marker")
     # A linked code worktree sharing an outer workspace must not acquire its marker.
     common = Path(_git_text(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
     git_dir = Path(_git_text(root, "rev-parse", "--absolute-git-dir"))
@@ -125,16 +128,23 @@ def new_ids(root, slugs, parent=None):
     directory = root / "workitems"
     if directory.exists() and not directory.is_dir():
         raise ProjectError("workitems must be a directory")
-    items = {}
-    for path in sorted(directory.glob("*/item.json")):
-        _no_links(root, path.relative_to(root).as_posix())
-        if not path.is_file():
-            raise ProjectError(f"item metadata must be a regular file: {path}")
-        metadata = read_json(path)
-        identifier = path.parent.name
-        if not _identifier(identifier) or not isinstance(metadata, dict) or metadata.get("id") != identifier:
-            raise ProjectError(f"item metadata id must be safe and match its directory: {path}")
-        items[identifier] = metadata
+    files = {}
+    marker = ".project/project.yaml" if (root / ".project/project.yaml").is_file() else ".project/project.json"
+    files[marker] = (root / marker).read_bytes()
+    for pattern in ("*/item.json", "*/metadata.yaml"):
+        for path in sorted(directory.glob(pattern)):
+            name = path.relative_to(root).as_posix()
+            _no_links(root, name)
+            if not path.is_file():
+                raise ProjectError(f"item metadata must be a regular file: {path}")
+            files[name] = path.read_bytes()
+    try:
+        items = store.items(files)
+    except store.StoreError as exc:
+        raise ProjectError(str(exc)) from exc
+    for identifier, metadata in items.items():
+        if not _identifier(identifier) or metadata.get("id") != identifier:
+            raise ProjectError(f"item metadata id must be safe and match its directory: {identifier}")
     try:
         return allocate_ids(items, slugs, parent)
     except ValueError as exc:
@@ -260,7 +270,7 @@ def _resolve_worktree(root, project, base, relative):
 def worktree_root(root):
     """Resolve the configured code-worktree directory; never create directories."""
     root = find_project(root)
-    project = read_json(root / ".project/project.json")
+    project = read_project(root)
     base, container = _layout(root, project)
     return _resolve_worktree(root, project, base, container)
 
@@ -270,11 +280,13 @@ def worktree_path(root, item_id):
     root = find_project(root)
     if not _identifier(item_id):
         raise ProjectError("invalid workitem id")
-    project = read_json(root / ".project/project.json")
+    project = read_project(root)
     base, container = _layout(root, project)
-    name = f"workitems/{item_id}/item.json"
-    _no_links(root, name)
-    item = read_json(root / name)
+    files = _working_files(root)
+    try:
+        item = store.item(files, item_id)
+    except store.StoreError as exc:
+        raise ProjectError(str(exc)) from exc
     development = item.get("development") if isinstance(item, dict) else None
     if not isinstance(development, dict):
         raise ProjectError(f"workitem {item_id} has no recorded development worktree")
@@ -295,18 +307,23 @@ def _managed_path(name):
     if any(part.lower() in {".git", ".project-local", "worktrees", ".env", "credentials",
                             "secrets", "id_rsa", "id_ed25519"} for part in parts):
         raise ProjectError(f"reserved or sensitive path: {name}")
-    allowed = name in {"AGENTS.md", ".gitignore", ".project/project.json",
+    allowed = name in {"AGENTS.md", ".gitignore", ".project/project.json", ".project/project.yaml",
                        ".project/context.md", ".project/workflow.md", ".project/recovery.md",
-                       ".project/main-workspace.md"}
-    allowed |= (len(parts) == 3 and parts[:2] == (".project", "sync")
-                and parts[2].endswith(".json") and _identifier(parts[2][:-5]))
+                       ".project/main-workspace.md", ".project/project-instructions.md", ".project/business-instructions.md",
+                       ".project/migration.yaml", ".project/graph.yaml"}
+    allowed |= (len(parts) == 3 and parts[:2] in {(".project", "sync"), (".project", "state")}
+                and PurePosixPath(parts[2]).suffix in ({".json", ".yaml"} if parts[1] == "sync" else {".yaml"})
+                and _identifier(PurePosixPath(parts[2]).stem))
+    allowed |= (len(parts) == 3 and parts[:2] == (".project", "history")
+                and parts[2].endswith(".md") and _identifier(parts[2][:-3]))
     if len(parts) >= 3 and parts[0] == "workitems" and _identifier(parts[1]):
         allowed |= (len(parts) == 3 and parts[2] in {
-            "item.json", "requirement.md", "spec.md", "decisions.md", "handoff.md"})
-        allowed |= (len(parts) >= 4 and parts[2] == "reviews" and parts[-1].endswith(".md")
+            "item.json", "metadata.yaml", "requirement.md", "spec.md", "decisions.md", "decision.md",
+            "context.md", "logs.md", "AGENTS.md", "handoff.md"})
+        allowed |= (len(parts) >= 4 and parts[2] in {"reviews", "records"} and PurePosixPath(parts[-1]).suffix in ({".md", ".yaml"} if parts[2] == "records" else {".md"})
                     and all(_identifier(part) for part in parts[3:]))
     allowed |= (len(parts) == 2 and parts[0] == "evidence" and
-                ((parts[1].endswith(".json") and _identifier(parts[1][:-5])) or
+                ((PurePosixPath(parts[1]).suffix in {".json", ".yaml"} and _identifier(PurePosixPath(parts[1]).stem)) or
                  (parts[1].endswith(".md") and _identifier(parts[1][:-3]))))
     if not allowed:
         raise ProjectError(f"not an approved management path: {name}")
@@ -329,26 +346,28 @@ def _item_for_path(name):
     parts = PurePosixPath(name).parts
     if parts[0] == "workitems":
         return parts[1]
-    if len(parts) == 3 and parts[:2] == (".project", "sync"):
+    if len(parts) == 3 and parts[:2] in {(".project", "sync"), (".project", "state")}:
         return PurePosixPath(parts[2]).stem
     return None
 
 
 def _business_digest(files, item_id):
     prefix = f"workitems/{item_id}/"
-    if prefix + "item.json" not in files:
-        raise ProjectError(f"unknown workitem: {item_id}")
+    try:
+        record = store.item(files, item_id)
+    except store.StoreError as exc:
+        raise ProjectError(str(exc)) from exc
     digest = hashlib.sha256()
-    for name in sorted(name for name in files if name.startswith(prefix)):
+    # Normalize storage-owned machine records, keeping owner outside business state.
+    # v1's established digest remains byte-for-byte compatible.
+    names = sorted(name for name in files if name.startswith(prefix))
+    metadata = store.item_path(files, item_id)
+    record.pop("owner", None)
+    for name in names:
         content = files[name]
-        if name == prefix + "item.json":
-            item = _decode_json(content, name)
-            if not isinstance(item, dict):
-                raise ProjectError(f"{name}: item must be an object")
-            item.pop("owner", None)
-            content = json.dumps(item, sort_keys=True, separators=(",", ":"),
-                                 ensure_ascii=False).encode("utf-8")
-        digest.update(name.encode("utf-8") + b"\x00" + content + b"\x00")
+        if name == metadata:
+            content = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        digest.update(name.encode() + b"\x00" + content + b"\x00")
     return digest.hexdigest()
 
 
@@ -401,7 +420,7 @@ def _ignore_errors(files):
     return errors
 
 
-def _validate_files(root, files):
+def _validate_legacy_files(root, files, digest_files=None):
     errors = []
 
     def need(condition, message):
@@ -560,6 +579,7 @@ def _validate_files(root, files):
             if item.get("status") == "done":
                 need(delivery.get("status") == "delivered", prefix + "done requires delivered status")
             if delivery.get("status") == "delivered":
+                need(item.get("status") == "done", prefix + "delivered requires done status; create a separate fix item")
                 if isinstance(required, list) and isinstance(evidence, list):
                     kinds = {record.get("kind") for record in evidence if isinstance(record, dict)
                              and isinstance(record.get("kind"), str)}
@@ -628,7 +648,7 @@ def _validate_files(root, files):
                 need(isinstance(value, expected_type) and bool(value), prefix + f"verified requires nonempty {key}")
         if receipt.get("state") == "verified" and identifier in items:
             try:
-                need(receipt.get("content_sha256") == _business_digest(files, identifier),
+                need(receipt.get("content_sha256") == _business_digest(digest_files if digest_files is not None else files, identifier),
                      prefix + "verified receipt must match the current item business digest")
             except ProjectError as exc:
                 errors.append(str(exc))
@@ -670,6 +690,89 @@ def _validate_files(root, files):
     return errors
 
 
+def _validate_files(root, files):
+    """Validate one physical authority before reusing the established field checks."""
+    try:
+        legacy = store.as_legacy(files)
+        errors = _validate_legacy_files(root, legacy, digest_files=files)
+        if not store.is_v2(files):
+            return errors + _fix_errors(store.items(files))
+        marker = store.project(files)
+        if type(marker.get("schema_version")) is not int or marker["schema_version"] != 2:
+            errors.append("project.schema_version must be 2")
+        records = store.items(files)
+        if ".project/graph.yaml" in files:
+            graph = store.load_yaml(files[".project/graph.yaml"], ".project/graph.yaml")
+            if not isinstance(graph, dict) or set(graph) != {"revision"} or type(graph.get("revision")) is not int or graph["revision"] < 0:
+                errors.append(".project/graph.yaml must contain only a nonnegative integer revision")
+        for name, data in files.items():
+            _managed_path(name)
+            if name.endswith(".yaml"):
+                store.load_yaml(data, name)
+            if name.startswith(".project/state/") and PurePosixPath(name).stem not in records:
+                errors.append(name + ": state must refer to an existing workitem")
+        for identifier, record in records.items():
+            prefix = f"item {identifier}: "
+            design = record.get("design")
+            if not (isinstance(design, dict) and design.get("file") == "spec.md" and
+                    type(design.get("version")) is int and design["version"] >= 0 and
+                    design.get("state") in {"draft", "review-pending", "implementable"}):
+                errors.append(prefix + "design requires file spec.md, nonnegative integer version and draft/review-pending/implementable state")
+            documents = record.get("documents")
+            if not isinstance(documents, dict) or any(not _identifier(key) or not isinstance(value, str) or
+                    len(PurePosixPath(value).parts) != 1 or value not in {
+                        "requirement.md", "spec.md", "decision.md", "decisions.md", "context.md", "logs.md", "AGENTS.md", "handoff.md"}
+                    for key, value in documents.items()):
+                errors.append(prefix + "documents must map safe names to approved item Markdown documents")
+            spec_name = f"workitems/{identifier}/spec.md"
+            if isinstance(design, dict):
+                if spec_name in files and (type(design.get("version")) is not int or design["version"] < 1):
+                    errors.append(prefix + "an existing design requires version >= 1")
+                if spec_name not in files and (design.get("version") != 0 or design.get("state") != "draft"):
+                    errors.append(prefix + "an absent design requires version 0 and draft state")
+        errors.extend(_fix_errors(records))
+        return errors
+    except (store.StoreError, ProjectError, UnicodeError) as exc:
+        return [str(exc)]
+
+
+def _fix_errors(records):
+    errors, graph = [], {}
+    for identifier, record in records.items():
+        target = record.get("fixes")
+        if target is None:
+            continue
+        if not _identifier(target) or target not in records:
+            errors.append(f"item {identifier}: fixes must identify an existing delivered item")
+            continue
+        graph[identifier] = target
+        if records[target].get("status") != "done" or records[target].get("delivery", {}).get("status") != "delivered":
+            errors.append(f"item {identifier}: fixes target {target} must be delivered")
+    for origin in graph:
+        seen, node = set(), origin
+        while node in graph:
+            if node in seen:
+                errors.append(f"fix relationship cycle involving {node}")
+                break
+            seen.add(node)
+            node = graph[node]
+    return errors
+
+
+def read_project(root):
+    """Read either physical project marker without inventing a second authority."""
+    root = Path(root)
+    files = {}
+    for name in (".project/project.json", ".project/project.yaml"):
+        _no_links(root, name)
+        if (root / name).is_file():
+            files[name] = (root / name).read_bytes()
+    try:
+        return store.project(files)
+    except store.StoreError as exc:
+        raise ProjectError(str(exc)) from exc
+
+
 def _working_files(root, paths=("AGENTS.md", ".gitignore", ".project", "workitems", "evidence", "worktrees/.gitkeep")):
     files = {}
     for name in paths:
@@ -701,7 +804,7 @@ def _working_files(root, paths=("AGENTS.md", ".gitignore", ".project", "workitem
 
 
 def _tree_files(root, revision):
-    result = {}
+    entries = []
     for entry in _git(root, "ls-tree", "-r", "-z", revision).stdout.split(b"\x00"):
         if not entry:
             continue
@@ -714,7 +817,30 @@ def _tree_files(root, revision):
         _managed_path(name)
         if mode not in {"100644", "100755"} or kind != "blob":
             raise ProjectError(f"tracked symlinks or nested repositories are forbidden: {name}")
-        result[name] = _git(root, "cat-file", "blob", object_id).stdout
+        entries.append((name, object_id))
+    if not entries:
+        return {}
+    # One process reads the complete snapshot. Per-file cat-file processes made
+    # every pre/post-publication check grow with the number of project documents.
+    data = _git(root, "cat-file", "--batch",
+                data="".join(oid + "\n" for _, oid in entries).encode("ascii")).stdout
+    result, offset = {}, 0
+    for name, expected in entries:
+        end = data.find(b"\n", offset)
+        header = data[offset:end].split() if end >= 0 else []
+        if len(header) != 3 or header[0] != expected.encode("ascii") or header[1] != b"blob":
+            raise ProjectError("invalid Git batch object header")
+        try:
+            size = int(header[2])
+        except ValueError as exc:
+            raise ProjectError("invalid Git batch object size") from exc
+        start, offset = end + 1, end + 1 + size
+        if size < 0 or data[offset:offset + 1] != b"\n":
+            raise ProjectError("truncated Git batch object")
+        result[name] = data[start:offset]
+        offset += 1
+    if offset != len(data):
+        raise ProjectError("unexpected trailing Git batch data")
     return result
 
 
@@ -741,22 +867,23 @@ def validate_project(root):
         root = find_project(root)
         _check_tracked_paths(root)
         return _validate_files(root, _working_files(root))
-    except (ProjectError, OSError) as exc:
+    except (ProjectError, store.StoreError, OSError) as exc:
         return [str(exc)]
 
 
 def item_digest(root, item_id):
     """Hash sorted workspace-relative paths and content, excluding owner and receipts.
 
-    item.json omits owner and uses sorted-key compact UTF-8 JSON (ensure_ascii=False).
-    Other files use original bytes. Each record is path + NUL + content + NUL.
+    Machine records omit owner and use sorted-key compact UTF-8 JSON. V2 state
+    is expanded into metadata before hashing. Other files retain original bytes.
+    Each record is path + NUL + content + NUL; receipts are excluded.
     """
     root = find_project(root)
     if not _identifier(item_id):
         raise ProjectError("invalid workitem id")
     prefix = f"workitems/{item_id}/"
-    _no_links(root, prefix + "item.json")
-    files = _working_files(root, (prefix.rstrip("/"),))
+    files = _working_files(root)
+    _no_links(root, store.item_path(files, item_id))
     return _business_digest(files, item_id)
 
 
@@ -812,35 +939,82 @@ def _validate_bundle(bundle):
         _managed_path(name)
         if name not in checks:
             raise ProjectError(f"write has no byte check: {name}")
+        if value is None:
+            continue
         if not isinstance(value, str):
-            raise ProjectError(f"write must contain UTF-8 text: {name}")
+            raise ProjectError(f"write must contain UTF-8 text or null deletion: {name}")
         try:
             value.encode("utf-8")
         except UnicodeError as exc:
             raise ProjectError(f"write is not valid UTF-8 text: {name}") from exc
-        identifier = _item_for_path(name)
-        if identifier is not None:
-            item_path = f"workitems/{identifier}/item.json"
-            if item_path not in checks:
-                raise ProjectError(f"item write must check {item_path}")
 
 
 def _check_owners(bundle, current, prospective):
     touched = {identifier for name in bundle["writes"] if (identifier := _item_for_path(name)) is not None}
     for identifier in touched:
-        name = f"workitems/{identifier}/item.json"
-        old = _decode_json(current[name], name) if name in current else {}
-        new = _decode_json(prospective[name], name) if name in prospective else {}
-        if not isinstance(old, dict) or not isinstance(new, dict):
-            raise ProjectError(f"invalid item metadata: {name}")
+        for snapshot in (current, prospective):
+            name = store.item_path(snapshot, identifier)
+            if name not in bundle["checks"]:
+                raise ProjectError(f"item write must check {name}")
+            if store.is_v2(snapshot):
+                state_name = f".project/state/{identifier}.yaml"
+                if state_name not in bundle["checks"]:
+                    raise ProjectError(f"item write must check {state_name}")
+        try:
+            old = store.item(current, identifier) if store.item_path(current, identifier) in current else {}
+            new = store.item(prospective, identifier) if store.item_path(prospective, identifier) in prospective else {}
+        except store.StoreError as exc:
+            raise ProjectError(str(exc)) from exc
+        if not new:
+            raise ProjectError(f"workitem deletion is forbidden: {identifier}")
         owner = old.get("owner")
         if owner is not None:
             if not isinstance(owner, dict) or owner.get("session") != bundle["session"] or owner.get("token") != bundle["token"]:
                 raise ProjectError(f"item {identifier} is owned by another session/token; no takeover is available")
         new_owner = new.get("owner")
         if new_owner is not None:
-            if not isinstance(new_owner, dict) or new_owner.get("session") != bundle["session"]:
-                raise ProjectError(f"item {identifier}: claim owner.session must match bundle.session; release before handoff")
+            if (not isinstance(new_owner, dict) or new_owner.get("session") != bundle["session"] or
+                    new_owner.get("token") != bundle["token"]):
+                raise ProjectError(f"item {identifier}: claim owner.session/token must match bundle.session/token; release before handoff")
+        if old.get("delivery", {}).get("status") == "delivered" and (
+                new.get("status") != "done" or new.get("delivery", {}).get("status") != "delivered"):
+            raise ProjectError(f"item {identifier}: delivered items cannot reopen; create a separate fix item")
+
+
+def _check_deletions(bundle, current, prospective):
+    """Deletion is limited to explicit format migration and replaceable documents/state."""
+    for name, value in bundle["writes"].items():
+        if value is not None:
+            continue
+        if name not in current:
+            raise ProjectError(f"cannot delete missing management file: {name}")
+        replacement = None
+        if name == ".project/project.json":
+            replacement = ".project/project.yaml"
+        elif re.fullmatch(r"workitems/[^/]+/item.json", name):
+            replacement = name[:-9] + "metadata.yaml"
+        elif name.startswith(".project/sync/") and name.endswith(".json"):
+            replacement = name[:-5] + ".yaml"
+        elif name.startswith("evidence/") and name.endswith(".json"):
+            replacement = name[:-5] + ".yaml"
+        if replacement:
+            if not store.is_v2(prospective) or replacement not in bundle["writes"] or replacement not in prospective:
+                raise ProjectError(f"migration deletion requires same-record YAML replacement: {name}")
+        elif name == ".project/project.yaml" or name.endswith("/metadata.yaml") or name in {"AGENTS.md", ".gitignore", ".project/graph.yaml", ".project/migration.yaml"}:
+            raise ProjectError(f"authority deletion is forbidden: {name}")
+        elif name.startswith(".project/state/"):
+            identifier = PurePosixPath(name).stem
+            if store.item_path(prospective, identifier) not in prospective:
+                raise ProjectError(f"state deletion requires retained workitem: {name}")
+        elif name.startswith("evidence/") and name.endswith((".yaml", ".md")):
+            base = str(PurePosixPath(name).with_suffix(""))
+            pair = (base + ".yaml", base + ".md")
+            if (not store.is_v2(current) or any(path not in current or path in prospective or
+                    path not in bundle["writes"] or bundle["writes"][path] is not None or
+                    path not in bundle["checks"] for path in pair)):
+                raise ProjectError(f"knowledge retirement requires explicit guarded YAML/Markdown pair deletion: {name}")
+        elif name.endswith(".yaml") and name.startswith(("evidence/", ".project/sync/")):
+            raise ProjectError(f"evidence/receipt authority deletion is forbidden: {name}")
 
 
 def _write_journal(path, state):
@@ -859,6 +1033,47 @@ def _fetch_selected(root, remote, branch):
     return _git_text(root, "rev-parse", "FETCH_HEAD")
 
 
+def _storage_config(root):
+    """Check both configured and effective destinations before any network call."""
+    storage = read_project(root)["storage"]
+    remote, url = storage["remote"], storage["url"]
+    urls = _git_text(root, "config", "--get-all", f"remote.{remote}.url").splitlines()
+    push_urls = _git_text(root, "config", "--get-all", f"remote.{remote}.pushurl", check=False).splitlines()
+    fetch_destinations = _git_text(root, "remote", "get-url", "--all", remote).splitlines()
+    push_destinations = _git_text(root, "remote", "get-url", "--push", "--all", remote).splitlines()
+    if urls != [url] or (push_urls and push_urls != [url]) or fetch_destinations != [url] or push_destinations != [url]:
+        raise ProjectError("configured remote URL/push URL differs from project.storage.url")
+    return storage
+
+
+def refresh_project(root):
+    """Fast-forward a clean management checkout from its exact authority."""
+    root = find_project(root)
+    with _project_lock(root):
+        original = _clean_root(root)
+        errors = validate_project(root)
+        if errors:
+            raise ProjectError("invalid current workspace:\n" + "\n".join(errors))
+        storage = _storage_config(root)
+        revision = _fetch_selected(root, storage["remote"], storage["branch"])
+        if _git(root, "merge-base", "--is-ancestor", original, revision, check=False).returncode:
+            raise ProjectError("root HEAD has unpublished/divergent commits; refresh cannot discard them")
+        files = _tree_files(root, revision)
+        marker = store.project(files)
+        if not isinstance(marker, dict) or marker.get("storage") != storage:
+            raise ProjectError("authoritative storage configuration changed")
+        errors = _validate_files(root, files)
+        if errors:
+            raise ProjectError("invalid remote workspace:\n" + "\n".join(errors))
+        if _clean_root(root) != original:
+            raise ProjectError("local checkout changed while refreshing")
+        if revision != original:
+            _git(root, "-c", "core.hooksPath=/dev/null", "merge", "--ff-only", "--no-edit", revision)
+        if _clean_root(root) != revision:
+            raise ProjectError("refresh did not produce the expected clean checkout")
+        return {"commit": revision, "changed": revision != original}
+
+
 def _verify_publication(root, remote, branch, commit, bundle, storage):
     """Observe the remote ref, including races or post-receive ref changes."""
     # known-limit: this is a remote-state observation, not a server-enforced lease.
@@ -869,7 +1084,7 @@ def _verify_publication(root, remote, branch, commit, bundle, storage):
         raise ProjectError("remote verification failed: candidate is not contained in the selected remote ref")
     files = _tree_files(root, verified)
     for name, value in bundle["writes"].items():
-        if files.get(name) != value.encode("utf-8"):
+        if files.get(name) != (value.encode("utf-8") if value is not None else None):
             raise ProjectError(f"remote verification failed: intended state changed for {name}")
     for name, expected in bundle["checks"].items():
         if name in bundle["writes"]:
@@ -877,7 +1092,7 @@ def _verify_publication(root, remote, branch, commit, bundle, storage):
         actual = hashlib.sha256(files[name]).hexdigest() if name in files else None
         if actual != expected:
             raise ProjectError(f"remote verification failed: guard/owner state changed for {name}")
-    marker = _decode_json(files.get(".project/project.json", b"null"), ".project/project.json")
+    marker = store.project(files)
     if not isinstance(marker, dict) or marker.get("storage") != storage:
         raise ProjectError("remote verification failed: authoritative storage configuration changed")
     errors = _validate_files(root, files)
@@ -904,15 +1119,8 @@ def publish(root, bundle_path):
         errors = validate_project(root)
         if errors:
             raise ProjectError("invalid current workspace:\n" + "\n".join(errors))
-        marker = read_json(root / ".project/project.json")
-        storage = marker["storage"]
+        storage = _storage_config(root)
         remote, branch, url = (storage[key] for key in ("remote", "branch", "url"))
-        urls = _git_text(root, "config", "--get-all", f"remote.{remote}.url").splitlines()
-        push_urls = _git_text(root, "config", "--get-all", f"remote.{remote}.pushurl", check=False).splitlines()
-        fetch_destinations = _git_text(root, "remote", "get-url", "--all", remote).splitlines()
-        push_destinations = _git_text(root, "remote", "get-url", "--push", "--all", remote).splitlines()
-        if urls != [url] or (push_urls and push_urls != [url]) or fetch_destinations != [url] or push_destinations != [url]:
-            raise ProjectError("configured remote URL/push URL differs from project.storage.url")
         for name in set(bundle["checks"]) | set(bundle["writes"]):
             _no_links(root, name)
         local = root / ".project-local"
@@ -942,10 +1150,10 @@ def publish(root, bundle_path):
                 actual = hashlib.sha256(current[name]).hexdigest() if name in current else None
                 if actual != expected:
                     raise ProjectError(f"byte check conflict: {name}; refresh remote data and rebuild the bundle")
-            prospective = dict(current)
-            prospective.update({name: value.encode("utf-8") for name, value in bundle["writes"].items()})
+            prospective = store.apply_writes(current, bundle["writes"])
+            _check_deletions(bundle, current, prospective)
             _check_owners(bundle, current, prospective)
-            new_marker = _decode_json(prospective[".project/project.json"], ".project/project.json")
+            new_marker = store.project(prospective)
             if not isinstance(new_marker, dict) or new_marker.get("storage") != storage:
                 raise ProjectError("publish cannot change authoritative storage remote/branch/url")
             errors = _validate_files(root, prospective)
@@ -955,6 +1163,9 @@ def publish(root, bundle_path):
                 env = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
                 _git(root, "read-tree", remote_head, env=env)
                 for name, data in bundle["writes"].items():
+                    if data is None:
+                        _git(root, "update-index", "--force-remove", "--", name, env=env)
+                        continue
                     object_id = _git_text(root, "hash-object", "-w", "--stdin", data=data.encode("utf-8"))
                     _git(root, "update-index", "--add", "--cacheinfo", "100644", object_id, name, env=env)
                 tree = _git_text(root, "write-tree", env=env)
@@ -977,7 +1188,7 @@ def publish(root, bundle_path):
             state["state"] = "published"
             _write_journal(journal, state)
             return {"commit": commit, "verified_remote_commit": verified, "journal": str(journal)}
-        except (ProjectError, OSError) as exc:
+        except (ProjectError, store.StoreError, OSError) as exc:
             state["error"] = str(exc)
             if state["state"] == "push_returned_verification_pending":
                 state["state"] = "remote_verification_failed"
@@ -987,9 +1198,156 @@ def publish(root, bundle_path):
             raise ProjectError(f"{exc}\nretained bundle/journal: {operation}") from exc
 
 
+def publication_disposition(state):
+    """Separate rejected pre-push attempts from publication outcomes to recover.
+
+    publish() saves its candidate before invoking push. A failed journal without
+    that candidate or any later push evidence has no remote mutation to recover;
+    its retained bundle is an unsubmitted intent, not a safe retry request.
+    """
+    if not isinstance(state, dict):
+        raise ProjectError("publication journal must be an object")
+    if state.get("state") == "published":
+        return "published"
+    if (state.get("state") == "failed" and
+            not any(key in state for key in ("candidate", "verified_remote_commit", "recovery_attempts"))):
+        return "rejected_before_push"
+    return "pending"
+
+
+def resume_publication(root, *, session=None, token=None, journal=None):
+    """Recover one existing publication intent; retry its candidate at most once.
+
+    Only an unchanged original remote base permits a retry. A published candidate
+    must still satisfy its writes/guards before the clean root can fast-forward.
+    No candidate or bundle is rebuilt, and ambiguous outcomes retain their journal.
+    """
+    root = find_project(root)
+    if not _nonempty(session) or token is not None and not _nonempty(token):
+        raise ProjectError("publication recovery requires the original session and token")
+
+    def blocked(code, detail, path=None):
+        result = {"status": "blocked", "code": code, "action": "blocked", "reason": str(detail)}
+        if path is not None:
+            result["journal"] = str(path)
+        return result
+
+    def owned_journal(path):
+        path = path if path.is_absolute() else root / path
+        relative = path.relative_to(root)
+        parts = relative.parts
+        if (len(parts) != 4 or parts[:2] != (".project-local", "publish") or
+                not re.fullmatch(r"[0-9a-f]{32}", parts[2]) or parts[3] != "journal.json"):
+            raise ProjectError("recovery journal must be a program-owned .project-local/publish/<operation>/journal.json")
+        _no_links(root, relative.as_posix())
+        bundle_path = path.parent / "bundle.json"
+        _no_links(root, bundle_path.relative_to(root).as_posix())
+        if not path.is_file() or not bundle_path.is_file():
+            raise ProjectError("recovery requires regular program-owned journal and bundle files")
+        state, bundle = read_json(path), read_json(bundle_path)
+        if not isinstance(state, dict) or state.get("bundle") != str(bundle_path):
+            raise ProjectError("journal bundle path does not identify its program-owned saved bundle")
+        _validate_bundle(bundle)
+        if bundle["session"] != session or bundle["token"] != token:
+            raise ProjectError("publication journal belongs to another session/token")
+        return path, state, bundle
+
+    with _project_lock(root):
+        selected = None
+        failure_code = "publication_journal_invalid"
+        try:
+            if journal is None:
+                _no_links(root, ".project-local/publish")
+                candidates = []
+                for path in sorted((root / ".project-local/publish").glob("*/journal.json")):
+                    # Ignore other identities without changing or recovering their intents.
+                    try:
+                        candidate = owned_journal(path)
+                    except ProjectError as exc:
+                        if "belongs to another" in str(exc):
+                            continue
+                        return blocked("publication_journal_invalid", exc, path)
+                    if publication_disposition(candidate[1]) == "pending":
+                        candidates.append(candidate)
+                if not candidates:
+                    return {"status": "no_op", "code": "publication_none_pending", "action": "none"}
+                if len(candidates) != 1:
+                    return {"status": "blocked", "code": "publication_journal_ambiguous", "action": "blocked",
+                            "journals": [str(candidate[0]) for candidate in candidates]}
+                selected, state, bundle = candidates[0]
+            else:
+                selected, state, bundle = owned_journal(Path(journal))
+            if publication_disposition(state) == "rejected_before_push":
+                return blocked("publication_rejected_before_push",
+                               "Publication was rejected before push; its saved writes will not be replayed. "
+                               "Refresh current inputs and start a new operation.", selected)
+            failure_code = "publication_local_dirty"
+            original = _clean_root(root)
+            failure_code = "publication_storage_changed"
+            storage = _storage_config(root)
+            if state.get("remote") != storage["remote"] or state.get("branch") != storage["branch"]:
+                return blocked("publication_storage_changed", "journal remote/branch differs from project storage", selected)
+            base, candidate, original_base = (state.get(key) for key in ("remote_head", "candidate", "original_head"))
+            if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value)
+                   for value in (base, candidate, original_base)):
+                return blocked("publication_candidate_missing", "journal has no complete original base/candidate identity", selected)
+            failure_code = "publication_candidate_invalid"
+            parents = _git_text(root, "rev-list", "--parents", "-n", "1", candidate).split()
+            if parents != [candidate, base] or _git(root, "merge-base", "--is-ancestor", original_base, base, check=False).returncode:
+                return blocked("publication_candidate_invalid", "candidate must have exactly the recorded remote base as parent", selected)
+            base_files = _tree_files(root, base)
+            for name, expected in bundle["checks"].items():
+                actual = hashlib.sha256(base_files[name]).hexdigest() if name in base_files else None
+                if actual != expected:
+                    return blocked("publication_guard_conflict", "saved bundle guard differs from original base: " + name, selected)
+            intended = store.apply_writes(base_files, bundle["writes"])
+            if _tree_files(root, candidate) != intended:
+                return blocked("publication_candidate_invalid", "candidate tree differs from the saved bundle intent", selected)
+            _check_deletions(bundle, base_files, intended)
+            _check_owners(bundle, base_files, intended)
+            if store.project(base_files).get("storage") != storage or store.project(intended).get("storage") != storage:
+                return blocked("publication_storage_changed", "candidate/base storage differs from selected storage", selected)
+            errors = _validate_files(root, intended)
+            if errors:
+                return blocked("publication_candidate_invalid", "\n".join(errors), selected)
+            failure_code = "publication_outcome_unknown"
+            remote = _fetch_selected(root, storage["remote"], storage["branch"])
+            contained = _git(root, "merge-base", "--is-ancestor", candidate, remote, check=False).returncode == 0
+            retried = False
+            if not contained:
+                if remote != base:
+                    return blocked("publication_remote_changed", "selected remote changed from the recorded base without the candidate", selected)
+                attempts = state.get("recovery_attempts", 0)
+                if type(attempts) is not int or attempts != 0:
+                    return blocked("publication_retry_exhausted", "the same candidate has already received its bounded recovery retry", selected)
+                state.update(state="recovery_push_pending", recovery_attempts=1)
+                _write_journal(selected, state)
+                retried = True
+                # A lost push response is reconciled by the verification fetch below.
+                _git(root, "push", "--porcelain", "--no-follow-tags", storage["remote"],
+                     candidate + ":refs/heads/" + storage["branch"], check=False)
+            verified = _verify_publication(root, storage["remote"], storage["branch"], candidate, bundle, storage)
+            failure_code = "publication_local_changed"
+            if _git(root, "merge-base", "--is-ancestor", original, verified, check=False).returncode:
+                return blocked("publication_local_diverged", "local HEAD is not contained in the verified remote", selected)
+            if _clean_root(root) != original:
+                return blocked("publication_local_changed", "local checkout changed during recovery", selected)
+            if verified != original:
+                _git(root, "-c", "core.hooksPath=/dev/null", "merge", "--ff-only", "--no-edit", verified)
+            if _clean_root(root) != verified:
+                return blocked("publication_local_changed", "recovery did not produce the expected clean root", selected)
+            state.update(state="published", verified_remote_commit=verified)
+            state.pop("error", None)
+            _write_journal(selected, state)
+            return {"status": "published", "code": "publication_retried" if retried else "publication_recovered",
+                    "action": "completed", "commit": candidate, "verified_remote_commit": verified, "journal": str(selected)}
+        except (ProjectError, store.StoreError, OSError, ValueError) as exc:
+            return blocked(failure_code, exc, selected)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
-        "No Aone calls, takeover, deletion, stash, reset or force-push. Run from the "
+        "No Aone calls, takeover, arbitrary item deletion, stash, reset or force-push. Run from the "
         "management Git root or its non-nested management subdirectories."))
     parser.add_argument("--root", default=".", help="project directory (default: current directory)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1014,9 +1372,9 @@ def main(argv=None):
                 "under ignored .project-local/publish/. Inspect remote state before retrying. "
                 "Receipt validation does not establish live Aone or delivery facts."))
     publication.add_argument("--bundle", required=True, help=(
-        "JSON file with checks {relative_path: SHA256|null}, writes {relative_path: UTF8text}, "
+        "JSON file with checks {relative_path: SHA256|null}, writes {relative_path: UTF8text|null deletion}, "
         "message, session, token (string|null). Every write requires a check; item files and sync receipts "
-        "also require item.json's check. Put local bundles under ignored .project-local/. "
+        "also require the item metadata check and v2 state check. Put local bundles under ignored .project-local/. "
         "Push failure retains a journal and candidate; inspect remote before rebuilding/retrying."))
     args = parser.parse_args(argv)
     try:
@@ -1035,7 +1393,7 @@ def main(argv=None):
             print(worktree_path(args.root, args.item))
         elif args.command == "publish":
             print(json.dumps(publish(args.root, args.bundle), ensure_ascii=False))
-    except (ProjectError, OSError) as exc:
+    except (ProjectError, store.StoreError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0

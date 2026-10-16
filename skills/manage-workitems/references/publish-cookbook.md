@@ -1,6 +1,6 @@
-# Publish cookbook
+# Schema-v1 publication helper
 
-This reference is the operational contract for assembling guarded publication bundles. [persistence](persistence.md) defines why checkpoints, ownership and backend ordering exist; this file defines how bundle fields derive from repository state so publication succeeds on the first attempt. `scripts/make_bundle.py` implements the derivation; `project_runtime.py publish` remains the only publisher.
+This reference supports maintainers validating schema-v1 publication internals. Project agents use the [fixed command contract](commands.md), including its diagnostic-only boundary for schema-v1 projects and explicit migration. `scripts/make_bundle.py` derives schema-v1 bundle fields from repository state for isolated validation; `project_runtime.py publish` applies the runtime's publication checks. Schema-v2 project operations use `project.py`.
 
 ## Observe committed bytes, write through the bundle
 

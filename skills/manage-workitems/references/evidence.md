@@ -1,45 +1,13 @@
-# Reusable context and evidence
+# Evidence and independent review
 
-Build context on demand. Do not scan an entire code repository at project creation or revalidate every evidence card at every session start. The aim is to reuse verified facts without inheriting stale assumptions or old review conclusions.
+Evidence distinguishes observed facts, inferences, search coverage and verification limits. Read primary requirement/spec and raw source pointers from the operation's complete `read` payload. A cached summary or previous review cannot establish the current contract, an absence claim, ownership or delivery.
 
-## Three levels
+For actual repository investigation within the user's requested scope, retain source paths/symbols, revisions or relevant content identity, configuration and observed outcomes. A matching HEAD does not identify dirty tracked/untracked source or dependency inputs. Claims such as “all callers” require a bounded search universe; new files or configuration may invalidate that coverage.
 
-1. Project navigation: `project_context.py list`, `show` and `context` select item metadata and role-specific input paths. Filter and paginate before reading bodies. `.project/context.md` carries only overall background.
-2. Repository/topic evidence: compact independent records under `evidence/` capture discovered entry points, contracts, ownership and important call relationships. Create only records likely to save repeated exploration.
-3. Item handoff: current approval, affected assumptions, review identities, progress, verification coverage and next action. Read the selected full requirement/spec for decisions; a handoff never substitutes for them.
+Current item facts, verification and handoff go through `context-update`. Reviews and delivery use the returned report drafts for their operation; the program writes paired Markdown/YAML records with requirement/spec/base/session and code snapshot bindings. Retain only the current records referenced by review, delivery, waiver or cleanup state, plus pending recovery artifacts. Decisions use `decision-record` to replace the complete current decision document; use the actual user input and provenance when recording an approval, but do not accumulate superseded decision text. The program treats Markdown as opaque text and does not detect semantically obsolete passages. Do not create ad hoc project evidence paths or edit a YAML record to assert that a gate passed.
 
-Local `.project-local/index.json` is derived and disposable. Its metadata membership/content identity detects added, removed and edited records. Rebuild stale/corrupt cache from canonical metadata; malformed canonical data is an error. It never establishes that a capability or item does not exist. Queries inspect metadata, not all Markdown or code. Source discovery falls back to targeted canonical files and repository search on a miss.
+The shared knowledge store is separate from item records and does not require an item pointer. Use `knowledge-show ID` through the command contract to get the body path, hashes and exact guarded update/remove commands. Replace the entire Markdown body when updating; metadata YAML is maintained by the program. Use `knowledge-remove` only when the entry is explicitly obsolete or no longer useful. No-pointer status alone is not grounds for removal, and the program does not parse body semantics or identify stale claims. Do not hand-edit metadata YAML or replace a body with a partial append.
 
-## Evidence card
+Independent reviewers form their own assessment from original inputs before reading previous findings. A different session is necessary but does not itself prove a review happened. Record the real review source and result; never manufacture provenance to satisfy a command. Design review additionally requires the user's explicit invocation. The implementation workflow may require its final fresh-subagent review within the authorized item.
 
-`evidence/<id>.json` routes to a concise `evidence/<id>.md` body:
-
-```json
-{
-  "id": "service-routing-entry",
-  "repository": "service",
-  "topic": "request routing",
-  "summary": "Routing entry points and owner boundaries",
-  "kind": "fact",
-  "sources": [{"path": "src/router.go", "revision": "full-source-commit", "sha256": "source-content-sha256"}],
-  "scope": "request dispatch in this source snapshot",
-  "inputs": {"configuration": "relevant defaults and flags", "search_scope": ["src/"]},
-  "body": "evidence/service-routing-entry.md"
-}
-```
-
-Kinds are `fact`, `inference`, `search`, or `verification`. The body records the claim, relevant path/symbol or source ranges, source and input identity, coverage and known unknowns. Keep fact and inference distinct. Record commands and actual observed outcomes when needed to reproduce evidence; omit broad raw logs and secrets. Evidence body paths stay within `evidence/` and never escape through symlinks.
-
-## Freshness is checked by the consumer
-
-Do not store universal `valid`, `current`, or `passed` flags. Applicability depends on the consuming task's source, inputs and acceptance. Check only the relevant records actually reused.
-
-- A positive local fact can be reused when its source and relevant inputs are unchanged and it covers the present question. Follow critical source pointers directly.
-- A claim such as “all callers”, “no other path” or “only implementation” depends on the complete search universe. New files/callers/configuration can invalidate it even when known source hashes match. Re-run the bounded search when that universe changed or cannot be established.
-- Dirty worktrees require identities for relevant tracked modifications, untracked source, configuration and dependency inputs. A matching HEAD alone is insufficient.
-- A spec edit invalidates its applicable review pass. It need not invalidate unrelated source facts. A delivered prerequisite or rebase may invalidate assumptions without changing the spec text.
-- Test evidence is reusable only for the same applicable code/input scope and acceptance. Distinguish unit checks, build, deployment and end-to-end results.
-
-An independent reviewer starts with original requirements, current full spec and raw source entry pointers. It forms its own issue candidates before reading previous findings or conclusions. Prior reviews appear as deferred input paths, never default context summaries. Record reviewed spec/base/diff identities separately from source evidence.
-
-Use separate records for concurrent investigations. When evidence conflicts, preserve both sources and resolve applicability; do not let last-writer-wins prose silently erase conflicting facts. The index is navigation, never an authority for design approval, absence, claim ownership or delivery.
+Verification claims name their practical limit: unit test, build, CI, merge, release, deployment and end-to-end evidence are distinct. Evidence applies only to the code, inputs and acceptance it actually covers. A delivered prerequisite, fix or rebase may invalidate a baseline even when spec bytes match. The program rechecks structural bindings; agents and reviewers remain responsible for deciding whether evidence substantively covers acceptance criteria and for reporting only what they verified.

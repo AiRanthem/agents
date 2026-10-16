@@ -7,6 +7,10 @@ description: Build or repair the smallest verifiable proof of concept from a con
 
 Produce the fastest runnable proof that the user's explicit acceptance scenario can work, or restore that proof when a POC run fails. The result is disposable POC code with enough runtime visibility to locate and fix faults in that scenario from logs. It is not production-ready implementation.
 
+## Project workitems
+
+In a schema-v2 project, preserve the generic POC acceptance and trimmed-scope authorization below, while using [the fixed project command workflow](../manage-workitems/references/commands.md) for project records and development ownership. Read the complete returned requirement/spec and original instructions, edit only returned Markdown drafts, execute the returned finish command unchanged and follow its status branch. Program-owned YAML replaces generic document-status writes. A missing design review may be bypassed only by the user's actual explicit scoped waiver through `development-start --skip-design-review --approval-source SOURCE`; POC scope does not waive ownership, dependencies, upstream-fix gates, independent implementation review or delivery evidence. Do not alter the generic POC behavior outside project mode.
+
 ## Respect authority and host mode
 
 - Follow user, harness, and higher-priority instructions, including permissions, security and data-protection boundaries, and safeguards for destructive or external actions. A POC does not expand authorization.
@@ -34,7 +38,7 @@ Read the complete confirmed design and trace the current code only far enough to
 Present the user with three explicit groups and obtain confirmation before planning or implementation:
 
 - **Do:** only the design goals and behavior required for the acceptance happy path.
-- **Do not:** every other goal, defensive behavior, corner case, compatibility path, failure recovery, cleanup, cancellation, concurrency guarantee, production rollout concern, and quality improvement.
+- **Do not:** goals outside the confirmed acceptance scope, production rollout, and unrelated defensive, compatibility, recovery, cleanup, cancellation, concurrency or quality work. Preserve any behavior in these areas that the accepted scenario requires for correctness, security, readability or maintainability.
 - **Modify:** any approved design behavior that must be simplified, hard-coded, bypassed, or replaced for this POC.
 
 The trimmed design must identify the shortest concrete execution path, affected components and ownership boundaries, required data flow or interface shape, environment assumptions, shortcuts, runtime observability, and the minimal integration check. Resolve every choice that could change the accepted scenario. The user's confirmation of the concrete trimmed design authorizes its in-scope implementation; it does not authorize unrelated changes or external effects.
@@ -48,16 +52,14 @@ Keep the trimmed design only in the conversation or host-managed plan. Never wri
 
 ## Optimize only for time to acceptance
 
-Choose the quickest implementation that can pass the accepted scenario. Reuse an existing path when it is faster; otherwise hard-code values, duplicate code, couple components, or bypass abstractions as needed.
+Choose a direct implementation that demonstrates the accepted scenario while keeping its path readable and maintainable. Prefer an existing simple path; use hard-coded values or a narrow bypass only when they keep the code understandable and preserve correctness and security. Trim behavior and verification to the confirmed POC scope; do not add production features or unrelated hardening.
 
 - Do not write unit, component, regression, negative, boundary, compatibility, concurrency, or recovery tests.
-- Do not write code comments or documentation.
-- Do not perform general code review, refactoring, cleanup, formatting churn, or quality hardening.
-- Do not optimize for readability, maintainability, extensibility, abstraction quality, repository architecture, or future reuse.
-- Treat repository development conventions about style, layering, placement, test breadth, comments, review, readability, maintainability, compatibility, and production readiness as out of scope unless they are required by the acceptance path or a higher-priority instruction.
+- Avoid comments and documentation unless they explain a deliberate shortcut, invariant or safe use of the POC.
+- Avoid broad review, refactoring, cleanup, and formatting churn unrelated to the accepted scope or its quality.
 - Add no defensive behavior or corner-case handling beyond what the accepted environment and happy path actually exercise.
 
-These shortcuts are requirements of this workflow. If a controlling instruction prevents one, obey that instruction and report the exact constraint instead of silently expanding the POC.
+Keep POC-specific limits within the accepted scope while following governing code-quality, security and authorization requirements.
 
 ## Make the accepted path reconstructable from logs
 
@@ -79,11 +81,11 @@ Prefer existing structured logging; otherwise use a consistent, searchable forma
 
 When the user reports a POC bug or a failed validation run, preserve the existing acceptance contract and trimmed scope. Read the complete logs for the failed run before changing code. Correlate them by run and resource identifiers, reconstruct the ordered execution, and compare each observed step with the accepted happy path.
 
-Apply every implementation rule in this skill to the repair itself. Optimize only for restoring the accepted scenario: do not add ordinary tests, comments, documentation, general review, refactoring, cleanup, defensive handling, maintainability work, or behavior outside the happy path. Keep maximum diagnostic logging, validate with only the same minimal integration or environment scenario, and run the independent diagnostic subagent audit after the final fix.
+Apply every implementation rule in this skill to the repair itself. Restore the accepted scenario while keeping the code readable and maintainable and preserving correctness and security. Do not add behavior outside the happy path. Keep diagnostic logging, validate with only the same minimal integration or environment scenario, and run the independent diagnostic subagent audit after the final fix.
 
 Locate the earliest observable divergence between expected and actual execution. Trace that point into the responsible code and its direct callers or external boundary. Distinguish the root fault from later symptoms, and state the log evidence that supports the diagnosis before editing.
 
-- If the logs identify the fault, make the smallest code change that restores the accepted path.
+- If the logs identify the fault, repair its owning code path while satisfying the accepted behavior and the quality requirements above.
 - If the logs stop before the fault can be located, add the smallest additional high-visibility logging around the unresolved interval, rerun or ask the user to rerun the same scenario in its validation environment, then diagnose from the new logs. Do not guess a code fix when the existing evidence cannot distinguish the cause.
 - If the failure reveals that the acceptance contract or trimmed design is wrong, stop the affected repair and obtain the user's explicit confirmation of the revised **Do**, **Do not**, or **Modify** entry before changing behavior.
 
@@ -93,7 +95,7 @@ Do not broaden the repair into production hardening or handle a new corner case 
 
 After implementation, add the smallest integration or end-to-end check that executes the user's exact acceptance scenario and asserts only its stated success evidence. Prefer the real validation environment and real owned components. Use the smallest substitute only when an external boundary is unavailable or unsafe, and disclose the substitution.
 
-Run that check and inspect its actual exit status, observable result, and logs. Do not broaden validation when it passes. When it fails, use the logs to locate the failing step, make the smallest acceptance-path fix, and rerun only the invalidated check.
+Run that check and inspect its actual exit status, observable result, and logs. Do not broaden validation when it passes. When it fails, use the logs to locate the failing step, repair the accepted path within its confirmed scope and quality requirements, and rerun only the invalidated check.
 
 ## Require one independent diagnostic audit
 

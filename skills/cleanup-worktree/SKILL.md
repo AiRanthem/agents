@@ -9,9 +9,9 @@ Remove the selected local worktree and authorized local branches after proving t
 
 ## Project workitems
 
-When the target belongs to a valid project workspace, load [the shared project context](../manage-workitems/references/project-context.md) for binding, evidence, and persistence rules. Cleanup eligibility uses the same cleanliness and remote-recovery criteria below, independently of the item's delivery status. Record the verified cleanup result through the designated runtime without marking unfinished work as delivered.
+When the target is a schema-v2 project work item, load [the shared project context](../manage-workitems/references/project-context.md) for binding and evidence rules. Cleanup eligibility uses the same cleanliness and remote-recovery criteria below, independently of the item's delivery status. Cleanup has separate user authorization from delivery. After authorized cleanup succeeds, record its actual result through `begin cleanup-record ID` and the returned command workflow; the program writes project records, including YAML. Do not edit project YAML directly. Ordinary non-project cleanup follows the workflow below.
 
-Resolve project item paths with `project_runtime.py worktree-path <id>`. Associated main-workspace worktrees may be outside the project root. Preserve that main workspace, its shared repositories and sibling projects; an unavailable or conflicting binding prevents removing the affected worktree.
+Use the project program's returned development location. Associated main-workspace worktrees may be outside the project root. Preserve that main workspace, its shared repositories and sibling projects; an unavailable or conflicting binding prevents removing the affected worktree.
 
 ## Establish exact scope
 

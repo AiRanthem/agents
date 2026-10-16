@@ -15,7 +15,7 @@
 # Code quality
 
 * Understand the affected flow and callers before editing; fix root causes at their ownership boundary.
-* Choose clear, maintainable code that satisfies the approved contract. Reuse suitable existing mechanisms and avoid complexity without a concrete benefit. Allow broader changes when they materially improve correctness, readability, ownership, or maintainability. Treat line count, file count, and diff size as evidence, not independent goals.
+* Choose clear, maintainable code that satisfies the approved contract. Within those requirements and quality constraints, minimize the final PR: assess the complete resulting diff against the task’s established integration baseline, including accumulated changes. Optimize the final state rather than the size of each edit or repair; replace intermediate approaches and remove superseded task changes when that produces a smaller coherent result. Reuse suitable existing mechanisms and avoid complexity without a concrete benefit. Retain broader changes when needed for correctness, readability, ownership, or maintainability; do not trade these away for fewer changed lines or files. Preserve unrelated user changes.
 * Add compatibility logic only for an established need. Cite the approved contract or relevant history, release, schema, or runtime evidence; distinguish code history from observed production data.
 * Preserve correctness, trust-boundary validation, security, data protection, accessibility, real-hardware calibration, and explicit requirements. Verify non-trivial logic with the smallest meaningful runnable check; trivial reversible edits need no new tests.
 * Document a deliberate shortcut's known ceiling and upgrade path in a nearby `known-limit:` comment.

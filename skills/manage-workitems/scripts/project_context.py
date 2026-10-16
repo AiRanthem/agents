@@ -17,15 +17,21 @@ from pathlib import PurePosixPath
 from typing import Any, Iterator
 
 try:  # Imported when used as a script or as a module in tests.
+    import project_runtime as runtime
     from project_runtime import ProjectError, find_project
+    import project_store as store
+    import project_retention as retention
     from workitem_ids import parse_id
 except ImportError:  # pragma: no cover - test loader can inject the sibling module.
+    from . import project_runtime as runtime
     from .project_runtime import ProjectError, find_project
+    from . import project_store as store
+    from . import project_retention as retention
     from .workitem_ids import parse_id
 
 
 ROLES = ("manage", "explore", "review-design", "implement", "review-implementation")
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 ITEM_STATUSES = {"new", "in_progress", "developing", "awaiting_delivery", "done", "cancelled"}
 
@@ -97,35 +103,83 @@ def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _source_files(root: Path, include_evidence: bool) -> tuple[Path, list[Path], list[Path]]:
-    marker = root / ".project" / "project.json"
-    workitems = root / "workitems"
-    evidence = root / "evidence"
-    item_files: list[Path] = []
-    evidence_files: list[Path] = []
-    sources = [(workitems, "*/item.json", item_files)]
-    if include_evidence:
-        sources.append((evidence, "*.json", evidence_files))
-    for directory, pattern, output in sources:
-        if directory.is_symlink():
-            raise ContextError(f"project metadata directory is unsafe: {directory}")
-        if not directory.exists():
+def _record_files(directory: Path, suffixes: set[str]) -> list[Path]:
+    """List machine records without opening or scanning their Markdown siblings."""
+    if directory.is_symlink():
+        raise ContextError(f"project metadata directory is unsafe: {directory}")
+    if not directory.exists():
+        return []
+    if not directory.is_dir():
+        raise ContextError(f"project metadata directory is unsafe: {directory}")
+    result = []
+    for candidate in sorted(directory.iterdir()):
+        if candidate.is_symlink():
+            raise ContextError(f"project metadata file is unsafe: {candidate}")
+        if candidate.is_dir():
             continue
-        if not directory.is_dir():
-            raise ContextError(f"project metadata directory is unsafe: {directory}")
-        for candidate in sorted(directory.glob(pattern)):
-            if candidate.is_symlink() or not candidate.is_file():
+        if candidate.suffix in suffixes:
+            if not candidate.is_file() or not IDENTIFIER.fullmatch(candidate.stem):
                 raise ContextError(f"project metadata file is unsafe: {candidate}")
-            output.append(candidate)
-    return marker, item_files, evidence_files
+            result.append(candidate)
+    return result
 
 
-def _metadata(root: Path, path: Path) -> tuple[dict[str, Any], str]:
-    raw = _read_bytes(root, path)
-    return _json_bytes(raw, path), _hash(raw)
+def _snapshot_paths(root: Path, include_evidence: bool) -> list[str]:
+    """Select canonical records via runtime snapshots; never read Markdown for listing."""
+    project_dir = root / ".project"
+    if project_dir.is_symlink() or not project_dir.is_dir():
+        raise ContextError(f"project metadata directory is unsafe: {project_dir}")
+    names = [f".project/{name}" for name in ("project.json", "project.yaml", "graph.yaml")
+             if (project_dir / name).is_file()]
+    for subdir, suffixes in (("state", {".yaml"}), ("sync", {".json", ".yaml"})):
+        names.extend(str(path.relative_to(root)) for path in _record_files(project_dir / subdir, suffixes))
+
+    workitems = root / "workitems"
+    if workitems.is_symlink():
+        raise ContextError(f"project metadata directory is unsafe: {workitems}")
+    if workitems.exists() and not workitems.is_dir():
+        raise ContextError(f"project metadata directory is unsafe: {workitems}")
+    if workitems.is_dir():
+        for item_dir in sorted(workitems.iterdir()):
+            if item_dir.is_symlink() or not item_dir.is_dir() or not IDENTIFIER.fullmatch(item_dir.name):
+                raise ContextError(f"work item directory is unsafe: {item_dir}")
+            for name in ("item.json", "metadata.yaml"):
+                path = item_dir / name
+                if path.is_symlink():
+                    raise ContextError(f"project metadata file is unsafe: {path}")
+                if path.exists():
+                    if not path.is_file():
+                        raise ContextError(f"project metadata file is unsafe: {path}")
+                    names.append(str(path.relative_to(root)))
+
+    if include_evidence:
+        names.extend(str(path.relative_to(root)) for path in _record_files(root / "evidence", {".json", ".yaml"}))
+    if not any(name in names for name in (".project/project.json", ".project/project.yaml")):
+        raise ContextError("project metadata marker is missing")
+    return sorted(set(names))
 
 
-def _validate_evidence_body(root: Path, metadata: dict[str, Any], metadata_path: Path) -> None:
+def _snapshot(root: Path, include_evidence: bool) -> dict[str, bytes]:
+    paths = _snapshot_paths(root, include_evidence)
+    try:
+        return runtime._working_files(root, paths=tuple(paths))
+    except (ProjectError, OSError, ValueError) as exc:
+        raise ContextError(f"cannot snapshot project records: {exc}") from exc
+
+
+def _metadata(data: bytes, path: str) -> tuple[dict[str, Any], str]:
+    try:
+        value = store.load_yaml(data, path) if path.endswith(".yaml") else _json_bytes(data, Path(path))
+    except store.StoreError as exc:
+        if path.endswith(".json"):
+            raise ContextError(f"malformed canonical JSON {path}: {exc}") from exc
+        raise ContextError(str(exc)) from exc
+    if not isinstance(value, dict):
+        raise ContextError(f"canonical record must contain an object: {path}")
+    return value, _hash(data)
+
+
+def _validate_evidence_body(root: Path, metadata: dict[str, Any], metadata_path: str) -> None:
     body = metadata.get("body")
     expected = f"evidence/{metadata.get('id')}.md"
     if not isinstance(body, str) or body != expected:
@@ -159,9 +213,27 @@ def _validate_item_metadata(item: dict[str, Any], path: Path) -> None:
         worktree = development["worktree"]
         if worktree is not None and not isinstance(worktree, str):
             raise ContextError(f"work item development.worktree must be a string or null: {path}")
+    documents = item.get("documents", {})
+    if not isinstance(documents, dict):
+        raise ContextError(f"work item documents must be a role-to-path mapping: {path}")
+    for role, relative in documents.items():
+        if not isinstance(role, str) or not IDENTIFIER.fullmatch(role) or not _document_relative(relative):
+            raise ContextError(f"work item document paths must be safe item-relative Markdown paths: {path}")
+    design = item.get("design")
+    if design is not None and (not isinstance(design, dict) or
+                               not _document_relative(design.get("file"))):
+        raise ContextError(f"work item design.file must be a safe item-relative Markdown path: {path}")
 
 
-def _validate_evidence_metadata(root: Path, metadata: dict[str, Any], path: Path, repository_ids: set[str]) -> None:
+def _document_relative(value: Any) -> bool:
+    if not isinstance(value, str) or not value.endswith(".md") or "\\" in value or "\x00" in value:
+        return False
+    path = PurePosixPath(value)
+    return bool(path.parts) and not path.is_absolute() and str(path) == value and all(
+        part not in {"", ".", ".."} for part in path.parts)
+
+
+def _validate_evidence_metadata(root: Path, metadata: dict[str, Any], path: str, repository_ids: set[str]) -> None:
     repository = metadata.get("repository")
     if not isinstance(repository, str) or repository not in repository_ids:
         raise ContextError(f"evidence repository is not configured: {path}")
@@ -183,41 +255,62 @@ def _validate_evidence_metadata(root: Path, metadata: dict[str, Any], path: Path
 
 
 def _load_sources(root: Path, include_evidence: bool) -> dict[str, Any]:
-    marker_path, item_paths, evidence_paths = _source_files(root, include_evidence)
-    marker, marker_hash = _metadata(root, marker_path)
-    # This lookup must remain metadata-only: runtime.validate_project currently
-    # reads requirement/spec/review/evidence bodies. Structural validation for
-    # writes belongs to project_runtime; this command checks only indexed records.
-    _validate_project_record(marker, marker_path)
-    sources = {".project/project.json": marker_hash}
+    files = _snapshot(root, include_evidence)
+    try:
+        marker = store.project(files)
+        item_records = store.items(files)
+    except store.StoreError as exc:
+        if ".json:" in str(exc):
+            raise ContextError(f"malformed canonical JSON: {exc}") from exc
+        raise ContextError(f"invalid canonical project records: {exc}") from exc
+    marker_path = store.project_path(files)
+    _validate_project_record(marker, Path(marker_path))
+    # Hash every included canonical machine record, including split state and
+    # external receipts. The index is derived navigation data, never authority.
+    sources = {name: _hash(data) for name, data in files.items()}
     main_workspace_marker = root / ".project" / "main-workspace.md"
     if "main_workspace" in marker:
         sources[".project/main-workspace.md"] = _main_workspace_marker_fingerprint(root, main_workspace_marker)
     repository_ids = {repository["id"] for repository in marker["repositories"]}
-    items = []
-    for path in item_paths:
-        item, digest = _metadata(root, path)
-        if not isinstance(item.get("id"), str) or not IDENTIFIER.fullmatch(item["id"]):
-            raise ContextError(f"work item metadata has no valid id: {path}")
-        if item["id"] != path.parent.name:
-            raise ContextError(f"work item id does not match its directory: {path}")
-        _validate_item_metadata(item, path)
-        items.append({"id": item["id"], "metadata": item, "path": str(path.relative_to(root)), "sha256": digest})
+
+    item_entries = []
+    for identifier, item in item_records.items():
+        path = store.item_path(files, identifier)
+        if not isinstance(item.get("id"), str) or not IDENTIFIER.fullmatch(item["id"]) or item["id"] != identifier:
+            raise ContextError(f"work item metadata id must match its directory: {path}")
+        _validate_item_metadata(item, Path(path))
+        item_entries.append({"id": identifier, "metadata": item, "path": path,
+                             "schema_version": 2 if store.is_v2(files) else 1,
+                             "sha256": _hash(files[path])})
+
+    receipts = []
+    for path, data in sorted(files.items()):
+        if not path.startswith(".project/sync/"):
+            continue
+        receipt, digest = _metadata(data, path)
+        identifier = Path(path).stem
+        if not IDENTIFIER.fullmatch(identifier):
+            raise ContextError(f"receipt id is invalid: {path}")
+        receipts.append({"id": identifier, "metadata": receipt, "path": path, "sha256": digest})
+
     evidences = []
-    for path in evidence_paths:
-        evidence, digest = _metadata(root, path)
-        if not isinstance(evidence.get("id"), str) or not IDENTIFIER.fullmatch(evidence["id"]):
-            raise ContextError(f"evidence metadata has no valid id: {path}")
-        if evidence["id"] != path.stem:
-            raise ContextError(f"evidence id does not match its filename: {path}")
+    for path, data in sorted(files.items()):
+        if not path.startswith("evidence/") or Path(path).suffix not in {".json", ".yaml"}:
+            continue
+        evidence, digest = _metadata(data, path)
+        identifier = Path(path).stem
+        if not IDENTIFIER.fullmatch(identifier) or evidence.get("id") != identifier:
+            raise ContextError(f"evidence id must match its filename: {path}")
         _validate_evidence_metadata(root, evidence, path, repository_ids)
-        evidences.append({"id": evidence["id"], "metadata": evidence, "path": str(path.relative_to(root)), "sha256": digest})
+        evidences.append({"id": identifier, "metadata": evidence, "path": path, "sha256": digest})
     return {
         "version": INDEX_VERSION,
         "coverage": "items+evidence" if include_evidence else "items",
         "project": marker,
+        "project_path": marker_path,
         "sources": sources,
-        "items": sorted(items, key=lambda entry: entry["id"]),
+        "items": sorted(item_entries, key=lambda entry: entry["id"]),
+        "receipts": receipts,
         "evidence": sorted(evidences, key=lambda entry: entry["id"]),
     }
 
@@ -227,8 +320,8 @@ def _validate_project_record(project: dict[str, Any], path: Path) -> None:
     missing = [field for field in required if field not in project]
     if missing:
         raise ContextError(f"invalid project metadata {path}: missing {', '.join(missing)}")
-    if type(project.get("schema_version")) is not int or project["schema_version"] != 1:
-        raise ContextError(f"invalid project metadata {path}: schema_version must be 1")
+    if type(project.get("schema_version")) is not int or project["schema_version"] not in {1, 2}:
+        raise ContextError(f"invalid project metadata {path}: schema_version must be 1 or 2")
     if not isinstance(project.get("id"), str) or not project["id"] or not isinstance(project.get("name"), str) or not project["name"].strip():
         raise ContextError(f"invalid project metadata {path}: id and name must be nonempty strings")
     storage = project.get("storage")
@@ -328,6 +421,8 @@ def _index_path(root: Path) -> Path:
 @contextlib.contextmanager
 def _index_lock(root: Path) -> Iterator[None]:
     local = root / ".project-local"
+    if local.is_symlink():
+        raise ContextError(f"local index directory must not be a symlink: {local}")
     local.mkdir(mode=0o700, parents=True, exist_ok=True)
     if local.is_symlink():
         raise ContextError(f"local index directory must not be a symlink: {local}")
@@ -343,6 +438,8 @@ def _index_lock(root: Path) -> Iterator[None]:
 
 def _read_cache(root: Path) -> dict[str, Any] | None:
     path = _index_path(root)
+    if path.parent.is_symlink() or not path.parent.is_dir():
+        return None
     if not path.exists():
         return None
     try:
@@ -351,7 +448,8 @@ def _read_cache(root: Path) -> dict[str, Any] | None:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict) or value.get("version") != INDEX_VERSION:
             return None
-        if not isinstance(value.get("sources"), dict) or not isinstance(value.get("items"), list) or not isinstance(value.get("evidence"), list):
+        if (not isinstance(value.get("sources"), dict) or not isinstance(value.get("items"), list)
+                or not isinstance(value.get("receipts"), list) or not isinstance(value.get("evidence"), list)):
             return None
         return value
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -374,17 +472,17 @@ def _write_cache(root: Path, index: dict[str, Any]) -> None:
             os.unlink(name)
 
 
-def get_index(root: Path, force: bool = False, include_evidence: bool = True) -> tuple[dict[str, Any], bool]:
-    """Return a fresh derived index and whether it had to be rebuilt."""
+def get_index(root: Path, force: bool = False, include_evidence: bool = True,
+              write_cache: bool = True) -> tuple[dict[str, Any], bool]:
+    """Return fresh derived records; writing the ignored cache is opt-in for CLI queries."""
     root = root.resolve(strict=True)
-    with _index_lock(root):
+    lock = _index_lock(root) if write_cache else contextlib.nullcontext()
+    with lock:
         # Scan authoritative metadata every time so added/removed files and raw
         # content changes are noticed. No code, worktree, or evidence body is read.
         fresh = _load_sources(root, include_evidence)
         cached = None if force else _read_cache(root)
         actual = dict(fresh["sources"])
-        actual.update({entry["path"]: entry["sha256"] for entry in fresh["items"]})
-        actual.update({entry["path"]: entry["sha256"] for entry in fresh["evidence"]})
         # A cache is only a derived lookup aid; source hashes are checked against
         # current files and never assert that evidence remains applicable.
         valid = (
@@ -393,12 +491,14 @@ def get_index(root: Path, force: bool = False, include_evidence: bool = True) ->
             and cached.get("source_hashes") == actual
             and cached.get("project") == fresh["project"]
             and cached.get("items") == fresh["items"]
+            and cached.get("receipts") == fresh["receipts"]
             and cached.get("evidence") == fresh["evidence"]
         )
         if valid:
             return cached, False
         fresh["source_hashes"] = actual
-        _write_cache(root, fresh)
+        if write_cache:
+            _write_cache(root, fresh)
         return fresh, True
 
 
@@ -432,21 +532,123 @@ def _page(rows: list[Any], limit: int, offset: int) -> dict[str, Any]:
 
 
 def _body_paths(root: Path, entry: dict[str, Any]) -> list[str]:
-    directory = root / "workitems" / entry["id"]
     found = []
-    for name in ("requirement.md", "spec.md", "decisions.md", "handoff.md"):
-        path = directory / name
+    for relative in _document_routes(root, entry).values():
+        path = root / relative
         if path.exists():
             _contained_file(root, path)
-            found.append(str(path.relative_to(root)))
-    reviews = directory / "reviews"
+            found.append(relative)
+    if entry.get("schema_version") == 2:
+        identifier = entry["id"]
+        names = (".project/project.yaml", entry["path"], f".project/state/{identifier}.yaml")
+        try:
+            files = runtime._working_files(root, paths=names)
+            records = retention.record_metadata_paths(files, identifier)
+            # Read only current state references, never enumerate historical
+            # record directories or include their prose in the metadata index.
+            pairs = records | {name[:-5] + ".md" for name in records}
+            for name in sorted(pairs):
+                if name.endswith(".yaml"):
+                    files[name] = _read_bytes(root, root / name)
+                else:
+                    _contained_file(root, root / name)
+                    files[name] = b""
+            found.extend(sorted(name for name in retention.live_record_paths(files, identifier)
+                                if name.endswith(".md")))
+        except (ProjectError, store.StoreError) as exc:
+            raise ContextError(str(exc)) from exc
+        return list(dict.fromkeys(found))
+    reviews = root / "workitems" / entry["id"] / "reviews"
     if reviews.exists():
         if reviews.is_symlink() or not reviews.is_dir():
             raise ContextError(f"review directory is unsafe: {reviews}")
         for path in sorted(reviews.glob("*.md")):
             _contained_file(root, path)
             found.append(str(path.relative_to(root)))
-    return found
+    return list(dict.fromkeys(found))
+
+
+def _document_routes(root: Path, entry: dict[str, Any]) -> dict[str, str]:
+    prefix = f"workitems/{entry['id']}/"
+    metadata = entry["metadata"]
+    if entry.get("schema_version") == 2:
+        documents = metadata.get("documents") or {}
+        allowed = {"requirement.md", "spec.md", "decision.md", "decisions.md", "context.md",
+                   "logs.md", "AGENTS.md", "handoff.md"}
+        if any(relative not in allowed for relative in documents.values()):
+            raise ContextError("v2 document routes must name current item documents")
+        routes = {"requirement": prefix + "requirement.md",
+                  "context": prefix + "context.md",
+                  "decision": prefix + "decision.md",
+                  "logs": prefix + "logs.md"}
+        routes.update({role: prefix + relative for role, relative in documents.items()})
+        design = metadata.get("design")
+        if isinstance(design, dict) and isinstance(design.get("file"), str):
+            if design["file"] != "spec.md":
+                raise ContextError("v2 design route must name spec.md")
+            routes.setdefault("spec", prefix + design["file"])
+        return routes
+
+    routes = {}
+    for role, candidates in {
+        "requirement": ("requirement.md",),
+        "context": ("context.md", "handoff.md"),
+        "decision": ("decision.md", "decisions.md"),
+        "logs": ("logs.md",),
+        "spec": ("spec.md",),
+    }.items():
+        for name in candidates:
+            path = root / prefix / name
+            if path.exists():
+                routes[role] = prefix + name
+                break
+    return routes
+
+
+def _role_document_keys(role: str) -> tuple[str, ...]:
+    return {
+        "manage": (),
+        "explore": ("requirement", "context", "decision", "spec", "logs"),
+        "review-design": ("requirement", "spec", "decision", "context"),
+        "implement": ("requirement", "context", "decision", "spec", "logs"),
+        "review-implementation": ("requirement", "context", "decision", "spec", "logs"),
+    }[role]
+
+
+def _document_payload(root: Path, path: str) -> dict[str, Any]:
+    target = root / path
+    if not target.exists():
+        return {"path": path, "exists": False, "sha256": None, "text": None}
+    data = _read_bytes(root, target)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ContextError(f"document is not UTF-8: {path}") from exc
+    return {"path": path, "exists": True, "sha256": _hash(data), "text": text}
+
+
+def _readiness(items: dict[str, dict[str, Any]], identifier: str) -> dict[str, Any]:
+    """Report transitive delivery and open-fix blockers from canonical YAML state."""
+    try:
+        try:
+            import project_workflow as workflow
+        except ImportError:  # pragma: no cover - package entrypoint
+            from . import project_workflow as workflow
+        ancestors = workflow._ancestors(items, identifier)
+        fixes = workflow._open_fixes(items, identifier)
+    except Exception as exc:
+        # Queries stay useful for malformed or cyclic graphs; readiness is then unknown.
+        return {"known": False, "reason": str(exc)}
+    dependencies = sorted(key for key in ancestors if
+                          items[key].get("status") == "cancelled" or
+                          items[key].get("delivery", {}).get("status") != "delivered")
+    return {
+        "known": True,
+        "dependency_ready": not dependencies,
+        "blocked": bool(dependencies or fixes),
+        "blockers": {"dependencies": dependencies, "fixes": fixes},
+        "design_state": (items[identifier].get("design") or {}).get("state"),
+    }
 
 
 def command(args: argparse.Namespace) -> dict[str, Any]:
@@ -457,12 +659,22 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(root, Path):
         root = Path(root)
     include_evidence = args.command in ("search-evidence", "rebuild")
-    index, rebuilt = get_index(root, force=args.command == "rebuild", include_evidence=include_evidence)
+    # Ordinary query commands are read-only. Rebuild is the explicit operation
+    # that writes the disposable cache under ignored .project-local/.
+    index, rebuilt = get_index(root, force=args.command == "rebuild",
+                               include_evidence=include_evidence,
+                               write_cache=args.command == "rebuild")
     result: dict[str, Any]
     if args.command == "rebuild":
         result = {"rebuilt": True, "items": len(index["items"]), "evidence": len(index["evidence"]), "index": str(_index_path(root))}
     elif args.command == "list":
-        rows = [entry["metadata"] for entry in index["items"]]
+        rows = []
+        all_items = {entry["id"]: entry["metadata"] for entry in index["items"]}
+        for entry in index["items"]:
+            row = dict(entry["metadata"])
+            if entry.get("schema_version") == 2:
+                row["readiness"] = _readiness(all_items, entry["id"])
+            rows.append(row)
         if args.status:
             statuses = set(args.status)
             rows = [row for row in rows if row.get("status") in statuses]
@@ -471,7 +683,15 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
         result = _page(rows, args.limit, args.offset)
     elif args.command == "show":
         entry = _resolve_item(index["items"], args.item)
-        result = {"metadata": entry["metadata"], "metadata_path": entry["path"], "body_paths": _body_paths(root, entry)}
+        receipt = next((record for record in index["receipts"] if record["id"] == entry["id"]), None)
+        result = {"metadata": entry["metadata"], "metadata_path": entry["path"],
+                  "body_paths": _body_paths(root, entry),
+                  "receipt": None if receipt is None else {
+                      "metadata": receipt["metadata"], "metadata_path": receipt["path"],
+                      "sha256": receipt["sha256"]}}
+        if entry.get("schema_version") == 2:
+            result["readiness"] = _readiness(
+                {item["id"]: item["metadata"] for item in index["items"]}, entry["id"])
     elif args.command == "context":
         project = index["project"]
         main_workspace = project.get("main_workspace")
@@ -483,53 +703,52 @@ def command(args: argparse.Namespace) -> dict[str, Any]:
         canonical_id = entry["id"]
         role = args.role
         meta = entry["metadata"]
-        body_paths = [] if role == "manage" else _body_paths(root, entry)
-        paths_by_name = {Path(path).name: path for path in body_paths}
-        selected = {"item.json": entry["path"]}
+        body_paths = _body_paths(root, entry)
+        routes = _document_routes(root, entry)
+        selected_roles = _role_document_keys(role)
+        selected = {Path(entry["path"]).name: entry["path"]}
         order: list[str] = [entry["path"]]
-        if role == "explore":
-            names = ("requirement.md", "spec.md", "decisions.md", "handoff.md")
-        elif role == "review-design":
-            names = ("requirement.md", "spec.md", "decisions.md", "handoff.md")
-        elif role == "implement":
-            names = ("requirement.md", "spec.md", "decisions.md", "handoff.md")
-        elif role == "review-implementation":
-            names = ("requirement.md", "spec.md", "decisions.md", "handoff.md")
-        else:
-            names = ()
-        for name in names:
-            if name in paths_by_name:
-                selected[name] = paths_by_name[name]
-                order.append(paths_by_name[name])
-        deferred = [path for path in body_paths if path.startswith(f"workitems/{canonical_id}/reviews/")] if role in ("review-design", "review-implementation") else []
+        payloads = {}
+        for document_role in selected_roles:
+            path = routes.get(document_role)
+            if path is None:
+                continue
+            selected[Path(path).name] = path
+            order.append(path)
+            payloads[document_role] = _document_payload(root, path)
+        deferred = [path for path in body_paths if path.startswith((f"workitems/{canonical_id}/reviews/", f"workitems/{canonical_id}/records/"))] if role in ("review-design", "review-implementation") else []
+        receipt = next((record for record in index["receipts"] if record["id"] == canonical_id), None)
+        readiness = (_readiness({item["id"]: item["metadata"] for item in index["items"]}, canonical_id)
+                     if entry.get("schema_version") == 2 else None)
         if role in ("review-design", "review-implementation"):
             review_order = order
-            if role == "review-design":
-                review_order = [
-                    paths_by_name[name]
-                    for name in ("requirement.md", "spec.md", "decisions.md")
-                    if name in paths_by_name
-                ]
             result = {
                 "item": canonical_id,
                 "role": role,
                 "entrypoint": entry["path"],
                 "preread_order": review_order,
                 "deferred_inputs": deferred,
-                "notice": "No review finding, document, or evidence body was read. Check the current contract and relevant source before reaching conclusions.",
+                "inputs": selected,
+                "documents": payloads,
+                "notice": "Selected role documents are included with hashes. Review reports remain deferred until you form an independent assessment. Check relevant source before reaching conclusions.",
             }
         else:
             result = {
                 "item": canonical_id,
                 "role": role,
                 "inputs": selected,
+                "documents": payloads,
                 "preread_order": order,
                 "deferred_inputs": deferred,
                 "repository": meta.get("repository"),
                 "worktree": (meta.get("development") or {}).get("worktree") if role == "implement" and isinstance(meta.get("development"), dict) else None,
                 "evidence_query_hint": "For relevant evidence, run search-evidence <topic> --repository <id> --limit <n> --offset <n>.",
-                "notice": "No document or evidence body was read. Evidence applicability requires consumer review; index hashes do not imply valid, current, or passed evidence.",
+                "notice": "Selected role documents are included with hashes. Evidence applicability requires consumer review; index hashes do not imply valid, current, or passed evidence.",
             }
+        result["receipt"] = None if receipt is None else {
+            "metadata": receipt["metadata"], "metadata_path": receipt["path"], "sha256": receipt["sha256"]}
+        if readiness is not None:
+            result["readiness"] = readiness
         result["worktree_layout"] = _worktree_layout(project)
         if main_workspace is not None:
             result["main_workspace"] = {
