@@ -1,5 +1,8 @@
 """Integration checks with isolated bare Git authority and a stateful fake backend."""
 import argparse
+import contextlib
+import io
+import errno
 import copy
 import shlex
 import hashlib
@@ -342,6 +345,35 @@ class ProjectV2PublishTest(unittest.TestCase):
         record['title'] = title
         return store.write_item(files, record)
 
+    def test_status_lock_permission_failure_is_explicit_and_never_uses_local_readiness(self):
+        self.v2()
+        original_open = Path.open
+        lock = self.a / ".git/project-publish.lock"
+
+        def denied(path, *args, **kwargs):
+            if path == lock:
+                raise PermissionError(errno.EPERM, "harness denied write", str(path))
+            return original_open(path, *args, **kwargs)
+
+        before = self.remote_head()
+        for command in (("status",), ("autonomy", "status", "--all")):
+            with self.subTest(command=command), mock.patch.object(Path, "open", denied), \
+                    mock.patch.object(runtime, "_fetch_selected") as fetch:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = project.main(["--root", str(self.a), *command])
+                result = json.loads(output.getvalue())
+                self.assertEqual(code, 1)
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["code"], "host_permission_required")
+                self.assertEqual(result["permission_path"], str(lock))
+                self.assertEqual(result["required_access"], "write")
+                self.assertEqual(result["action"], "request_host_permission")
+                self.assertNotIn("round_finished", result)
+                fetch.assert_not_called()
+        self.assertEqual(self.remote_head(), before)
+        self.assertFalse((self.a / ".project-local").exists())
+
     def test_git_only_publication_and_noop_stale_guard(self):
         self.v2()
         changes = self.rename('A', 'Changed')
@@ -525,6 +557,17 @@ class ProjectOutputTest(unittest.TestCase):
         self.assertEqual(command[-2:], ['--identity-file', '/tmp/migration identity.json'])
         self.assertEqual(result['action'], 'resume')
         self.assertLess(len(json.dumps(result)), 1000)
+
+    def test_pending_stage_result_selects_its_attempt_continuation(self):
+        continuation = "python project.py --root /project autonomy resume A --attempt actual-attempt"
+        result = project._public_result(
+            {"status": "partial", "stage_result_pending": True,
+             "continuation_command": continuation,
+             "recovery": {"identity_file": "/project/identity.json", "journal": "/project/journal.json"}},
+            argparse.Namespace(root="/project", command="autonomy"))
+        self.assertEqual(result["next_command"], continuation)
+        self.assertEqual(shlex.split(result["publication_next_command"])[-4:],
+                         ["--identity-file", "/project/identity.json", "--journal", "/project/journal.json"])
 
     def test_partial_removal_is_blocked_without_unrelated_resume(self):
         result = project._public_result({'status': 'partial', 'removed': ['worktree'],

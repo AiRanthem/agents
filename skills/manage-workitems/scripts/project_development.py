@@ -486,7 +486,7 @@ def _reservation(root, identity, branch, relative, configuration, discarded=None
     return desired
 
 
-def prepare(root, item, project, *, options=None):
+def prepare(root, item, project, *, options=None, publish_branch=True):
     """Create or reuse one worktree after the workflow has published ownership."""
     root, options = Path(root).resolve(), options or {}
     _main_workspace(root, project)
@@ -506,11 +506,12 @@ def prepare(root, item, project, *, options=None):
         normalized, legacy = _existing_record(root, item, project, checkout, configuration)
         expected_ref = normalized["publish_ref"]
         remote_head = _remote_head(checkout, configuration["publish_url"], expected_ref)
-        if not remote_head:
+        if not remote_head and existing.get("branch_published", True):
             raise ProjectError("recorded published development branch is missing")
-        _git(checkout, "fetch", "--no-tags", configuration["publish_url"], expected_ref)
-        if _git(checkout, "merge-base", "--is-ancestor", remote_head, "HEAD", check=False).returncode:
-            raise ProjectError("recorded published development branch has diverged")
+        if remote_head:
+            _git(checkout, "fetch", "--no-tags", configuration["publish_url"], expected_ref)
+            if _git(checkout, "merge-base", "--is-ancestor", remote_head, "HEAD", check=False).returncode:
+                raise ProjectError("recorded published development branch has diverged")
         if legacy:
             # Ownership has already been published by the caller. These are local
             # coordination facts only; code/index and existing remote refs stay intact.
@@ -568,7 +569,7 @@ def prepare(root, item, project, *, options=None):
         _git(checkout, "fetch", "--no-tags", configuration["publish_url"], published_ref)
         if _git(checkout, "merge-base", "--is-ancestor", remote_head, branch, check=False).returncode:
             raise ProjectError("published branch has diverged; remote updates are forbidden")
-    else:
+    elif publish_branch:
         # known-limit: published item ownership plus a session-derived reservation
         # excludes protocol participants. Direct Git writers require server-side
         # create-only policy for strict CAS; post-push verification detects divergence.
@@ -577,8 +578,11 @@ def prepare(root, item, project, *, options=None):
             raise ProjectError("published branch changed concurrently; reservation retained for recovery")
     _git(checkout, "config", "branch." + branch + ".remote", configuration["publish_remote"])
     _git(checkout, "config", "branch." + branch + ".merge", published_ref)
-    return {"repository": repo["id"], "worktree": relative.as_posix(), "branch": branch,
-            "base_commit": base_commit, "publish_ref": published_ref, **configuration}
+    result = {"repository": repo["id"], "worktree": relative.as_posix(), "branch": branch,
+              "base_commit": base_commit, "publish_ref": published_ref, **configuration}
+    if not remote_head and not publish_branch:
+        result["branch_published"] = False
+    return result
 
 
 def verify_merged(root, item, project, *, evidence=None):

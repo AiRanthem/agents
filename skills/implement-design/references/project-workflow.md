@@ -1,0 +1,9 @@
+# Ordinary managed-project implementation
+
+Use only for ordinary managed-project development, not an autonomous stage executor. Read [project context](../../manage-workitems/references/project-context.md) and the fixed [command workflow](../../manage-workitems/references/commands.md). The program owns YAML, document routes, baseline/review/dependency/fix gates, worktree preparation, ownership and Git/Aone publication.
+
+In Agent mode, start requested implementation through `begin development-start ID` and execute its returned finish command before code edits. Native Plan reads the project context and returns its implementation plan without state mutations. Read the complete payload and required original instructions. A current independent design review normally gates implementation. Only the user's explicit scoped `--skip-design-review --approval-source SOURCE` may bind the unchanged requirement/spec/base/dependencies instead; do not invent a review pass or `implementable` status.
+
+Use returned Markdown drafts for project document updates, including approved contract corrections. Resume recorded development, preserve native Plan read-only behavior and leave source submission to user instructions.
+
+For the final project review, invoke `$review-implementation` in a fresh independent subagent, then pass its actual result, provenance, reviewer session and report file through `begin development-finish ID` and execute the returned finish command unchanged. Follow the command contract's returned statuses. A future review promise does not satisfy the gate; unavailable host capability is an explicit incomplete boundary.

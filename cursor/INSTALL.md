@@ -35,3 +35,52 @@
 ## 云端范围
 
 本安装只在本机建立上述链接和配置。Cursor 托管 Cloud Agent 要使用这些 skills，还需要用户在 Settings → Agents 打开 Sync Skills for Cloud Agents。该同步只复制 `~/.cursor/skills/` 的内容。`~/.cursor/rules`、`cli-config.json` 和 status line 不进入该同步。安装完成时报告该开关仍需人工确认。
+
+## 自主推进阶段角色
+
+宿主配置 helper `scripts/host_agents.py` 需要 Python 3.11 或更高版本（使用标准库 `tomllib`）；按当前工作区规定选择满足此要求的解释器。
+
+所有 Cursor 使用形态共用 `agents/*.md` 和 [自主推进适配](AUTONOMY.md)。原生文件遵循
+[Cursor Subagents 格式与模型参数](https://cursor.com/docs/subagents)：Markdown + YAML
+frontmatter，使用明确的 `name`、`description` 与 `model`。安装时将本目录四个
+`agents/*.md` 分别以绝对软链接安装到 `~/.cursor/agents/<name>.md`，比较目标后再替换，
+保留未收录个人内容与无关 agents。更新只清理指向本仓库 `cursor/agents/`、已无对应源文件
+的链接。不给所有后代设置统一模型，不设置宽松权限或自动 worktree 隔离。
+
+本轮经用户确认，一级阶段统一 Grok 最新型号；2026-10-17 按
+[官方模型页](https://cursor.com/docs/models/grok-4-7)解析并固定为 `grok-4.7`：设计审查 / 实现 /
+代码审查 / 修复依次 `xhigh` / `high` / `xhigh` / `high`，均显式 `fast=false`。
+原生 `model` 以 `grok-4.7[effort=xhigh,fast=false]` 或 high 变体表达。官方模型页确认四种
+effort；本机只读 `agent models` 同时列出 `grok-4.7-high`、`grok-4.7-xhigh` 及各自 fast
+变体，CLI 帮助确认方括号参数写法。升级型号是一次明确配置维护，不在每次运行时动态
+改用新的型号。若当前环境不支持指定 effort 或非 fast 变体，报告具体能力缺失，不降档。
+
+安装后运行：
+
+```sh
+python3 <dev-kit-root>/scripts/host_agents.py check --host cursor
+```
+
+应返回 `disk_ready=true`。该检查只验证文件与技能入口，不能代替真实发现和工具调用。
+新会话确认四原生角色已加载、无同名项目级遮蔽，按 [官方嵌套限制](https://cursor.com/docs/subagents#faq)
+核对 Task 工具允许主控 → reviewer → quality 两跳；不可要求更深的后代再派发。
+主控 alwaysApply 规则的 Composer 路由仅适用于普通主会话；自主推进及其执行者按适配
+执行。质量子代理不能实际启动时报告阻塞。
+
+[官方模型回退说明](https://cursor.com/docs/subagents#when-the-configured-model-wont-be-used)
+指出账户或管理员限制可能使指定模型回退；配置文件不是实际型号证据。只比较真实工具
+回执 / 任务卡直接提供的信息；未暴露则标记未验证，发现不匹配不得静默接受。
+[官方 Hooks 会话元数据](https://cursor.com/docs/hooks#common-schema)中的 `conversation_id`
+可提供稳定主控身份；不用逐轮 `generation_id` 或随机值替代。
+
+本机链接不自动部署到云端。云端复用同一适配和业务流程，在实际环境中配置共享 skills、
+四角色和可读 dev-kit 副本；仅 Sync Skills 不会带上原生 agents、用户规则或 helper。
+按照 [官方 SDK 配置来源](https://cursor.com/docs/sdk/typescript#configuration-sources-at-a-glance)
+在执行环境中提供项目级角色或对应原生注入定义并核对实际生效来源；不修改业务仓库来
+自动布置这些文件。云端权限与信任仍由实际 harness 决定。
+
+云端项目角色使用 `host_agents.py check --host cursor --agents-dir <project>/.cursor/agents
+--skills-dir <cloud-skills>`，接受与仓库模板内容一致的普通角色文件和完整技能副本。
+原生注入改用 `--roles-file <loaded-roles.json>`；其角色配置和来源格式见
+[自主推进适配](AUTONOMY.md)。显式指定真实生效来源，检查器不会从本机目录推断云端配置，
+也不会把配置清单当作实际发现或运行型号证据。默认本机检查仍要求仓库软链接。

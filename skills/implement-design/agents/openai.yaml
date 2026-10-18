@@ -1,6 +1,6 @@
 interface:
   display_name: "Implement Design"
-  short_description: "Resolve implementation TODOs, then plan or write code"
-  default_prompt: "Use $implement-design to understand the approved Why and What, discuss implementation choices, and produce actionable TODOs as the final plan in native Plan mode or execute them in Agent mode."
+  short_description: "Implement an approved contract or prepare its native Plan"
+  default_prompt: "Use $implement-design to realize the approved Why and What, decide internal implementation choices within the contract, and verify the result. Return executable TODOs in native Plan mode; execute the assigned implementation scope in Agent mode."
 policy:
   allow_implicit_invocation: true

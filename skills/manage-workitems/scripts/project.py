@@ -62,6 +62,9 @@ def _save_identity(root, request):
 def _error_details(error):
     message = str(error)
     result = {"error": message}
+    if isinstance(error, runtime.ProjectPermissionError):
+        result.update(code="host_permission_required", permission_path=error.path,
+                      required_access="write", action="request_host_permission")
     marker = "retained bundle/journal: "
     if marker in message:
         directory = Path(message.rsplit(marker, 1)[1].strip())
@@ -657,6 +660,29 @@ def parser():
             sources.add_argument("--clear-sources", action="store_true")
             knowledge.add_argument("--source-revision", action="append", metavar="PATH=REVISION")
             knowledge.add_argument("--source-sha256", action="append", metavar="PATH=SHA256")
+    autonomy = sub.add_parser("autonomy")
+    advancing = autonomy.add_subparsers(dest="autonomy_action", required=True)
+    for action in ("status", "authorize"):
+        command = advancing.add_parser(action)
+        selected = command.add_mutually_exclusive_group(required=True)
+        selected.add_argument("--all", dest="all_items", action="store_true")
+        selected.add_argument("--tree")
+        selected.add_argument("--item", dest="items", action="append")
+        if action == "authorize":
+            command.add_argument("--approval-source", required=True)
+            command.add_argument("--skip-design-review", action="store_true")
+            command.add_argument("--predevelop", action="store_true")
+    for action in ("dispatch", "result", "accept", "resume", "retire", "snapshot", "prepare"):
+        command = advancing.add_parser(action)
+        command.add_argument("item")
+        if action in {"dispatch", "result", "retire"}:
+            command.add_argument("--receipt-file", required=True)
+        if action == "dispatch":
+            command.add_argument("--role", choices=("design-review", "implementation", "code-review", "fix", "design-revision", "baseline", "rebase"), required=True)
+        if action == "accept":
+            command.add_argument("--approval-source", required=True)
+        if action == "resume":
+            command.add_argument("--attempt", required=True)
     sub.add_parser("refresh")
     sub.add_parser("status")
     sub.add_parser("removal-plan")
@@ -667,7 +693,7 @@ def parser():
     begin.add_argument("operation")
     begin.add_argument("selector", nargs="?")
     for name in ("title", "slug", "parent", "repository", "approval-source", "result", "provenance",
-                 "reviewer-session", "review-file", "branch",
+                 "reviewer-session", "review-file", "branch", "execution",
                  "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode"):
         begin.add_argument("--" + name)
     begin.add_argument("--skip-design-review", action="store_true", default=None)
@@ -801,6 +827,9 @@ def _public_result(result, args):
         if recovery.get("journal"):
             command += ["--journal", recovery["journal"]]
         result["next_command"] = shlex.join(command)
+        if result.get("stage_result_pending") and result.get("continuation_command"):
+            result["publication_next_command"] = result["next_command"]
+            result["next_command"] = result["continuation_command"]
         result["action"] = "resume"
         result.pop("finish_command", None)
     if result.get("status") in {"partial", "blocked"}:
@@ -812,7 +841,26 @@ def _public_result(result, args):
 def main(argv=None):
     try:
         args = parser().parse_args(argv)
-        if args.command == "begin":
+        if args.command == "autonomy":
+            autonomy = _module("project_autonomy")
+            action = args.autonomy_action
+            if action in {"status", "authorize"}:
+                options = {key: getattr(args, key) for key in ("all_items", "tree", "items")}
+                if action == "authorize":
+                    options.update(approval_source=args.approval_source, skip_design_review=args.skip_design_review, predevelop=args.predevelop, publish=publish_changes)
+                result = getattr(autonomy, action)(args.root, **options)
+            elif action == "resume":
+                result = autonomy.resume(args.root, args.item, attempt=args.attempt, publish=publish_changes)
+            elif action == "accept":
+                result = autonomy.accept(args.root, args.item, approval_source=args.approval_source, publish=publish_changes)
+            elif action in {"snapshot", "prepare"}:
+                result = getattr(_module("project_predevelopment"), action)(args.root, args.item, publish=publish_changes)
+            else:
+                options = {"receipt": _json_input(args.receipt_file), "publish": publish_changes}
+                if action == "dispatch":
+                    options["role"] = args.role
+                result = getattr(autonomy, action)(args.root, args.item, **options)
+        elif args.command == "begin":
             result = _module("project_workflow").begin(args.root, args.operation, args.selector,
                                                        options=_begin_options(args), publish=publish_changes)
         elif args.command == "finish":

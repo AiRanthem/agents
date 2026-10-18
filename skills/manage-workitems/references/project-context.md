@@ -13,6 +13,7 @@ Requirements and design work use the complete selected current requirement and s
 | Deterministic project migration and instruction refresh | [upgrade-project](../../upgrade-project/SKILL.md) |
 | Decompose a requirement into usable deliverables | [split-workitem](../../split-workitem/SKILL.md) |
 | Requested design or implementation | [develop-workitem](../../develop-workitem/SKILL.md) |
+| Explicit scoped autonomous advancement | [advance-project](../../advance-project/SKILL.md), through the [coordinator interface](commands.md#autonomous-advancement) |
 | Verify actual delivery or separately requested cleanup | [complete-workitem](../../complete-workitem/SKILL.md) |
 | Remove the selected local project | [delete-project](../../delete-project/SKILL.md) |
 
@@ -22,6 +23,6 @@ Shared project knowledge is global and may remain valid without an item pointer.
 
 [Schema](schema.md) defines record ownership; [workflow](workflow.md) defines lifecycle evidence and authorization. [Main-workspace association](main-workspace.md) describes the separate business context boundary. [Recovery](recovery.md), [Aone](aone.md) and [persistence](persistence.md) describe program responsibilities and the facts to report when execution stops; they do not add agent-selected recovery procedures.
 
-When delegation is authorized for the task, pass the project root, item ID, role, code workdir and required original instruction paths. Each reviewer starts from the returned current inputs and primary repository evidence; do not load obsolete review files or treat another review's conclusions as evidence of an assessment. Code commands use an explicit code workdir and that repository's applicable instructions. A project metadata checkpoint cannot authorize extra source writes, remote deletion or takeover.
+For explicit autonomous advancement, retain the exact selected scope and coordinator identity. Read `autonomy status` for ready/running/blocked/acceptance/delivery collections; continue ready items while reporting affected blockers. When delegation is authorized for the task, pass the project root, item ID, role, bound attempt/input identity, code workdir and required original instruction paths. The trusted coordinator captures actual host spawn/result receipts and native worker identity rather than accepting worker-authored execution claims; an optional host `call_id` must be actually observable. Pass returned `approved_contract` to derived-design reviewers for comparison with the original approved requirement/spec/decision. Each reviewer starts from the returned current inputs and primary repository evidence; do not load obsolete review files or treat another review's conclusions as evidence of an assessment. Code commands use an explicit code workdir and that repository's applicable instructions. A project metadata checkpoint cannot authorize extra source writes, remote deletion or takeover.
 
 known-limit: local serialization uses Unix `flock`; native Windows requires equivalent cross-process locking and concurrency validation before writes are enabled.

@@ -20,7 +20,7 @@ def _component(value, label):
 
 def _root_paths(identifier, root, kind):
     inline = root if isinstance(root, dict) else None
-    if kind in {"design-review", "development-finish", "user_design_review_waiver"}:
+    if kind in {"design-review", "development-finish", "user_design_review_waiver", "predevelopment-snapshot"}:
         if inline is None or inline.get("item") != identifier or inline.get("kind") != kind:
             raise store.StoreError("current " + kind + " root must be a same-item inline record")
     elif not isinstance(root, str):
@@ -69,7 +69,10 @@ def _current_roots(files, identifier):
              sections["delivery"].get("record"), sections["workflow"].get("design_waiver"),
              sections["workflow"].get("cleanup_record"), sections["workflow"].get("development_discard_record"))
     kinds = ("design-review", "development-finish", "delivery-record", "user_design_review_waiver", "cleanup", "cleanup")
-    return [(root, kind) for root, kind in zip(roots, kinds) if root is not None]
+    current = [(root, kind) for root, kind in zip(roots, kinds) if root is not None]
+    for captured in (sections["workflow"].get("autonomy") or {}).get("snapshots", {}).values():
+        current.append((captured, "predevelopment-snapshot"))
+    return current
 
 
 def record_metadata_paths(files, identifier):

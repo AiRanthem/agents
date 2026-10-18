@@ -96,6 +96,23 @@ class DevelopmentTests(unittest.TestCase):
         self.item = store.item(converted, self.item["id"])
         return location, original
 
+    def test_autonomous_preparation_keeps_source_branch_local_and_reuses_dirty_worktree(self):
+        remote_before = git(self.remote, "show-ref")
+        with mock.patch.object(development, "_git", wraps=development._git) as calls:
+            prepared = development.prepare(self.root, self.item, self.project,
+                options={"repository_path": str(self.code)}, publish_branch=False)
+        self.assertFalse(prepared["branch_published"])
+        self.assertFalse(any("push" in call.args[1:] for call in calls.call_args_list))
+        self.assertEqual(git(self.remote, "show-ref"), remote_before)
+        self.item["development"] = prepared
+        location = self.worktree()
+        (location / "code.txt").write_text("unsubmitted implementation\n")
+        again = development.prepare(self.root, self.item, self.project, publish_branch=False)
+        self.assertEqual(again, prepared)
+        self.assertEqual((location / "code.txt").read_text(), "unsubmitted implementation\n")
+        self.assertEqual(git(self.remote, "show-ref"), remote_before)
+        self.assertEqual(git(location, "rev-parse", "HEAD"), prepared["base_commit"])
+
     def test_authenticated_legacy_context_and_prepare_preserve_code_and_remote(self):
         location, original = self.migrate_legacy_development()
         (location / "code.txt").write_text("staged legacy patch\n")

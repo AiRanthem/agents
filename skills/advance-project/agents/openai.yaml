@@ -1,0 +1,4 @@
+interface:
+  display_name: "Advance Project"
+  short_description: "Advance ready project stages to human acceptance"
+  default_prompt: "Use $advance-project to advance the approved scope of this project until its items await human acceptance or are blocked."

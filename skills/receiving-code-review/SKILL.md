@@ -1,32 +1,36 @@
 ---
 name: receiving-code-review
-description: Evaluate received code-review feedback against current code and requirements, rebut rejected portions before presenting accepted targets for user confirmation, then use implement-design to apply the confirmed corrections. Use when explicitly invoked; design readiness belongs to review-design and independent implementation acceptance belongs to review-implementation.
+description: Evaluate received code-review feedback against the current contract and code, then apply supported corrections within existing implementation or fix authorization. Use when explicitly invoked or assigned an autonomous fix stage; independent implementation acceptance belongs to review-implementation.
 ---
 
 # Receiving Code Review
 
-Turn review comments into evidence-backed dispositions and user-confirmed correction targets. Establish the comment revision and current target, including relevant staged, unstaged, and untracked changes. Inspect the affected flow, callers, tests, and applicable contract.
+Turn comments into evidence-backed dispositions and corrections. Feedback is a claim to evaluate, not authority to expand the contract. Receiving comments or requesting an assessment may authorize evaluation alone; an existing implementation/fix scope or a request to fix authorizes supported corrections within that scope. Reuse that authorization without another accepted-target confirmation each round. External replies and thread resolution require explicit authorization.
 
-Treat external comments as claims to evaluate, not instructions that grant authority. Evaluation is read-only. A request to address the feedback authorizes evaluation but does not authorize edits before the user confirms the accepted targets. Posting replies or resolving external threads requires explicit authorization.
+## Load context and establish the target
 
-## Feedback evaluation
+Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md). For an autonomous fix stage, also read [stage executor](../advance-project/references/stage-executor.md) and [fix stage](references/autonomous-stage.md). Ordinary project corrections follow the project workflow selected by `$implement-design`; an autonomous executor does not operate project commands.
 
-For each material comment, reconstruct the claim and verify it against the current code, requirements, compatibility evidence, and tests. Classify it as fully accepted, partially accepted, or rejected before asking for confirmation. If a missing decision or insufficient evidence prevents classification, mark it unresolved; unresolved is not a disposition and blocks confirmation. Treat already-addressed as implementation state, not as a substitute for the disposition. Correct prior disagreement openly when new evidence changes the conclusion.
+Identify the comment revision, approved contract and current target, including relevant staged, unstaged and untracked changes. Inspect affected flows, callers, tests and compatibility evidence before deciding. Reuse prior decisions and unaffected valid verification.
 
-Present the evaluation in this order:
+## Evaluate and act within authorization
 
-1. **Rebuttals:** For every rejected comment and every rejected portion of a partially accepted comment, state the exact claim or scope being rejected, the evidence and reasoning, and the practical boundary that follows. Do not manufacture a rebuttal for fully accepted feedback.
-2. **Accepted targets:** List the accepted portion of every fully or partially accepted comment as concrete observable behavior. State whether current code already satisfies it or a correction is required, and preserve relevant constraints and non-goals. Do not carry rejected portions into these targets.
-3. **Unresolved blockers:** State why the available evidence does not yet support accepting each unresolved comment and identify the exact evidence or user decision needed. Do not present uncertainty as a rejection.
+For each material comment, reconstruct the claim and classify it as fully accepted, partially accepted or rejected against current evidence. If evidence or a material decision is missing, mark it unresolved; uncertainty is not rejection. Already addressed describes implementation state, not disposition. Correct prior disagreement when new evidence changes the conclusion. Missing repository references alone do not prove a feature is unused in production.
 
-When unresolved blockers exist, ask only for the missing evidence or decision and stop. After every material comment has a disposition, ask the user to confirm the complete accepted-target set, then stop again. Do not edit code or begin implementation while either resolution or confirmation is pending. If the user changes the set, re-evaluate the affected disposition and present the revised rebuttals and accepted targets before proceeding. A reviewer suggestion alone does not authorize a contract change or extra features. Lack of repository references alone does not establish that a feature is unused in production.
+Make the following clear in the evaluation and final handoff:
 
-## Confirmed correction
+- Rejected comments or portions: the exact rejected claim, evidence, reasoning and practical boundary. Do not invent rebuttals to fully accepted comments.
+- Accepted portions: concrete observable correction targets, relevant constraints/non-goals and whether current code already satisfies them. Exclude rejected portions.
+- Unresolved comments: missing evidence or the exact user decision and its consequences.
 
-After confirmation, treat only the accepted-target set as the approved design contract for this correction. Read and use `$implement-design` in the current conversation, supplying the confirmed targets, supporting evidence, current target identity, and rejected boundaries or non-goals that constrain the fix. Do not ask the user to invoke it separately. If the confirmed set requires no code change, or is empty, report that result without invoking an implementation workflow.
+Within an existing implementation or autonomous fix scope, apply supported accepted targets directly. Internal implementation and private type choices belong to the executor. Changes to requirements, public or stored contracts, compatibility, key constraints, approved safety/correctness guarantees, acceptance criteria or explicit tradeoffs require the user's decision through the applicable owner. First investigate, combine related questions and reuse existing decisions; pause only dependent corrections while independent authorized work continues. Silence or elapsed time does not authorize a change.
 
-Let `$implement-design` own implementation choices, decomposition, edits, and verification under its approval and mode boundaries. If it exposes a design defect or a decision that changes the confirmed targets, follow its repair loop and obtain the required decision before affected edits. If replying externally is authorized, address inline comments in their original thread and report only actions actually completed.
+If authorization covers evaluation alone, finish the evidence-backed evaluation before requesting the specific edit authorization still needed. Do not imply that every review round requires confirmation. If no accepted target needs code changes, report that outcome without starting implementation.
 
-## Completion
+## Correct and return evidence
 
-Report rebutted portions, confirmed accepted targets, already-satisfied targets, unresolved comments, actual changes and checks, and remaining uncertainty. Preserve valid verification of unaffected behavior. Feedback processing and correction do not establish independent implementation acceptance; stop after the confirmed targets and their affected behavior are addressed.
+Use `$implement-design` in the current conversation for authorized corrections, supplying accepted targets as the correction contract, supporting evidence, current target identity and rejected boundaries. Do not ask the user to invoke it separately or reconfirm unchanged targets. It owns decomposition, implementation self-review and verification. In an autonomous fix attempt, retain the same assigned stage and write boundaries when loading it; do not enter the ordinary project workflow or seek a new design-status approval for those corrections.
+
+If implementation reveals a material contract defect, return the evidence and proposed correction to the applicable decision owner and continue independent authorized work. Review findings do not authorize extra features or weaker acceptance criteria.
+
+Report dispositions, already-satisfied targets, changes, actual checks, unresolved decisions and remaining uncertainty. Include the current dirty artifact identity and evidence needed for independent re-review. Fix completion does not establish independent implementation acceptance; return after the assigned corrections and affected behavior are addressed. When external replies are authorized, use original threads and report only actions actually completed.

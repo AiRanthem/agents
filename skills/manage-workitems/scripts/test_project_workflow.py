@@ -199,6 +199,51 @@ class WorkflowTest(unittest.TestCase):
         blocked = workflow.begin(self.a, "design-review", "A", options={}, publish=self.publisher)
         self.assertEqual(blocked["action_code"], "independent_review_required")
 
+    def test_developing_design_review_keeps_owner_and_registers_independent_report(self):
+        self.designed()
+        report = self.directory / "independent-design-review.md"
+        body = "Independent assessment of the revised requirement, design and source.\n"
+        report.write_text(body)
+        unowned = workflow.begin(self.a, "design-review", "A",
+            options={"reviewer_session": "fresh-reviewer", "review_file": str(report)}, publish=self.publisher)
+        self.assertEqual(unowned["status"], "blocked")
+        self.assertIn("owned developing item", unowned["message"])
+        self.assertEqual(self.finish(self.begin("development-start"))["status"], "published")
+        original = copy.deepcopy(self.record())
+        revision = self.begin("design-update")
+        self.edit(revision, "# Revised design during development\n")
+        self.assertEqual(self.finish(revision)["status"], "published")
+        approval = self.begin("decision-record", approval_source="User approves revised contract")
+        self.edit(approval, "Approved revised design.\n")
+        self.assertEqual(self.finish(approval)["status"], "published")
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "fresh-reviewer"}):
+            blocked = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
+            self.assertEqual(blocked["status"], "blocked")  # No takeover of source ownership.
+        for inputs in ({"reviewer_session": "fresh-reviewer"}, {"review_file": str(report)},
+                       {"reviewer_session": "author", "review_file": str(report)}):
+            with self.subTest(inputs=inputs):
+                blocked = workflow.begin(self.a, "design-review", "A", options=inputs, publish=self.publisher)
+                self.assertEqual(blocked["status"], "blocked")
+        options = {"reviewer_session": "fresh-reviewer", "review_file": str(report)}
+        stale = self.begin("design-review", **options)
+        report.write_text("Different report after review handoff.\n")
+        self.assertEqual(workflow.finish(self.a, stale["ticket"], options={"result": "pass", "provenance": "Actual external reviewer"},
+                                         publish=self.publisher)["code"], "stale_evidence")
+        report.write_text(body)
+        review = self.begin("design-review", **options)
+        self.assertEqual(workflow.finish(self.a, review["ticket"], options={"result": "pass", "provenance": "Actual external reviewer"},
+                                         publish=self.publisher)["status"], "published")
+        item = self.record()
+        self.assertEqual(item["owner"], original["owner"])
+        self.assertEqual(item["development"], original["development"])
+        self.assertEqual(item["design"]["review"]["session"], "fresh-reviewer")
+        self.assertEqual(item["design"]["review"]["recorded_by"], "author")
+        self.assertEqual(item["design"]["review"]["source"]["sha256"], workflow._hash(body))
+        self.assertEqual((self.a / item["design"]["review"]["report"]).read_text(), body)
+        report.unlink()
+        self.assertEqual(self.finish(self.begin("development-start"))["status"], "published")
+
+
     def test_stale_draft_never_overwrites_remote_requirement(self):
         result = self.begin("requirement-update")
         self.edit(result, "My stale version\n")

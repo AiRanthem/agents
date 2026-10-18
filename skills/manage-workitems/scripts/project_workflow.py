@@ -30,11 +30,11 @@ ProjectError = runtime.ProjectError
 OPERATIONS = {
     "create": {"title", "slug", "parent", "repository", "kind", "depends_on", "delivery_required"},
     "fix": {"title", "slug", "fixes", "parent", "repository", "delivery_required"},
-    "requirement-update": set(), "design-update": set(),
+    "requirement-update": set(), "design-update": {"execution"},
     "decision-record": {"approval_source"},
-    "design-review": set(),
-    "development-start": {"base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
-    "development-finish": {"result", "provenance", "reviewer_session", "review_file"},
+    "design-review": {"execution", "reviewer_session", "review_file"},
+    "development-start": {"execution", "base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
+    "development-finish": {"execution", "result", "provenance", "reviewer_session", "review_file"},
     "delivery-record": {"kind", "reference", "commit", "provenance"},
     "context-update": set(), "log-record": set(),
     "cleanup-record": {"cleanup_status", "reference", "mode", "approval_source", "discard_development"},
@@ -117,21 +117,32 @@ def _load(root, ticket):
         raise ProjectError("ticket must be the opaque ID returned by begin")
     directory = _local(root, "edits") / ticket
     runtime._no_links(root, directory.relative_to(root).as_posix())
+    return directory, _load_manifest(root, directory)
+
+
+def _load_manifest(root, directory):
+    """Read a program-signed local checkpoint within the project."""
+    runtime._no_links(root, directory.relative_to(root).as_posix())
     path = directory / "manifest.yaml"
     if not path.is_file():
-        raise ProjectError("unknown edit ticket")
+        raise ProjectError("unknown local workflow checkpoint")
     payload = store.load_yaml(path.read_bytes(), str(path))
     signature = payload.pop("signature", None)
     expected = hmac.new(_key(root), _canonical(payload), hashlib.sha256).hexdigest()
     if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
         raise ProjectError("workflow manifest was modified outside the program")
-    return directory, payload
+    return payload
 
 
-def _identity(root):
+def _session():
     session = os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID")
     if not session:
         raise ProjectError("CODEX_THREAD_ID or PROJECT_SESSION_ID is required for workflow identity")
+    return session
+
+
+def _identity(root):
+    session = _session()
     directory = _local(root, "identities")
     path = directory / (_hash(session) + ".yaml")
     if path.is_symlink():
@@ -227,11 +238,18 @@ def _open_fixes(items, identifier):
                   and item.get("delivery", {}).get("status") != "delivered")
 
 
-def _blocked(items, identifier):
+def _blocked(items, identifier, *, speculative=False):
     item = items[identifier]
+    predevelopment = _autonomy_module()._predevelopment()
+    if not speculative and (predevelopment.state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"}:
+        raise ProjectError("checkpoint blocked: predevelopment requires formal convergence")
+    pinned = predevelopment.pins(item) if speculative else {}
     pending = [key for key in item.get("depends_on", [])
-               if items[key].get("delivery", {}).get("status") != "delivered" or items[key].get("status") == "cancelled"]
+               if key not in pinned and (items[key].get("delivery", {}).get("status") != "delivered" or items[key].get("status") == "cancelled")]
     fixes = _open_fixes(items, identifier)
+    if (items[identifier].get("workflow") or {}).get("autonomy"):
+        pending.extend(key for key in item.get("depends_on", [])
+                       if key not in pinned and ((items[key].get("workflow") or {}).get("autonomy", {}).get("acceptance") or {}).get("status") != "accepted" and key not in pending)
     if pending or fixes:
         raise ProjectError("checkpoint blocked: undelivered dependencies=" + ",".join(pending) +
                            "; open upstream fixes=" + ",".join(fixes))
@@ -268,11 +286,12 @@ def _approved(files, item):
             any(approval.get(key) != value for key, value in _approval_binding(files, item).items()) or
             any(review.get(key) != value for key, value in _binding(files, item, actual_base).items()) or
             review.get("session") in {approval.get("session"), design.get("author_session")} or
-            not review.get("provenance") or item.get("needs_review")):
+            not review.get("provenance") or item.get("needs_review") or
+            not _autonomy_module().review_inputs_current(files, item, review)):
         raise ProjectError("design approval or independent review is stale or incomplete")
 
 
-def _implementation_approved(files, item):
+def _implementation_approved(files, item, *, missing_root=None):
     development = item.get("development") or {}
     review = development.get("review") or {}
     if item.get("kind") == "aggregate":
@@ -280,6 +299,7 @@ def _implementation_approved(files, item):
     if (review.get("result") != "pass" or not review.get("provenance") or
             not review.get("session") or review.get("session") == development.get("author_session") or
             review.get("code_snapshot") != development.get("reviewed_snapshot") or
+            not _autonomy_module().review_inputs_current(files, item, review, missing_root=missing_root) or
             any(review.get(key) != value for key, value in _binding(files, item, development.get("base_commit")).items())):
         raise ProjectError("delivery requires a current independent implementation review")
 
@@ -301,11 +321,21 @@ def _read_payload(root, files, item, operation):
               for path in sorted(selected) if path in files]
     items = store.items(files)
     extra_items = set(item.get("depends_on", [])) if operation in {"design-update", "design-review", "development-start", "development-finish"} else set()
+    pinned = _autonomy_module()._predevelopment().pins(item)
+    if extra_items:
+        extra_items.update(pinned)
     if operation == "fix":
         extra_items.add(item["fixes"])
     for identifier in sorted(extra_items):
         upstream = items[identifier]
-        paths = {_documents(upstream)["requirement"], _spec(upstream)}
+        if identifier in pinned:
+            captured = pinned[identifier]
+            path = captured["report"]
+            if path not in files or _hash(files[path]) != captured["artifact_sha256"]:
+                raise ProjectError("frozen prerequisite contract is missing or changed: " + identifier)
+            paths = {path}
+        else:
+            paths = {_documents(upstream)["requirement"], _spec(upstream)}
         if operation == "fix":
             paths.add(_documents(upstream)["context"])
         for path in sorted(paths):
@@ -355,6 +385,9 @@ def _options(operation, options):
             if options.get("result") not in {"pass", "fail"}:
                 raise ProjectError("review result must be pass or fail")
             _text(options.get("provenance"), "review provenance")
+    if operation == "design-review" and {"reviewer_session", "review_file"}.intersection(options):
+        _text(options.get("reviewer_session"), "actual independent design reviewer session")
+        _text(options.get("review_file"), "independent design review file")
     if operation == "decision-record" and "approval_source" in options:
         _text(options["approval_source"], "actual user approval source")
     if operation == "delivery-record":
@@ -463,6 +496,42 @@ def _checks(files, item, operation):
     return {path: _hash(files.get(path)) for path in sorted(selected)}
 
 
+def _autonomy_module():
+    try:
+        import project_autonomy
+    except ImportError:
+        from . import project_autonomy
+    return project_autonomy
+
+
+def _execution(root, files, item, operation, options, *, require_result=False):
+    attempt = options.get("execution")
+    if not attempt:
+        autonomy = ((item.get("workflow") or {}).get("autonomy") or {})
+        if autonomy.get("current") or (autonomy.get("authorization") and operation in {"design-review", "development-start", "development-finish"}):
+            raise ProjectError("autonomous stage requires its bound captured execution attempt")
+        return None
+    entry = _autonomy_module().execution(root, files, item, attempt, operation, require_result=require_result)
+    expected_result = "fail" if entry.get("result", {}).get("outcome") == "revised" else entry.get("result", {}).get("outcome")
+    if require_result and operation in {"design-review", "development-finish"} and options.get("result") != expected_result:
+        raise ProjectError("review result does not match captured host execution")
+    return entry
+
+
+def _actor(item, identity, execution, operation, options):
+    actor = execution["worker_id"] if execution else identity["session"]
+    if operation in {"design-review", "development-finish"} and options.get("reviewer_session"):
+        reviewer = options["reviewer_session"]
+        if operation == "design-review" and not execution and (item.get("status") != "developing" or not item.get("owner")):
+            raise ProjectError("external design review registration requires an owned developing item")
+        if execution and reviewer != actor:
+            raise ProjectError("reviewer session does not match captured host execution")
+        if reviewer == identity["session"]:
+            raise ProjectError("reviewer must be independent from the registering session")
+        actor = reviewer
+    return actor
+
+
 def _begin(root, operation, selector=None, *, options=None, publish=None):
     """Refresh, claim the item and return only relevant prose and fixed edit paths."""
     if operation not in OPERATIONS:
@@ -474,13 +543,15 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     items = store.items(files)
     item = _new_item(items, options, operation) if operation in {"create", "fix"} else copy.deepcopy(items[_resolve(items, selector)])
     identifier = item["id"]
+    execution = _execution(root, files, item, operation, options)
+    actor = _actor(item, identity, execution, operation, options)
     if item.get("archived") and operation != "archive":
         raise ProjectError("archived work item cannot be edited")
     if item.get("status") == "done" and operation not in {"context-update", "log-record", "archive", "rename", "cleanup-record"}:
         raise ProjectError("delivered history cannot reopen; create a separate fix work item")
     _ownership(item, identity)
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier)
+        _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -489,9 +560,12 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
             _approved(files, item)
     if operation == "design-review":
         approval = _design(item).get("approval")
-        if not isinstance(approval, dict) or _design(item).get("state") != "review-pending":
+        allowed_states = {"draft", "review-pending", "implementable"} if execution else {"review-pending"}
+        if (not isinstance(approval, dict) or _design(item).get("state") not in allowed_states
+                or (execution and any(approval.get(key) != value
+                                      for key, value in _approval_binding(files, item).items()))):
             raise ProjectError("design review requires recorded current user approval")
-        if identity["session"] in {approval.get("session"), _design(item).get("author_session")} :
+        if actor in {approval.get("session"), _design(item).get("author_session")} :
             raise ProjectError("independent design reviewer must use a different session from the design author")
     if operation == "development-finish":
         if not item.get("development") or item.get("status") not in {"developing", "awaiting_delivery"}:
@@ -500,13 +574,19 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
             raise ProjectError("implementation reviewer must use a different session")
     review_source = None
     if options.get("review_file"):
-        source = Path(options["review_file"]).absolute()
-        for component in (source, *source.parents):
-            if component.is_symlink():
-                raise ProjectError("review source cannot use symlinks")
-        if not source.is_file():
-            raise ProjectError("review source must be an actual report file")
-        review_source = {"path": str(source), "sha256": _hash(source.read_bytes())}
+        if execution:
+            if options["review_file"] != (execution.get("result") or {}).get("report_file"):
+                raise ProjectError("review source differs from the captured execution report")
+            body = _autonomy_module()._captured_body(execution, "report")
+            review_source = {"body": body, "sha256": _hash(body)}
+        else:
+            source = Path(options["review_file"]).absolute()
+            for component in (source, *source.parents):
+                if component.is_symlink():
+                    raise ProjectError("review source cannot use symlinks")
+            if not source.is_file():
+                raise ProjectError("review source must be an actual report file")
+            review_source = {"path": str(source), "sha256": _hash(source.read_bytes())}
     if operation == "development-finish" and review_source is None:
         raise ProjectError("implementation review requires an actual review_file")
     if operation == "cleanup-record":
@@ -573,9 +653,12 @@ def _prepare_context(root, directory, manifest, files, publish):
     manifest["item"] = item
     if operation in CODE_PREPARATION_OPERATIONS and item.get("repository"):
         development = dict(item.get("development") or {})
-        development.update(_development_module().prepare(root, item, store.project(files), options=options))
+        development.update(_development_module().prepare(root, item, store.project(files), options=options, publish_branch=not bool(options.get("execution"))))
         if development != item.get("development"):
             item["development"] = development
+            if options.get("execution"):
+                entry = item["workflow"]["autonomy"]["executions"][options["execution"]]
+                entry["input_binding"] = _autonomy_module()._binding(root, files, item)
             item.setdefault("workflow", {}).pop("development_discard_record", None)
             item["cleanup"] = "pending"
             writes = store.write_item(files, item)
@@ -625,7 +708,8 @@ def _open_edit(root, directory, manifest, files):
     for name, (target, template) in _drafts(operation, item, files).items():
         path = directory / name
         if name == "report.md" and review_source:
-            template = Path(review_source["path"]).read_text(encoding="utf-8")
+            template = (review_source["body"] if "body" in review_source else
+                        Path(review_source["path"]).read_text(encoding="utf-8"))
         path.write_text(template, encoding="utf-8")
         manifest["drafts"][name] = {"target": target, "initial_sha256": _hash(template)}
         editable.append({"path": str(path), "template": template})
@@ -690,6 +774,10 @@ def _dependency_digest(files, item):
     records = {key: {"status": items[key].get("status"), "delivery": items[key].get("delivery"),
                      "requirement": _hash(files.get(_documents(items[key])["requirement"])),
                      "spec": _hash(files.get(_spec(items[key])))} for key in sorted(upstream)}
+    for key in records:
+        captured = _autonomy_module()._predevelopment().frozen_dependency(item, key)
+        if captured:
+            records[key] = {"snapshot": captured}
     fixes = {key: {"fixes": value["fixes"], "status": value.get("status"), "delivery": value.get("delivery")}
              for key, value in items.items() if value.get("fixes") in upstream and key != item["id"]}
     return _hash(_canonical({"upstream": records, "fixes": fixes}))
@@ -715,6 +803,9 @@ def _report(root, manifest, item, files, writes, kind, content):
 
 
 def _invalidate_implementation(item):
+    autonomy = (item.get("workflow") or {}).get("autonomy")
+    if autonomy:
+        autonomy.pop("acceptance", None)
     if item.get("status") == "awaiting_delivery":
         item["status"] = "in_progress"
     development = item.get("development")
@@ -731,6 +822,13 @@ def _prepare_finish(root, manifest, files, drafts):
     items = store.items(files)
     item = copy.deepcopy(manifest["item"] if operation in {"create", "fix"} else items[manifest["item"]["id"]])
     identifier = item["id"]
+    execution = _execution(root, files, item, operation, options, require_result=operation != "development-start")
+    actor = _actor(item, identity, execution, operation, options)
+    if execution and operation in {"design-review", "development-finish", "design-update"}:
+        expected = execution.get("candidate_sha256") if operation == "design-update" else execution["report"]["sha256"]
+        content = drafts.get("spec.md") if operation == "design-update" else drafts.get("report.md")
+        if _hash(content) != expected:
+            raise ProjectError("stage draft differs from the captured execution artifact")
     approval = _design(item).get("approval")
     if isinstance(approval, dict):
         approval.pop("record", None)
@@ -738,7 +836,7 @@ def _prepare_finish(root, manifest, files, drafts):
         raise ProjectError("allocated work item ID was published by another session; begin again")
     _ownership(item, identity)
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier)
+        _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -770,11 +868,29 @@ def _prepare_finish(root, manifest, files, drafts):
         design = _design(item)
         if _hash(writes[_spec(item)]) != _hash(files.get(_spec(item))):
             _invalidate_implementation(item)
+            if execution and design.get("author_session"):
+                authors = item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("design_authors", [])
+                if design["author_session"] not in authors:
+                    authors.append(design["author_session"])
             design["version"] += 1
-            design["author_session"] = identity["session"]
+            design["author_session"] = actor
             design["state"] = "draft"
             design.pop("approval", None)
             design.pop("review", None)
+            if execution:
+                if execution["result"].get("outcome") != "revised":
+                    raise ProjectError("autonomous design update requires a captured revised result")
+                original = copy.deepcopy(approval)
+                if not original:
+                    raise ProjectError("contract-internal revision requires the original user approval")
+                prospective = store.apply_writes(files, writes)
+                derived = {**_approval_binding(prospective, item), "kind": "derived_revision",
+                           "source": original["source"], "session": actor,
+                           "original_user_approval": original.get("original_user_approval", original),
+                           "execution": execution["attempt"]}
+                design["approval"] = derived
+                design["state"] = "review-pending"
+                item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("design_authors", []).append(actor)
     elif operation == "decision-record":
         _text(writes[documents["decision"]], "decision body")
         if "approval_source" in options:
@@ -793,13 +909,20 @@ def _prepare_finish(root, manifest, files, drafts):
         _text(drafts["report.md"], "review report")
         design = _design(item)
         approval = design.get("approval")
-        if not isinstance(approval, dict) or identity["session"] in {approval.get("session"), design.get("author_session")} :
+        if not isinstance(approval, dict) or actor in {approval.get("session"), design.get("author_session")} :
             raise ProjectError("independent review requires current approval from a different session")
         # The approval baseline is the design's baseline, not the subsequent
         # management commit that recorded approval or claimed this edit.
         manifest["base_commit"] = _base(item)
         record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
         record["result"] = options["result"]
+        if execution or options.get("reviewer_session"):
+            record.update(session=actor, recorded_by=identity["session"])
+        if manifest.get("review_source"):
+            record["source"] = copy.deepcopy(manifest["review_source"])
+        if execution:
+            record.update(execution=execution["attempt"],
+                          contract_unchanged=execution["result"].get("contract_unchanged"))
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         if any(approval.get(key) != value for key, value in _approval_binding(files, item).items()):
             raise ProjectError("design approval is stale")
@@ -818,8 +941,12 @@ def _prepare_finish(root, manifest, files, drafts):
         else:
             _approved(files, item)
         if item.get("status") != "developing":
-            item["development"] = _development_module().prepare(root, item, store.project(files), options=options)
-            item["development"]["author_session"] = identity["session"]
+            item["development"] = _development_module().prepare(root, item, store.project(files), options=options, publish_branch=not bool(options.get("execution")))
+            item["development"]["author_session"] = actor
+        if execution:
+            authors = item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("code_authors", [])
+            if actor not in authors:
+                authors.append(actor)
         item.setdefault("workflow", {}).pop("development_discard_record", None)
         item["status"] = "developing"
         item["owner"] = identity
@@ -834,6 +961,8 @@ def _prepare_finish(root, manifest, files, drafts):
         record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
         record.update(result=options["result"], code_snapshot=current, session=options["reviewer_session"],
                       recorded_by=identity["session"])
+        if execution:
+            record["execution"] = execution["attempt"]
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         development["review"] = record
         development["reviewed_snapshot"] = current
@@ -841,6 +970,8 @@ def _prepare_finish(root, manifest, files, drafts):
             item["status"] = "awaiting_delivery"
             item["owner"] = None
     elif operation == "delivery-record":
+        if ((item.get("workflow") or {}).get("autonomy") or {}).get("authorization") and not _autonomy_module()._acceptance_valid(root, files, item):
+            raise ProjectError("delivery requires current explicit user acceptance")
         _implementation_approved(files, item)
         if item["kind"] == "development":
             review = (item.get("development") or {}).get("review") or {}
@@ -964,6 +1095,10 @@ def _compact_finished(root, directory, manifest):
         (directory / name).unlink(missing_ok=True)
     tombstone = {key: manifest[key] for key in ("ticket", "operation", "identity", "created_at", "state")}
     tombstone["item"] = {"id": manifest["item"]["id"]}
+    execution = manifest.get("execution") or manifest.get("options", {}).get("execution")
+    if execution:
+        tombstone["execution"] = execution
+        tombstone["read_hashes"] = manifest.get("read_hashes", {})
     if manifest != tombstone:
         _save(root, directory, tombstone)
     return tombstone
@@ -995,8 +1130,13 @@ def _finish(root, ticket, *, options=None, publish=None):
     drafts = _validate_edits(directory, manifest)
     source = manifest.get("review_source")
     if source and manifest["state"] not in {"claim-pending", "context-pending", "context-publication-pending"}:
-        path = Path(source["path"])
-        if any(component.is_symlink() for component in (path, *path.parents)) or not path.is_file() or _hash(path.read_bytes()) != source["sha256"] or _hash(drafts["report.md"]) != source["sha256"]:
+        if "body" in source:
+            source_current = _hash(source["body"]) == source["sha256"]
+        else:
+            path = Path(source["path"])
+            source_current = (not any(component.is_symlink() for component in (path, *path.parents))
+                              and path.is_file() and _hash(path.read_bytes()) == source["sha256"])
+        if not source_current or _hash(drafts["report.md"]) != source["sha256"]:
             return _stale(root, manifest, "Independent review artifact changed; draft is retained.")
     files = _snapshot(root)
     if manifest["state"] == "context-pending":
@@ -1038,7 +1178,7 @@ def _finish(root, ticket, *, options=None, publish=None):
         current = _checks(files, manifest["item"], manifest["operation"])
         if manifest["operation"] in {"development-start", "development-finish", "delivery-record"}:
             try:
-                _blocked(store.items(files), manifest["item"]["id"])
+                _blocked(store.items(files), manifest["item"]["id"], speculative=bool(manifest.get("options", {}).get("execution")) and manifest["operation"] != "delivery-record")
                 if manifest["operation"] == "delivery-record":
                     _implementation_approved(files, store.item(files, manifest["item"]["id"]))
                 elif (manifest["operation"] != "development-finish" or store.item(files, manifest["item"]["id"]).get("status") != "awaiting_delivery") and not (manifest["operation"] == "development-start" and manifest["options"].get("skip_design_review")):

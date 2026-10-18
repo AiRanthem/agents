@@ -1,0 +1,7 @@
+# Delegation and task context
+
+Delegate substantive work when added coverage or parallel benefit outweighs startup, reading, verification and integration cost. Reuse sufficient current evidence or continue with a suitable existing executor first. Keep one owner for related investigation; do not split it by tool call or file, or create tasks to fill capacity. Dispatch worthwhile independent workstreams early. Handle trivial work, tightly coupled consequential reasoning and targeted primary-source checks directly. A missing fact, permission or tool is not solved by changing models.
+
+Give the executor the result, scope/target version, authorization, constraints, acceptance criteria, evidence index and remaining gap. Use `fork_turns: "none"`; pass no full session or routing policy. Load only applicable role/mode inputs. Inputs already read in the current context need no reread while unchanged; preserve mandatory instruction reloads, complete contracts and necessary primary-source inspection. Summaries index original inputs. Executors check and repair their work before handoff.
+
+When explicitly selecting an Astra subagent, use the native `astra-delegate` role and pass the selected model and effort explicitly. Its persistent developer instructions reload the scoped policy after compaction; startup hook context alone is insufficient. If the host cannot select that role or provide equivalent persistent developer instructions, report that missing capability for the Astra assignment. Preserve any user-designated role and required independent review.

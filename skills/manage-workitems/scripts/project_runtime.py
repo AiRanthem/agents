@@ -8,6 +8,7 @@ transitions and external reconciliation use the higher-level workflow commands.
 import argparse
 import contextlib
 import fcntl
+import errno
 import hashlib
 import json
 import os
@@ -34,6 +35,14 @@ LAYOUT_RESERVED = {".git", ".project", ".project-local"}
 
 class ProjectError(Exception):
     """An operation stopped without claiming publication success."""
+
+
+class ProjectPermissionError(ProjectError):
+    """The harness must permit the same locked project operation."""
+
+    def __init__(self, path, error):
+        self.path = str(path)
+        super().__init__(f"project operation requires write access to {path}: {error}")
 
 
 def _json_object(pairs):
@@ -718,6 +727,14 @@ def _validate_files(root, files):
                     type(design.get("version")) is int and design["version"] >= 0 and
                     design.get("state") in {"draft", "review-pending", "implementable"}):
                 errors.append(prefix + "design requires file spec.md, nonnegative integer version and draft/review-pending/implementable state")
+            try:
+                try:
+                    from project_autonomy import validate_state
+                except ImportError:
+                    from .project_autonomy import validate_state
+                validate_state(record)
+            except ProjectError as exc:
+                errors.append(prefix + str(exc))
             documents = record.get("documents")
             if not isinstance(documents, dict) or any(not _identifier(key) or not isinstance(value, str) or
                     len(PurePosixPath(value).parts) != 1 or value not in {
@@ -912,7 +929,13 @@ def _project_lock(root):
     lock = common / "project-publish.lock"
     if lock.is_symlink():
         raise ProjectError("publication lock cannot be a symlink")
-    with lock.open("a+b") as handle:
+    try:
+        handle = lock.open("a+b")
+    except OSError as error:
+        if error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}:
+            raise ProjectPermissionError(lock, error) from error
+        raise
+    with handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield
@@ -1215,12 +1238,13 @@ def publication_disposition(state):
     return "pending"
 
 
-def resume_publication(root, *, session=None, token=None, journal=None):
+def resume_publication(root, *, session=None, token=None, journal=None, expected_write_hashes=None):
     """Recover one existing publication intent; retry its candidate at most once.
 
     Only an unchanged original remote base permits a retry. A published candidate
     must still satisfy its writes/guards before the clean root can fast-forward.
     No candidate or bundle is rebuilt, and ambiguous outcomes retain their journal.
+    Callers recovering an unlinked intent can require exact saved write hashes.
     """
     root = find_project(root)
     if not _nonempty(session) or token is not None and not _nonempty(token):
@@ -1277,6 +1301,13 @@ def resume_publication(root, *, session=None, token=None, journal=None):
                 selected, state, bundle = candidates[0]
             else:
                 selected, state, bundle = owned_journal(Path(journal))
+            if expected_write_hashes is not None and (not expected_write_hashes or any(
+                    name not in bundle["writes"] or
+                    (hashlib.sha256(bundle["writes"][name].encode("utf-8")).hexdigest()
+                     if bundle["writes"][name] is not None else None) != expected
+                    for name, expected in expected_write_hashes.items())):
+                return blocked("publication_intent_mismatch",
+                               "saved publication writes do not match the retained operation", selected)
             if publication_disposition(state) == "rejected_before_push":
                 return blocked("publication_rejected_before_push",
                                "Publication was rejected before push; its saved writes will not be replayed. "

@@ -27,12 +27,27 @@ alwaysApply: true
 
 # Subagent Delegation
 
+The routing rules in this section apply only to ordinary main-agent work. During
+an explicitly started `advance-project` run, the coordinator uses the installed
+shared skill and `cursor/AUTONOMY.md`, dispatches the configured native stage roles,
+and does not force Composer or choose a model by difficulty. Stage executors are
+explicitly authorized to delegate within their assignments and freely choose
+models and effort for their descendants within actual host limits; the ordinary
+routing below does not apply to them. After the run, ordinary main-agent work
+uses the following rules.
+
+## Ordinary main-agent work
+
 When dispatching or reassigning a subagent, report its task and the model specified in the dispatch parameters. Do not inspect or verify the subagent's runtime settings.
 
 When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Subagents stay within their assignment and delegate further only when explicitly authorized.
 
 Pass `composer-2.5-fast` for every delegated subagent, independently of the main agent's model. Delegate work that is clearly simple and bounded and whose result is easy to verify. Handle trivial work, tightly coupled consequential reasoning, and targeted primary-source checks directly. When a local check grows into a separable investigation, delegate the remainder with the evidence already gathered.
 
-After the minimum orientation needed to define assignments, actively delegate read-heavy work to concurrent `composer-2.5-fast` subagents before investigating it yourself, so independent reading proceeds in parallel and elapsed time stays low. Read-heavy work includes source discovery, documentation and code research, and evidence collection. Send independent workstreams in the same turn. Keep related searches and reads in one investigation, even when each lookup is small.
+After minimum orientation, delegate eligible read-heavy work when added coverage or parallel benefit outweighs startup, reading and integration cost. Reuse sufficient current evidence or continue with a suitable existing executor before creating another agent. Keep one owner for related research; do not split it by tool call or file, or create tasks to fill capacity. Send worthwhile independent workstreams together before investigating them yourself.
 
-Give each subagent the intended result, scope, constraints, acceptance criteria, and minimal sufficient context. Require a concise conclusion, the evidence locations, and any unresolved issues. A missing fact, permission, or tool stays with the main agent. If the returned result is insufficient, preserve the valid part and finish the remainder directly. If `composer-2.5-fast` is absent from the allowed model list, report that and keep the work on the main agent.
+Give each subagent the intended result, scope and target version, constraints, acceptance criteria, evidence locations and remaining gaps. Use a fresh context where supported; do not copy the whole session or routing policy. Load only applicable role/mode instructions. Inputs already read in the current context need no reread while unchanged; preserve mandatory instruction reloads, complete contracts and necessary primary-source inspection. Summaries index original inputs rather than replace them. A missing fact, permission, or tool stays with the main agent. If the result is insufficient, preserve the valid part and finish the remainder directly. If `composer-2.5-fast` is absent from the allowed model list, report that and keep the work on the main agent.
+
+Give each concrete check one execution owner in the task tree. Share its target, command/cwd, relevant environment, status (`running`, `passed`, `failed`, `stale`) and accessible raw output. Wait for a running owner's result by default. Reuse completed results after checking scope, inputs, exit status and logs; add checks for an uncovered risk, invalidated result or inaccessible evidence, not merely to make verification independent. After a fix, invalidate affected scope/inputs and recheck narrowly; a whole-tree fingerprint change alone does not invalidate every result.
+
+Share facts, navigation and check results while preserving independent judgments and required review gates. The lead inspects critical code, test oracles and the necessary complete contract; quality and specialist reviewers focus on assigned boundaries rather than each repeating the full investigation. Return one compact handoff with input/output identities, key facts and original locations, check status/output locations, unresolved gaps and next action. Keep large logs, source extracts and intermediate state in accessible disposable artifacts outside formal source documentation; honor project-controller ownership of formal persistence.

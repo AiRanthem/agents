@@ -1,5 +1,5 @@
 {
-  "description": "Inject main-agent delegation at session boundaries and reload instructions after compaction.",
+  "description": "Load main-agent delegation and Astra startup context; astra-delegate supplies persistent subagent policy reload.",
   "hooks": {
     "SessionStart": [
       {
@@ -19,6 +19,18 @@
             "type": "command",
             "command": "python3 \"$HOME/.codex/hooks/session-start.py\"",
             "statusMessage": "Loading main-agent delegation"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$HOME/.codex/hooks/subagent-start.py\"",
+            "statusMessage": "Loading Astra subagent delegation"
           }
         ]
       }

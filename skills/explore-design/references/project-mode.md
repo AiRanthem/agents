@@ -1,0 +1,15 @@
+# Project design ownership
+
+Read [shared project context](../../manage-workitems/references/project-context.md) and the [fixed command workflow](../../manage-workitems/references/commands.md). These project write instructions apply to the controller or an ordinary authorized project session, never a delegated stage executor.
+
+During autonomous advancement, use the [coordinator receipt workflow](../../advance-project/references/coordinator.md) to publish executor candidates and preserve their actual author/contract bindings; do not start a second ordinary design checkpoint.
+
+For ordinary authorized design work, run `begin design-update ID`, read the complete returned requirement/spec and original instruction inputs, edit only the returned Markdown draft, then execute the exact returned `finish_command` and fixed status branch. The spec is the sole complete current Why/What document; keep machine-status frontmatter out of it. Use `decision-record` for the complete current decision document, retaining effective decisions and real approval provenance while removing superseded statements. The program owns versions, approval bindings and review state; exploration cannot establish a review pass. The controller does not perform an autonomous executor's missing design work or invent approval provenance.
+
+Keep design within the requested scope. Explicit prerequisite assumptions may be recorded while preparing designs early, but reconcile them with actually delivered code before the dependent item's independent design review. Direct requested decomposition may produce requirement children without a spec. A simple requirement bypasses review only through an explicit scoped user waiver at `development-start`.
+
+A material revision invalidates its previous review binding. The program removes the superseded current review record, while Git history preserves prior versions. Do not carry `implementable` into a changed contract.
+
+In native Plan, perform read-only exploration and use [host-mode handoff](host-modes.md); no project checkpoint or document write is permitted. In Agent mode, use the program-owned spec and approval workflow instead of creating a second design document. Complete the approved design and report its identity and pending independent review.
+
+Ordinary project design does not invoke `$review-design` without an explicit request. Within authorized `$advance-project`, the controller schedules the design-review stage without another permission or separate user session. An executor returns a candidate and report under [stage executor](../../advance-project/references/stage-executor.md); it does not run `begin`, `finish`, decision recording, project Git or Aone operations, or write official project documents.

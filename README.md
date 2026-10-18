@@ -13,7 +13,7 @@
 - `skills/`：安装到用户级目录、可在不同仓库复用的 skills。
 - `.agents/skills/install/`：仅用于安装、更新、修复或验证本 dev-kit 的仓库级 skill。
 - `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
-- `codex/`：Codex 全局指令和 hooks。
+- `codex/`：Codex 全局指令、固定自主阶段角色，以及按模型组装的主代理与 Astra 子代理委派 hooks。
 - `cursor/`：Cursor 用户级规则、`~/.cursor/skills` 入口、CLI status line 和 CLI 偏好。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
 
@@ -47,6 +47,7 @@ $install 安装或更新这个 dev-kit
 | `$delete-project` | 核对并删除选定的本机项目工作区，保留远程分支和 Aone 历史。 |
 | `$manage-workitems` | 在项目中创建、查询、更新、归档抽象工作项；通过 Git 和已启用后端持久化。 |
 | `$split-workitem` | 将项目大需求拆为可独立交付的工作项，用无环依赖图表达交付顺序。 |
+| `$advance-project` | 在已批准初版合同与前置人工验收交付满足后，并发推进指定范围的阶段，直到等待人工验收。 |
 | `$develop-workitem` | 准备工作树、探索设计、衔接独立审查，并在远程认领后实现项目工作项。 |
 | `$complete-workitem` | 核实项目工作项的实际交付，解锁依赖并单独记录工作树清理结果。 |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
@@ -54,7 +55,7 @@ $install 安装或更新这个 dev-kit
 | `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
 | `$explore-design` | 探索或细化 Why/What；Plan mode 直接衔接实施规划，Agent mode 将设计文档标记为 `review-pending`。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |
-| `$implement-design` | 将已确认设计落实实现；Agent mode 缺评审状态时先警告并征得用户同意。 |
+| `$implement-design` | 将已确认设计落实实现，按实际 Plan/Agent 与项目职责加载指令，保留验证和独立审查边界。 |
 | `$implement-poc` | 将已确认设计裁剪到明确验收场景，实现并验证可排障的 POC。 |
 | `$optimize-tests` | 在充分覆盖行为的前提下，主动清理、合并和精简指定范围内的测试代码，经确认后执行。 |
 | `$review-implementation` | 根据已确认设计独立验收完成的实现。 |
@@ -69,13 +70,17 @@ $install 安装或更新这个 dev-kit
 $review-design 评审 docs/proposal.md
 ```
 
-Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 配置为仅允许显式调用，后两者保留原安装的调用策略。
+Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 保留仅显式调用策略。已授权的项目阶段由主控显式委派相应技能，不需要用户逐阶段重复调用。
 
 项目使用时始终从项目根目录启动 agent。项目的 `worktrees/` 通过空占位文件保留，源码内容被忽略，Git 状态由各代码仓库自行管理。也可关联 OKAWorkspace 这类业务主工作区，将源码工作树放在主工作区 `worktrees/<项目标识>/` 下；项目保存必要约束、业务上下文和技能的入口，本机绝对路径单独绑定。创建时可选择主工作区的远程仓库，用独立空分支存储项目，主工作区原检出保持原分支。详见 [主工作区关联](skills/manage-workitems/references/main-workspace.md)。
 
 新工作项使用“层级编号 + 英文短语”的 ID，汇报时附中文标题，例如 `123-quota-lock（统一配额锁）`。`123` 表示第 1 个根项下的第 2 个子项下的第 3 个子项；每层用 `1`–`9`、`A`–`Z`，`A` 表示第 10 项。可以用完整 ID、编号、短语或标题定位工作项。编号表达拆分归属，交付顺序仍由依赖图决定；以远端发布成功的编号为准，冲突方刷新后重新分配尚未发布的编号。详见 [编号约定](skills/manage-workitems/references/schema.md#identity-and-hierarchy)。
 
-创建阶段只做到“元数据 + 需求骨架”：程序建立存储远程、专用分支和必要背景；用户同时提供需求时记录目标、范围、验收和交付义务，未知内容保持待确认。创建完成即收尾。设计与独立设计评审分别需要用户明确请求。实现通常要求当前独立设计评审；用户明确指定某个简单需求可跳过时，用 `development-start --skip-design-review --approval-source <实际用户来源>` 记录当前合同的限定豁免，不伪造评审通过。实现独立评审、owner、依赖与交付证据仍保留，代码提交和推送需要用户授权。
+创建阶段只做到“元数据 + 需求骨架”：程序建立存储远程、专用分支和必要背景；用户同时提供需求时记录目标、范围、验收和交付义务，未知内容保持待确认。创建完成即收尾。普通单项设计与独立设计评审按用户请求执行；自主推进启动授权覆盖指定范围内的阶段调用。实现通常要求当前独立设计评审；用户明确指定某个简单需求可跳过时，用 `development-start --skip-design-review --approval-source <实际用户来源>` 记录当前合同的限定豁免，不伪造评审通过。实现独立评审、owner、依赖与交付证据仍保留，代码提交和推送需要用户授权。
+
+在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控直接调度所有就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
+
+自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex 和 Cursor，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md) 和 [Cursor 适配](cursor/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 
