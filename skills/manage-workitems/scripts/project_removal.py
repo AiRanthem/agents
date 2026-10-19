@@ -18,8 +18,9 @@ try:
     import project_runtime as runtime
     import project_store as store
     import project_development as development
+    import project_lifecycle as lifecycle
 except ImportError:  # package entrypoint
-    from . import project_runtime as runtime, project_store as store, project_development as development
+    from . import project_runtime as runtime, project_store as store, project_development as development, project_lifecycle as lifecycle
 
 ProjectError = runtime.ProjectError
 _git = runtime._git
@@ -185,7 +186,7 @@ def _allowed_local(root, inventory, blocked, project, items, retained):
     # known-limit: unknown journal formats require explicit preservation; expand
     # this classifier only with a verified recoverability contract.
     local = root / ".project-local"
-    for kind in ("publish", "edits", "identities", "development"):
+    for kind in ("publish", "edits", "identities", "development", "autonomy-results"):
         base = local / kind
         if not base.is_dir() or base.is_symlink():
             continue
@@ -247,6 +248,15 @@ def _allowed_local(root, inventory, blocked, project, items, retained):
                             and record["worktree"] == matches[0]["development"]["worktree"]
                             and entry.name == hashlib.sha256(record["identity"].encode()).hexdigest() + ".yaml"):
                         allowed.add(name)
+                elif kind == "autonomy-results" and entry.is_dir():
+                    matches = [item for item in items.values() if entry.name in
+                               ((item.get("workflow") or {}).get("autonomy") or {}).get("executions", {})]
+                    if len(matches) != 1:
+                        continue
+                    _, resource = lifecycle._resource(matches[0], "runtime-cache", name,
+                                                      relative_path=name, attempt=entry.name)
+                    lifecycle._inspect(root, {}, matches[0], resource)
+                    allowed.update({name, name + "/manifest.yaml"})
             except (ProjectError, OSError, ValueError, TypeError, KeyError, AttributeError):
                 continue
     for name, entry in inventory.items():
@@ -264,6 +274,9 @@ def _inspect(root):
     for identifier, item in items.items():
         if item.get("owner"):
             blocked.append("active owner: " + identifier)
+        resource_state = (item.get("workflow") or {}).get("lifecycle") or {}
+        if resource_state.get("transition") or (resource_state.get("gc") or {}).get("state") in {"planned", "collecting"}:
+            blocked.append("unresolved resource lifecycle: " + identifier)
         receipt = store.receipt(files, identifier)
         if receipt and receipt.get("state") != "verified":
             blocked.append("unresolved sync: " + identifier)
@@ -299,12 +312,12 @@ def _inspect(root):
         blocked.append(str(exc))
     targets = {}
     for identifier, item in items.items():
-        if item.get("development"):
+        for descriptor, _ in lifecycle._descriptors(item).values():
             try:
-                target = runtime.worktree_path(root, identifier)
+                target = development.worktree_location(root, dict(item, development=descriptor), project)
                 if target in targets:
                     raise ProjectError("duplicate worktree ownership: " + str(target))
-                targets[target] = identifier
+                targets[target] = (identifier, descriptor)
             except ProjectError as exc:
                 blocked.append(str(exc))
     bindings = development._bindings(root)
@@ -319,11 +332,11 @@ def _inspect(root):
             if path != root / ".project-local/repos" / repository or repository not in repositories:
                 blocked.append("unrecognized local clone: " + value)
                 continue
-            targets[path] = None
+            targets[path] = (None, None)
         else:
             preserved.append({"kind": "external_source", "path": str(path),
                               "git": _git_state(path)})
-    for target, identifier in targets.items():
+    for target, (identifier, recorded) in targets.items():
         resource = {"kind": "item_worktree" if identifier else "local_clone", "item": identifier, "path": str(target)}
         resources.append(resource)
         if not target.exists():
@@ -338,7 +351,6 @@ def _inspect(root):
             if identifier:
                 item = items[identifier]
                 repo = development._repository(item, project)
-                recorded = item["development"]
                 if current["branch"] != "refs/heads/" + recorded["branch"]:
                     raise ProjectError("item worktree branch differs from recorded development")
                 development._check_identity(target, recorded["branch"], development._identity(project, item))
@@ -350,7 +362,16 @@ def _inspect(root):
             else:
                 repo = repositories[target.name]
                 url, ref = repo["url"], repo.get("base_ref")
-            recovery = _recovery(target, url, ref, current["head"])
+            try:
+                recovery = _recovery(target, url, ref, current["head"])
+            except ProjectError:
+                checkpoints = (lifecycle.state(items[identifier]).get("checkpoints", {}) if identifier else {}).values()
+                matches = [value for value in checkpoints if value.get("status") == "published" and
+                           _git(target, "merge-base", "--is-ancestor", current["head"], value["commit"], check=False).returncode == 0]
+                if not matches:
+                    raise
+                saved = matches[-1]
+                recovery = _recovery(target, saved["url"], saved["ref"], current["head"])
             resource["retained"] = recovery
             if not linked:
                 _unpublished_refs(target, current, recovery)
@@ -422,7 +443,9 @@ def _inspect(root):
     for key in project:
         if key != "worktrees" and ("worktree" in key or "clone" in key or "reference" in key):
             blocked.append("unclassified project resource: " + key)
+    retained_resources = lifecycle.inventory(files)
     return {"project_id": project["id"], "root": str(root), "resources": resources,
+            "retained_resource_registry": {"recovery": root_resource.get("retained"), "resources": retained_resources},
             "preserved": preserved, "blocked": sorted(set(blocked)),
             "remote_policy": "retain all remote branches and Aone records"}
 
@@ -514,4 +537,5 @@ def remove(root, manifest_id, confirm):
             return {"status": "partial", "manifest": manifest_id, "removed": removed,
                     "error": str(exc), "action": "inspect_partial_removal_without_broadening_scope"}
     return {"status": "removed", "manifest": manifest_id, "digest": record["digest"],
-            "removed": removed, "preserved": current["preserved"], "retained": retained}
+            "removed": removed, "preserved": current["preserved"], "retained": retained,
+            "retained_resource_registry": current["retained_resource_registry"]}

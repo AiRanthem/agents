@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import tempfile
 
 try:
@@ -57,7 +58,16 @@ def frozen_dependency(item, identifier):
 
 def _latest(item):
     current = (item.get("workflow") or {}).get("autonomy", {})
-    return current.get("snapshots", {}).get(current.get("latest_snapshot"))
+    captured = current.get("snapshots", {}).get(current.get("latest_snapshot"))
+    return captured if captured and _lifecycle().snapshot_offered(item, captured) else None
+
+
+def _lifecycle():
+    try:
+        import project_lifecycle
+    except ImportError:
+        from . import project_lifecycle
+    return project_lifecycle
 
 
 def _normal_blocks(root, files, item):
@@ -73,7 +83,9 @@ def _guard_configuration(files, item):
 def _candidate(root, files, item, coordinator):
     captured = _latest(item)
     if captured:
-        return captured if captured["binding"]["project_sha256"] == workflow._hash(files[store.project_path(files)]) else None
+        current = workflow._approval_binding(files, item)
+        return captured if (captured["binding"]["project_sha256"] == workflow._hash(files[store.project_path(files)]) and
+                            all(captured["binding"].get(key) == value for key, value in current.items())) else None
     authorization = (item.get("workflow") or {}).get("autonomy", {}).get("authorization", {})
     if (authorization.get("coordinator") != coordinator or not authorization.get("predevelop") or
             item.get("kind") != "development" or item.get("status") != "awaiting_delivery" or
@@ -177,8 +189,9 @@ def snapshot(root, selector, *, publish=None):
             raise ProjectError("snapshot source differs from the independently reviewed tree")
         binding = _autonomy()._binding(root, files, item)
         for captured in reversed(list(captures.values())):
-            if captured["binding"] == binding:
+            if captured["binding"] == binding and _lifecycle().snapshot_offered(item, captured):
                 return {"status": "no_op", "snapshot": captured}
+        _lifecycle().capacity(item, snapshot=True)
         record_id = secrets.token_hex(16)
         branch = "snapshots/" + project["id"] + "/" + item["id"] + "/" + record_id
         remote_ref = development._published_ref(location, configuration["publish_remote"], branch, development._repository(item, project))
@@ -274,7 +287,7 @@ def _switch_reservation(root, item, project, desired):
 def _new_worktree(root, files, item, generation, start, label):
     project = store.project(files)
     repo = development._repository(item, project)
-    checkout = development._checkout(root, item, project, repo, {})
+    checkout = development._checkout(root, _lifecycle().replacement_item(item), project, repo, {})
     configuration = development._configuration(checkout, repo)
     _, container = runtime._layout(root, project)
     branch = repo.get("branch_pattern", "feature/{project}/{item}-{session}").format(
@@ -314,6 +327,7 @@ def _new_worktree(root, files, item, generation, start, label):
         raise ProjectError("generation worktree belongs to another Git repository")
     descriptor = {"repository": item["repository"], "branch": branch, "worktree": relative.as_posix(),
                   "base_commit": start, "publish_ref": ref, "branch_published": False, **configuration}
+    descriptor["host"] = socket.gethostname()
     _switch_reservation(root, item, project, descriptor)
     return descriptor
 
@@ -330,7 +344,9 @@ def prepare(root, selector, *, publish=None):
     if current and current["phase"] != "formal":
         if current["phase"] not in {"preparing", "speculative"}:
             return {"status": "no_op"}
-        readiness = _autonomy()._next(root, files, item, owner["session"])
+        readiness = (schedule(root, files, item, owner["session"]) if
+                     ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending") else
+                     _autonomy()._next(root, files, item, owner["session"]))
         if readiness["state"] != "ready" or readiness.get("next_action") != "prepare":
             raise ProjectError("predevelopment preparation is not ready: " + str(readiness))
     if current and current["phase"] == "speculative":
@@ -345,6 +361,7 @@ def prepare(root, selector, *, publish=None):
         location = development.worktree_location(root, item, store.project(files))
         configuration = development._configuration(location, development._repository(item, store.project(files)))
         target = development._base(location, configuration, development._identity(store.project(files), item))
+        _lifecycle().capacity(item, retiring=True)
         current["retained_developments"].append(copy.deepcopy(item["development"]))
         current.update(phase="reconciling", rebase={"generation": secrets.token_hex(16),
             "source": own["snapshot"], "old_base": item["development"]["base_commit"], "target": target})
@@ -353,6 +370,7 @@ def prepare(root, selector, *, publish=None):
         _autonomy()._state(item)["next_role"] = "rebase"
         return _save(root, files, item, owner, "Begin formal convergence " + item["id"], publish)
     if not current:
+        _lifecycle().capacity(item)
         readiness = schedule(root, files, item, owner["session"])
         if not readiness or readiness.get("next_action") != "prepare":
             raise ProjectError("predevelopment preparation is not ready")
@@ -368,8 +386,12 @@ def prepare(root, selector, *, publish=None):
                 queue.extend((key, None) for key in upstream.get("depends_on", []))
                 continue
             value = (_autonomy()._state(upstream).get("snapshots", {}).get(pinned_id) if pinned_id else _latest(upstream))
+            if value and not pinned_id and any(value["binding"].get(key) != expected for key, expected in workflow._approval_binding(files, upstream).items()):
+                value = None
             if pinned_id and not value:
                 raise ProjectError("transitive frozen prerequisite is missing: " + identifier)
+            if value and not _lifecycle().snapshot_available(upstream, value):
+                raise ProjectError("frozen prerequisite is released or being collected: " + identifier)
             if not value:
                 outcome = snapshot(root, identifier, publish=publish)
                 if not _settled(outcome):
@@ -387,7 +409,7 @@ def prepare(root, selector, *, publish=None):
             queue.extend((key, None) for key in upstream.get("depends_on", []) if key not in value.get("prerequisites", {}))
         project = store.project(files)
         repo = development._repository(item, project)
-        checkout = development._checkout(root, item, project, repo, {})
+        checkout = development._checkout(root, _lifecycle().replacement_item(item), project, repo, {})
         configuration = development._configuration(checkout, repo)
         formal_base = development._base(checkout, configuration, development._identity(project, item))
         current = {"phase": "preparing", "generation": secrets.token_hex(16), "inputs": captured,
@@ -406,8 +428,9 @@ def prepare(root, selector, *, publish=None):
         return {"status": "no_op"}
     project = store.project(files)
     repo = development._repository(item, project)
-    checkout = development._checkout(root, item, project, repo, {})
-    if item.get("development") and not development.snapshot(checkout)["clean"]:
+    checkout = development._checkout(root, _lifecycle().replacement_item(item), project, repo, {})
+    if (item.get("development") and _lifecycle().replacement_item(item) is item and not development.snapshot(checkout)["clean"] and
+            not _lifecycle().source_preserved(root, files, item)):
         raise ProjectError("existing development is dirty; preserve it before changing the baseline")
     same = [value for value in current["inputs"].values() if value["repository"] == item["repository"]]
     for value in same:
@@ -437,6 +460,9 @@ def prepare_writer(root, files, item, role):
         old = item["development"]
         # A dispatch continuation reuses the same adopted generation.
         if old.get("predevelopment_generation") != plan["generation"]:
+            project = store.project(files)
+            checkout = development._checkout(root, item, project, development._repository(item, project), {})
+            _fetch(checkout, plan["source"])
             descriptor = _new_worktree(root, files, item, plan["generation"], plan["source"]["commit"], "formal")
             descriptor["base_commit"] = plan["old_base"]
             descriptor["predevelopment_generation"] = plan["generation"]

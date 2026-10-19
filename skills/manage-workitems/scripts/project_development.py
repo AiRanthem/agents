@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import os
 import re
+import socket
 
 try:
     import project_store as store
@@ -364,6 +365,8 @@ def _legacy_original(root, item):
 def _existing_record(root, item, project, checkout, configuration):
     """Validate one actual worktree; only authenticated v1 records may omit v2 facts."""
     recorded = item["development"]
+    if recorded.get("host", socket.gethostname()) != socket.gethostname():
+        raise ProjectError("recorded development belongs to another host; prepare a controlled replacement")
     original = _legacy_original(root, item)
     normalized = dict(recorded)
     if original is not None:
@@ -579,7 +582,7 @@ def prepare(root, item, project, *, options=None, publish_branch=True):
     _git(checkout, "config", "branch." + branch + ".remote", configuration["publish_remote"])
     _git(checkout, "config", "branch." + branch + ".merge", published_ref)
     result = {"repository": repo["id"], "worktree": relative.as_posix(), "branch": branch,
-              "base_commit": base_commit, "publish_ref": published_ref, **configuration}
+              "base_commit": base_commit, "publish_ref": published_ref, "host": socket.gethostname(), **configuration}
     if not remote_head and not publish_branch:
         result["branch_published"] = False
     return result

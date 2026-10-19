@@ -495,6 +495,12 @@ def _query(args):
     if args.command == "list":
         result["results"] = [_item_summary(record) for record in result["results"]]
     elif args.command == "show":
+        root = runtime.find_project(args.root)
+        files = runtime._working_files(root)
+        if store.is_v2(files):
+            result["workflow_gates"] = _module("project_workflow").gates(
+                files, result["metadata"], os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID"))
+        result["readiness_scope"] = "dependency_delivery_and_open_fixes"
         result["metadata"] = _item_summary(result["metadata"])
     return _redact(result)
 
@@ -720,6 +726,35 @@ def parser():
             command.add_argument("--approval-source", required=True)
         if action == "resume":
             command.add_argument("--attempt", required=True)
+    lifecycle = sub.add_parser("lifecycle")
+    lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
+    lifecycle_status = lifecycle_actions.add_parser("status")
+    lifecycle_status.add_argument("item", nargs="?")
+    for action in ("policy", "handoff", "replan", "prepare", "adopt", "dispose", "release", "plan", "collect"):
+        command = lifecycle_actions.add_parser(action)
+        command.add_argument("item")
+        if action in {"policy", "handoff", "replan"}:
+            command.add_argument("--approval-source", required=True)
+        if action == "policy":
+            command.add_argument("--grace-days", type=int, default=7)
+            command.add_argument("--max-retained", type=int, default=2)
+            command.add_argument("--max-snapshots", type=int, default=20)
+        if action in {"replan", "handoff"}:
+            command.add_argument("--mode", choices=("manual", "autonomous"), default="autonomous", required=action == "handoff")
+            command.add_argument("--coordinator-session")
+        if action == "adopt":
+            command.add_argument("--worktree", required=True)
+        if action == "dispose":
+            command.add_argument("--generation", required=True)
+            command.add_argument("--disposition", choices=("migrated", "discarded"), required=True)
+            command.add_argument("--approval-source")
+        if action in {"dispose", "release"}:
+            command.add_argument("--reference", required=True)
+        if action == "release":
+            command.add_argument("--snapshot", required=True)
+        if action == "collect":
+            command.add_argument("--intent", required=True)
+            command.add_argument("--confirm", required=True)
     sub.add_parser("refresh")
     sub.add_parser("status")
     sub.add_parser("progress")
@@ -902,6 +937,19 @@ def main(argv=None):
                 if action == "dispatch":
                     options["role"] = args.role
                 result = getattr(autonomy, action)(args.root, args.item, **options)
+        elif args.command == "lifecycle":
+            lifecycle = _module("project_lifecycle")
+            action = args.lifecycle_action
+            fields = {"policy": ("approval_source", "grace_days", "max_retained", "max_snapshots"),
+                      "replan": ("approval_source", "mode", "coordinator_session"),
+                      "handoff": ("approval_source", "mode", "coordinator_session"),
+                      "dispose": ("generation", "disposition", "reference", "approval_source"),
+                      "adopt": ("worktree",),
+                      "release": ("snapshot", "reference"), "collect": ("intent", "confirm")}
+            options = {key: getattr(args, key) for key in fields.get(action, ())}
+            if action != "status":
+                options["publish"] = publish_changes
+            result = getattr(lifecycle, action)(args.root, args.item, **options)
         elif args.command == "begin":
             result = _module("project_workflow").begin(args.root, args.operation, args.selector,
                                                        options=_begin_options(args), publish=publish_changes)

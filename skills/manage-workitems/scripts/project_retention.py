@@ -71,6 +71,14 @@ def _current_roots(files, identifier):
     kinds = ("design-review", "development-finish", "delivery-record", "user_design_review_waiver", "cleanup", "cleanup")
     current = [(root, kind) for root, kind in zip(roots, kinds) if root is not None]
     for captured in (sections["workflow"].get("autonomy") or {}).get("snapshots", {}).values():
+        lifecycle = sections["workflow"].get("lifecycle") or {}
+        if lifecycle.get("policy"):
+            # Keep exact evidence until physical retirement finishes. Tombstones
+            # remain in state/Git history, without pinning every report forever.
+            resources = [row for row in lifecycle.get("resources", {}).values()
+                         if row.get("snapshot") == captured["id"]]
+            if resources and all(row.get("state") == "deleted" for row in resources):
+                continue
         current.append((captured, "predevelopment-snapshot"))
     return current
 

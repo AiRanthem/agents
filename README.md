@@ -85,7 +85,11 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 
-统一入口是 `skills/manage-workitems/scripts/project.py`。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
+统一入口是 `skills/manage-workitems/scripts/project.py`。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束当前操作并继续已授权的交接，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
+
+设计负责会话完成完整批准交接：呈现当前合同与版本，复用已有覆盖批准，或汇总实质变化请求用户决定；收到实际批准后核对版本并登记，再进入已授权的独立审查。自然语言“审查某项设计”可触发审查技能；`show.workflow_gates` 分别说明批准、审查和实施条件，查询成功的 `ready` 不代表可以实施。
+
+执行模式移交和旧成果替换使用程序的 `lifecycle` 命令。`handoff` 保留源码、评审与预研发基线；`replan` 保存旧源码、建立可处置的 generation，并通过 `prepare` 绑定新基线。资源策略单独授权内部存档发布与回收，精确管理 worktree、本地缓存和远端冻结 refs，保留实际引用、唯一旧成果与未决操作；宽限期和配额约束增长。回收使用精确 manifest 和条件删除，项目删除后登记仍可从保留的管理 Git 提交恢复。见 [资源生命周期](skills/manage-workitems/references/resource-lifecycle.md)。
 
 工作项正文固定为 `requirement.md`（目标、范围、验收、交付）、`spec.md`（完整当前设计，无机器状态 frontmatter）、`decision.md`（当前有效决定）、`context.md`（当前事实、验证与交接）和 `logs.md`（当前运行摘要与交接）；decision/log 由 Agent 写成完整 Markdown，程序替换文件且不追加机器事件。Git 历史追溯旧版本；records 只保留当前 review、delivery、waiver、cleanup 指针所需的成对 Markdown/YAML 工件，以及待恢复操作材料。设计版本按原始字节生成，首版为 1，变化递增，相同不变。后台同步回执由程序维护。实际 Git 与已启用后端均核实完成后才算持久化；未知外部创建不会盲目重试。Git/Aone 没有原子事务，Aone 没有已验证的字段 CAS。见 [记录契约](skills/manage-workitems/references/schema.md)。
 

@@ -56,3 +56,5 @@ Operate from a surviving worktree. Immediately before mutation, refresh exact re
 - If an operation fails or remaining cleanup safety changes, stop and report the partial result and recovery commands. Do not broaden deletion or recreate resources automatically.
 
 Completion requires confirming that the target path and worktree registration are absent, authorized local refs were removed, retained recovery refs remain live and contain the recorded OIDs, and surviving worktrees and retained candidate refs remain intact. Report removed, retained, and failed items plus the concrete remote recovery instructions. Command exit codes alone do not prove completion.
+
+For program-owned collection of registered internal project resources under an adopted policy, use the managed [resource lifecycle](../manage-workitems/references/resource-lifecycle.md) and its exact typed manifest. That program owns inspections and removal; report blockers without repeating Git checks or broadening the target. Ordinary development worktrees and remote branch deletion remain governed by their separate scopes.

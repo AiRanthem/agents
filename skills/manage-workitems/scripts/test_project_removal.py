@@ -76,6 +76,30 @@ class RemovalTests(unittest.TestCase):
         self.assertTrue(self.b.is_dir())
         self.assertEqual(git(self.remote, "show-ref"), remote)
 
+    def test_removed_project_returns_registry_recoverable_from_retained_management_commit(self):
+        self.code()
+        key = "a" * 32
+        branch = "snapshots/project-demo/A/" + key
+        oid = git(self.source, "rev-parse", "HEAD")
+        git(self.source, "push", "--quiet", "origin", oid + ":refs/heads/" + branch)
+        item = json.loads((self.a / "workitems/A/item.json").read_text())
+        captured = {"id": key, "item": "A", "kind": "predevelopment-snapshot", "status": "published",
+                    "repository": "code", "branch": branch, "ref": "refs/heads/" + branch,
+                    "url": str(self.code_remote), "commit": oid, "prerequisites": {}}
+        item["workflow"] = {"autonomy": {"snapshots": {key: captured}}}
+        self.write(self.a, "workitems/A/item.json", json.dumps(item))
+        self.save()
+        plan = self.plan()
+        self.assertEqual(plan["status"], "awaiting_confirmation", plan.get("blocked"))
+        result = self.execute(plan)
+        self.assertEqual(result["status"], "removed", result)
+        registry = result["retained_resource_registry"]
+        self.assertTrue(any(row.get("ref") == captured["ref"] for row in registry["resources"]))
+        recovery = registry["recovery"]
+        restored = json.loads(git(self.remote, "show", recovery["head"] + ":workitems/A/item.json"))
+        self.assertEqual(restored["workflow"]["autonomy"]["snapshots"][key], captured)
+        self.assertEqual(git(self.code_remote, "rev-parse", captured["ref"]), oid)
+
     def test_v2_reads_store_and_is_removable(self):
         files = runtime._working_files(self.a)
         self.project["schema_version"] = 2

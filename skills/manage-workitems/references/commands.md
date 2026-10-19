@@ -20,8 +20,8 @@ Ordinary work-item writes use the following `begin`/`finish` workflow. Authorize
 | Status | Action |
 | --- | --- |
 | `ready` | Read its inputs, edit its returned drafts and finish; a diagnostic status without an edit payload is reported as ready. |
-| `published` | Report the completed checkpoint and end. |
-| `no_op` | Report no change and end; there is no new publication. |
+| `published` | Report the completed checkpoint and end this operation; continue the authorized phase handoff. |
+| `no_op` | Report no change and end this operation; continue the authorized phase handoff. There is no new publication. |
 | `partial` | Execute only its `next_command` (resume of the retained operation), then apply this same status table. |
 | `blocked` | For `code: stale_ticket`, execute only the returned `next_command` to begin the same operation with current inputs. For `code: stale_evidence`, the program returns no `next_command` or `finish_command`; obtain current authorization/review evidence and report the blocker. Otherwise report the exact blockers/missing facts and stop the affected operation. |
 
@@ -38,7 +38,7 @@ Ordinary work-item writes use the following `begin`/`finish` workflow. Authorize
 | `requirement-update ID` | Edit the returned current requirement draft. |
 | `design-update ID` | Edit the returned complete current design draft, only for requested design work. |
 | `decision-record ID` | Replace the complete current decision Markdown in the returned draft, retaining effective decisions and removing superseded text; `--approval-source SOURCE` records actual user approval of the current design. |
-| `design-review ID` | Begin without a result. An independent session reviews an unowned item directly. For an owned developing item, its owner registers an actual external review with paired `--reviewer-session SESSION --review-file FILE`; the source report must stay unchanged through publication, and the reviewer differs from author, approval session and registrar. Preserve the current owner and record reviewer/registrar separately; external identity and reviewed-target provenance are trusted owner assertions. Finish with the real `--result pass\|fail --provenance SOURCE` as declared in `finish_options`. Requires explicit ordinary review authorization or the autonomous bound-worker workflow. |
+| `design-review ID` | Begin without a result. An independent session reviews an unowned item directly. For an owned developing item, its owner registers an actual external review with paired `--reviewer-session SESSION --review-file FILE`; the source report must stay unchanged through publication, and the reviewer differs from all recorded design authors/revisers and the external-review registrar. Approval registration alone is not authorship. Preserve the current owner and record reviewer/registrar separately; external identity and reviewed-target provenance are trusted owner assertions. Finish with the real `--result pass\|fail --provenance SOURCE` as declared in `finish_options`. Requires recorded current user approval (`decision-record --approval-source SOURCE`) and explicit ordinary review intent, including natural language, or the autonomous bound-worker workflow. Load `review-design` and its project mode in either ordinary route; `skill_instruction_paths` returns the original paths even when approval blocks begin. |
 | `development-start ID` | `--base-ref REF --branch BRANCH --worktree RELATIVE_PATH` as required for the selected code development. Only explicit user authorization permits `--skip-design-review --approval-source SOURCE` for this unchanged contract. Publication establishes ownership before code edits. |
 | `development-finish ID` | At `begin`, supply `--result pass\|fail --provenance SOURCE --reviewer-session SESSION --review-file FILE` from the actual independent reviewer; persist the review through the returned report draft, then run the returned finish command unchanged. These are required begin inputs, not finish options. |
 | `delivery-record ID` | Repeated `--kind KIND --reference SOURCE` and `--provenance SOURCE`; fill the returned delivery report with actual obligation coverage. |
@@ -109,3 +109,24 @@ Code repository setup uses `--repository-id ID --repository-url URL --repository
 `removal-plan` returns a program-owned exact local-removal manifest. After explicit authorization of that concrete manifest, `remove --manifest ID --confirm DIGEST` performs the guarded removal; see [delete-project](../../delete-project/SKILL.md).
 
 `resume` is executed exactly as returned, including its identity file/session binding. It resumes an existing intent; it does not authorize takeover. Do not reconstruct it from local YAML or retry an uncertain external creation yourself.
+
+`show.workflow_gates` reports current approval and operation-specific contract gates using the checkpoint predicates. Top-level `status: ready` means the diagnostic query succeeded; legacy `readiness` covers dependency delivery and open fixes only. These fields do not establish ownership, host liveness or permission to implement. Successful design/decision checkpoints return the approval handoff and contract identity.
+
+## Managed resource lifecycle
+
+Read [resource lifecycle](resource-lifecycle.md) before these direct typed commands. They use the program's guarded publication path, not Markdown `begin`/`finish`. Actual policy/replan/discard sources remain assertions grounded in user instructions.
+
+| Command | Purpose |
+| --- | --- |
+| `lifecycle status [ID]` | Local diagnostic resource inventory, retention reasons and pending intents. It performs no collection. |
+| `lifecycle policy ID --approval-source SOURCE [--grace-days 7 --max-retained 2 --max-snapshots 20]` | Adopt the explicitly authorized internal preservation-publication and GC policy. |
+| `lifecycle handoff ID --mode manual\|autonomous --approval-source SOURCE [--coordinator-session SESSION]` | After actual worker closure, transfer execution mode/coordination while preserving current source, reviews and predevelopment baseline. This grants no GC policy or initial design approval. |
+| `lifecycle replan ID --approval-source SOURCE [--mode manual\|autonomous] [--coordinator-session SESSION]` | After genuine executor closure, preserve old source and retire its generation/authorization; record a controlled mode/coordinator handoff. |
+| `lifecycle prepare ID` | Continue the same replacement intent with current prerequisite gates; bind a fresh isolated speculative or formal baseline. Preparation leaves approval, independent review and implementation gates intact. |
+| `lifecycle adopt ID --worktree RELATIVE_PATH` | Preserve and register the exact already-recorded legacy retained source for later migration/disposition. It does not claim an unregistered path. |
+| `lifecycle dispose ID --generation GENERATION --disposition migrated\|discarded --reference SOURCE [--approval-source SOURCE]` | Register actual migration-review evidence or explicit user discard of a unique retained source; never claim cleanup occurred. |
+| `lifecycle release ID --snapshot SNAPSHOT --reference SOURCE` | Stop offering a frozen version; existing consumers retain their original pins. |
+| `lifecycle plan ID` | Persist current resource relationships/release times and an exact collection intent, returning its resources, blockers and `collect_command`. |
+| `lifecycle collect ID --intent INTENT --confirm DIGEST` | Execute/resume only the returned exact intent under adopted policy; settle lower publication recovery first. |
+
+A blocked collection retains `continuation_command` for the same intent after the stated blocker is resolved; it authorizes neither a new manifest nor broader cleanup. An uncertain archive publication retains the same `transition` checkpoint; inspect `lifecycle status` and preserve the original operation inputs. The current coordinator must hand off before another session can replace or collect its resources. A mode switch preserves formal convergence and review gates.

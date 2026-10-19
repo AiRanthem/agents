@@ -6,6 +6,7 @@ from unittest import mock
 import project
 import project_autonomy as autonomy
 import project_development as development
+import project_lifecycle as lifecycle
 import project_predevelopment as predevelopment
 import project_retention as retention
 import project_runtime as runtime
@@ -183,8 +184,16 @@ class PredevelopmentTest(unittest.TestCase):
         with self.assertRaisesRegex(runtime.ProjectError, "formal convergence"):
             workflow._blocked(store.items(runtime._working_files(self.root)), "B")
         old_snapshot = development.snapshot(b)
+        lifecycle.policy(self.root, 'B', approval_source='Manage internal convergence caches', grace_days=0, publish=self.f.publisher)
         self.prepare("B")
-        rebase = self.dispatch("rebase", "formal-rebaser", "B")
+        recovery = predevelopment.state(self.item('B'))['rebase']['source']
+        plan = lifecycle.plan(self.root, 'B', publish=self.f.publisher)
+        collected = lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)
+        self.assertEqual(collected['status'], 'published', collected)
+        self.assertNotEqual(development._git(self.code, 'rev-parse', '--verify', 'refs/heads/' + recovery['branch'], check=False).returncode, 0)
+        with mock.patch.object(predevelopment, '_fetch', wraps=predevelopment._fetch) as fetch:
+            rebase = self.dispatch("rebase", "formal-rebaser", "B")
+            self.assertTrue(any(call.args[1]['id'] == recovery['id'] for call in fetch.call_args_list))
         formal = Path(rebase["code_context"]["worktree"])
         self.assertNotEqual(formal, b)
         operation = rebase["git_operation"]

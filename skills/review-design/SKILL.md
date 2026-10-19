@@ -1,7 +1,6 @@
 ---
 name: review-design
-description: Independently challenge a design against original requirements and repository evidence before implementation. Invoke when the user explicitly names this skill, or when advance-project delegates its already-authorized design-review stage. Preserve explicit-only ordinary invocation. Review contract quality and feasibility; do not implement or approve product decisions, and never independently approve a version you authored or revised.
-disable-model-invocation: true
+description: Independently challenge a design against original requirements and repository evidence before implementation. Invoke when the user explicitly requests design review in natural language or names this skill, or when advance-project delegates its already-authorized design-review stage. Ordinary use requires explicit review intent. Review contract quality and feasibility; do not implement or approve product decisions, and never independently approve a version you authored or revised.
 ---
 
 # Review Design
@@ -10,7 +9,7 @@ Find concrete mistakes and omissions in a design's coherence, evidence, precisio
 
 ## Load the active context
 
-Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) for every invocation. The skill remains explicit-only in ordinary use. An authorized `$advance-project` controller may explicitly delegate this review stage without asking the user again or requiring a separate user-invoked session.
+Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) for every invocation. Ordinary use requires an explicit design-review request, including natural language such as “审查 16 的设计”. An authorized `$advance-project` controller may explicitly delegate this review stage without asking the user again or requiring a separate user-invoked session.
 
 - **Delegated autonomous project stage:** Read [stage executor](../advance-project/references/stage-executor.md). Read the original requirements, approved design, applicable original instructions and primary evidence. Write only assigned candidate artifacts or reports and return them to the controller; do not load controller write instructions below.
 - **Project controller or ordinary project review session, including a fresh subagent assigned the complete ordinary review:** Read [project mode](references/project-mode.md).

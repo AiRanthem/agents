@@ -45,6 +45,9 @@ def _binding(root, files, item, *, code=True):
     result = workflow._binding(files, item, workflow._base(item))
     result["project_sha256"] = workflow._hash(files[store.project_path(files)])
     result["decision_sha256"] = workflow._hash(files.get(workflow._documents(item)["decision"]))
+    sources = ((item.get("workflow") or {}).get("lifecycle") or {}).get("generations")
+    if sources:
+        result["retained_sources_sha256"] = workflow._hash(workflow._canonical(sources))
     if _predevelopment().state(item):
         result["predevelopment_sha256"] = workflow._hash(workflow._canonical(_predevelopment().identity(item)))
     if code and item.get("development"):
@@ -146,8 +149,14 @@ def _publish(root, files, records, identity, message, publish, *, extra=None):
     for item in records:
         writes.update(store.write_item(files, item))
         checks.update(workflow._checks(files, item, "context-update"))
+    writes.update(_predevelopment()._lifecycle().reconcile(files, writes))
     for name in writes:
         checks.setdefault(name, workflow._hash(files.get(name)))
+    # Pin creation and lifecycle deletion marking serialize on the same state.
+    # Include all items: a frozen transitive input need not remain in today's DAG.
+    for name, content in files.items():
+        if name.startswith(".project/state/") or name.endswith("/metadata.yaml"):
+            checks.setdefault(name, workflow._hash(content))
     prospective = store.apply_writes(files, writes)
     errors = runtime._validate_files(root, prospective)
     if errors:
@@ -233,6 +242,9 @@ def _next(root, files, item, session):
         result["reasons"].append("authorization_contract_changed")
     if authorization and authorization.get("decision_sha256") != workflow._hash(files.get(workflow._documents(item)["decision"])):
         result["reasons"].append("authorization_decision_changed")
+    if not result["reasons"] and ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
+        result.update(state="ready", next_action="lifecycle_prepare")
+        return result
     if not result["reasons"]:
         extra = _predevelopment().schedule(root, files, item, session)
         if extra:
@@ -241,6 +253,11 @@ def _next(root, files, item, session):
     result["reasons"].extend(_dependency_blocks(root, files, item))
     if result["reasons"]:
         result["state"] = "blocked"
+        return result
+    try:
+        _predevelopment()._lifecycle().capacity(item, runtime_cache=True)
+    except ProjectError as exc:
+        result.update(state="blocked", reasons=[str(exc)])
         return result
     binding = _binding(root, files, item)
     development = item.get("development") or {}
@@ -265,7 +282,8 @@ def _next(root, files, item, session):
     except ProjectError:
         pass
     role = state.get("next_role")
-    formal_review = (_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"}
+    formal_review = ((_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"} or
+                     ((item.get("workflow") or {}).get("lifecycle") or {}).get("fresh_reviews_required"))
     if role == "design-revision":
         pass
     elif not design_review_current and (formal_review or not authorization.get("skip_design_review") or
@@ -312,6 +330,10 @@ def authorize(root, *, approval_source, all_items=False, tree=None, items=None, 
         item = store.item(files, identifier)
         state = _state(item)
         owner = item.get("owner") or {}
+        handoff = ((item.get("workflow") or {}).get("lifecycle") or {}).get("handoff")
+        if handoff and handoff["to"] != identity["session"]:
+            blocked.append({"id": identifier, "reason": "recorded_coordinator_handoff"})
+            continue
         if state.get("current") or (owner and owner.get("session") != identity["session"]) or (state.get("authorization") and state["authorization"]["coordinator"] != identity["session"]):
             blocked.append({"id": identifier, "reason": "unknown_owner_liveness"})
             continue
@@ -411,7 +433,7 @@ def dispatch(root, selector, *, role, receipt, publish=None):
     if role == "code-review":
         authors.add((item.get("development") or {}).get("author_session"))
     if role == "design-review":
-        authors.add(item.get("design", {}).get("author_session"))
+        authors.update(workflow._design_authors(item))
     if role in {"design-review", "code-review"} and captured["worker_id"] in authors | {identity["session"]}:
         raise ProjectError("independent reviewer must not have authored or repaired the current artifact")
     attempt = secrets.token_hex(16)
@@ -494,7 +516,8 @@ def _continue_dispatch(root, identifier, attempt, *, publish=None):
         else:
             options = {"execution": attempt}
             authorization = state["authorization"]
-            formal_review = (_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"}
+            formal_review = ((_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"} or
+                     ((item.get("workflow") or {}).get("lifecycle") or {}).get("fresh_reviews_required"))
             if role == "implementation" and authorization.get("skip_design_review") and not formal_review:
                 options.update(skip_design_review=True, approval_source=authorization["source"])
             prepared = workflow.begin(root, OPERATIONS[role], identifier, options=options, publish=publish)
@@ -929,6 +952,7 @@ def accept(root, selector, *, approval_source, publish=None):
 
 def validate_state(item):
     """Validate persisted dispatch/result structure independently of CLI callers."""
+    _predevelopment()._lifecycle().validate(item)
     state = (item.get("workflow") or {}).get("autonomy")
     if state is None:
         return
