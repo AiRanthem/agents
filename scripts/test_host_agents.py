@@ -208,12 +208,22 @@ class HostAgentTests(unittest.TestCase):
                 else:
                     self.assertIn("freely delegate", body)
                 if host == "cursor":
-                    self.assertIn("composer-2.5[fast=false]", body)
+                    self.assertIn("subagent type `composer`", body)
                     self.assertNotIn("composer-2.5-fast", body)
+                    self.assertNotIn("composer-2.5[fast=false]", body)
                 else:
                     self.assertNotIn("composer-2.5", body)
                 if name == "project-implementation-reviewer":
                     self.assertIn("independent code-quality subagent must actually run", body)
+
+    def test_cursor_composer_subagent_pins_the_standard_variant(self):
+        _, content, config = host_agents.role_config("cursor", "composer")
+        self.assertEqual(config["name"], "composer")
+        self.assertEqual(config["model"], "composer-2.5[fast=false]")
+        self.assertIn("Use proactively", config["description"])
+        self.assertIn("Always use for investigating", config["description"])
+        self.assertNotIn("composer-2.5-fast", content)
+        self.assertNotIn("fast=true", content)
 
     def test_cursor_project_roles_use_the_explicit_source_and_reject_stale_content(self):
         with tempfile.TemporaryDirectory() as temp:

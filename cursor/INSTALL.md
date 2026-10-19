@@ -42,11 +42,12 @@
 
 所有 Cursor 使用形态共用 `agents/*.md` 和 [自主推进适配](AUTONOMY.md)。原生文件遵循
 [Cursor Subagents 格式与模型参数](https://cursor.com/docs/subagents)：Markdown + YAML
-frontmatter，使用明确的 `name`、`description` 与 `model`。安装时将本目录四个
-`agents/*.md` 分别以绝对软链接安装到 `~/.cursor/agents/<name>.md`，比较目标后再替换，
+frontmatter，使用明确的 `name`、`description` 与 `model`。安装时将本目录每个
+`agents/*.md` 以绝对软链接安装到 `~/.cursor/agents/<name>.md`，比较目标后再替换，
 保留未收录个人内容与无关 agents。更新只清理指向本仓库 `cursor/agents/`、已无对应源文件
-的链接。不给所有后代设置统一模型。读多取证，以及结果内容和验收检查都已确定的
-低价值机械修改，使用标准 Composer 2.5：`composer-2.5` 或 `composer-2.5[fast=false]`。
+的链接。四个阶段角色不给自行下结论的后代设置统一模型。读多取证，以及要求已定、结果可直接核对的
+有界执行，派发 `composer` 子代理并省略 Task 的 `model`，由其文件中的
+`composer-2.5[fast=false]` 承担；该文件对应 Codex 里 Luna high/max 的工作范围。
 自行下结论的后代由一级角色另选模型。不设置宽松权限或自动 worktree 隔离。
 
 本轮经用户确认，一级阶段统一 Grok 最新型号；2026-10-17 按
@@ -64,10 +65,10 @@ python3 <dev-kit-root>/scripts/host_agents.py check --host cursor
 ```
 
 应返回 `disk_ready=true`。该检查只验证文件与技能入口，不能代替真实发现和工具调用。
-新会话确认四原生角色已加载、无同名项目级遮蔽，按 [官方嵌套限制](https://cursor.com/docs/subagents#faq)
+新会话确认四原生角色和 `composer` 已加载、无同名项目级遮蔽，且 `~/.cursor/agents/composer.md` 指向本目录对应文件。按 [官方嵌套限制](https://cursor.com/docs/subagents#faq)
 核对 Task 工具允许主控 → reviewer → quality 两跳；不可要求更深的后代再派发。
-主控 alwaysApply 规则的 `composer-2.5-fast` 路由仅适用于普通主会话。自主推进的一级
-角色保持各自的 Grok 配置；读多取证和低价值机械修改按适配使用标准 Composer 2.5。
+主控 alwaysApply 规则把普通主会话中 Luna 对应的工作派给 `composer` 子代理，并省略 Task 的 `model`。自主推进的一级
+角色保持各自的 Grok 配置；读多取证和已定稿的低价值机械修改派给同一个 `composer` 子代理。
 质量子代理不能实际启动时报告阻塞。
 
 [官方模型回退说明](https://cursor.com/docs/subagents#when-the-configured-model-wont-be-used)
@@ -77,7 +78,7 @@ python3 <dev-kit-root>/scripts/host_agents.py check --host cursor
 可提供稳定主控身份；不用逐轮 `generation_id` 或随机值替代。
 
 本机链接不自动部署到云端。云端复用同一适配和业务流程，在实际环境中配置共享 skills、
-四角色和可读 dev-kit 副本；仅 Sync Skills 不会带上原生 agents、用户规则或 helper。
+四角色、`composer.md` 和可读 dev-kit 副本；仅 Sync Skills 不会带上原生 agents、用户规则或 helper。
 按照 [官方 SDK 配置来源](https://cursor.com/docs/sdk/typescript#configuration-sources-at-a-glance)
 在执行环境中提供项目级角色或对应原生注入定义并核对实际生效来源；不修改业务仓库来
 自动布置这些文件。云端权限与信任仍由实际 harness 决定。
