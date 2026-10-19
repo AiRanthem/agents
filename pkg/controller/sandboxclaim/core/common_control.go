@@ -488,7 +488,9 @@ func (c *commonControl) buildCSIMountOptions(ctx context.Context, mounts []agent
 		driverName, publishRequest, genErr := csiClient.GenerateNodePublishVolumeRequest(ctx, mountConfig)
 		if genErr != nil {
 			errMsg := "failed to generate csi mount options config for sandbox"
-			logger.Error(genErr, errMsg, "mountConfigRequest", mountConfig)
+			// Attributes are arbitrary provider input and must not be logged. The PV
+			// and target path are sufficient to identify the failed mount.
+			logger.Error(genErr, errMsg, "pvName", mountConfig.PvName, "mountPath", mountConfig.MountPath)
 			return nil, "", "", fmt.Errorf("%s, err: %v", errMsg, genErr)
 		}
 		csiMountOptions = append(csiMountOptions, config.MountConfig{

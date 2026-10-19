@@ -19,6 +19,7 @@ package csiutils
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -1043,6 +1044,149 @@ func TestGenerateNodePublishVolumeRequest_AgentIdentitySkipsSecret(t *testing.T)
 				require.NoError(t, reqErr)
 				assert.Equal(t, tt.expectDriverName, driverName)
 			}
+		})
+	}
+}
+
+func TestGenerateNodePublishVolumeRequest_Attributes(t *testing.T) {
+	const (
+		driverName = "example.csi.test"
+		pvName     = "pv-attributes-test"
+	)
+
+	tests := []struct {
+		name              string
+		pvAttributes      map[string]string
+		claimAttributes   map[string]string
+		subPath           string
+		enricher          func(context.Context, v1alpha1.CSIMountConfig, map[string]string)
+		wantVolumeContext map[string]string
+		wantError         string
+	}{
+		{
+			name: "passes arbitrary attributes and overrides PV defaults",
+			pvAttributes: map[string]string{
+				"storage.example.com/instance-id": "pv-instance",
+				"pv-only":                         "preserved",
+			},
+			claimAttributes: map[string]string{
+				"storage.example.com/instance-id":     "claim-instance",
+				"storage.example.com/access-point-id": "ap-456",
+				"storage.example.com/optional":        "",
+			},
+			wantVolumeContext: map[string]string{
+				"storage.example.com/instance-id":     "claim-instance",
+				"storage.example.com/access-point-id": "ap-456",
+				"storage.example.com/optional":        "",
+				"pv-only":                             "preserved",
+			},
+		},
+		{
+			name:              "nil attributes preserve PV defaults",
+			pvAttributes:      map[string]string{"pv-only": "preserved"},
+			wantVolumeContext: map[string]string{"pv-only": "preserved"},
+		},
+		{
+			name:              "empty attributes preserve PV defaults",
+			pvAttributes:      map[string]string{"pv-only": "preserved"},
+			claimAttributes:   map[string]string{},
+			wantVolumeContext: map[string]string{"pv-only": "preserved"},
+		},
+		{
+			name:            "attributes initialize a nil PV map",
+			claimAttributes: map[string]string{"storage.example.com/filesystem-id": "fs-123"},
+			wantVolumeContext: map[string]string{
+				"storage.example.com/filesystem-id": "fs-123",
+			},
+		},
+		{
+			name:            "subPath remains platform derived",
+			pvAttributes:    map[string]string{volumeAttributePath: "/base"},
+			claimAttributes: map[string]string{"storage.example.com/instance-id": "instance-123"},
+			subPath:         "tenant/data",
+			wantVolumeContext: map[string]string{
+				volumeAttributePath:               "/base/tenant/data",
+				"storage.example.com/instance-id": "instance-123",
+			},
+		},
+		{
+			name:            "provider enrichment runs after generic merge",
+			claimAttributes: map[string]string{"provider-key": "claim-value"},
+			enricher: func(_ context.Context, _ v1alpha1.CSIMountConfig, attributes map[string]string) {
+				attributes["provider-key"] = "enriched-value"
+				attributes["derived-key"] = "derived-value"
+			},
+			wantVolumeContext: map[string]string{
+				"provider-key": "enriched-value",
+				"derived-key":  "derived-value",
+			},
+		},
+		{
+			name:            "rejects path",
+			claimAttributes: map[string]string{volumeAttributePath: "/other"},
+			wantError:       `attribute "path" is reserved`,
+		},
+		{
+			name:            "rejects authType",
+			claimAttributes: map[string]string{volumeAttributeAuthType: "agent-identity"},
+			wantError:       `attribute "authType" is reserved`,
+		},
+		{
+			name:            "rejects Kubernetes CSI keys",
+			claimAttributes: map[string]string{"csi.storage.k8s.io/pod.uid": "spoofed-pod"},
+			wantError:       `attribute "csi.storage.k8s.io/pod.uid" is reserved`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: pvName},
+				Spec: corev1.PersistentVolumeSpec{
+					PersistentVolumeSource: corev1.PersistentVolumeSource{
+						CSI: &corev1.CSIPersistentVolumeSource{
+							Driver:           driverName,
+							VolumeAttributes: maps.Clone(tt.pvAttributes),
+						},
+					},
+				},
+			}
+			cache, _, err := cachetest.NewTestCache(t, pv)
+			require.NoError(t, err)
+
+			registry := &mockStorageProviderRegistry{
+				supportedDrivers: map[string]bool{driverName: true},
+				providers:        map[string]storages.VolumeMountProvider{driverName: &storages.MountProvider{}},
+			}
+			handler := NewCSIMountHandler(cache.GetClient(), cache.GetAPIReader(), registry, utils.DefaultSandboxDeployNamespace)
+
+			savedEnricher := NodePublishVolumeEnricher
+			NodePublishVolumeEnricher = tt.enricher
+			t.Cleanup(func() { NodePublishVolumeEnricher = savedEnricher })
+
+			_, csiReq, err := handler.GenerateNodePublishVolumeRequest(context.Background(), v1alpha1.CSIMountConfig{
+				PvName:     pvName,
+				MountPath:  "/mnt/data",
+				SubPath:    tt.subPath,
+				Attributes: maps.Clone(tt.claimAttributes),
+			})
+			if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
+				assert.Nil(t, csiReq)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, csiReq)
+				assert.Equal(t, tt.wantVolumeContext, csiReq.VolumeContext)
+				// The generated request continues through the mount pipeline and may be
+				// enriched there; such writes must never reach the informer-cached PV.
+				csiReq.VolumeContext["request-only-mutation"] = "mutated"
+			}
+
+			cachedPV := &corev1.PersistentVolume{}
+			require.NoError(t, cache.GetClient().Get(context.Background(), client.ObjectKey{Name: pvName}, cachedPV))
+			assert.Equal(t, tt.pvAttributes, cachedPV.Spec.CSI.VolumeAttributes)
+			assert.NotContains(t, cachedPV.Spec.CSI.VolumeAttributes, "request-only-mutation")
 		})
 	}
 }

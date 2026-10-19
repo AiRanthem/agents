@@ -33,6 +33,12 @@ import (
 	"github.com/openkruise/agents/pkg/utils"
 )
 
+const (
+	volumeAttributePath          = "path"
+	volumeAttributeAuthType      = "authType"
+	csiStorageAttributeKeyPrefix = "csi.storage.k8s.io/"
+)
+
 type CSIMountHandler struct {
 	client          ctrlclient.Client
 	apiReader       ctrlclient.Reader
@@ -65,6 +71,9 @@ func (h *CSIMountHandler) GenerateNodePublishVolumeRequest(ctx context.Context, 
 	if persistentVolumeObj.Spec.CSI == nil {
 		return "", nil, fmt.Errorf("no found csi object in persistent volume by name: %s", mountRequest.PvName)
 	}
+	if err := validateMountAttributes(mountRequest.Attributes); err != nil {
+		return "", nil, err
+	}
 	driverName := persistentVolumeObj.Spec.CSI.Driver
 	if !h.storageRegistry.IsSupported(driverName) {
 		return "", nil, fmt.Errorf("driver %s is not supported in current environment", driverName)
@@ -79,7 +88,7 @@ func (h *CSIMountHandler) GenerateNodePublishVolumeRequest(ctx context.Context, 
 	// to fetch secret object
 	// Skip secret lookup when the PV declares agent-identity authentication;
 	// in this mode the CSI binary authenticates via an agent-identity token rather than a K8s Secret.
-	isAgentIdentityAuth := persistentVolumeObj.Spec.CSI.VolumeAttributes["authType"] == "agent-identity"
+	isAgentIdentityAuth := persistentVolumeObj.Spec.CSI.VolumeAttributes[volumeAttributeAuthType] == "agent-identity"
 	var secretObj *corev1.Secret
 	if !isAgentIdentityAuth && persistentVolumeObj.Spec.CSI.NodePublishSecretRef != nil {
 		nodePublishSecretRef := persistentVolumeObj.Spec.CSI.NodePublishSecretRef
@@ -96,9 +105,10 @@ func (h *CSIMountHandler) GenerateNodePublishVolumeRequest(ctx context.Context, 
 		}
 	}
 
-	// Deep copy the PV when we need to modify VolumeAttributes (sub-path merging
-	// or hook enrichment) to avoid mutating the cached object.
-	needsCopy := mountRequest.SubPath != "" || NodePublishVolumeEnricher != nil
+	// Deep copy the PV when we need to modify VolumeAttributes (Claim attribute
+	// passthrough, sub-path merging, or hook enrichment) to avoid mutating the
+	// informer-cached object.
+	needsCopy := len(mountRequest.Attributes) > 0 || mountRequest.SubPath != "" || NodePublishVolumeEnricher != nil
 	if needsCopy {
 		persistentVolumeObj = persistentVolumeObj.DeepCopy()
 		if persistentVolumeObj.Spec.CSI.VolumeAttributes == nil {
@@ -106,9 +116,15 @@ func (h *CSIMountHandler) GenerateNodePublishVolumeRequest(ctx context.Context, 
 		}
 	}
 
+	// Treat PV VolumeAttributes as defaults for this mount. Claim attributes are
+	// request-scoped and override ordinary keys without changing the persisted PV.
+	for key, value := range mountRequest.Attributes {
+		persistentVolumeObj.Spec.CSI.VolumeAttributes[key] = value
+	}
+
 	// to add access point sub path
 	if mountRequest.SubPath != "" {
-		basePath, exist := persistentVolumeObj.Spec.CSI.VolumeAttributes["path"]
+		basePath, exist := persistentVolumeObj.Spec.CSI.VolumeAttributes[volumeAttributePath]
 		if !exist {
 			basePath = "/"
 		}
@@ -116,7 +132,7 @@ func (h *CSIMountHandler) GenerateNodePublishVolumeRequest(ctx context.Context, 
 		if err != nil {
 			return "", nil, fmt.Errorf("failed to merge and validate paths: base path=%s, sub path=%s, err: %v", basePath, mountRequest.SubPath, err)
 		}
-		persistentVolumeObj.Spec.CSI.VolumeAttributes["path"] = mergedPath
+		persistentVolumeObj.Spec.CSI.VolumeAttributes[volumeAttributePath] = mergedPath
 	}
 
 	// Allow internal implementations to inject provider-specific VolumeAttributes
@@ -161,6 +177,18 @@ var NodePublishVolumeEnricher func(ctx context.Context, mountRequest v1alpha1.CS
 //   - annotationValue: the serialized annotation value (JSON-encoded credential metadata)
 //   - err: any error encountered during construction
 var BuildStorageAuthAnnotation func(ctx context.Context, client ctrlclient.Client, mounts []v1alpha1.CSIMountConfig) (annotationKey string, annotationValue string, err error)
+
+// validateMountAttributes prevents Claim-scoped values from replacing fields
+// whose meaning and provenance are owned by the platform. All other keys are
+// provider-specific and pass through without interpretation.
+func validateMountAttributes(attributes map[string]string) error {
+	for key := range attributes {
+		if key == volumeAttributePath || key == volumeAttributeAuthType || strings.HasPrefix(key, csiStorageAttributeKeyPrefix) {
+			return fmt.Errorf("attribute %q is reserved and cannot be set in dynamicVolumesMount.attributes", key)
+		}
+	}
+	return nil
+}
 
 func mergeAndValidatePaths(basePath, subPath string) (string, error) {
 	if basePath == "" {

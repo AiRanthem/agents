@@ -42,6 +42,37 @@ func TestDefaultCSIMountConcurrency(t *testing.T) {
 	assert.Equal(t, 3, DefaultCSIMountConcurrency, "default CSI mount concurrency should be 3")
 }
 
+func TestCSIMountOptionsRedactsRawPersistencePayload(t *testing.T) {
+	const rawAttributeValue = "resource-id-must-not-leak"
+	opts := CSIMountOptions{
+		MountOptionListRaw: `[{"pvName":"pv-test","mountPath":"/data","attributes":{"storage.example.com/instance-id":"` + rawAttributeValue + `"}}]`,
+		Concurrency:        2,
+	}
+
+	marshal := func(v any) string {
+		raw, err := json.Marshal(v)
+		require.NoError(t, err)
+		return string(raw)
+	}
+	tests := []struct {
+		name     string
+		rendered string
+	}{
+		{name: "value", rendered: marshal(opts)},
+		{name: "pointer", rendered: marshal(&opts)},
+		{name: "enclosing options", rendered: marshal(struct {
+			CSIMount *CSIMountOptions `json:"csiMount"`
+		}{CSIMount: &opts})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NotContains(t, tt.rendered, rawAttributeValue)
+			assert.NotContains(t, tt.rendered, "mountOptionListRaw")
+			assert.Contains(t, tt.rendered, `"concurrency":2`)
+		})
+	}
+}
+
 // testMountConfig builds a mount config whose publish request exercises the
 // shapes the storage providers actually produce: the access-type oneof, an enum,
 // the string maps and the credential-bearing Secrets.

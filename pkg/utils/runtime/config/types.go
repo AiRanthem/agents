@@ -39,9 +39,12 @@ func NewDefaultAccessToken() string {
 const DefaultCSIMountConcurrency = 3
 
 type CSIMountOptions struct {
-	MountOptionList    []MountConfig `json:"mountOptionList"`
-	MountOptionListRaw string        `json:"mountOptionListRaw"`    // the raw json string for mount options
-	Concurrency        int           `json:"concurrency,omitempty"` // max concurrent CSI mount operations, 0 or negative means unlimited, default is DefaultCSIMountConcurrency
+	MountOptionList []MountConfig `json:"mountOptionList"`
+	// MountOptionListRaw is the persistence payload written to Sandbox and
+	// Checkpoint annotations. It may contain provider attributes and must never be
+	// rendered in diagnostic JSON.
+	MountOptionListRaw string `json:"-"`
+	Concurrency        int    `json:"concurrency,omitempty"` // max concurrent CSI mount operations, 0 or negative means unlimited, default is DefaultCSIMountConcurrency
 }
 
 // MountConfig is a single resolved CSI mount intent: the driver that must serve

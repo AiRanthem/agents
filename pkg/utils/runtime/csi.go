@@ -226,7 +226,9 @@ func ResolveCSIMountFromAnnotation(ctx context.Context, obj metav1.Object, clien
 	for _, cfg := range csiMountConfigs {
 		driverName, publishRequest, genErr := csiClient.GenerateNodePublishVolumeRequest(ctx, cfg)
 		if genErr != nil {
-			log.Error(genErr, "failed to generate csi mount options config", "mountConfig", cfg)
+			// Attributes are arbitrary provider input and must not be logged. The PV
+			// and target path are sufficient to identify the failed mount.
+			log.Error(genErr, "failed to generate csi mount options config", "pvName", cfg.PvName, "mountPath", cfg.MountPath)
 			return nil, fmt.Errorf("failed to generate csi mount options config: %w", genErr)
 		}
 		mountOptionList = append(mountOptionList, config.MountConfig{Driver: driverName, PublishRequest: publishRequest})
