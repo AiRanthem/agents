@@ -28,16 +28,16 @@ design_status: implementable
 
 同一工作项的当前阶段只有一名一级负责执行者，由主控在该阶段结束后交接给下一阶段执行者。主控可在宿主并发容量内并发推进不同工作项的当前阶段。
 
-| 角色 | 阶段职责 | Codex 固定配置 | Cursor 固定配置 |
-| --- | --- | --- | --- |
-| 设计审查者 | 使用 `review-design` 检查设计；发现问题时可使用 `explore-design` 协助修正 | `gpt-6.1-sol` / `xhigh` | `grok-4.7` / `xhigh`，非 fast |
-| 实现者 | 使用 `implement-design` 实现已批准设计并完成该阶段要求的验证 | `gpt-6.1-sol` / `medium` | `grok-4.7` / `high`，非 fast |
-| 代码审查者 | 使用 `review-implementation` 独立审查实现及其实际工件 | `gpt-6.1-sol` / `xhigh` | `grok-4.7` / `xhigh`，非 fast |
-| 修复者 | 使用 `receiving-code-review` 处理审查意见并提供复核所需结果 | `gpt-6.1-sol` / `medium` | `grok-4.7` / `high`，非 fast |
+| 角色 | 阶段职责 | Codex 固定配置 | Cursor 固定配置 | Qoder 固定配置 |
+| --- | --- | --- | --- | --- |
+| 设计审查者 | 使用 `review-design` 检查设计；发现问题时可使用 `explore-design` 协助修正 | `gpt-6.1-sol` / `xhigh` | `grok-4.7` / `xhigh`，非 fast | `Qwen3.8-Max` / `xhigh` |
+| 实现者 | 使用 `implement-design` 实现已批准设计并完成该阶段要求的验证 | `gpt-6.1-sol` / `medium` | `grok-4.7` / `high`，非 fast | `DeepSeek-Flash` / `max` |
+| 代码审查者 | 使用 `review-implementation` 独立审查实现及其实际工件 | `gpt-6.1-sol` / `xhigh` | `grok-4.7` / `xhigh`，非 fast | `Qwen3.8-Max` / `xhigh` |
+| 修复者 | 使用 `receiving-code-review` 处理审查意见并提供复核所需结果 | `gpt-6.1-sol` / `medium` | `grok-4.7` / `high`，非 fast | `DeepSeek-Flash` / `max` |
 
 设计审查者一旦参与修改设计，就不能独立批准自己参与修订的版本。主控须为新版本安排一名未参与改稿的审查者；该循环持续到设计达到 `implementable`，或需要用户决定。实现者可以承担简单修复，但代码审查仍由独立执行者复核。所有角色继续遵守相应共享技能已有的质量与风险要求。
 
-主控仅根据阶段角色选择一级执行者的固定模型与 effort 模板，不按工作项难度动态选档或自动升级。一级执行者可以自行决定任务拆分、内部组织、结果整合和后代执行者收尾，也可为后代自主选择模型与 effort。主控只控制一级执行者，不管理后代的调度策略，也不把一级角色配置传播为后代限制。实际宿主的工具、并发和权限边界始终生效。
+主控仅根据阶段角色选择一级执行者的固定模型与 effort 模板，不按工作项难度动态选档或自动升级。一级执行者决定任务拆分、内部组织、结果整合和后代收尾。Cursor 角色对读多取证和已定稿的低价值机械修改使用标准 Composer 2.5（非 fast）；其余后代模型由一级执行者在宿主能力内选择。主控只控制一级执行者，不逐个指定后代档位，也不把一级角色配置传播为全体后代的模型。实际宿主的工具、并发和权限边界始终生效。
 
 ### 范围、依赖与启动条件
 
@@ -94,9 +94,9 @@ flowchart LR
 
 ### 角色配置与宿主适配
 
-共享技能定义角色职责和工作合同；各宿主适配维护该宿主的角色模型与 effort 配置，不在技能正文重复整套角色规则。一级配置如上表。Cursor 使用维护时核实的最新 Grok 型号并固定非 fast 变体，本次为 `grok-4.7`；运行时不自行切换型号或速度档。主控模型尚无固定配置；其能力应适合长程协调、合同判断和用户沟通，具体型号由用户选择。
+共享技能定义角色职责和工作合同；各宿主适配维护该宿主的角色模型与 effort 配置，不在技能正文重复整套角色规则。一级配置如上表。Cursor 使用维护时核实的最新 Grok 型号并固定非 fast 变体，本次为 `grok-4.7`；运行时不自行切换型号或速度档。Qoder 使用用户指定的 `Qwen3.8-Max` 与 `DeepSeek-Flash`，模型 ID 按宿主原生 `"[显示名](模型 ID)"` 形式固定为 `qmodel_38max` 与 `dfmodel`；其适配不维护 subagent 委派路由规则，也不为后代设置统一模型。主控模型尚无固定配置；其能力应适合长程协调、合同判断和用户沟通，具体型号由用户选择。
 
-本设计覆盖 Codex 与 Cursor 的不同使用形态，每个宿主的各使用形态共用同一套业务流程和 harness 适配。Qoder 留待后续单独设计，不属于本轮实现范围。适配应表达各宿主真实可用的委派、并发、等待与工具能力；工具调用未发生、执行者无法启动或宿主能力不足时，须按实际结果处理，不能伪造成功或把缺失能力认作审查通过。
+本设计覆盖 Codex、Cursor 与 Qoder 的不同使用形态，每个宿主的各使用形态共用同一套业务流程和 harness 适配。适配应表达各宿主真实可用的委派、并发、等待与工具能力；工具调用未发生、执行者无法启动或宿主能力不足时，须按实际结果处理，不能伪造成功或把缺失能力认作审查通过。
 
 ### 按职责和模式加载指令
 
@@ -136,5 +136,8 @@ flowchart LR
 - [OpenAI：Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - [Cursor：Subagents](https://cursor.com/docs/subagents)
 - [Cursor：Grok 4.7](https://cursor.com/docs/models/grok-4-7)
+- [Qoder：Subagent](https://docs.qoder.com/cli/subagent.md)
+- [Qoder：模型与推理努力](https://docs.qoder.com/cli/model.md)
+- [Qoder：Hooks](https://docs.qoder.com/cli/hooks.md)
 
 这些宿主文档提供适配参考，不构成端到端能力或本设计已实现的证据。

@@ -510,6 +510,43 @@ def _item_summary(record):
     return result
 
 
+def _progress_item(record):
+    """Compact progress facts, including predevelopment markers omitted from status summaries."""
+    result = _item_summary(record)
+    development = record.get("development") or {}
+    review = development.get("review") if isinstance(development, dict) else None
+    if isinstance(review, dict) and review.get("result"):
+        result.setdefault("development", {})["review_result"] = review["result"]
+    autonomy = ((record.get("workflow") or {}).get("autonomy") or {})
+    acceptance = autonomy.get("acceptance") or {}
+    if acceptance.get("status"):
+        result["acceptance"] = acceptance["status"]
+    authorization = autonomy.get("authorization") or {}
+    if authorization.get("predevelop"):
+        result["predevelop"] = True
+        if authorization.get("source"):
+            result["authorization_source"] = authorization["source"]
+    pre = autonomy.get("predevelopment")
+    latest = (autonomy.get("snapshots") or {}).get(autonomy.get("latest_snapshot"))
+    if isinstance(pre, dict) or isinstance(latest, dict):
+        marker = {}
+        if isinstance(pre, dict):
+            marker.update({key: pre[key] for key in ("phase", "generation", "formal_base", "baseline") if pre.get(key) is not None})
+            pins = {name: {"id": value.get("id"), "commit": value.get("commit")}
+                    for name, value in (pre.get("inputs") or {}).items() if isinstance(value, dict)}
+            retained = [{"worktree": row.get("worktree"), "branch": row.get("branch")}
+                        for row in pre.get("retained_developments") or [] if isinstance(row, dict)]
+            if pins:
+                marker["pins"] = pins
+            if retained:
+                marker["retained"] = retained
+        if isinstance(latest, dict):
+            marker["snapshot"] = {"id": latest.get("id"), "status": latest.get("status"),
+                                  "commit": latest.get("commit"), "prerequisites": latest.get("prerequisites") or {}}
+        result["predevelopment"] = marker
+    return result
+
+
 def _migration_output(root, result, output):
     if output:
         root = runtime.find_project(root)
@@ -685,6 +722,7 @@ def parser():
             command.add_argument("--attempt", required=True)
     sub.add_parser("refresh")
     sub.add_parser("status")
+    sub.add_parser("progress")
     sub.add_parser("removal-plan")
     remove = sub.add_parser("remove")
     remove.add_argument("--manifest", required=True)
@@ -737,7 +775,11 @@ def parser():
     return p
 
 
-def _status(root):
+def _progress(root):
+    return _status(root, _progress_item)
+
+
+def _status(root, summarize=_item_summary):
     refreshed = runtime.refresh_project(root)
     root = runtime.find_project(root)
     files = runtime._working_files(root)
@@ -767,7 +809,7 @@ def _status(root):
         identities.add((bundle.get("session"), bundle.get("token")))
         publications.append({"journal": str(path), "state": state.get("state"), "session": bundle.get("session")})
     result = _redact({"status": "ready", "project": store.project(files),
-                      "items": [_item_summary(record) for record in items.values()],
+                      "items": [summarize(record) for record in items.values()],
                       "pending_sync": pending, "pending_publications": publications,
                       "rejected_publications": rejected, **refreshed})
     if not identities:
@@ -877,6 +919,8 @@ def main(argv=None):
             result = _migration_output(args.root, result, args.output)
         elif args.command == "status":
             result = _status(args.root)
+        elif args.command == "progress":
+            result = _progress(args.root)
         elif args.command == "knowledge-show":
             result = _module("project_knowledge").show(args.root, args.identifier)
         elif args.command in {"knowledge-update", "knowledge-remove"}:

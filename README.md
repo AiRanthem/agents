@@ -15,6 +15,7 @@
 - `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
 - `codex/`：Codex 全局指令、固定自主阶段角色，以及按模型组装的主代理与 Astra 子代理委派 hooks。
 - `cursor/`：Cursor 用户级规则、`~/.cursor/skills` 入口、CLI status line 和 CLI 偏好。
+- `qoder/`：Qoder 固定自主阶段角色、会话身份 hook 和自主推进适配。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
 
 ## 安装与更新
@@ -28,7 +29,7 @@ $install 安装或更新这个 dev-kit
 `$install` 会执行以下范围内的工作：
 
 1. 按照 [`skills/INSTALL.md`](skills/INSTALL.md) 将所有共享 skills 安装为 `~/.agents/skills/<name>` 的独立绝对软链接。
-2. 识别当前 Agent，只选择对应的顶层配置进行安装。例如，Codex 使用 [`codex/INSTALL.md`](codex/INSTALL.md)，Cursor 使用 [`cursor/INSTALL.md`](cursor/INSTALL.md)。
+2. 识别当前 Agent，只选择对应的顶层配置进行安装。例如，Codex 使用 [`codex/INSTALL.md`](codex/INSTALL.md)，Cursor 使用 [`cursor/INSTALL.md`](cursor/INSTALL.md)，Qoder 使用 [`qoder/INSTALL.md`](qoder/INSTALL.md)。
 3. 保留目标机器上的无关配置；目标存在仓库未收录的内容时，先展示差异并等待用户决定。
 4. 完成对应安装文档要求的验证，并报告仍需重启、信任或人工确认的步骤。
 
@@ -80,7 +81,7 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控直接调度所有就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
 
-自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex 和 Cursor，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md) 和 [Cursor 适配](cursor/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
+自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex、Cursor 和 Qoder，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md)、[Cursor 适配](cursor/AUTONOMY.md) 和 [Qoder 适配](qoder/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 

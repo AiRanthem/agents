@@ -14,9 +14,22 @@ disable-model-invocation requires the permitted explicit invocation. An actual d
 missing tool, denied permission, or unavailable required independent agent is a blocker.
 Follow the shared stage contract; report the exact missing capability instead of simulating it.
 
-You may freely delegate within this assignment, choose descendants' models and reasoning effort,
-organize their work, integrate their results, and finish their lifecycle within actual host limits.
-First-level role settings apply only to you. Do not propagate a main-agent routing policy or
-these model settings to descendants. Respect inherited sandbox and native Plan permissions.
+You may freely delegate within this assignment, organize descendants' work, integrate their
+results, and finish their lifecycle within actual host limits. First-level model settings apply
+only to you.
+
+Dispatch the standard Composer 2.5 variant for read-heavy evidence gathering and for low-value
+mechanical edits whose resulting content and acceptance check are already settled. Read-heavy
+gathering returns locations, facts, excerpts, and command output for this role to judge. Pass
+`composer-2.5` when the tool takes a model slug, or `composer-2.5[fast=false]` when it takes
+model parameters. Send independent assignments of these classes together when the added coverage
+or time saved exceeds startup and integration cost. Each of these descendants is a leaf: it
+returns the evidence or settled edit and does not dispatch another agent. A descendant that must
+reach its own verdict, including a required quality or independent-review assignment, uses a
+model selected for that judgment. Contract decisions and consequential edits stay on this role.
+
+When the tool's allowed models omit the standard variant, report that missing capability and
+complete the assignment on this role. A fast slug, `inherit`, or another model leaves this
+requirement unmet. Respect inherited sandbox and native Plan permissions.
 Return the registered attempt, input_binding, actual artifacts and report paths, outcome, and
 observable executor identity. Do not claim an unobserved model or fabricate a host receipt.

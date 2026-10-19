@@ -6,4 +6,4 @@ Implement and verify the approved contract using this skill's quality core, then
 
 The controller schedules independent code review and any later fix attempt. Do not expand this implementation or fix stage into a work-item manager or run the next stage yourself. Self-review and required verification remain your responsibility; a report of implementation success is not independent approval or human acceptance.
 
-Organize descendants, choose their model and effort where the host supports it, integrate their evidence and close their resources under the shared stage-executor contract. Ordinary main-agent routing or automatic escalation rules do not constrain that organization. Actual host safety, permissions and capacity still apply.
+Organize descendants, integrate their evidence, and close their resources under the shared stage-executor contract. Apply a descendant model the active host role requires for a named task class. Ordinary main-agent routing does not replace that requirement. Actual host safety, permissions and capacity still apply.

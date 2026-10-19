@@ -45,7 +45,9 @@
 frontmatter，使用明确的 `name`、`description` 与 `model`。安装时将本目录四个
 `agents/*.md` 分别以绝对软链接安装到 `~/.cursor/agents/<name>.md`，比较目标后再替换，
 保留未收录个人内容与无关 agents。更新只清理指向本仓库 `cursor/agents/`、已无对应源文件
-的链接。不给所有后代设置统一模型，不设置宽松权限或自动 worktree 隔离。
+的链接。不给所有后代设置统一模型。读多取证，以及结果内容和验收检查都已确定的
+低价值机械修改，使用标准 Composer 2.5：`composer-2.5` 或 `composer-2.5[fast=false]`。
+自行下结论的后代由一级角色另选模型。不设置宽松权限或自动 worktree 隔离。
 
 本轮经用户确认，一级阶段统一 Grok 最新型号；2026-10-17 按
 [官方模型页](https://cursor.com/docs/models/grok-4-7)解析并固定为 `grok-4.7`：设计审查 / 实现 /
@@ -64,8 +66,9 @@ python3 <dev-kit-root>/scripts/host_agents.py check --host cursor
 应返回 `disk_ready=true`。该检查只验证文件与技能入口，不能代替真实发现和工具调用。
 新会话确认四原生角色已加载、无同名项目级遮蔽，按 [官方嵌套限制](https://cursor.com/docs/subagents#faq)
 核对 Task 工具允许主控 → reviewer → quality 两跳；不可要求更深的后代再派发。
-主控 alwaysApply 规则的 Composer 路由仅适用于普通主会话；自主推进及其执行者按适配
-执行。质量子代理不能实际启动时报告阻塞。
+主控 alwaysApply 规则的 `composer-2.5-fast` 路由仅适用于普通主会话。自主推进的一级
+角色保持各自的 Grok 配置；读多取证和低价值机械修改按适配使用标准 Composer 2.5。
+质量子代理不能实际启动时报告阻塞。
 
 [官方模型回退说明](https://cursor.com/docs/subagents#when-the-configured-model-wont-be-used)
 指出账户或管理员限制可能使指定模型回退；配置文件不是实际型号证据。只比较真实工具

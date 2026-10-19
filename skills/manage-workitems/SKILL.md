@@ -1,11 +1,21 @@
 ---
 name: manage-workitems
-description: Create, find, update or archive work items through the fixed project command workflow. Applies inside a schema-v2 managed project; v1 projects support diagnostic reading and explicit migration. Requirement recording does not start design or development.
+description: Create, find, update or archive work items through the fixed project command workflow. A project progress or status report runs the progress command once and includes stored predevelopment markers. Applies inside a schema-v2 managed project; v1 projects support diagnostic reading and explicit migration. Requirement recording does not start design or development.
 ---
 
 # Manage Work Items
 
 Use installed [project.py](scripts/project.py) and the [command contract](references/commands.md). The program owns YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
+
+## Progress report
+
+A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items already include the lifecycle summary plus stored predevelopment markers. Scheduling collections during advancement come from `autonomy status` for the recorded coordinator session; a progress report uses `progress`.
+
+Write every item as its full ID and title. Include kind, status, design state and version, delivery status and required evidence, dependencies, branch, worktree, and implementation review result when the JSON has them. When `predevelop` is true, include the authorization source. When `predevelopment` is present, include phase, generation, formal base, baseline, each pin's snapshot id and commit, the retained original worktree and branch, and the item's own snapshot id, status, commit and prerequisite map.
+
+Read phases from the JSON as follows. `speculative` means the recorded review passed on a frozen generation; formal acceptance and delivery wait until every pinned predecessor is human-accepted and actually delivered, so report that wait with the pins and the retained worktree. `preparing` means the generation is ready to pin inputs. `baseline` means pinned snapshots are being integrated. `reconciling` means the item is replaying onto the formal base. `formal`, and an item with no `predevelopment` object, use the stored item status, review result, acceptance and delivery. `predevelop: true` with no `predevelopment` object means the item is authorized and has no generation yet.
+
+Also report `changed`, `commit`, pending sync, pending publications, and the number of `rejected_publications`. A `blocked` or `partial` result follows the command contract status table.
 
 If this is an autonomous stage assignment, read [stage-executor](../advance-project/references/stage-executor.md), return evidence to the controller and perform no project command or formal project-document write. For autonomous scope coordination, use [advance-project](../advance-project/SKILL.md). For ordinary controller operations, read [discussion and authorization](../advance-project/references/discussion-and-authorization.md).
 

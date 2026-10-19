@@ -356,7 +356,7 @@ class ProjectV2PublishTest(unittest.TestCase):
             return original_open(path, *args, **kwargs)
 
         before = self.remote_head()
-        for command in (("status",), ("autonomy", "status", "--all")):
+        for command in (("status",), ("progress",), ("autonomy", "status", "--all")):
             with self.subTest(command=command), mock.patch.object(Path, "open", denied), \
                     mock.patch.object(runtime, "_fetch_selected") as fetch:
                 output = io.StringIO()
@@ -568,6 +568,39 @@ class ProjectOutputTest(unittest.TestCase):
         self.assertEqual(result["next_command"], continuation)
         self.assertEqual(shlex.split(result["publication_next_command"])[-4:],
                          ["--identity-file", "/project/identity.json", "--journal", "/project/journal.json"])
+
+    def test_progress_item_adds_predevelopment_marker_without_changing_status_summary(self):
+        record = {
+            "id": "12-shared-quota", "title": "共享配额支持多 Infra", "kind": "development",
+            "status": "awaiting_delivery", "depends_on": ["11-shared-state"],
+            "design": {"state": "implementable", "version": 2},
+            "delivery": {"required": ["merged"], "status": "pending"},
+            "development": {"branch": "feature/predev", "worktree": "worktrees/predev",
+                            "review": {"result": "pass", "session": "reviewer"}},
+            "workflow": {"autonomy": {
+                "authorization": {"predevelop": True, "source": "user:predevelop"},
+                "predevelopment": {
+                    "phase": "speculative", "generation": "abc123", "formal_base": "base",
+                    "baseline": "pin", "inputs": {"11-shared-state": {"id": "snap", "commit": "abc", "binding": {}}},
+                    "retained_developments": [{"worktree": "worktrees/original", "branch": "feature/original"}],
+                },
+                "latest_snapshot": "own",
+                "snapshots": {"own": {"id": "own", "status": "published", "commit": "def",
+                                      "prerequisites": {"11-shared-state": "snap"}, "binding": {}}},
+            }},
+        }
+        summary = project._item_summary(record)
+        self.assertNotIn("predevelopment", summary)
+        self.assertNotIn("review_result", summary.get("development", {}))
+        progress = project._progress_item(record)
+        self.assertEqual(progress["development"]["review_result"], "pass")
+        self.assertEqual(progress["predevelop"], True)
+        self.assertEqual(progress["authorization_source"], "user:predevelop")
+        self.assertEqual(progress["predevelopment"]["phase"], "speculative")
+        self.assertEqual(progress["predevelopment"]["pins"]["11-shared-state"], {"id": "snap", "commit": "abc"})
+        self.assertEqual(progress["predevelopment"]["retained"], [{"worktree": "worktrees/original", "branch": "feature/original"}])
+        self.assertEqual(progress["predevelopment"]["snapshot"]["commit"], "def")
+        self.assertNotIn("binding", json.dumps(progress["predevelopment"]["pins"]))
 
     def test_partial_removal_is_blocked_without_unrelated_resume(self):
         result = project._public_result({'status': 'partial', 'removed': ['worktree'],

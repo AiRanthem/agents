@@ -8,6 +8,7 @@ Requirements and design work use the complete selected current requirement and s
 
 | Requested task | Skill |
 | --- | --- |
+| Report project progress or current status | [manage-workitems](../SKILL.md#progress-report), one `progress` command |
 | Record requirements, rename, change dependencies or archive | [manage-workitems](../SKILL.md) |
 | Create a separate project repository | [create-project](../../create-project/SKILL.md) |
 | Deterministic project migration and instruction refresh | [upgrade-project](../../upgrade-project/SKILL.md) |

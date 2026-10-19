@@ -15,7 +15,7 @@ Only read project records. Do not call project CLI, begin/finish/resume, claim w
 
 ## Descendants and lifecycle
 
-You freely choose your own decomposition, descendants, their model/effort, integration and lifecycle within actual host capabilities and safety permissions. The fixed first-level role template and the controller's general model-routing policy are not descendant restrictions. The controller does not manage or audit your descendant strategy. Keep write scopes coordinated and evidence independent where required. Finish or account for all descendants and release their resources before declaring this stage complete; if an outstanding writer cannot be confirmed stopped, report it and preserve the worktree.
+Follow the active host role template when it names a descendant model for a task class. For every other descendant, choose model and effort within actual host capabilities and safety permissions. The first-level model's own settings and ordinary main-session routing do not become a blanket descendant model. The controller does not manage or audit your descendant strategy. Keep write scopes coordinated and evidence independent where required. Finish or account for all descendants and release their resources before declaring this stage complete; if an outstanding writer cannot be confirmed stopped, report it and preserve the worktree.
 
 ## Reuse evidence within the stage
 

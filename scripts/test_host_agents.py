@@ -14,17 +14,21 @@ spec.loader.exec_module(host_agents)
 
 def install_fixture(home, host):
     agents = home / f".{host}" / "agents"
-    agents.mkdir(parents=True)
+    agents.mkdir(parents=True, exist_ok=True)
     for name in host_agents.ROLES:
         source, _, _ = host_agents.role_config(host, name)
-        if host == "codex":
-            (agents / source.name).write_bytes(source.read_bytes())
-        else:
-            (agents / source.name).symlink_to(source)
-    skill_root = home / (".agents" if host == "codex" else ".cursor") / "skills"
-    skill_root.mkdir(parents=True)
+        target = agents / source.name
+        if host in ("codex", "qoder"):
+            target.write_bytes(source.read_bytes())
+        elif not target.is_symlink() or target.resolve() != source.resolve():
+            target.symlink_to(source)
+    skill_root = home / (".cursor" if host == "cursor" else ".agents") / "skills"
+    skill_root.mkdir(parents=True, exist_ok=True)
     for name in host_agents.SKILLS:
-        (skill_root / name).symlink_to(host_agents.ROOT / "skills" / name)
+        link = skill_root / name
+        expected = host_agents.ROOT / "skills" / name
+        if not link.is_symlink() or link.resolve() != expected.resolve():
+            link.symlink_to(expected)
     return agents, skill_root
 
 
@@ -96,7 +100,7 @@ class HostAgentTests(unittest.TestCase):
 
     def test_missing_installation_reports_roles_and_skill_entries(self):
         with tempfile.TemporaryDirectory() as temp:
-            for host in ("codex", "cursor"):
+            for host in ("codex", "cursor", "qoder"):
                 result = host_agents.check(host, Path(temp))
                 self.assertFalse(result["disk_ready"])
                 self.assertFalse(result["runtime_verified"])
@@ -106,7 +110,7 @@ class HostAgentTests(unittest.TestCase):
     def test_installed_agents_are_ready_and_local_modification_is_reported(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            for host in ("codex", "cursor"):
+            for host in ("codex", "cursor", "qoder"):
                 agents, _ = install_fixture(home, host)
                 self.assertTrue(host_agents.check(host, home)["disk_ready"])
                 target = next(agents.iterdir())
@@ -116,11 +120,11 @@ class HostAgentTests(unittest.TestCase):
                 result = host_agents.check(host, home)
                 self.assertFalse(result["disk_ready"])
                 self.assertEqual(len(result["missing"]), 1)
-                self.assertIn("differs" if host == "codex" else "must link to repository", result["missing"][0])
+                self.assertIn("differs" if host in ("codex", "qoder") else "must link to repository", result["missing"][0])
                 self.assertEqual(target.read_text(), content + "\nLocal custom instruction\n")
 
     def test_wrong_skill_link_and_regular_copy_are_rejected(self):
-        for host in ("codex", "cursor"):
+        for host in ("codex", "cursor", "qoder"):
             for kind in ("wrong-link", "regular-copy"):
                 with self.subTest(host=host, kind=kind), tempfile.TemporaryDirectory() as temp:
                     home = Path(temp)
@@ -143,19 +147,20 @@ class HostAgentTests(unittest.TestCase):
                     self.assertIn("skill must link to repository directory", result["missing"][0])
                     self.assertEqual((target / "SKILL.md").read_text(), content)
 
-    def test_codex_role_symlink_is_not_native_discovery_readiness(self):
-        with tempfile.TemporaryDirectory() as temp:
-            home = Path(temp)
-            agents, _ = install_fixture(home, "codex")
-            name = "project-design-reviewer"
-            source, _, _ = host_agents.role_config("codex", name)
-            target = agents / source.name
-            target.unlink()
-            target.symlink_to(source)
-            result = host_agents.check("codex", home)
-            self.assertFalse(result["disk_ready"])
-            self.assertEqual(len(result["missing"]), 1)
-            self.assertIn("regular TOML file", result["missing"][0])
+    def test_native_file_role_symlink_is_not_native_discovery_readiness(self):
+        for host in ("codex", "qoder"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as temp:
+                home = Path(temp)
+                agents, _ = install_fixture(home, host)
+                name = "project-design-reviewer"
+                source, _, _ = host_agents.role_config(host, name)
+                target = agents / source.name
+                target.unlink()
+                target.symlink_to(source)
+                result = host_agents.check(host, home)
+                self.assertFalse(result["disk_ready"])
+                self.assertEqual(len(result["missing"]), 1)
+                self.assertIn("regular", result["missing"][0])
 
     def test_cursor_requires_the_repository_symlink_even_for_identical_content(self):
         for kind in ("copy", "wrong-link"):
@@ -178,8 +183,8 @@ class HostAgentTests(unittest.TestCase):
 
     def test_role_output_preserves_complete_instructions_and_fixed_profiles(self):
         for name in host_agents.ROLES:
-            effort = "xhigh" if "reviewer" in name else "medium"
-            for host in ("codex", "cursor"):
+            reviewer = "reviewer" in name
+            for host in ("codex", "cursor", "qoder"):
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     result = host_agents.main(["role", "--host", host, "--name", name])
@@ -188,14 +193,25 @@ class HostAgentTests(unittest.TestCase):
                 self.assertEqual(role["name"], name)
                 if host == "codex":
                     self.assertEqual(role["model"], "gpt-6.1-sol")
-                    self.assertEqual(role["model_reasoning_effort"], effort)
+                    self.assertEqual(role["model_reasoning_effort"], "xhigh" if reviewer else "medium")
+                elif host == "cursor":
+                    self.assertEqual(role["model"], f"grok-4.7[effort={'xhigh' if reviewer else 'high'},fast=false]")
                 else:
-                    cursor_effort = "xhigh" if "reviewer" in name else "high"
-                    self.assertEqual(role["model"], f"grok-4.7[effort={cursor_effort},fast=false]")
+                    self.assertEqual(role["model"],
+                                     "[Qwen3.8-Max](qmodel_38max)" if reviewer else "[DeepSeek-Flash](dfmodel)")
+                    self.assertEqual(role["effort"], "xhigh" if reviewer else "max")
                 body = role["developer_instructions"]
                 self.assertIn("references/stage-executor.md", body)
-                self.assertIn("freely delegate", body)
                 self.assertIn("attempt", body)
+                if host == "qoder":
+                    self.assertNotIn("freely delegate", body)
+                else:
+                    self.assertIn("freely delegate", body)
+                if host == "cursor":
+                    self.assertIn("composer-2.5[fast=false]", body)
+                    self.assertNotIn("composer-2.5-fast", body)
+                else:
+                    self.assertNotIn("composer-2.5", body)
                 if name == "project-implementation-reviewer":
                     self.assertIn("independent code-quality subagent must actually run", body)
 

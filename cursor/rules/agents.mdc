@@ -29,12 +29,12 @@ alwaysApply: true
 
 The routing rules in this section apply only to ordinary main-agent work. During
 an explicitly started `advance-project` run, the coordinator uses the installed
-shared skill and `cursor/AUTONOMY.md`, dispatches the configured native stage roles,
-and does not force Composer or choose a model by difficulty. Stage executors are
-explicitly authorized to delegate within their assignments and freely choose
-models and effort for their descendants within actual host limits; the ordinary
-routing below does not apply to them. After the run, ordinary main-agent work
-uses the following rules.
+shared skill and `cursor/AUTONOMY.md` and dispatches the configured native stage
+roles at their fixed first-level models. Stage executors delegate within their
+assignments. Read-heavy evidence gathering and settled low-value mechanical edits
+use the standard Composer 2.5 variant required by those Cursor roles. Other
+descendant models stay with the stage executor, within actual host limits. After
+the run, ordinary main-agent work uses the following rules.
 
 ## Ordinary main-agent work
 

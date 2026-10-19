@@ -40,6 +40,8 @@ def role_config(host, name):
         raise ValueError(f"{source}: native role name mismatch")
     if host == "codex" and not config.get("model_reasoning_effort"):
         raise ValueError(f"{source}: missing model_reasoning_effort")
+    if host == "qoder" and not config.get("effort"):
+        raise ValueError(f"{source}: missing effort")
     return source, content, config
 
 
@@ -74,6 +76,8 @@ def check(host, home, *, agents_dir=None, roles_file=None, skills_dir=None):
                        "model": config["model"]}
         if host == "codex":
             roles[name]["model_reasoning_effort"] = config["model_reasoning_effort"]
+        if host == "qoder":
+            roles[name]["effort"] = config["effort"]
         if injected is not None:
             actual = injected.get(name)
             if (not isinstance(actual, dict) or not isinstance(actual.get("source"), str) or
@@ -84,15 +88,16 @@ def check(host, home, *, agents_dir=None, roles_file=None, skills_dir=None):
                 if any(actual.get(key) != value for key, value in config.items()):
                     missing.append(f"injected role differs from repository: {name}")
             continue
-        if host == "codex" and target.is_symlink():
-            missing.append(f"native Codex agent must be a regular TOML file: {target}")
+        if host in ("codex", "qoder") and target.is_symlink():
+            kind = "TOML" if host == "codex" else "Markdown"
+            missing.append(f"native {host.capitalize()} agent must be a regular {kind} file: {target}")
         elif host == "cursor" and agents_dir is None and (not target.is_symlink() or target.resolve() != source.resolve()):
             missing.append(f"native Cursor agent must link to repository template: {target} -> {source}")
         elif not target.is_file():
             missing.append(f"missing native agent: {target}")
         elif target.read_text() != content:
             missing.append(f"native agent differs from repository: {target}")
-    skill_root = skills_dir if skills_dir is not None else home / (".agents" if host == "codex" else ".cursor") / "skills"
+    skill_root = skills_dir if skills_dir is not None else home / (".cursor" if host == "cursor" else ".agents") / "skills"
     for name in SKILLS:
         skill_dir = skill_root / name
         expected = ROOT / "skills" / name
@@ -177,7 +182,7 @@ def capture_receipt(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("check", "role", "receipt"))
-    parser.add_argument("--host", required=True, choices=("codex", "cursor"))
+    parser.add_argument("--host", required=True, choices=("codex", "cursor", "qoder"))
     parser.add_argument("--home", type=Path, default=Path.home())
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument("--agents-dir", type=Path, help="Cursor project/cloud native agent directory")
