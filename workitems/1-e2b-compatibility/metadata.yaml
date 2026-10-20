@@ -1,6 +1,6 @@
 id: 1-e2b-compatibility
 title: E2B 兼容性
-kind: aggregate
+kind: development
 status: new
 delivery:
   required:
@@ -16,3 +16,4 @@ design:
   version: 2
   state: implementable
   author_session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+repository: agents
