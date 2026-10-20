@@ -5,7 +5,13 @@ storage:
   remote: origin
   url: git@github.com:AiRanthem/agents.git
   branch: projects/e2b-compatibility
-repositories: []
+repositories:
+  - id: agents
+    url: git@github.com:openkruise/agents.git
+    base_ref: refs/heads/master
+    base_remote: upstream
+    publish_remote: airanthem
+    publish_url: git@github.com:AiRanthem/agents.git
 backends:
   aone: null
 main_workspace:
