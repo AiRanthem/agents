@@ -71,11 +71,7 @@ func (m *SandboxManager) issueTrafficAccessToken(ctx context.Context, opts Refre
 	}
 
 	flightKey := string(sandbox.GetUID())
-	if flightKey != "" {
-		// A reusable Sandbox CR can serve multiple deliveries. Include the
-		// delivery ID so a recycled CR cannot join the previous delivery's flight.
-		flightKey += "\x00" + opts.SandboxID
-	} else {
+	if flightKey == "" {
 		flightKey = opts.SandboxID
 	}
 	flight, leader := m.trafficTokenSingleflight.acquire(flightKey)

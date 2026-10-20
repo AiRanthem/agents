@@ -37,7 +37,6 @@ import (
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	infracache "github.com/openkruise/agents/pkg/cache"
@@ -333,7 +332,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 			},
 		},
 		{
-			name: "Assignment disabled retires previous delivery label",
+			name: "Assignment disabled clears a pre-existing sandbox ID label",
 			opts: infra.ClaimSandboxOptions{
 				User:     username,
 				Template: "prelabeled-pool",
@@ -356,7 +355,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 			},
 		},
 		{
-			name: "Assignment enabled rotates recycled sandbox ID across claim surfaces",
+			name: "Assignment enabled replaces an existing sandbox ID across claim surfaces",
 			managerOptions: config.SandboxManagerOptions{
 				EnableShortSandboxID: true,
 				ShortSandboxIDPrefix: "claim-",
@@ -374,8 +373,7 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 			templateSetup: map[string]int{"short-id-pool": 1},
 			prepareSandbox: func(sandbox *agentsv1alpha1.Sandbox) {
 				sandbox.UID = types.UID("123e4567-e89b-12d3-a456-426614174000")
-				sandbox.Labels[agentsv1alpha1.LabelSandboxID] = "previous-delivery-id"
-				sandbox.Status.RecycledCount = 1
+				sandbox.Labels[agentsv1alpha1.LabelSandboxID] = "caller-supplied-id"
 			},
 			postCheck: func(t *testing.T, manager *SandboxManager, client ctrlclient.Client, sbx infra.Sandbox) {
 				expectedID := "claim-aaaaaaaaaaaac"
@@ -395,8 +393,8 @@ func TestSandboxManager_ClaimSandbox(t *testing.T) {
 				legacyID := sandboxid.Legacy(sbx.GetNamespace(), sbx.GetName())
 				_, legacyPresent := manager.proxy.LoadRoute(legacyID)
 				assert.False(t, legacyPresent)
-				_, previousPresent := manager.proxy.LoadRoute("previous-delivery-id")
-				assert.False(t, previousPresent)
+				_, callerIDPresent := manager.proxy.LoadRoute("caller-supplied-id")
+				assert.False(t, callerIDPresent)
 			},
 		},
 		{
@@ -2460,76 +2458,6 @@ func TestSandboxManagerReleaseQuotaAfterDeleteGuards(t *testing.T) {
 			} else {
 				assert.Empty(t, quotaMgr.lastRelease.User)
 			}
-		})
-	}
-}
-
-// clientOverrideCache substitutes the client returned by a cache Provider.
-type clientOverrideCache struct {
-	infracache.Provider
-	client ctrlclient.Client
-}
-
-func (c *clientOverrideCache) GetClient() ctrlclient.Client {
-	return c.client
-}
-
-func TestSandboxManager_DeleteSandboxRecycle(t *testing.T) {
-	limitedSpec := &quotaspec.QuotaSpec{Limits: []quotaspec.QuotaLimit{{Dimension: quotaspec.DimSandboxCount, Scope: quotaspec.ScopeRunning, Limit: 5}}}
-	tests := []struct {
-		name       string
-		patchFails bool
-	}{
-		{name: "recycle success skips kill and releases quota"},
-		{name: "recycle failure falls back to kill", patchFails: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			quotaMgr := &fakeManagerQuota{}
-			manager, client := setupTestManager(t)
-			manager.quota = quotaMgr
-
-			sandbox := getSandboxForApiTest("recycle", func(sbx *agentsv1alpha1.Sandbox) {
-				sbx.Annotations[agentsv1alpha1.AnnotationCleanupEnabled] = agentsv1alpha1.True
-				sbx.Annotations[agentsv1alpha1.AnnotationLock] = "lock-recycle"
-			})
-			CreateSandboxWithStatus(t, client, sandbox)
-
-			provider := infracache.Provider(manager.GetInfra().GetCache())
-			if tt.patchFails {
-				failing := interceptor.NewClient(client.(ctrlclient.WithWatch), interceptor.Funcs{
-					Patch: func(context.Context, ctrlclient.WithWatch, ctrlclient.Object, ctrlclient.Patch, ...ctrlclient.PatchOption) error {
-						return assert.AnError
-					},
-				})
-				provider = &clientOverrideCache{Provider: provider, client: failing}
-			}
-			sbx := sandboxcr.AsSandbox(sandbox, provider)
-
-			route, err := sbx.GetRoute()
-			require.NoError(t, err)
-			manager.proxy.SetRoute(route)
-
-			err = manager.DeleteSandbox(t.Context(), DeleteSandboxOptions{
-				Sandbox: sbx,
-				User:    testUser,
-				Quota:   limitedSpec,
-			})
-			require.NoError(t, err)
-
-			stored := &agentsv1alpha1.Sandbox{}
-			getErr := client.Get(t.Context(), ctrlclient.ObjectKeyFromObject(sandbox), stored)
-			if tt.patchFails {
-				assert.True(t, apierrors.IsNotFound(getErr), "fallback kill must delete the sandbox")
-			} else {
-				require.NoError(t, getErr)
-				assert.Equal(t, agentsv1alpha1.True, stored.Annotations[agentsv1alpha1.AnnotationCleanup])
-			}
-			assert.Equal(t, testUser, quotaMgr.lastRelease.User)
-			assert.Equal(t, "lock-recycle", quotaMgr.lastRelease.LockString)
-			_, present := manager.proxy.LoadRoute(route.ID)
-			assert.False(t, present, "the local route must be removed on accepted delete")
 		})
 	}
 }

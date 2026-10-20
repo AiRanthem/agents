@@ -4,9 +4,8 @@ This directory implements the Manager layer defined by the repository guide.
 
 ## Sandbox Identity
 
-- A Sandbox ID identifies one user delivery rather than the reusable Sandbox
-  CR. When short-ID assignment is enabled, each Claim or Clone delivery gets a
-  new ID, including a Claim that reuses a recycled Sandbox. Keep assignment
+- A Sandbox ID identifies one user delivery. When short-ID assignment is
+  enabled, each Claim or Clone delivery gets a new ID. Keep assignment
   policy in Manager while shared primitives and Infra remain policy-neutral.
 
 ## Route Orchestration

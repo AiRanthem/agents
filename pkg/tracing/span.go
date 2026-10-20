@@ -107,7 +107,6 @@ const (
 	AttrCSIDrivers          = "csi.drivers"
 	AttrRouteID             = "route.id"
 	AttrPeersSynced         = "peers.synced"
-	AttrReuseTriggered      = "reuse.triggered"
 
 	// AttrReconcileNoop marks a Reconcile (or its EnsureSandbox* child) Span that
 	// performed no real write operation. Spans carrying this attribute are dropped

@@ -25,8 +25,8 @@ import (
 
 // withSandboxIDAssignment validates the enabled generator before mutation, then
 // runs the caller modifier and applies Manager-owned Sandbox ID policy last.
-// This prevents caller-supplied or recycled IDs from surviving into the new
-// delivery: enabled mode replaces them; disabled mode clears the reserved label.
+// This prevents caller-supplied IDs from surviving into the new delivery:
+// enabled mode replaces them; disabled mode clears the reserved label.
 func withSandboxIDAssignment(
 	modifier func(infra.Sandbox) error,
 	enabled bool,

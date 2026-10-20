@@ -297,7 +297,7 @@ func TestAntiDriftDiff(t *testing.T) {
 		},
 		{
 			name:          "not-live snapshot is not charged",
-			liveSnapshots: []infra.QuotaSandboxSnapshot{deadSnapshot(owner, "reuse-lock")},
+			liveSnapshots: []infra.QuotaSandboxSnapshot{deadSnapshot(owner, "not-live-lock")},
 			haveEntries:   map[string]Entry{},
 			healthy:       true,
 		},
@@ -362,9 +362,9 @@ func TestAntiDriftEventReconcile(t *testing.T) {
 		{
 			name:          "deleted sandbox released when cache healthy",
 			limitedOwners: []string{owner},
-			event:         infra.QuotaSandboxEvent{Snapshot: runningSnapshot(owner, "lock-reuse", 0, 0, false), Deleted: true},
+			event:         infra.QuotaSandboxEvent{Snapshot: runningSnapshot(owner, "lock-deleted", 0, 0, false), Deleted: true},
 			healthy:       true,
-			wantReleased:  []string{"lock-reuse"},
+			wantReleased:  []string{"lock-deleted"},
 		},
 		{
 			name:          "not live sandbox release skipped when cache unhealthy",

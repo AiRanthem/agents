@@ -159,7 +159,7 @@ Sandbox lifecycle:
   ├─ Trace #1: CreateSandbox  (TraceID: aaa)  create → wait for Pod Ready
   ├─ Trace #2: PauseSandbox   (TraceID: bbb)  pause → wait for Checkpoint + Pod deletion
   ├─ Trace #3: ResumeSandbox  (TraceID: ccc)  resume → wait for Pod to become Ready again
-  └─ Trace #4: DeleteSandbox  (TraceID: ddd)  delete → wait for Pod termination or reuse completion
+  └─ Trace #4: DeleteSandbox  (TraceID: ddd)  delete → wait for Pod termination
 ```
 
 #### Annotation Propagation Mechanism
@@ -264,7 +264,7 @@ unrelated Reconcile passes do not produce Spans. The next user operation will na
 | Span Name | Trigger | Attributes | Type |
 |-----------|---------|------------|------|
 | `sandbox-manager.CreateSandbox` | `POST /sandboxes` | `sandbox.id`, `template`, `namespace` | Root Span |
-| `sandbox-manager.DeleteSandbox` | `DELETE /sandboxes/{id}` | `sandbox.id`, `reuse.enabled` | Root Span |
+| `sandbox-manager.DeleteSandbox` | `DELETE /sandboxes/{id}` | `sandbox.id` | Root Span |
 | `sandbox-manager.PauseSandbox` | `POST /sandboxes/{id}/pause` | `sandbox.id` | Root Span |
 | `sandbox-manager.ResumeSandbox` | `POST /sandboxes/{id}/resume` | `sandbox.id` | Root Span |
 | `sandbox-manager.ConnectSandbox` | `POST /sandboxes/{id}/connect` | `sandbox.id`, `timeout` | Root Span |
@@ -273,7 +273,7 @@ unrelated Reconcile passes do not produce Spans. The next user operation will na
 | `sandbox-manager.ListSandboxes` | `GET /v2/sandboxes` | (none) | Root Span (read-only) |
 | `manager.ClaimSandbox` | Within CreateSandbox | `claim.lock_type`, `claim.retries` | Child Span |
 | `manager.CloneSandbox` | Within CreateSandbox | | Child Span |
-| `manager.DeleteSandbox` | Within DeleteSandbox | `reuse.triggered` | Child Span |
+| `manager.DeleteSandbox` | Within DeleteSandbox | | Child Span |
 | `manager.PauseSandbox` | Within PauseSandbox | | Child Span |
 | `manager.ResumeSandbox` | Within ResumeSandbox | | Child Span |
 | `infra.ClaimSandbox` | Within manager.ClaimSandbox | `claim.duration` | Child Span, injects annotation |
@@ -377,23 +377,10 @@ Key insights: Resume 15s vs Create 30s (saves image pull); PatchPod slower than 
 total time shorter; Initialize 3s is additional overhead
 ```
 
-#### Delete Sandbox (with Reuse)
+#### Delete Sandbox
 
 ```plaintext
-Trace #4a (TraceID: ddd, reuse=true)
-
-sandbox-manager.DeleteSandbox
-████████████████████████████████████████  (200ms, root Span)
-  └─ controller.Reconcile #1  ████                               (50ms)
-       └─ controller.PatchPod  ███                                (40ms) ← reset annotations
-
-Key insights: 200ms vs Create's 30s (600x speedup)
-```
-
-#### Delete Sandbox (without Reuse)
-
-```plaintext
-Trace #4b (TraceID: ddd, reuse=false)
+Trace #4 (TraceID: ddd)
 
 sandbox-manager.DeleteSandbox
 ████████████████████████████████████████████  (8s, root Span)
@@ -402,7 +389,7 @@ sandbox-manager.DeleteSandbox
   └─ controller.Reconcile #2  ██                                  (20ms)
        └─ controller.updateSandboxStatus  █                       (10ms)
 
-Key insights: DeletePod 5.5s is the main cost; reuse vs delete: 200ms vs 8s (40x)
+Key insights: DeletePod 5.5s is the main cost
 ```
 
 #### Create Snapshot (CreateSnapshot)
@@ -743,11 +730,6 @@ As an SRE, search by sandbox ID in the trace backend and see the complete trace 
 
 As a developer, trace pause/resume cycles and compare Checkpoint 5s + DeletePod 5.5s vs PatchPod 2s
 + Initialize 3s to identify optimization directions.
-
-### Story 3: Reuse Flow Observability
-
-As an SRE, verify reuse is working: DeleteSandbox (reuse=true) trace shows only 200ms (PatchPod
-40ms), compared to 8s without reuse (DeletePod 5.5s), quantifying the value of reuse.
 
 ## Implementation Details and Constraints
 

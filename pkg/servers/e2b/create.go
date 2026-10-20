@@ -33,7 +33,6 @@ import (
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
-	"github.com/openkruise/agents/pkg/sandbox-manager/infra/sandboxcr"
 	quotaspec "github.com/openkruise/agents/pkg/sandbox-manager/quota/spec"
 	"github.com/openkruise/agents/pkg/servers/e2b/models"
 	"github.com/openkruise/agents/pkg/servers/web"
@@ -148,7 +147,6 @@ func (sc *Controller) createSandboxWithClaim(ctx context.Context, request models
 		},
 		ReserveFailedSandboxFor: request.Extensions.ReserveFailedSandboxFor,
 		CreateOnNoStock:         request.Extensions.CreateOnNoStock,
-		UserMetadataKeys:        sandboxcr.BuildUserMetadataKeys(request.Extensions.Labels, request.Metadata),
 	}
 
 	if !request.Extensions.SkipInitRuntime {
@@ -423,9 +421,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 	if request.SecurityRulesJSON != "" {
 		annotations[agentsv1alpha1.AnnotationSecurityRules] = request.SecurityRulesJSON
 	} else {
-		// The claimed CR may come from the pool with a previous tenant's
-		// rules; recycle clears the key (AnnotationsClearedOnRecycle), and
-		// this delete keeps a missed recycle from inheriting them.
+		// This delivery's security rules come only from the request.
 		delete(annotations, agentsv1alpha1.AnnotationSecurityRules)
 	}
 	if request.Extensions.ReturnPodIP {
@@ -442,8 +438,7 @@ func (sc *Controller) basicSandboxCreateModifier(ctx context.Context, sbx infra.
 		}
 		sbx.EnableWakeOnIngressTraffic(pauseTimeout)
 	} else {
-		// Called on both branches so a claimed CR that still holds a
-		// previous delivery's rule is reset even if its recycle was skipped.
+		// This delivery does not enable wake-on-ingress traffic.
 		sbx.ClearWakeOnIngressTraffic()
 	}
 	sbx.SetAnnotations(annotations)

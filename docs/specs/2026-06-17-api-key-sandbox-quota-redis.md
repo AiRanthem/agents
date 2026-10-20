@@ -230,7 +230,7 @@ lives in Redis and is owned by sandbox-manager quota.
   ```go
   // IsLiveForQuota reports whether a Sandbox still occupies its owner's quota at all (membership in `all`).
   // Freed (NOT live) iff deletion has been requested or is in progress; a merely Failed/Succeeded-but-not-yet-
-  // deleted sandbox still occupies quota until it is. Reusing/reuse-triggered sandboxes are not quota-live.
+  // deleted sandbox still occupies quota until it is.
   func IsLiveForQuota(sbx *agentsv1alpha1.Sandbox) bool {
       return lifecycle.IsLiveForQuota(sbx)
   }
@@ -260,8 +260,8 @@ lives in Redis and is owned by sandbox-manager quota.
   hot-path and anti-drift resource extraction or dimension maps.
 
   `IsLiveForQuota` is **deliberately narrower** than `CountActiveSandboxes`'s "not `Dead`" filter (which *also*
-  excludes Failed/Succeeded): quota frees a slot only when deletion is requested/terminating or the sandbox enters
-  reuse, **not** the moment a pod fails. That difference is why quota uses its own additive read rather than
+  excludes Failed/Succeeded): quota frees a slot only when deletion is requested or the sandbox is
+  terminating, **not** the moment a pod fails. That difference is why quota uses its own additive read rather than
   `CountActiveSandboxes` (left untouched, §1). `InRunningScope` uses `Spec.Paused` (the pause request) rather
   than waiting for `Status.Phase == Paused`; we do **not** wait for the CR to become invisible.
 
@@ -968,8 +968,8 @@ Authorization reuses `CheckCreateAPIKeyPermission`; quota set chains `CheckApiKe
   resource extraction helper and one shared `infra.SandboxResource -> quota footprint` mapper in
   `pkg/sandbox-manager/quota`.
 - **Shared live predicate:** quota-live membership lives in the leaf sandbox lifecycle package. It excludes
-  deleting/terminating sandboxes, `SandboxReusing`, and reuse-triggered sandboxes. Cache imports that leaf package
-  directly; quota wraps it as `IsLiveForQuota`; cache does not import quota.
+  deleting and terminating sandboxes. Cache imports that leaf package directly; quota wraps it as
+  `IsLiveForQuota`; cache does not import quota.
 - **Removal:** conservative request-side (failed-create keeps an ambiguous charge; manager `DELETE` releases only
   after deletion is accepted); **leader event reconcile** for pause/resume/footprint/non-manager-delete; **leader
   bidirectional anti-drift** backstop. Subjects come from a Redis-independent `SubjectLister` supplied by E2B, not
