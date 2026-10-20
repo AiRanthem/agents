@@ -1,0 +1,43 @@
+id: 1c9bd0b64f71f2d8cb653fc2e03d9231
+kind: design-reuse
+item: 1-e2b-compatibility
+report: workitems/1-e2b-compatibility/records/1c9bd0b64f71f2d8cb653fc2e03d9231.md
+session: ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e
+created_at: '2026-10-20T06:43:16.248968+00:00'
+provenance: owner-applicability:session=ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e;review=96344c83b286eb313d760a9349ea99a4;base=2b06e110..fd2bea719;e2b-paths-unchanged
+requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+version: 2
+base_commit: fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48
+dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+result: pass
+target:
+  binding:
+    requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+    spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+    version: 2
+    base_commit: fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48
+    dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+    project_sha256: 5c297c72c0cd8a772ad2876b2b807f446ee9e6db89bf301fd3d4af56d06b5adc
+    decision_sha256: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+  read_hashes:
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md: a0ae7b6c038eb6c6981244781e5fa7dbb89bedfb23db6c31e5d3eab7ed2b2d1e
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md: d39b5517b3d323a6702789fa3bdfd1891dee8326a098ac936233ff33aa680f5f
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md: 39c8a82e6696006e4aa131ee6b8b78b07f67dc222b07297b1bcbae71dcfeb474
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md: 0e6f5b8ff728ae438ce2e9eb14e7ce1b1bfa90677f5469515dd5755a288fab72
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md: 681298fc3da189f07f261f4e1bc8b54de5e4fbff2a3c8371d37fd094d8d3589a
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+    /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: e4934ae327d101f992691bbacd61d420da6ebc31f1f40786b29f20a24734eab2
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/worktrees/1-e2b-compatibility/AGENTS.md: 1f47c34baf1ddabafb70f61677f09dbbd212c0c52376b08870e61306f33e129a
+    /Users/sophon/Workspace/AGENTS.md: null
+    /Users/AGENTS.md: null
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/worktrees/AGENTS.md: null
+    /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+    /AGENTS.md: null
+    /Users/sophon/AGENTS.md: null
+    /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/business-instructions.md: null
+  authorization: null
+basis_review: 96344c83b286eb313d760a9349ea99a4
+basis_sha256: 85825846bc83b54cb7e387a6cfb98acc1b3bc5da169771e2bef3e32b6d9f22d8
