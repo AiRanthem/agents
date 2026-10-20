@@ -1,7 +1,12 @@
-owner:
-  session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
-  token: 87d8c9ef71c322083e96c2f8c9dcbff8c1280dc9252ea2dba9af111c1f74ec55
-  machine: Sophon-1A.local
 workflow:
   design_authors:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
+design:
+  approval:
+    requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+    spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+    version: 2
+    kind: user
+    source: 会话 bfa1920e-2676-4e3a-a8d9-70c449134a7b：用户先批准完整v1，随后明确要求在memory请求时显式返回400，并要求按最新版技能持续推进直到implementable、最多三轮审查；本次沿用原批准并纳入用户指定的内存请求拒绝变更，其余契约未变
+    session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+    recorded_by: bfa1920e-2676-4e3a-a8d9-70c449134a7b
