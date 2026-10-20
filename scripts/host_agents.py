@@ -159,9 +159,11 @@ def capture_receipt(args):
             raise ValueError("revised result requires the actual candidate file")
         if args.contract_unchanged:
             receipt["contract_unchanged"] = True
+        if args.mechanical_correction:
+            receipt["mechanical_correction"] = True
     else:
         if any((args.outcome, args.report_file, args.candidate_file, args.terminal_status,
-                args.descendants_stopped, args.contract_unchanged)):
+                args.descendants_stopped, args.contract_unchanged, args.mechanical_correction)):
             raise ValueError("result fields require an accepted dispatch file")
         receipt["worker_id"] = args.worker_id
     api._receipt(receipt)
@@ -199,6 +201,8 @@ def main(argv=None):
     parser.add_argument("--terminal-status", choices=("completed", "failed", "stopped"))
     parser.add_argument("--descendants-stopped", action="store_true")
     parser.add_argument("--contract-unchanged", action="store_true")
+    parser.add_argument("--mechanical-correction", action="store_true",
+                        help="Actual deterministic candidate correction confirmed by the independent design reviewer")
     parser.add_argument("--call-id", help="Only an ID exposed by the actual host tool")
     parser.add_argument("--output", type=Path, help="New controller-owned receipt file")
     args = parser.parse_args(argv)

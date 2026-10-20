@@ -146,7 +146,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.record()["design"]["version"], 3)
         self.assertNotIn("review", self.record()["design"])
         for suffix in (".md", ".yaml"):
-            self.assertFalse((self.a / ("workitems/A/records/" + old_review + suffix)).exists())
+            self.assertTrue((self.a / ("workitems/A/records/" + old_review + suffix)).exists())
         self.designed()
         result = self.begin("requirement-update")
         self.edit(result, "Changed requirement\n")
@@ -729,7 +729,9 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(historical["development_snapshot"], before["development"])
         self.assertEqual(historical["approval_source"], "User discards this unfinished implementation")
         self.assertNotIn("token", record_path.read_text())
-        for old in (before["design"]["review"]["id"], before["development"]["review"]["id"], before["workflow"]["design_waiver"]["id"], ordinary["ticket"]):
+        retained_review = before["design"]["review"]["id"]
+        self.assertTrue((self.a / ("workitems/A/records/" + retained_review + ".yaml")).exists())
+        for old in (before["development"]["review"]["id"], before["workflow"]["design_waiver"]["id"], ordinary["ticket"]):
             self.assertFalse((self.a / ("workitems/A/records/" + old + ".yaml")).exists())
         blocked = workflow.begin(self.a, "development-start", "A", publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked", blocked)

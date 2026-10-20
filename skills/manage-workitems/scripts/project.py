@@ -780,6 +780,8 @@ def parser():
     finish.add_argument("ticket")
     finish.add_argument("--result", choices=("pass", "fail"))
     finish.add_argument("--provenance")
+    finish.add_argument("--contract-unchanged", action="store_true", default=None)
+    finish.add_argument("--mechanical-correction", action="store_true", default=None)
     migration = sub.add_parser("migrate")
     migration.add_argument("--dry-run", action="store_true")
     migration.add_argument("--instructions-file")
@@ -955,7 +957,7 @@ def main(argv=None):
                                                        options=_begin_options(args), publish=publish_changes)
         elif args.command == "finish":
             result = _module("project_workflow").finish(args.root, args.ticket,
-                        options={key: value for key, value in {"result": args.result, "provenance": args.provenance}.items()
+                        options={key: value for key, value in {"result": args.result, "provenance": args.provenance, "contract_unchanged": args.contract_unchanged, "mechanical_correction": args.mechanical_correction}.items()
                                  if value is not None}, publish=publish_changes)
         elif args.command == "removal-plan":
             result = _module("project_removal").removal_plan(args.root)

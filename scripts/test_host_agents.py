@@ -61,6 +61,24 @@ class HostAgentTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(host_agents.main(argv), 1)
             self.assertEqual((root / "receipt.json").read_bytes(), original)
+            context["role"] = "design-review"
+            (root / "dispatch.json").write_text(json.dumps(context))
+            candidate = root / "candidate.md"
+            candidate.write_text("Approved design with a corrected reference.\n")
+            mechanical = argv[:-1] + [str(root / "mechanical.json"),
+                "--candidate-file", str(candidate), "--mechanical-correction", "--contract-unchanged"]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(host_agents.main(mechanical), 0)
+            corrected = json.loads((root / "mechanical.json").read_text())
+            self.assertEqual(corrected["raw"], raw)
+            self.assertEqual(corrected["candidate_file"], str(candidate))
+            self.assertTrue(corrected["mechanical_correction"])
+            self.assertTrue(corrected["contract_unchanged"])
+            incomplete = mechanical[:-1]
+            incomplete[incomplete.index("--output") + 1] = str(root / "incomplete.json")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(host_agents.main(incomplete), 1)
+            self.assertFalse((root / "incomplete.json").exists())
             for name, mutate in (("wrong_worker", lambda: raw["result"]["agents"].pop(0)),
                                  ("paused_context", lambda: context.update(worker_paused=True))):
                 with self.subTest(name=name):

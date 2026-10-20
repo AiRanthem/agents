@@ -505,6 +505,7 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
                                'source_worktree': (item.get('development') or {}).get('worktree')}
     lifecycle['handoff'] = {'from': identity['session'], 'to': coordinator_session or identity['session'],
                              'source': approval_source, 'created_at': workflow._now()}
+    workflow._design_reuse().capture(root, files, item)
     workflow._invalidate_implementation(item)
     item['design'].pop('review', None)
     if item['design'].get('approval'):

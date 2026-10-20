@@ -5,6 +5,7 @@ manifests retain optimistic guards and publication intents across retries.
 """
 
 import copy
+import difflib
 import hashlib
 import hmac
 import json
@@ -33,6 +34,7 @@ OPERATIONS = {
     "requirement-update": set(), "design-update": {"execution"},
     "decision-record": {"approval_source"},
     "design-review": {"execution", "reviewer_session", "review_file"},
+    "design-reuse": set(),
     "development-start": {"execution", "base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
     "development-finish": {"execution", "result", "provenance", "reviewer_session", "review_file"},
     "delivery-record": {"kind", "reference", "commit", "provenance"},
@@ -325,7 +327,17 @@ def _binding(files, item, base):
             "dependency_sha256": _dependency_digest(files, item)}
 
 
+def _design_reuse():
+    try:
+        import project_design_reuse
+    except ImportError:
+        from . import project_design_reuse
+    return project_design_reuse
+
+
 def _approved(files, item):
+    if _design_reuse().pending(files, item):
+        raise ProjectError("independent contract confirmation is required before implementation")
     actual_base = (item.get("development") or {}).get("base_commit")
     waiver = (item.get("workflow") or {}).get("design_waiver")
     if isinstance(waiver, dict):
@@ -336,14 +348,15 @@ def _approved(files, item):
             return
     design = _design(item)
     approval, review = design.get("approval"), design.get("review")
+    reused = isinstance(review, dict) and _design_reuse().current(files, item, review)
     if not isinstance(approval, dict) or not isinstance(review, dict):
         raise ProjectError("current user approval and independent design review are required")
     if (design.get("state") != "implementable" or review.get("result") != "pass" or
             any(approval.get(key) != value for key, value in _approval_binding(files, item).items()) or
-            any(review.get(key) != value for key, value in _binding(files, item, actual_base).items()) or
+            (not reused and any(review.get(key) != value for key, value in _binding(files, item, actual_base).items())) or
             review.get("session") in _design_authors(item) or
             not review.get("provenance") or item.get("needs_review") or
-            not _autonomy_module().review_inputs_current(files, item, review)):
+            not (reused or _autonomy_module().review_inputs_current(files, item, review))):
         raise ProjectError("design approval or independent review is stale or incomplete")
 
 
@@ -368,15 +381,15 @@ def _read_payload(root, files, item, operation):
     documents = _documents(item)
     selected = {"AGENTS.md", ".project/project-instructions.md", ".project/main-workspace.md", ".project/business-instructions.md", ".project/context.md",
                 documents["requirement"], documents["context"]}
-    if operation in {"requirement-update", "design-update", "decision-record", "design-review",
+    if operation in {"requirement-update", "design-update", "decision-record", "design-review", "design-reuse",
                      "development-start", "development-finish", "delivery-record"}:
         selected.add(_spec(item))
-    if operation in {"design-update", "decision-record", "design-review", "development-start"}:
+    if operation in {"design-update", "decision-record", "design-review", "design-reuse", "development-start"}:
         selected.add(documents["decision"])
     result = [{"path": str(Path(root) / path), "content": files[path].decode("utf-8")}
               for path in sorted(selected) if path in files]
     items = store.items(files)
-    extra_items = set(item.get("depends_on", [])) if operation in {"design-update", "design-review", "development-start", "development-finish"} else set()
+    extra_items = set(item.get("depends_on", [])) if operation in {"design-update", "design-review", "design-reuse", "development-start", "development-finish"} else set()
     pinned = _autonomy_module()._predevelopment().pins(item)
     if extra_items:
         extra_items.update(pinned)
@@ -420,8 +433,11 @@ def _drafts(operation, item, files):
     if operation in {"decision-record", "log-record"}:
         target = documents["decision" if operation == "decision-record" else "logs"]
         return {Path(target).name: (target, files.get(target, b"").decode("utf-8"))}
-    if operation in {"design-review", "development-finish", "delivery-record"}:
-        return {"report.md": (None, "# " + operation + "\n\n")}
+    if operation in {"design-review", "design-reuse", "development-finish", "delivery-record"}:
+        drafts = {"report.md": (None, "# " + operation + "\n\n")}
+        if operation == "design-review":
+            drafts["spec.md"] = (_spec(item), files[_spec(item)].decode("utf-8"))
+        return drafts
     return {}
 
 
@@ -611,6 +627,8 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if item.get("status") == "done" and operation not in {"context-update", "log-record", "archive", "rename", "cleanup-record"}:
         raise ProjectError("delivered history cannot reopen; create a separate fix work item")
     _ownership(item, identity)
+    if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
+        raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
         _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
@@ -619,6 +637,8 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
             _implementation_approved(files, item)
         elif operation != "development-finish" or item.get("status") != "awaiting_delivery":
             _approved(files, item)
+    if operation == "design-reuse":
+        _design_reuse().ready(item, identity["session"])
     if operation == "design-review":
         _review_ready(files, item, actor, execution=bool(execution))
     if operation == "development-finish":
@@ -732,7 +752,7 @@ def _prepare_context(root, directory, manifest, files, publish):
             manifest.pop("context_writes", None)
             manifest.pop("context_message", None)
         manifest["base_commit"] = _base(item)
-    if operation == "development-finish":
+    if operation in {"development-finish", "design-reuse"} and item.get("development"):
         manifest["code_snapshot"] = _code_snapshot(root, item, store.project(files))
     return _open_edit(root, directory, manifest, files)
 
@@ -753,7 +773,14 @@ def _open_edit(root, directory, manifest, files):
     operation = manifest["operation"]
     review_source = manifest.get("review_source")
     read = _read_payload(root, files, item, operation)
-    manifest["read_hashes"] = {entry["path"]: _hash(Path(entry["path"]).read_bytes()) for entry in read}
+    manifest["read"] = read
+    manifest["read_hashes"] = (_autonomy_module()._read_hashes(root, files, item, "design-review", read=read)
+                               if operation in {"design-review", "design-reuse"} else
+                               {entry["path"]: _hash(Path(entry["path"]).read_bytes()) for entry in read})
+    if operation == "design-reuse":
+        _design_reuse().ready(item, manifest["identity"]["session"])
+        manifest["reuse_target"] = _design_reuse().target(root, files, item)
+        manifest["read_hashes"] = manifest["reuse_target"]["read_hashes"]
     manifest["state"] = "editing"
     manifest["checks"] = _checks(files, item, operation)
     manifest["checks"].setdefault(".project/graph.yaml", None)
@@ -776,8 +803,17 @@ def _open_edit(root, directory, manifest, files):
     code_context = _code_context(root, item, store.project(files), manifest.get("code_snapshot"))
     if code_context:
         result["code_context"] = code_context
-    if operation == "design-review":
+    if operation == "design-review" and item.get("workflow", {}).get("design_basis"):
+        result["design_basis"] = copy.deepcopy(item["workflow"]["design_basis"])
+    if operation == "design-reuse":
+        result["design_basis"] = copy.deepcopy(_design_reuse().ready(item, manifest["identity"]["session"]))
+        result["current_target"] = copy.deepcopy(manifest["reuse_target"])
+    if operation in {"design-review", "design-reuse"}:
         result["finish_options"] = "--result pass|fail --provenance SOURCE"
+        if operation == "design-review" and _design_reuse().pending(files, item):
+            result["finish_options"] += " --contract-unchanged (required for pass)"
+        if operation == "design-review":
+            result["mechanical_correction_options"] = "--mechanical-correction --contract-unchanged (only for uniquely determined contract-preserving candidate corrections)"
         result["skill_instruction_paths"] = skill_instructions(operation)
     all_items = store.items(files)
     result["dependencies"] = [{"id": key, "title": all_items[key]["title"], "status": all_items[key]["status"],
@@ -807,7 +843,7 @@ def _begin_command(root, manifest):
 def _stale(root, manifest, message):
     result = {"status": "stale", "ticket": manifest["ticket"], "message": message}
     sensitive = {"approval_source", "skip_design_review", "discard_development", "result", "provenance", "review_file", "reviewer_session"}
-    if (manifest["operation"] in {"design-review", "development-finish"} or
+    if (manifest["operation"] in {"design-review", "design-reuse", "development-finish"} or
             sensitive.intersection(manifest["options"]) or manifest.get("review_source")):
         result.update(status="blocked", code="stale_evidence", action_code="stale_evidence",
                       message=message + " Start a new operation with fresh authorization or review evidence.")
@@ -887,12 +923,16 @@ def _prepare_finish(root, manifest, files, drafts):
         content = drafts.get("spec.md") if operation == "design-update" else drafts.get("report.md")
         if _hash(content) != expected:
             raise ProjectError("stage draft differs from the captured execution artifact")
+        if operation == "design-review" and options.get("mechanical_correction") and _hash(drafts.get("spec.md")) != execution.get("candidate_sha256"):
+            raise ProjectError("mechanical candidate differs from the captured execution artifact")
     approval = _design(item).get("approval")
     if isinstance(approval, dict):
         approval.pop("record", None)
     if operation in {"create", "fix"} and identifier in items:
         raise ProjectError("allocated work item ID was published by another session; begin again")
     _ownership(item, identity)
+    if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
+        raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
         _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
@@ -903,6 +943,8 @@ def _prepare_finish(root, manifest, files, drafts):
             _approved(files, item)
     documents = _documents(item)
     writes = {}
+    if operation in {"requirement-update", "design-update", "decision-record", "dependency-update", "context-update"}:
+        _design_reuse().capture(root, files, item)
     if operation in {"create", "fix"}:
         try:
             from project_migration import item_entry
@@ -918,11 +960,15 @@ def _prepare_finish(root, manifest, files, drafts):
     if operation == "requirement-update":
         if _hash(writes[documents["requirement"]]) != _hash(files.get(documents["requirement"])):
             _invalidate_implementation(item)
+            authors = item.setdefault("workflow", {}).setdefault("design_authors", [])
+            if actor not in authors:
+                authors.append(actor)
             design = _design(item)
             design["state"] = "draft"
             design.pop("approval", None)
             design.pop("review", None)
     elif operation == "design-update":
+        pending_revision = _design_reuse().pending(files, item)
         design = _design(item)
         if _hash(writes[_spec(item)]) != _hash(files.get(_spec(item))):
             _invalidate_implementation(item)
@@ -953,6 +999,12 @@ def _prepare_finish(root, manifest, files, drafts):
                 design["approval"] = derived
                 design["state"] = "review-pending"
                 item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("design_authors", []).append(actor)
+            elif pending_revision:
+                # Candidate repair retains only the original comparison mandate;
+                # an independent unchanged-contract pass is still required.
+                prospective = store.apply_writes(files, writes)
+                design["approval"] = {**approval, **_approval_binding(prospective, item)}
+                design["state"] = "review-pending"
     elif operation == "decision-record":
         _text(writes[documents["decision"]], "decision body")
         if "approval_source" in options:
@@ -964,19 +1016,63 @@ def _prepare_finish(root, manifest, files, drafts):
                                   "session": identity["session"], "recorded_by": identity["session"]}
             design["state"] = "review-pending"
             design.pop("review", None)
+    elif operation == "design-reuse":
+        if options.get("result") not in {"pass", "fail"}:
+            raise ProjectError("finish assessment requires an explicit result pass or fail")
+        _text(options.get("provenance"), "assessment provenance")
+        _text(drafts["report.md"], "assessment report")
+        _design_reuse().finish(root, manifest, files, item, writes, drafts["report.md"])
     elif operation == "design-review":
         if options.get("result") not in {"pass", "fail"}:
             raise ProjectError("finish review requires an explicit result pass or fail")
         _text(options.get("provenance"), "review provenance")
         _text(drafts["report.md"], "review report")
+        pending_confirmation = _design_reuse().pending(files, item)
+        mechanical = options.get("mechanical_correction") is True
+        changed = _hash(drafts["spec.md"]) != _hash(files.get(_spec(item)))
+        if changed and not mechanical:
+            raise ProjectError("design review candidate changes require explicit mechanical_correction or a separate design revision")
+        if mechanical and (not changed or options["result"] != "pass" or options.get("contract_unchanged") is not True):
+            raise ProjectError("mechanical correction requires a changed candidate, pass and contract_unchanged confirmation")
+        if options.get("contract_unchanged") and (not (pending_confirmation or mechanical) or options["result"] != "pass"):
+            raise ProjectError("contract_unchanged is only valid for a passing independent pending-contract confirmation")
+        if pending_confirmation and options["result"] == "pass" and options.get("contract_unchanged") is not True:
+            raise ProjectError("pending approval requires independent contract_unchanged confirmation")
         design = _design(item)
         approval = design.get("approval")
         _review_ready(files, item, actor, execution=bool(execution))
         # The approval baseline is the design's baseline, not the subsequent
         # management commit that recorded approval or claimed this edit.
         manifest["base_commit"] = _base(item)
-        record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
+        review_files = files
+        original_binding = _binding(files, item, manifest["base_commit"])
+        if mechanical:
+            design["version"] += 1
+            review_files = store.apply_writes(files, {_spec(item): drafts["spec.md"]})
+            original_approval = copy.deepcopy(approval)
+            design["approval"] = {**_approval_binding(review_files, item), "kind": "derived_mechanical",
+                "source": approval["source"], "original_user_approval": approval.get("original_user_approval", original_approval),
+                "review": manifest["ticket"], "execution": options.get("execution")}
+            approval = design["approval"]
+        record = _report(root, manifest, item, review_files, writes, operation, drafts["report.md"])
+        if mechanical:
+            record["mechanical_correction"] = {"original_binding": original_binding,
+                "candidate_sha256": _hash(drafts["spec.md"]), "contract_unchanged": True,
+                "diff": "".join(difflib.unified_diff(files[_spec(item)].decode("utf-8").splitlines(keepends=True),
+                    drafts["spec.md"].splitlines(keepends=True), fromfile="original/spec.md", tofile="candidate/spec.md"))}
+
         record["result"] = options["result"]
+        if pending_confirmation and options["result"] == "pass":
+            record["contract_unchanged"] = True
+            design["approval"] = {**approval, "kind": "derived_confirmation", "review": record["id"]}
+            authorization = (item.get("workflow", {}).get("autonomy") or {}).get("authorization")
+            if authorization:
+                authorization.update(requirement_sha256=approval["requirement_sha256"],
+                                     decision_sha256=_hash(files.get(documents["decision"])),
+                                     design_confirmation=record["id"])
+        record["read_hashes"] = copy.deepcopy(manifest["read_hashes"])
+        if mechanical:
+            record["read_hashes"][str(Path(root) / _spec(item))] = _hash(drafts["spec.md"])
         if execution or options.get("reviewer_session"):
             record.update(session=actor, recorded_by=identity["session"])
         if manifest.get("review_source"):
@@ -985,11 +1081,26 @@ def _prepare_finish(root, manifest, files, drafts):
             record.update(execution=execution["attempt"],
                           contract_unchanged=execution["result"].get("contract_unchanged"))
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
-        if any(approval.get(key) != value for key, value in _approval_binding(files, item).items()):
+        if any(approval.get(key) != value for key, value in _approval_binding(review_files, item).items()):
             raise ProjectError("design approval is stale")
         design["review"] = record
         design["state"] = "implementable" if options["result"] == "pass" else "draft"
         item.pop("needs_review", None)
+        if record["result"] == "pass":
+            item.setdefault("workflow", {}).pop("design_review_failure", None)
+            reviewed_read = copy.deepcopy(manifest.get("read"))
+            if mechanical and reviewed_read is not None:
+                for row in reviewed_read:
+                    if row["path"] == str(Path(root) / _spec(item)):
+                        row["content"] = drafts["spec.md"]
+            _design_reuse().capture(root, review_files, item, reviewed=True, read=reviewed_read, read_hashes=record["read_hashes"])
+        elif pending_confirmation:
+            # Preserve the original approved comparison input across the repair;
+            # this known failure disables reuse until independent re-review.
+            item.setdefault("workflow", {})["design_review_failure"] = copy.deepcopy(record)
+        else:
+            item.setdefault("workflow", {}).pop("design_basis", None)
+            item["workflow"].pop("design_reuse", None)
     elif operation == "development-start":
         if options.get("skip_design_review"):
             waiver = {"id": manifest["ticket"], "kind": "user_design_review_waiver", "item": identifier,
@@ -1180,12 +1291,15 @@ def _finish(root, ticket, *, options=None, publish=None):
             result["code_context"] = _code_context(root, store.item(files, manifest["item"]["id"]), store.project(files))
         return result
     if options:
-        if manifest["operation"] != "design-review" or set(options) - {"result", "provenance"}:
-            raise ProjectError("finish accepts typed result/provenance only for design-review")
+        if manifest["operation"] not in {"design-review", "design-reuse"} or set(options) - ({"result", "provenance", "contract_unchanged", "mechanical_correction"} if manifest["operation"] == "design-review" else {"result", "provenance"}):
+            raise ProjectError("finish accepts typed result/provenance only for design-review or design-reuse")
         merged = {**manifest["options"], **options}
         if merged.get("result") not in {"pass", "fail"}:
             raise ProjectError("review result must be pass or fail")
         _text(merged.get("provenance"), "review provenance")
+        for flag in ("contract_unchanged", "mechanical_correction"):
+            if flag in merged and type(merged[flag]) is not bool:
+                raise ProjectError(flag + " must be an explicit boolean")
         if manifest["state"] != "editing" and merged != manifest["options"]:
             raise ProjectError("published review intent cannot change result or provenance")
         manifest["options"] = merged
@@ -1231,11 +1345,22 @@ def _finish(root, ticket, *, options=None, publish=None):
         if manifest["operation"] == "development-finish":
             manifest["code_snapshot"] = _code_snapshot(root, manifest["item"], store.project(files))
         return _continue_context(root, directory, manifest, files, publish)
+    if manifest["operation"] == "design-reuse":
+        reuse_item = store.item(files, manifest["item"]["id"])
+        _design_reuse().ready(reuse_item, manifest["identity"]["session"])
+        if manifest.get("code_snapshot") is not None and _code_snapshot(root, reuse_item, store.project(files)) != manifest["code_snapshot"]:
+            return _stale(root, manifest, "Assessment source snapshot changed; draft is retained.")
+        if manifest["state"] == "prepared":
+            try:
+                _autonomy_module()._validate_reads(manifest)
+            except ProjectError:
+                return _stale(root, manifest, "Assessment read inputs changed during publication recovery.")
     recovering = manifest["state"] == "prepared"
     if manifest["state"] == "editing":
         for name, expected in manifest.get("read_hashes", {}).items():
             path = Path(name)
-            if any(component.is_symlink() for component in (path, *path.parents)) or not path.is_file() or _hash(path.read_bytes()) != expected:
+            if any(component.is_symlink() for component in (path, *path.parents)) or (
+                    not path.exists() and expected is not None or path.exists() and (not path.is_file() or _hash(path.read_bytes()) != expected)):
                 return _stale(root, manifest, "A required read source changed; draft is retained.")
         current = _checks(files, manifest["item"], manifest["operation"])
         if manifest["operation"] in {"development-start", "development-finish", "delivery-record"}:

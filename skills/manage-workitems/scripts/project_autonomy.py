@@ -63,8 +63,9 @@ def _payload(root, files, item, role):
     return read
 
 
-def _read_hashes(root, files, item, role):
-    read = _payload(root, files, item, role)
+def _read_hashes(root, files, item, role, *, read=None):
+    if read is None:
+        read = _payload(root, files, item, role)
     hashes = {entry["path"]: workflow._hash(Path(entry["path"]).read_bytes()) for entry in read}
     candidates = {root / name for name in (".project/project-instructions.md", ".project/main-workspace.md",
                                           ".project/business-instructions.md", ".project/context.md")}
@@ -106,13 +107,27 @@ def _validate_reads(entry, *, revised_spec=None, missing_root=None):
 def review_inputs_current(files, item, review, *, missing_root=None):
     attempt = review.get("execution")
     if not attempt:
-        return True
+        basis = (item.get("workflow") or {}).get("design_basis") or {}
+        guard = review if review.get("read_hashes") else basis if basis.get("review") == review else {}
+        if not guard.get("read_hashes"):
+            # Existing ordinary review records predate read guards; controlled
+            # edits capture a still-current basis before replacing their inputs.
+            return True
+        try:
+            _validate_reads(guard, missing_root=missing_root)
+            return True
+        except ProjectError:
+            return False
     entry = _state(item).get("executions", {}).get(attempt)
     if (not entry or not entry.get("read_hashes") or
             entry.get("input_binding", {}).get("project_sha256") != workflow._hash(files[store.project_path(files)])):
         return False
     try:
-        _validate_reads(entry, missing_root=missing_root)
+        mechanical = review.get("mechanical_correction") or {}
+        revised_spec = next((name for name in review.get("read_hashes", {}) if name.endswith("/workitems/" + item["id"] + "/spec.md")), None)
+        if mechanical.get("candidate_sha256") != entry.get("candidate_sha256"):
+            revised_spec = None
+        _validate_reads(entry, missing_root=missing_root, revised_spec=revised_spec if mechanical else None)
         return True
     except ProjectError:
         return False
@@ -124,7 +139,7 @@ def _contract(files, item):
 
 def _approved_contract(files, item):
     approval = item.get("design", {}).get("approval") or {}
-    return bool(approval.get("source") and all(approval.get(k) == v for k, v in _contract(files, item).items()))
+    return bool(approval.get("kind") != "derived_reuse_pending" and approval.get("source") and all(approval.get(k) == v for k, v in _contract(files, item).items()))
 
 
 def scope(files, *, all_items=False, tree=None, items=None):
@@ -236,11 +251,13 @@ def _next(root, files, item, session):
         return result
     if state.get("blocker"):
         result["reasons"].append(state["blocker"])
-    if not _approved_contract(files, item):
+    assess_reuse = not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
+    pending_confirmation = workflow._design_reuse().pending(files, item)
+    if not assess_reuse and not pending_confirmation and not _approved_contract(files, item):
         result["reasons"].append("approved_initial_design_required")
-    if authorization and authorization.get("requirement_sha256") != _contract(files, item)["requirement_sha256"]:
+    if not assess_reuse and not pending_confirmation and authorization and authorization.get("requirement_sha256") != _contract(files, item)["requirement_sha256"]:
         result["reasons"].append("authorization_contract_changed")
-    if authorization and authorization.get("decision_sha256") != workflow._hash(files.get(workflow._documents(item)["decision"])):
+    if not assess_reuse and not pending_confirmation and authorization and authorization.get("decision_sha256") != workflow._hash(files.get(workflow._documents(item)["decision"])):
         result["reasons"].append("authorization_decision_changed")
     if not result["reasons"] and ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
         result.update(state="ready", next_action="lifecycle_prepare")
@@ -258,6 +275,9 @@ def _next(root, files, item, session):
         _predevelopment()._lifecycle().capacity(item, runtime_cache=True)
     except ProjectError as exc:
         result.update(state="blocked", reasons=[str(exc)])
+        return result
+    if assess_reuse:
+        result.update(state="ready", next_action="design_reuse_assessment")
         return result
     binding = _binding(root, files, item)
     development = item.get("development") or {}
@@ -339,11 +359,23 @@ def authorize(root, *, approval_source, all_items=False, tree=None, items=None, 
             continue
         workflow._ownership(item, identity)
         approval = item.get("design", {}).get("approval") or {}
-        if _approved_contract(files, item) and approval.get("kind") == "user":
-            state["approved_contract"] = {"approval": copy.deepcopy(approval),
-                "requirement": files.get(workflow._documents(item)["requirement"], b"").decode("utf-8"),
-                "spec": files.get(workflow._spec(item), b"").decode("utf-8"),
-                "decision": files.get(workflow._documents(item)["decision"], b"").decode("utf-8")}
+        confirmed_contract = approval.get("kind") == "user"
+        if approval.get("kind") in {"derived_reuse", "derived_mechanical", "derived_confirmation", "derived_revision"}:
+            unwaived = copy.deepcopy(item)
+            unwaived.setdefault("workflow", {}).pop("design_waiver", None)
+            try:
+                workflow._approved(files, unwaived)
+                confirmed_contract = True
+            except ProjectError:
+                pass
+        if _approved_contract(files, item) and confirmed_contract:
+            basis = (item.get("workflow") or {}).get("design_basis") or {}
+            original_read = {row["path"]: row["content"] for row in basis.get("read", [])} if approval.get("kind") != "user" else {}
+            paths = {"requirement": workflow._documents(item)["requirement"], "spec": workflow._spec(item),
+                     "decision": workflow._documents(item)["decision"]}
+            state["approved_contract"] = {"approval": copy.deepcopy(basis.get("approval", approval) if original_read else approval),
+                **{name: original_read.get(str(root / path), files.get(path, b"").decode("utf-8"))
+                   for name, path in paths.items()}}
         state["authorization"] = {"source": approval_source, "coordinator": identity["session"],
                                   "scope": selected, "created_at": workflow._now(),
                                   "requirement_sha256": _contract(files, item)["requirement_sha256"],
@@ -506,10 +538,10 @@ def _continue_dispatch(root, identifier, attempt, *, publish=None):
         ticket = _preparation_ticket(root, item, entry, identity)
         if ticket:
             _, manifest = workflow._load(root, ticket)
-            for name, expected in manifest.get("read_hashes", {}).items():
-                path = Path(name)
-                if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file() or workflow._hash(path.read_bytes()) != expected:
-                    raise ProjectError("dispatch continuation required read source changed; preserve its original ticket")
+            try:
+                _validate_reads(manifest)
+            except ProjectError as exc:
+                raise ProjectError("dispatch continuation required read source changed; preserve its original ticket") from exc
             prepared = {"status": "ready", "ticket": ticket}
             if manifest["state"] not in {"editing", "finished"}:
                 prepared = workflow.resume(root, ticket, publish=publish)
@@ -544,6 +576,7 @@ def _continue_dispatch(root, identifier, attempt, *, publish=None):
     return {"status": "ready", "attempt": attempt, "role": role, "worker_id": entry["worker_id"],
             "worker_paused": False, "input_binding": entry["input_binding"],
             "approved_contract": copy.deepcopy(_state(item).get("approved_contract")),
+            **({"design_basis": copy.deepcopy(item["workflow"]["design_basis"])} if role == "design-review" and item.get("workflow", {}).get("design_basis") else {}),
             "code_context": workflow._code_context(root, item, store.project(files)),
             "git_operation": _predevelopment().writer_context(item, role),
             "prerequisites": copy.deepcopy(_predevelopment().pins(item)),
@@ -574,7 +607,7 @@ def _retained_result(root, item, entry, identity):
         raise ProjectError("retained result mismatches dispatched host")
     _result_outcome(captured)
     _captured_body(saved, "report")
-    if captured["outcome"] == "revised":
+    if captured["outcome"] == "revised" or captured.get("mechanical_correction"):
         _captured_body(saved, "candidate")
     return saved
 
@@ -691,7 +724,7 @@ def result(root, selector, *, receipt, publish=None):
     # artifact, not an arbitrary later design, may complete the recorded result.
     derived = item.get("design", {}).get("approval") or {}
     _validate_reads(entry, revised_spec=str(root / workflow._spec(item)) if derived.get("execution") == attempt else None)
-    if (entry.get("result", {}).get("outcome") == "revised" and derived.get("execution") == attempt and
+    if ((entry.get("result", {}).get("outcome") == "revised" or entry.get("result", {}).get("mechanical_correction")) and derived.get("execution") == attempt and
             current.get("spec_sha256") == entry.get("candidate_sha256") and current.get("version") == expected.get("version", 0) + 1):
         expected["spec_sha256"] = current["spec_sha256"]
         expected["version"] = current["version"]
@@ -701,7 +734,7 @@ def result(root, selector, *, receipt, publish=None):
     if expected != current:
         raise ProjectError("execution input contract or dirty code snapshot is stale")
     role = entry["role"]
-    if outcome == "pass" and role == "design-review" and item.get("design", {}).get("approval", {}).get("kind") == "derived_revision" and captured.get("contract_unchanged") is not True:
+    if outcome == "pass" and role == "design-review" and item.get("design", {}).get("approval", {}).get("kind") in {"derived_revision", "derived_reuse_pending"} and captured.get("contract_unchanged") is not True:
         raise ProjectError("derived revision requires independent confirmation that the approved contract is unchanged")
     saved = _retained_result(root, item, entry, identity)
     if saved and saved["result"] != captured:
@@ -713,13 +746,13 @@ def result(root, selector, *, receipt, publish=None):
         if retained["result"] != captured:
             raise ProjectError("captured result and report are immutable")
         report = _captured_body(retained, "report")
-        candidate = _captured_body(retained, "candidate") if outcome == "revised" else None
+        candidate = _captured_body(retained, "candidate") if outcome == "revised" or captured.get("mechanical_correction") else None
         for key in ("result", "report", "candidate", "candidate_sha256"):
             if key in retained:
                 entry[key] = copy.deepcopy(retained[key])
     else:
         report = _read_report(captured.get("report_file"))
-        candidate = _read_report(captured.get("candidate_file")) if outcome == "revised" else None
+        candidate = _read_report(captured.get("candidate_file")) if outcome == "revised" or captured.get("mechanical_correction") else None
         entry.update(result=captured, report={"sha256": workflow._hash(report), "body": report})
         if candidate is not None:
             entry["candidate"] = {"sha256": workflow._hash(candidate), "body": candidate}
@@ -776,10 +809,17 @@ def result(root, selector, *, receipt, publish=None):
             entry = item["workflow"]["autonomy"]["executions"][attempt]
             prepared = _stage_ticket(root, files, item, entry, key="result_ticket")
         content = candidate if operation == "design-update" else report
+        if prepared["editable"] and captured.get("mechanical_correction"):
+            target_spec = next(value for value in prepared["editable"] if Path(value["path"]).name == "spec.md")
+            Path(target_spec["path"]).write_text(candidate, encoding="utf-8")
         if prepared["editable"]:
             target = next(value for value in prepared["editable"] if Path(value["path"]).name == ("spec.md" if operation == "design-update" else "report.md"))
             Path(target["path"]).write_text(content, encoding="utf-8")
         finish_options = {"result": outcome, "provenance": _provenance(captured)} if operation == "design-review" else None
+        if operation == "design-review" and outcome == "pass" and (workflow._design_reuse().pending(files, item) or captured.get("mechanical_correction")):
+            finish_options["contract_unchanged"] = captured.get("contract_unchanged")
+        if captured.get("mechanical_correction"):
+            finish_options["mechanical_correction"] = True
         finished = workflow.finish(root, prepared["ticket"], options=finish_options, publish=publish)
         if finished.get("status") not in {"published", "no_op"}:
             return _pending_result(root, identifier, attempt, finished)
@@ -796,11 +836,15 @@ def result(root, selector, *, receipt, publish=None):
             workflow._invalidate_implementation(item)
             item["design"].pop("approval", None)
             item["design"].pop("review", None)
+            item.setdefault("workflow", {}).pop("design_basis", None)
+            item["workflow"].pop("design_reuse", None)
+            item["workflow"].pop("design_review_failure", None)
             item["design"]["state"] = "draft"
     else:
         state.pop("blocker", None)
         state["next_role"] = ("design-review" if outcome == "revised" or role == "design-revision" else
                               "design-revision" if role == "design-review" and outcome == "fail" else
+                              "code-review" if role == "design-review" and (_predevelopment().state(item) or {}).get("rebased") else
                               "implementation" if role == "design-review" else
                               "fix" if role == "code-review" and outcome == "fail" else "code-review")
         if role in {"baseline", "rebase"}:
@@ -872,6 +916,13 @@ def _result_outcome(captured):
     if outcome != "blocked" and captured["terminal_status"] != "completed":
         raise ProjectError("a stage verdict requires a completed worker; interrupted workers may only report blocked")
     role = captured.get("role")
+    mechanical = captured.get("mechanical_correction")
+    if mechanical is not None and mechanical is not True:
+        raise ProjectError("mechanical_correction must be an explicit true declaration")
+    if mechanical and (role != "design-review" or outcome != "pass" or captured.get("contract_unchanged") is not True or not captured.get("candidate_file")):
+        raise ProjectError("mechanical correction requires design-review pass, candidate and unchanged approved contract")
+    if captured.get("candidate_file") and outcome != "revised" and not mechanical:
+        raise ProjectError("a changed candidate requires a mechanical correction declaration or a separate revision")
     if outcome == "revised" and role not in {"design-review", "design-revision"}:
         raise ProjectError("only design stages may return a revised design")
     if role == "design-revision" and outcome not in {"revised", "blocked", "contract-change"}:
@@ -953,6 +1004,7 @@ def accept(root, selector, *, approval_source, publish=None):
 def validate_state(item):
     """Validate persisted dispatch/result structure independently of CLI callers."""
     _predevelopment()._lifecycle().validate(item)
+    workflow._design_reuse().validate(item)
     state = (item.get("workflow") or {}).get("autonomy")
     if state is None:
         return

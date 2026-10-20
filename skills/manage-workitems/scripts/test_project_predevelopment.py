@@ -147,7 +147,7 @@ class PredevelopmentTest(unittest.TestCase):
             parsed = project.parser().parse_args(["--root", str(self.root), "autonomy", action, "B"])
             self.assertEqual(parsed.autonomy_action, action)
 
-    def test_chain_waits_for_delivery_and_requires_fresh_formal_reviews(self):
+    def test_chain_waits_for_delivery_and_retains_design_coverage_with_formal_code_review(self):
         for identifier, dependencies in (("A", []), ("B", ["A"]), ("C", ["B"])):
             self.configure(identifier, dependencies)
         self.f.commit("initial approved scope")
@@ -203,10 +203,19 @@ class PredevelopmentTest(unittest.TestCase):
         self.assertEqual(git(formal, "rev-parse", "HEAD"), operation["target"])
         self.assertIn("B.txt", git(formal, "status", "--porcelain"))
         self.assertTrue((formal / "human-update.txt").exists())
-        self.assertEqual(self.state("B")["next_role"], "design-review")
+        self.assertEqual(self.state("B")["next_action"], "design_reuse_assessment")
         with self.assertRaises(runtime.ProjectError):
-            self.dispatch("code-review", "cannot-skip-design", "B")
-        self.develop("B")
+            self.dispatch("code-review", "cannot-skip-assessment", "B")
+        original_review = copy.deepcopy(self.item("B")["workflow"]["design_basis"]["review"])
+        assessment = self.f.begin("design-reuse", "B")
+        self.f.edit(assessment, "Formal baseline and delivered dependency changes preserve the approved contract and assumptions.\n")
+        assessed = workflow.finish(self.root, assessment["ticket"], options={"result": "pass", "provenance": "Coordinator compared formal convergence inputs"}, publish=self.f.publisher)
+        self.assertEqual(assessed["status"], "published", assessed)
+        self.assertEqual(self.item("B")["design"]["review"], original_review)
+        self.assertEqual(self.state("B")["next_role"], "code-review")
+        with self.assertRaises(runtime.ProjectError):
+            autonomy.accept(self.root, "B", approval_source="Cannot bypass formal code review", publish=self.f.publisher)
+        self.finish("B", self.dispatch("code-review", "formal-code-reviewer", "B"))
         self.assertEqual(predevelopment.state(self.item("B"))["phase"], "formal")
         for key in ("rebased", "base"):
             corrupt = copy.deepcopy(self.item("B"))

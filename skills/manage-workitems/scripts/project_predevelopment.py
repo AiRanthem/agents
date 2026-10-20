@@ -362,6 +362,7 @@ def prepare(root, selector, *, publish=None):
         configuration = development._configuration(location, development._repository(item, store.project(files)))
         target = development._base(location, configuration, development._identity(store.project(files), item))
         _lifecycle().capacity(item, retiring=True)
+        workflow._design_reuse().capture(root, files, item)
         current["retained_developments"].append(copy.deepcopy(item["development"]))
         current.update(phase="reconciling", rebase={"generation": secrets.token_hex(16),
             "source": own["snapshot"], "old_base": item["development"]["base_commit"], "target": target})
@@ -441,6 +442,7 @@ def prepare(root, selector, *, publish=None):
     for value in same:
         if development._git(checkout, "merge-base", "--is-ancestor", start, value["commit"], check=False).returncode == 0:
             start = value["commit"]
+    workflow._design_reuse().capture(root, files, item)
     item["development"] = _new_worktree(root, files, item, current["generation"], start, "predev")
     complete = all(development._git(checkout, "merge-base", "--is-ancestor", value["commit"], start, check=False).returncode == 0 for value in same)
     current["phase"] = "speculative" if complete else "baseline"

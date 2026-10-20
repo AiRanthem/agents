@@ -20,7 +20,7 @@ def _component(value, label):
 
 def _root_paths(identifier, root, kind):
     inline = root if isinstance(root, dict) else None
-    if kind in {"design-review", "development-finish", "user_design_review_waiver", "predevelopment-snapshot"}:
+    if kind in {"design-review", "design-reuse", "development-finish", "user_design_review_waiver", "predevelopment-snapshot"}:
         if inline is None or inline.get("item") != identifier or inline.get("kind") != kind:
             raise store.StoreError("current " + kind + " root must be a same-item inline record")
     elif not isinstance(root, str):
@@ -28,7 +28,7 @@ def _root_paths(identifier, root, kind):
     record_id = _component(inline.get("id") if inline is not None else root, "record id")
     base = "workitems/" + identifier + "/records/" + record_id
     metadata, report = base + ".yaml", base + ".md"
-    if inline is not None and (kind in {"design-review", "development-finish"} or "report" in inline):
+    if inline is not None and (kind in {"design-review", "design-reuse", "development-finish"} or "report" in inline):
         if inline.get("report") != report:
             raise store.StoreError("current credential root report must reference its same-id pair: " + metadata)
     return metadata, report
@@ -42,7 +42,7 @@ def _record_paths(files, identifier, root, kind):
     if (not isinstance(record, dict) or record.get("id") != PurePosixPath(metadata).stem or
             record.get("item") != identifier or record.get("kind") != kind):
         raise store.StoreError("current credential has inconsistent id/item/kind: " + metadata)
-    if kind in {"design-review", "development-finish", "delivery-record"}:
+    if kind in {"design-review", "design-reuse", "development-finish", "delivery-record"}:
         if record.get("report") != report:
             raise store.StoreError("current credential report must reference its same-id pair: " + metadata)
     elif "report" in record and record["report"] != report:
@@ -70,6 +70,13 @@ def _current_roots(files, identifier):
              sections["workflow"].get("cleanup_record"), sections["workflow"].get("development_discard_record"))
     kinds = ("design-review", "development-finish", "delivery-record", "user_design_review_waiver", "cleanup", "cleanup")
     current = [(root, kind) for root, kind in zip(roots, kinds) if root is not None]
+    if sections["workflow"].get("design_review_failure") is not None:
+        current.append((sections["workflow"]["design_review_failure"], "design-review"))
+    basis = sections["workflow"].get("design_basis") or {}
+    if basis.get("review") is not None:
+        current.append((basis["review"], "design-review"))
+    if sections["workflow"].get("design_reuse") is not None:
+        current.append((sections["workflow"]["design_reuse"], "design-reuse"))
     for captured in (sections["workflow"].get("autonomy") or {}).get("snapshots", {}).values():
         lifecycle = sections["workflow"].get("lifecycle") or {}
         if lifecycle.get("policy"):
