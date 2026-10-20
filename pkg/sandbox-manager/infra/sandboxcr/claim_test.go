@@ -4808,21 +4808,23 @@ func TestPickAnAvailableSandbox_ProbeUpdates(t *testing.T) {
 	running := v1alpha1.SandboxRunning
 	pending := v1alpha1.SandboxPending
 	tests := []struct {
-		name                string
-		candidates          []v1alpha1.Sandbox
-		probeUpdatesEnabled bool
-		claimHasProbes      bool
-		claimHasPolicy      bool
-		poolHasProbe        bool
-		candidateCounts     int
-		speculate           bool
-		getErr              error
-		cancelOnNodeGet     bool
-		wantCandidate       string
-		wantLock            infra.LockType
-		wantNoAvailable     bool
-		wantCanceled        bool
-		wantNodeGets        int
+		name                  string
+		candidates            []v1alpha1.Sandbox
+		probeUpdatesEnabled   bool
+		claimHasProbes        bool
+		claimHasPolicy        bool
+		poolHasProbe          bool
+		candidateCounts       int
+		speculate             bool
+		getErr                error
+		nodeGetErrs           map[string]error
+		cancelOnNodeGet       bool
+		wantCandidate         string
+		wantLock              infra.LockType
+		wantNoAvailable       bool
+		wantCanceled          bool
+		wantNodeGets          int
+		wantProbeUpdateReason string
 	}{
 		{name: "available virtual kubelet candidate is skipped", candidates: []v1alpha1.Sandbox{candidate("vk-available", "vk-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantNoAvailable: true, wantNodeGets: 1},
 		{name: "creating virtual kubelet candidate is skipped", candidates: []v1alpha1.Sandbox{candidate("vk-creating", "vk-node", "current", pending)}, probeUpdatesEnabled: true, claimHasProbes: true, speculate: true, wantNoAvailable: true, wantNodeGets: 1},
@@ -4832,7 +4834,10 @@ func TestPickAnAvailableSandbox_ProbeUpdates(t *testing.T) {
 		{name: "node get error is skipped", candidates: []v1alpha1.Sandbox{candidate("node-get-error", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, getErr: errors.New("node lookup failed"), wantNoAvailable: true, wantNodeGets: 1},
 		{name: "node get cancellation aborts selection", candidates: []v1alpha1.Sandbox{candidate("node-get-canceled", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, cancelOnNodeGet: true, wantCanceled: true, wantNodeGets: 1},
 		{name: "empty node name is skipped", candidates: []v1alpha1.Sandbox{candidate("no-node-name", "", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, wantNoAvailable: true},
-		{name: "disabled capability skips probe-bearing candidates", candidates: []v1alpha1.Sandbox{candidate("disabled-vk", "vk-node", "current", running)}, claimHasProbes: true, wantNoAvailable: true},
+		{name: "disabled capability skips probe-bearing candidates", candidates: []v1alpha1.Sandbox{candidate("disabled-vk", "vk-node", "current", running)}, claimHasProbes: true, wantNoAvailable: true, wantProbeUpdateReason: "probe updates disabled: 1"},
+		{name: "virtual kubelet is not hidden by a later node read failure", candidates: []v1alpha1.Sandbox{candidate("a-vk", "vk-node", "current", running), candidate("b-unread", "flaky-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, nodeGetErrs: map[string]error{"flaky-node": errors.New("node lookup failed")}, wantNoAvailable: true, wantNodeGets: 2, wantProbeUpdateReason: "virtual-kubelet: 1, node read failed: 1"},
+		{name: "virtual kubelet is not hidden by an earlier node read failure", candidates: []v1alpha1.Sandbox{candidate("a-unread", "flaky-node", "current", running), candidate("b-vk", "vk-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, nodeGetErrs: map[string]error{"flaky-node": errors.New("node lookup failed")}, wantNoAvailable: true, wantNodeGets: 2, wantProbeUpdateReason: "virtual-kubelet: 1, node read failed: 1"},
+		{name: "unscheduled candidate is not hidden by a node read failure", candidates: []v1alpha1.Sandbox{candidate("a-none", "", "current", running), candidate("b-unread", "flaky-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, nodeGetErrs: map[string]error{"flaky-node": errors.New("node lookup failed")}, wantNoAvailable: true, wantNodeGets: 1, wantProbeUpdateReason: "unscheduled: 1, node read failed: 1"},
 		{name: "no claim probes leave virtual kubelet candidate eligible", candidates: []v1alpha1.Sandbox{candidate("no-probes-vk", "vk-node", "current", running)}, probeUpdatesEnabled: true, wantCandidate: "no-probes-vk", wantLock: infra.LockTypeUpdate},
 		{name: "policy-only claim does not inspect node capability", candidates: []v1alpha1.Sandbox{candidate("policy-only-real", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasPolicy: true, poolHasProbe: true, wantCandidate: "policy-only-real", wantLock: infra.LockTypeUpdate},
 		{name: "virtual kubelet before real node does not consume candidate count", candidates: []v1alpha1.Sandbox{candidate("a-vk", "vk-node", "current", running), candidate("b-real", "real-node", "current", running)}, probeUpdatesEnabled: true, claimHasProbes: true, candidateCounts: 1, wantCandidate: "b-real", wantLock: infra.LockTypeUpdate, wantNodeGets: 2},
@@ -4868,6 +4873,9 @@ func TestPickAnAvailableSandbox_ProbeUpdates(t *testing.T) {
 							if tt.cancelOnNodeGet {
 								cancel()
 								return context.Canceled
+							}
+							if err, ok := tt.nodeGetErrs[key.Name]; ok {
+								return err
 							}
 							if tt.getErr != nil {
 								return tt.getErr
@@ -4953,6 +4961,9 @@ func TestPickAnAvailableSandbox_ProbeUpdates(t *testing.T) {
 				require.Error(t, pickErr)
 				var retriable retriableError
 				require.ErrorAs(t, pickErr, &retriable)
+				if tt.wantProbeUpdateReason != "" {
+					assert.Contains(t, pickErr.Error(), "no candidate supports probe updates: "+tt.wantProbeUpdateReason)
+				}
 				assert.Nil(t, sbx)
 				return
 			}

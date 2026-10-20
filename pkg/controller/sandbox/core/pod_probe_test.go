@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/autopause"
 	"github.com/openkruise/agents/pkg/features"
 	"github.com/openkruise/agents/pkg/utils"
 	utilfeature "github.com/openkruise/agents/pkg/utils/feature"
@@ -70,7 +71,7 @@ func virtualNode(name string) *corev1.Node {
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,
-			Labels: map[string]string{virtualKubeletNodeLabelKey: virtualKubeletNodeLabelValue},
+			Labels: map[string]string{autopause.VirtualKubeletNodeLabelKey: autopause.VirtualKubeletNodeLabelValue},
 		},
 	}
 }
@@ -168,7 +169,7 @@ func TestInjectProbe(t *testing.T) {
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
-					NodeSelector: map[string]string{virtualKubeletNodeLabelKey: "normal"},
+					NodeSelector: map[string]string{autopause.VirtualKubeletNodeLabelKey: "normal"},
 					Containers:   []corev1.Container{{Name: "main"}},
 				},
 			},
@@ -180,7 +181,7 @@ func TestInjectProbe(t *testing.T) {
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
-					NodeSelector: map[string]string{virtualKubeletNodeLabelKey: virtualKubeletNodeLabelValue},
+					NodeSelector: map[string]string{autopause.VirtualKubeletNodeLabelKey: autopause.VirtualKubeletNodeLabelValue},
 					Containers:   []corev1.Container{{Name: "main"}},
 				},
 			},
@@ -209,9 +210,9 @@ func TestInjectProbe(t *testing.T) {
 							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 								NodeSelectorTerms: []corev1.NodeSelectorTerm{{
 									MatchExpressions: []corev1.NodeSelectorRequirement{{
-										Key:      virtualKubeletNodeLabelKey,
+										Key:      autopause.VirtualKubeletNodeLabelKey,
 										Operator: corev1.NodeSelectorOpNotIn,
-										Values:   []string{virtualKubeletNodeLabelValue},
+										Values:   []string{autopause.VirtualKubeletNodeLabelValue},
 									}},
 								}},
 							},
@@ -233,9 +234,9 @@ func TestInjectProbe(t *testing.T) {
 							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 								NodeSelectorTerms: []corev1.NodeSelectorTerm{{
 									MatchExpressions: []corev1.NodeSelectorRequirement{{
-										Key:      virtualKubeletNodeLabelKey,
+										Key:      autopause.VirtualKubeletNodeLabelKey,
 										Operator: corev1.NodeSelectorOpIn,
-										Values:   []string{"normal", virtualKubeletNodeLabelValue},
+										Values:   []string{"normal", autopause.VirtualKubeletNodeLabelValue},
 									}},
 								}},
 							},
@@ -253,7 +254,7 @@ func TestInjectProbe(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
 					Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{"normal"},
+						Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{"normal"},
 					}}}}}}},
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -282,7 +283,7 @@ func TestInjectProbe(t *testing.T) {
 				Spec: corev1.PodSpec{
 					Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{
 						{MatchExpressions: []corev1.NodeSelectorRequirement{{
-							Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{virtualKubeletNodeLabelValue},
+							Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{autopause.VirtualKubeletNodeLabelValue},
 						}}},
 						{MatchExpressions: []corev1.NodeSelectorRequirement{{
 							Key: "kubernetes.io/os", Operator: corev1.NodeSelectorOpIn, Values: []string{"linux"},
@@ -312,7 +313,7 @@ func TestInjectProbe(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
 					Affinity: requiredAffinity(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpExists,
+						Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpExists,
 					}}}),
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -326,7 +327,7 @@ func TestInjectProbe(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
 					Affinity: requiredAffinity(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpDoesNotExist,
+						Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpDoesNotExist,
 					}}}),
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -340,7 +341,7 @@ func TestInjectProbe(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
 					Affinity: requiredAffinity(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpGt, Values: []string{"1"},
+						Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpGt, Values: []string{"1"},
 					}}}),
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -354,8 +355,8 @@ func TestInjectProbe(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
 					Affinity: requiredAffinity(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{
-						{Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{virtualKubeletNodeLabelValue}},
-						{Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{virtualKubeletNodeLabelValue}},
+						{Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpIn, Values: []string{autopause.VirtualKubeletNodeLabelValue}},
+						{Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{autopause.VirtualKubeletNodeLabelValue}},
 					}}),
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -368,9 +369,9 @@ func TestInjectProbe(t *testing.T) {
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{Name: "box", Namespace: "default"},
 				Spec: corev1.PodSpec{
-					NodeSelector: map[string]string{virtualKubeletNodeLabelKey: virtualKubeletNodeLabelValue},
+					NodeSelector: map[string]string{autopause.VirtualKubeletNodeLabelKey: autopause.VirtualKubeletNodeLabelValue},
 					Affinity: requiredAffinity(corev1.NodeSelectorTerm{MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key: virtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{virtualKubeletNodeLabelValue},
+						Key: autopause.VirtualKubeletNodeLabelKey, Operator: corev1.NodeSelectorOpNotIn, Values: []string{autopause.VirtualKubeletNodeLabelValue},
 					}}}),
 					Containers: []corev1.Container{{Name: "main"}},
 				},
@@ -412,9 +413,9 @@ func TestInjectProbe(t *testing.T) {
 								Weight: 1,
 								Preference: corev1.NodeSelectorTerm{
 									MatchExpressions: []corev1.NodeSelectorRequirement{{
-										Key:      virtualKubeletNodeLabelKey,
+										Key:      autopause.VirtualKubeletNodeLabelKey,
 										Operator: corev1.NodeSelectorOpNotIn,
-										Values:   []string{virtualKubeletNodeLabelValue},
+										Values:   []string{autopause.VirtualKubeletNodeLabelValue},
 									}},
 								},
 							}},

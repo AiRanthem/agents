@@ -58,24 +58,12 @@ type SandboxClaimSpec struct {
 	AutoPausePolicy *AutoPausePolicy `json:"autoPausePolicy,omitempty"`
 
 	// Probes are merged by name onto the claimed Sandbox at claim time: a
-	// probe with the same name replaces the version carried by the pool
-	// candidate, new names are appended. AutoPausePolicy rules may therefore
-	// reference probes declared here instead of on the target SandboxSet. The
-	// merged set must pass the same validation as SandboxSet probes and stay
-	// within the Sandbox probes limit, otherwise the claim completes with
-	// reason InvalidClaimSpec. Omitted or empty leaves the Sandbox probes
-	// unchanged. Reuse requires both AutoPauseController and KruiseIntegration
-	// and a compatible candidate scheduled to a real node. The Node named by
-	// status.nodeName is read through the informer-backed client; no node name,
-	// a failed read, or type=virtual-kubelet skips the candidate. The platform
-	// must follow this Node label convention. With either gate disabled, existing
-	// warm and Creating candidates are skipped. createOnNoStock (default: true)
-	// allows creating a Sandbox when no candidate is reusable; when false, the
-	// Claim retries until timeout.
-	// These gates do not reject probe configuration, and Claim completion does
-	// not guarantee probe results are ready. Real-node delivery requires
-	// KruiseIntegration and an installed, running OpenKruise daemon. See the
-	// SandboxClaim auto-pause proposal for the VK execution-layer recycle limit.
+	// probe with the same name replaces the pool version, and new names are
+	// appended. Omitted or empty leaves the Sandbox probes unchanged. The merge
+	// with the target SandboxSet must stay within 16 probes and pass SandboxSet
+	// probe validation; otherwise the Claim completes with reason InvalidClaimSpec.
+	// Candidate reuse, feature gates, and the virtual-kubelet recycle limit are
+	// described in the SandboxClaim auto-pause proposal.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

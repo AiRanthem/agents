@@ -36,16 +36,12 @@ spec:
   #     onIngressTraffic: {}
 
   # Probes are merged by name onto the claimed Sandbox at claim time: a probe
-  # with the same name replaces the version carried by the pool candidate,
-  # new names are appended. AutoPausePolicy rules may reference probes
-  # declared here instead of on the target SandboxSet. Reuse requires both
-  # AutoPauseController and KruiseIntegration plus a compatible candidate
-  # scheduled to a real node. Candidates without a node name, with an unreadable
-  # Node, or with type=virtual-kubelet are skipped. The platform must honor this
-  # Node label convention. With either gate off, existing warm and Creating
-  # candidates are skipped. createOnNoStock (default: true) allows creation;
-  # when false, the Claim retries until timeout. Gates do not reject this
-  # configuration, and Claim completion does not guarantee probe results ready.
+  # with the same name replaces the pool version, and new names are appended.
+  # Omitted or empty leaves the Sandbox probes unchanged. The merge with the
+  # target SandboxSet must stay within 16 probes and pass SandboxSet probe
+  # validation; otherwise the Claim completes with reason InvalidClaimSpec.
+  # Candidate reuse, feature gates, and the virtual-kubelet recycle limit are
+  # described in the SandboxClaim auto-pause proposal.
   # probes:
   #   - name: Active
   #     exec:

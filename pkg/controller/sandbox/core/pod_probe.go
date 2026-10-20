@@ -43,11 +43,6 @@ import (
 	kruiseappsv1alpha1 "github.com/openkruise/kruise-api/apps/v1alpha1"
 )
 
-const (
-	virtualKubeletNodeLabelKey   = autopause.VirtualKubeletNodeLabelKey
-	virtualKubeletNodeLabelValue = autopause.VirtualKubeletNodeLabelValue
-)
-
 var podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
 
 // podProbeItem represents a single probe entry in the kruise.io/podprobe annotation.
@@ -132,7 +127,7 @@ func (m *PodProbeManager) isPodExcludedFromVirtualKubelet(ctx context.Context, p
 		}
 	}
 
-	if nodeType, constrained := pod.Spec.NodeSelector[virtualKubeletNodeLabelKey]; constrained && nodeType != virtualKubeletNodeLabelValue {
+	if nodeType, constrained := pod.Spec.NodeSelector[autopause.VirtualKubeletNodeLabelKey]; constrained && nodeType != autopause.VirtualKubeletNodeLabelValue {
 		return true
 	}
 	return required != nil && !requiredNodeAffinityMayMatchVirtualKubelet(required)
@@ -155,13 +150,13 @@ func requiredNodeAffinityMayMatchVirtualKubelet(required *corev1.NodeSelector) b
 // that a virtual node is impossible and are therefore treated as compatible.
 func nodeSelectorTermMayMatchVirtualKubelet(term corev1.NodeSelectorTerm) bool {
 	for _, requirement := range term.MatchExpressions {
-		if requirement.Key != virtualKubeletNodeLabelKey {
+		if requirement.Key != autopause.VirtualKubeletNodeLabelKey {
 			continue
 		}
 
 		hasVirtualKubeletValue := false
 		for _, value := range requirement.Values {
-			if value == virtualKubeletNodeLabelValue {
+			if value == autopause.VirtualKubeletNodeLabelValue {
 				hasVirtualKubeletValue = true
 				break
 			}

@@ -622,7 +622,7 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	availableCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	speculatingCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	var resizeSkipReason error
-	var probeUpdateSkipReason error
+	var probeUpdateSkips probeUpdateSkipTally
 	// The claim-required probes derive from the claim's auto-pause policy minus
 	// the probes the claim itself carries: candidates do not need to pre-declare
 	// those, they are merged onto the picked sandbox at claim time.
@@ -670,7 +670,7 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 				if errors.Is(checkErr, context.Canceled) || errors.Is(checkErr, context.DeadlineExceeded) {
 					return nil, "", checkErr
 				}
-				probeUpdateSkipReason = checkErr
+				probeUpdateSkips.add(checkErr)
 				log.Info("skip sandbox that cannot update probes", "sandbox", klog.KObj(obj), "reason", checkErr)
 				continue
 			}
@@ -758,27 +758,110 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 		}
 		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate declares required probes %v", missing))
 	}
-	if probeUpdateSkipReason != nil && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
-		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate supports probe updates: %v", probeUpdateSkipReason))
+	if !probeUpdateSkips.empty() && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
+		return nil, "", NoAvailableError(template, "no candidate supports probe updates: "+probeUpdateSkips.Error())
 	}
 	return nil, "", NoAvailableError(template, pickErr.Error())
+}
+
+// probeUpdateSkipKind classifies why a pool candidate cannot receive claim probes.
+type probeUpdateSkipKind int
+
+const (
+	probeUpdateSkipUnread probeUpdateSkipKind = iota
+	probeUpdateSkipUnscheduled
+	probeUpdateSkipVirtual
+	probeUpdateSkipDisabled
+)
+
+// probeUpdateSkipError keeps the per-candidate diagnostic and a stable category
+// so mixed skips can be aggregated without matching message text. Unwrap
+// preserves context cancellation from the Node read.
+type probeUpdateSkipError struct {
+	kind  probeUpdateSkipKind
+	msg   string
+	cause error
+}
+
+func (e *probeUpdateSkipError) Error() string {
+	return e.msg
+}
+
+func (e *probeUpdateSkipError) Unwrap() error {
+	return e.cause
+}
+
+// probeUpdateSkipTally counts skip categories across the pool. Deterministic
+// categories are rendered before transient node-read failures, so a cache miss
+// cannot hide a virtual-kubelet, unscheduled, or disabled-gate skip.
+type probeUpdateSkipTally struct {
+	disabled    int
+	virtual     int
+	unscheduled int
+	unread      int
+}
+
+func (t *probeUpdateSkipTally) add(err error) {
+	var skip *probeUpdateSkipError
+	if !errors.As(err, &skip) {
+		t.unread++
+		return
+	}
+	switch skip.kind {
+	case probeUpdateSkipDisabled:
+		t.disabled++
+	case probeUpdateSkipVirtual:
+		t.virtual++
+	case probeUpdateSkipUnscheduled:
+		t.unscheduled++
+	default:
+		t.unread++
+	}
+}
+
+func (t probeUpdateSkipTally) empty() bool {
+	return t.disabled == 0 && t.virtual == 0 && t.unscheduled == 0 && t.unread == 0
+}
+
+func (t probeUpdateSkipTally) Error() string {
+	parts := make([]string, 0, 4)
+	if t.disabled > 0 {
+		parts = append(parts, fmt.Sprintf("probe updates disabled: %d", t.disabled))
+	}
+	if t.virtual > 0 {
+		parts = append(parts, fmt.Sprintf("virtual-kubelet: %d", t.virtual))
+	}
+	if t.unscheduled > 0 {
+		parts = append(parts, fmt.Sprintf("unscheduled: %d", t.unscheduled))
+	}
+	if t.unread > 0 {
+		parts = append(parts, fmt.Sprintf("node read failed: %d", t.unread))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // checkCandidateProbeUpdates rejects pool candidates whose existing Pods cannot
 // receive claim probes. Node reads use the caller's informer-backed client.
 func checkCandidateProbeUpdates(ctx context.Context, sbx *v1alpha1.Sandbox, enabled bool, c client.Client) error {
 	if !enabled {
-		return errors.New("probe updates are disabled")
+		return &probeUpdateSkipError{kind: probeUpdateSkipDisabled, msg: "probe updates are disabled"}
 	}
 	if sbx.Status.NodeName == "" {
-		return errors.New("sandbox has no scheduled node")
+		return &probeUpdateSkipError{kind: probeUpdateSkipUnscheduled, msg: "sandbox has no scheduled node"}
 	}
 	node := &corev1.Node{}
 	if err := c.Get(ctx, client.ObjectKey{Name: sbx.Status.NodeName}, node); err != nil {
-		return fmt.Errorf("cannot determine probe update support for node %s: %w", sbx.Status.NodeName, err)
+		return &probeUpdateSkipError{
+			kind:  probeUpdateSkipUnread,
+			msg:   fmt.Sprintf("cannot determine probe update support for node %s: %v", sbx.Status.NodeName, err),
+			cause: err,
+		}
 	}
 	if autopause.IsVirtualKubeletNode(node) {
-		return fmt.Errorf("node %s is a virtual-kubelet node", node.Name)
+		return &probeUpdateSkipError{
+			kind: probeUpdateSkipVirtual,
+			msg:  fmt.Sprintf("node %s is a virtual-kubelet node", node.Name),
+		}
 	}
 	return nil
 }
@@ -965,7 +1048,8 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 	}
 	setMemoryPersistence(sbx, opts.MemoryPersistence)
 	// Deep-copy the claim's policy so the sandbox spec never aliases the
-	// SandboxClaim spec.
+	// SandboxClaim spec. Applied after the modifier on purpose: an explicitly
+	// supplied claim policy replaces any policy the modifier wrote.
 	if opts.AutoPausePolicy != nil {
 		sbx.Spec.AutoPausePolicy = opts.AutoPausePolicy.DeepCopy()
 	}
