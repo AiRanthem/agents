@@ -1,0 +1,17 @@
+id: 1-e2b-compatibility
+title: E2B 兼容性
+kind: aggregate
+status: new
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft
