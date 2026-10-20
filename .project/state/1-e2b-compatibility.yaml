@@ -1,3 +1,7 @@
+owner:
+  session: 6b1f6568-6e10-4267-8485-008023d22241
+  token: e5de922bb0d554b52251cb40929d9baeb8ddfcc5fa4a992cb443b7d74142f5b1
+  machine: Sophon-1A.local
 workflow:
   design_authors:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
