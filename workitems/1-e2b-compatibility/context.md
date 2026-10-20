@@ -1,19 +1,30 @@
 # 当前上下文
 
-2026-10-20，用户要求创建「E2B 兼容性」项目，并明确：解决任何 E2B 兼容性问题前，先讨论是否需要解决，确认需要解决的再进入设计。
+本总项管理 E2B 兼容性。用户于 2026-10-20 要求先讨论每项解决必要性，确认后再设计；项目记录存储于 GitHub `AiRanthem/agents` 的 `projects/e2b-compatibility` 分支。
 
-同日，用户指定项目记录存储于 GitHub `AiRanthem/agents`，分支保持 `projects/e2b-compatibility`，并确认上述约束。
+## 当前范围与确认
 
-本项为需求管理总项。2026-10-20，用户本轮明确要求「解决上游 #1083 #1084 #1085 三个 Issue」；已将三项问题及上游允许的解决边界登记在当前 requirement.md。三项在查询时均为 OPEN，暂无评论。
+用户要求解决 `openkruise/agents` #1083、#1084、#1085。在核对事实并讨论三项均有必要修复后，用户明确选择“最小修复 (Recommended)”：#1083 完整修复列表筛选/排序/分页；#1084 对 `memory:false` 返回 400；#1085 支持 filesystem-only 快照、修正 `names` 数组，对创建和列表的 `name` 返回 400。实际问题与选择原文见 `decision.md`，当前验收范围见 `requirement.md`。
 
-- #1083：https://github.com/openkruise/agents/issues/1083 。列表 `order`、`template`、`startedAfter` 被误当 metadata，且排序默认值与协议不同。
-- #1084：https://github.com/openkruise/agents/issues/1084 。Pause 忽略请求体 `memory`，可能静默执行与调用者意图不同的暂停模式。
-- #1085：https://github.com/openkruise/agents/issues/1085 。Snapshot 忽略创建 `name`/`memory` 与列表 `name`，且返回 `names: null`。
+## 已取得的证据
 
-已读取三个 Issue 及其引用的 E2B OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082` 对应原文。规范中的命名快照包含复用已有模板并分配新 build 的语义，名称筛选还允许 ID、命名空间及 tag；不能将简单记录 checkpoint 名称等同于完整兼容。Pause 的 filesystem-only 语义还影响恢复时冷启动以及 auto-resume。
+- 三个上游 Issue 查询时均为 OPEN、无评论；读取了其引用的 E2B OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082` 原文，并查阅 E2B 文档。SDK 报告版本为 e2b 2.56.0。
+- 源码主检出 `/Users/sophon/Workspace/OKAWorkspace/agents` 保持 `develop`。本会话先确认干净并执行 `git pull --ff-only`，再刷新 upstream；只读核对基线为 `upstream/master@2b06e110327f52da85053730a531ec3b3b0d6a46`，三项问题仍存在。
+- 列表共享分页器默认升序，启动时间来源是领取时间，模板 ID/现有别名来自已有模板身份；不能全局反转其他列表的顺序。
+- PauseOptions 无单次持久化内容选择；Checkpoint 已支持单次 PersistentContents 覆盖，但无 E2B 命名/同名 build/tag 体系。
 
-关联源码仓库 `/Users/sophon/Workspace/OKAWorkspace/agents` 保持 `develop`；已确认干净并执行 `git pull --ff-only`，随后刷新 `upstream`，当前开源候选基线为 `upstream/master` 的 `2b06e1103`。后续证据须区分开源基线与内部 develop，不在主检出上实现修复。
+## 当前设计与反思结果
 
-当前仅登记问题并核对证据，未形成正式设计、设计批准、独立评审或源码变更；尚未创建代码 worktree。本项目还没有注册开发代码仓库或具体开发子项。
+完整候选为 `spec.md`，程序登记版本 1，原文字节 SHA256 为 `f79b4857b1edb0b8797d79b61801b7e5764554f51592132a676c25b9eb2f9971`；设计发布提交为 `781ed144ca9e02f006217011c80557bad9659960`，当前需求和范围决策随后通过项目工作流更新。
 
-待讨论事项：三项的实际影响与解决必要性；#1084/#1085 采用完整新能力还是上游允许的显式 400；据此确定行为验收条件、开发项和交付方式。用户的解决请求不能记作对尚未提出的方案的批准。源码提交、推送、PR 与 Issue 关闭仍需覆盖相应操作的授权。
+完整性核对覆盖列表参数与时间边界、同时间分页、共享调用者、Pause 拒绝无副作用、Snapshot 显式模式与扩展头冲突、源策略保持、租户可见性及数组序列化。候选明确了按时间点排序、稳定同时间顺序、冲突返回 400，以及无效输入在写入前拒绝。保留单次暂停/命名能力不支持和省略 snapshot memory 时继承现有策略等限制；未发现需要先扩大已确认能力范围的设计障碍。
+
+以上为作者静态分析，不是独立评审，也不是运行验证。未修改源码、未运行测试、未创建代码 worktree、未提交或推送源码、未创建 PR 或关闭 Issue。
+
+## 待交接
+
+- 必要性与最小修复范围已经确认，不需要重复询问。
+- 完整设计的新增细节尚未得到用户批准。需要向用户展示完整 v1 候选，确认覆盖当前字节版本的批准后再通过 `decision-record --approval-source` 记录真实来源。
+- 独立设计评审尚未请求或执行；范围选择不是跳过评审授权。普通路线仍需明确评审请求，且评审者须独立于设计作者。
+- 项目仅有 aggregate 总项，尚未注册代码仓库与具体开发项；源码实现还须满足项目注册、独立评审及 development-start 所有权门禁，不绕过程序直接写代码。
+- 源码提交/推送、PR、Issue 关闭和交付完成仍依赖各自实际授权与证据。
