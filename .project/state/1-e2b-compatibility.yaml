@@ -2,6 +2,18 @@ owner:
   session: ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e
   token: 13da6c45fbf9e7cb54969d6fddc3f8e219d6dce7123c95b111b75e83e847af75
   machine: Sophon-1A.local
+development:
+  repository: agents
+  worktree: worktrees/1-e2b-compatibility
+  branch: fix/e2b-1083-1085-261020
+  base_commit: fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48
+  publish_ref: refs/heads/fix/e2b-1083-1085-261020
+  host: Sophon-1A.local
+  base_remote: upstream
+  base_ref: refs/heads/master
+  base_url: git@github.com:openkruise/agents.git
+  publish_remote: airanthem
+  publish_url: git@github.com:AiRanthem/agents.git
 workflow:
   design_authors:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
