@@ -48,7 +48,7 @@ Then check the retained claims against the evidence. Verify causal reasons and c
 
 ## Independent review before delivery
 
-After drafting and self-checking, delegate a content review to an independent subagent. Give the reviewer this skill, the draft, and the authoritative design materials and relevant evidence, without the author's self-assessment or intended verdict. The reviewer must apply the same explanatory purpose and content-selection criteria; independent review is not a demand to restore every omitted requirement.
+After drafting and self-checking, delegate a content review to an independent subagent. Apply [shared-context preparation](../advance-project/references/delegation-context.md); this author's session must use clean reviewer context. Give the reviewer this skill, the draft, and the authoritative design materials and relevant evidence, without the author's self-assessment or intended verdict. The reviewer must apply the same explanatory purpose and content-selection criteria; independent review is not a demand to restore every omitted requirement.
 
 The review must establish both newcomer comprehension and fidelity. Have the reviewer read the draft on its own first, then compare its claims and consequential omissions against the source. Findings need the affected passage, supporting evidence, and the impact on understanding or design meaning. Distinguish material defects from optional stylistic preferences. Review notes belong in the handoff, not in the article.
 

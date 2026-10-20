@@ -24,7 +24,9 @@ An implementer's summary is only an index. It must not determine which requireme
 
 At least one actual review execution must be independent of implementation. A lead in a fresh context that did not implement the change can satisfy this gate. The dedicated quality subagent below can also satisfy it when it is separate from implementation.
 
-Every review must also dispatch one fresh read-only subagent dedicated to implementation quality. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code to evaluate the final implementation. Keep this assignment separate from broad correctness, security, and test review so it focuses on:
+Before dispatching reviewers, apply [shared-context preparation](../../advance-project/references/delegation-context.md). Read the likely common original contract, conventions, stable diff and critical surrounding code first. An independent review lead may fork this primary-material context before forming findings when the host, model/effort and role boundaries permit; an implementation or authoring session must use clean dispatch. Keep reviewer-specific investigation delegated and conclusions independent.
+
+Every review must also dispatch one read-only subagent independent of implementation and dedicated to implementation quality. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code to evaluate the final implementation, through the eligible shared context or clean original inputs. Keep this assignment separate from broad correctness, security, and test review so it focuses on:
 
 - whether the behavior has clear responsibilities, readable code, maintainable structure, and suitable reuse of repository or platform capabilities;
 - unnecessary lines, files, branches, abstractions, dependencies, indirection, duplication, and generated churn;

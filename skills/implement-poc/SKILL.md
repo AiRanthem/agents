@@ -99,7 +99,7 @@ Run that check and inspect its actual exit status, observable result, and logs. 
 
 ## Require one independent diagnostic audit
 
-Once implementation and its integration check are complete, dispatch one independent read-only subagent that did not implement the POC. This is a targeted diagnosability audit, not a general code review.
+Once implementation and its integration check are complete, dispatch one independent read-only subagent that did not implement the POC. Apply [shared-context preparation](../advance-project/references/delegation-context.md); the implementation session must use clean reviewer context. This is a targeted diagnosability audit, not a general code review.
 
 Give it the confirmed acceptance contract, trimmed design, final diff, integration command and result, and produced logs. Require it to trace every accepted-path step and every operation that can fail and determine whether the logs expose the inputs, decisions, state transitions, external results, errors, and final outcome needed to locate a failure. It must report concrete blind spots with code-path evidence and must not edit files.
 
