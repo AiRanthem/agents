@@ -1,7 +1,7 @@
 id: 1-e2b-compatibility
 title: E2B 兼容性
 kind: development
-status: new
+status: developing
 delivery:
   required:
   - merged
