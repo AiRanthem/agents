@@ -11,6 +11,15 @@ This file contains repository-wide rules.
 
 ## Control Plane Layering
 
+### Sandbox-manager Runtime Contract
+
+- Sandbox recycle cannot occur in any cluster running sandbox-manager. All
+  sandbox-manager API, Manager, Infra, cache, quota, and token flows treat
+  recycle as nonexistent; do not add recycle-specific handling or compatibility.
+- The independent Sandbox controller retains recycle support for other
+  deployments. Its recycle capability does not imply CR reuse across deliveries
+  in sandbox-manager deployments.
+
 ### API Layer — sandbox-manager
 
 - The API layer is `pkg/servers/**`, including E2B-compatible protocols.

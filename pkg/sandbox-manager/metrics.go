@@ -85,27 +85,6 @@ var (
 		[]string{"namespace"},
 	)
 
-	// sandboxRecycleResponses tracks total recycle requests and their results
-	sandboxRecycleResponses = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name:        "sandbox_recycle_responses",
-			Help:        "Total number of sandbox recycle requests and their results",
-			ConstLabels: prometheus.Labels{"source": "e2b"},
-		},
-		[]string{"namespace", "result"},
-	)
-
-	// sandboxRecycleDuration tracks the time of sandbox recycle trigger operations
-	sandboxRecycleDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:        "sandbox_recycle_duration_seconds",
-			Help:        "Duration of sandbox recycle trigger operations in seconds",
-			ConstLabels: prometheus.Labels{"source": "e2b"},
-			Buckets:     prometheus.ExponentialBuckets(0.02, 2, 12), // 20ms -> ~41s
-		},
-		[]string{"namespace"},
-	)
-
 	// --- Claim metrics ---
 
 	// sandboxClaimCreationResponses tracks total requests and failures
@@ -202,13 +181,13 @@ func init() {
 	metrics.Registry.MustRegister(sandboxClaimCreationResponses,
 		sandboxPauseDuration, sandboxPauseResponses,
 		sandboxResumeDuration, sandboxResumeResponses,
-		sandboxDeleteResponses, sandboxRecycleResponses,
+		sandboxDeleteResponses,
 		// Claim
 		sandboxClaimDuration, sandboxClaimTotal, sandboxClaimRetries,
 		// Clone
 		sandboxCloneDuration, sandboxCloneTotal,
-		// Delete & Recycle duration
-		sandboxDeleteDuration, sandboxRecycleDuration,
+		// Delete duration
+		sandboxDeleteDuration,
 		// Route sync
 		sandboxRouteSyncDuration, sandboxRouteSyncTotal,
 	)

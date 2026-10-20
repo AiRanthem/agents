@@ -81,8 +81,9 @@ type ClaimSandboxOptions struct {
 	// Set to 0 to disable speculation feature
 	SpeculateCreatingDuration time.Duration `json:"speculateCreatingDuration"`
 	// UserMetadataKeys records the keys of user-specified labels/annotations
-	// added during claim (from SandboxClaim.Spec or E2B request). Used by the
-	// cleanup flow to clean up user metadata when returning the sandbox to the pool.
+	// added during claim (from SandboxClaim.Spec). Only the independent Sandbox
+	// controller consumes it, through the cleanup flow that returns the sandbox
+	// to the pool. Sandbox-manager drivers leave it nil.
 	UserMetadataKeys *v1alpha1.UpdatedMetadataInClaim `json:"-"`
 	// Claim is the SandboxClaim that triggers this claim. May be nil for
 	// non-CRD paths such as the E2B API. IdentityProvider implementations must

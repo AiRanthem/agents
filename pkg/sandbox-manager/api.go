@@ -440,8 +440,7 @@ func (m *SandboxManager) deleteRouteAndSync(ctx context.Context, sbx infra.Sandb
 }
 
 // DeleteSandbox deletes a sandbox and syncs route with peers.
-// If the sandbox is cleanup-enabled and in Running phase, it triggers cleanup instead of deletion.
-// On both accepted-delete return paths (reuse trigger success and Kill success), quota is released.
+// Quota is released after the deletion is accepted.
 func (m *SandboxManager) DeleteSandbox(ctx context.Context, opts DeleteSandboxOptions) (err error) {
 	ctx, span := tracing.StartManagerSpan(ctx, tracing.SpanManagerDeleteSandbox)
 	// Keep the closure: a direct defer tracing.EndSpan(ctx, span, err) would
@@ -449,23 +448,6 @@ func (m *SandboxManager) DeleteSandbox(ctx context.Context, opts DeleteSandboxOp
 	defer func() { tracing.EndSpan(ctx, span, err) }()
 	log := klog.FromContext(ctx).WithValues("sandbox", klog.KObj(opts.Sandbox))
 	sbx := opts.Sandbox
-
-	if sbx.IsRecycleEnabled() && sbx.Phase() == string(v1alpha1.SandboxRunning) {
-		log.Info("sandbox is recycle-enabled, triggering recycle instead of deletion")
-		start := time.Now()
-		if err := sbx.TriggerRecycle(ctx); err != nil {
-			log.Error(err, "failed to trigger recycle, falling back to delete")
-			sandboxRecycleResponses.WithLabelValues(sbx.GetNamespace(), "failure").Inc()
-		} else {
-			sandboxRecycleResponses.WithLabelValues(sbx.GetNamespace(), "success").Inc()
-			sandboxRecycleDuration.WithLabelValues(sbx.GetNamespace()).Observe(time.Since(start).Seconds())
-			span.SetAttributes(attribute.Bool(tracing.AttrReuseTriggered, true))
-			m.deleteRouteAndSync(ctx, sbx)
-			m.releaseQuotaAfterDelete(ctx, opts)
-			return nil
-		}
-	}
-	span.SetAttributes(attribute.Bool(tracing.AttrReuseTriggered, false))
 
 	start := time.Now()
 	if err := sbx.Kill(ctx); err != nil {

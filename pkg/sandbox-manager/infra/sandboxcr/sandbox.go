@@ -333,25 +333,6 @@ func (s *Sandbox) Kill(ctx context.Context) (err error) {
 	return DefaultDeleteSandbox(ctx, s.Sandbox, s.Cache.GetClient())
 }
 
-func (s *Sandbox) TriggerRecycle(ctx context.Context) error {
-	patch := client.MergeFrom(s.Sandbox.DeepCopy())
-	if s.Sandbox.Annotations == nil {
-		s.Sandbox.Annotations = make(map[string]string, 1)
-	}
-	s.Sandbox.Annotations[agentsv1alpha1.AnnotationCleanup] = agentsv1alpha1.True
-	// Inject trace context so the controller's recycle Reconcile is linked.
-	s.Sandbox.Annotations = tracing.InjectTraceContext(ctx, s.Sandbox.Annotations)
-	return s.Cache.GetClient().Patch(ctx, s.Sandbox, patch)
-}
-
-func (s *Sandbox) IsRecycleEnabled() bool {
-	return s.Sandbox.Annotations[agentsv1alpha1.AnnotationCleanupEnabled] == agentsv1alpha1.True
-}
-
-func (s *Sandbox) Phase() string {
-	return string(s.Sandbox.Status.Phase)
-}
-
 // GetTrafficAccessToken returns the transient access token minted during claim or clone
 // for accessing this sandbox through the sandbox gateway. It is empty unless
 // the sandbox opted in via AnnotationEnableJwtAuth.

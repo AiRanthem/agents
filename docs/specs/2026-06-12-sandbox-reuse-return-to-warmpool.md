@@ -127,17 +127,11 @@ If the sandbox's current phase is not `Running`, the sandbox controller sets a `
 
 ### 5.3 E2B API Scenario
 
-`SandboxManager.DeleteSandbox()` determines behavior based on the `AnnotationReuseEnabled` annotation — no additional environment variable needed. It checks whether the sandbox has `AnnotationReuseEnabled=true` (capability marker), has a SandboxSet origin label (`LabelSandboxPool`), and is currently in `Running` phase. When all three conditions are met, it sets the `AnnotationReuse` annotation instead of actually deleting, handing off to the sandbox controller. If conditions are not met (e.g., no `reuse-enabled`, phase is not `Running`), it falls through to the delete path.
-
-```go
-func (m *SandboxManager) DeleteSandbox(ctx context.Context, sbx infra.Sandbox) error {
-    if sbx.IsReuseEnabled() && hasSandboxPool(sbx) && sbx.Phase() == SandboxRunning {
-        return sbx.TriggerReuse(ctx)  // Set AnnotationReuse, don't actually delete
-    }
-    // Default: delete (including cases without reuse-enabled or non-Running phase)
-    return m.doDeleteSandbox(ctx, sbx)
-}
-```
+sandbox-manager does **not** trigger reuse. `SandboxManager.DeleteSandbox()` always deletes the
+sandbox and releases its quota; it never sets the `AnnotationReuse` trigger, regardless of
+`AnnotationReuseEnabled` or phase. In sandbox-manager deployments the reuse flow is therefore never
+initiated from the E2B delete path — reuse is triggered only through the manual/SandboxClaim
+annotation path described in 5.2 and executed by the sandbox controller.
 
 ## 6. API Changes
 
@@ -403,21 +397,21 @@ All reason constants are defined in section 6.1.
 
 7. **Over-provisioning race**: If SandboxSet already created a replacement before the reuse annotation was set, the returning sandbox causes total > replicas. SandboxSet's existing scale-down logic deletes the excess Creating or Available sandboxes.
 
-8. **Missing SandboxPool label**: Sandboxes not created via SandboxSet do not have `LabelSandboxPool`. The reuse annotation on such sandboxes is ignored; sandbox-manager falls back to delete.
+8. **Missing SandboxPool label**: Sandboxes not created via SandboxSet do not have `LabelSandboxPool`. The controller cannot restore an OwnerReference for them, so a reuse trigger on such sandboxes fails and the controller deletes them.
 
 ## 13. Backward Compatibility
 
 - No new CRD spec fields — fully backward compatible.
 - `LabelSandboxPool` is an existing label, requiring no additional setup. All sandboxes created via SandboxSet already have it.
 - Existing sandboxes and claims continue to work normally.
-- sandbox-manager only triggers reuse when the sandbox has `AnnotationReuseEnabled`. Sandboxes without this annotation behave unchanged.
+- sandbox-manager never triggers reuse; `DeleteSandbox` always deletes. The reuse flow is driven only by the sandbox controller through the annotation trigger described in 5.2.
 
 ## 14. Implementation Order
 
 1. **Phase 1 — API types**: Add `SandboxReusing` phase, `AnnotationReuseEnabled`, `AnnotationReuse`, `AnnotationUpdatedMetadataInClaim` constants, `UpdatedMetadataInClaim` type, `status.reuseCount`. Remove `LabelSandboxPool` deprecated marker.
 2. **Phase 2 — Sandbox controller**: Implement reuse reconciliation (detect annotations → Reusing phase → call `SandboxReuser.Reuse()` → reset claim metadata via template → cooldown → Running+Ready + restore OwnerRef → Available). Add `--reuse-timeout`, `--reuse-grace-period` flags.
 3. **Phase 3 — SandboxSet controller**: No new groups or states needed. Verify existing scale-down logic correctly handles reused sandboxes returning to pool (total > replicas).
-4. **Phase 4 — Sandbox-manager**: Update `DeleteSandbox` to check `AnnotationReuseEnabled` and set reuse annotation or delete directly.
+4. **Phase 4 — Sandbox-manager**: No reuse trigger. `DeleteSandbox` always deletes and releases quota; reuse is initiated only through the controller annotation path (5.2).
 5. **Phase 5 — SandboxReuser implementation**: Implement cleanup API (separate spec).
 6. **Phase 6 — Metrics & observability**: Add Prometheus metrics.
 

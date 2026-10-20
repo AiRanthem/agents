@@ -359,10 +359,6 @@ func TestCache_ListLiveSandboxesByOwner(t *testing.T) {
 	deleting := base("deleting", "user-1", "lock-deleting", agentsv1alpha1.SandboxRunning)
 	deleting.DeletionTimestamp = &metav1.Time{Time: time.Now()}
 	deleting.Finalizers = []string{"test.finalizer"}
-	reusing := base("reusing", "user-1", "lock-reusing", agentsv1alpha1.SandboxRecycling)
-	reuseTriggered := base("reuse-triggered", "user-1", "lock-reuse-triggered", agentsv1alpha1.SandboxRunning)
-	reuseTriggered.Annotations[agentsv1alpha1.AnnotationCleanup] = "true"
-	reuseTriggered.Annotations[agentsv1alpha1.AnnotationCleanupEnabled] = "true"
 
 	c, _, err := cachetest.NewTestCache(t,
 		base("running", "user-1", "lock-running", agentsv1alpha1.SandboxRunning),
@@ -370,8 +366,6 @@ func TestCache_ListLiveSandboxesByOwner(t *testing.T) {
 		base("succeeded", "user-1", "lock-succeeded", agentsv1alpha1.SandboxSucceeded),
 		base("terminating", "user-1", "lock-terminating", agentsv1alpha1.SandboxTerminating),
 		deleting,
-		reusing,
-		reuseTriggered,
 		base("nolock", "user-1", "", agentsv1alpha1.SandboxRunning),
 		base("other", "user-2", "lock-other", agentsv1alpha1.SandboxRunning),
 	)

@@ -1084,10 +1084,8 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			expectWakeRule: true,
 		},
 		{
-			// A recycled CR can still carry the wake rule of delivery A;
-			// delivery B's request decides the policy, so the stale rule is
-			// replaced by a new rule carrying B's request timeout.
-			name: "autoResume enabled replaces stale inherited wake rule",
+			// An existing wake rule is replaced by the rule for this request.
+			name: "autoResume enabled replaces an existing wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
@@ -1128,10 +1126,8 @@ func TestBasicSandboxCreateModifier(t *testing.T) {
 			maxTimeout: 3600,
 		},
 		{
-			// Delivery A enabled autoResume; the CR was recycled and claimed
-			// by delivery B without autoResume. The inherited wake rule must
-			// be cleared so B cannot be woken by traffic.
-			name: "autoResume disabled clears inherited wake rule",
+			// An existing wake rule is removed when this request disables autoResume.
+			name: "autoResume disabled clears an existing wake rule",
 			request: models.NewSandboxRequest{
 				TemplateID: "t1",
 				Timeout:    300,
