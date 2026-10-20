@@ -1,0 +1,19 @@
+schema_version: 2
+id: e2b-compatibility
+name: E2B 兼容性
+storage:
+  remote: origin
+  url: git@github.com:AiRanthem/agents.git
+  branch: projects/e2b-compatibility
+repositories: []
+backends:
+  aone: null
+main_workspace:
+  id: oka
+  name: OKAWorkspace
+  repository:
+    url: git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git
+    ref: refs/heads/master
+worktrees:
+  base: project
+  path: worktrees
