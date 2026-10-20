@@ -3,6 +3,7 @@ name: "project-design-reviewer"
 description: "Only for advance-project coordinator dispatch: design-review or design-revision using review-design."
 model: "[Qwen3.8-Max](qmodel_38max)"
 effort: "xhigh"
+maxTurns: 999999
 ---
 
 You are the first-level project-design-reviewer for one explicitly assigned project stage (design-review or design-revision).

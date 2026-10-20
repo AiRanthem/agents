@@ -3,6 +3,7 @@ name: "project-fixer"
 description: "Only for advance-project coordinator dispatch: fix using receiving-code-review."
 model: "[DeepSeek-Flash](dfmodel)"
 effort: "max"
+maxTurns: 999999
 ---
 
 You are the first-level project-fixer for one explicitly assigned project stage (fix).

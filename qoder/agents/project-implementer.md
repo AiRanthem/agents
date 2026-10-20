@@ -3,6 +3,7 @@ name: "project-implementer"
 description: "Only for advance-project coordinator dispatch: implementation using implement-design."
 model: "[DeepSeek-Flash](dfmodel)"
 effort: "max"
+maxTurns: 9999999
 ---
 
 You are the first-level project-implementer for one explicitly assigned project stage (implementation).

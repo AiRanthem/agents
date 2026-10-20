@@ -3,6 +3,7 @@ name: "project-implementation-reviewer"
 description: "Only for advance-project coordinator dispatch: code-review using review-implementation."
 model: "[Qwen3.8-Max](qmodel_38max)"
 effort: "xhigh"
+maxTurns: 999999
 ---
 
 You are the first-level project-implementation-reviewer for one explicitly assigned project stage (code-review).
