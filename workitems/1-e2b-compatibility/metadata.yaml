@@ -14,5 +14,5 @@ documents:
 design:
   file: spec.md
   version: 2
-  state: review-pending
+  state: implementable
   author_session: bfa1920e-2676-4e3a-a8d9-70c449134a7b

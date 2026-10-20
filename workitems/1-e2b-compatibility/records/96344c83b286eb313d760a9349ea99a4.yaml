@@ -1,0 +1,29 @@
+id: 96344c83b286eb313d760a9349ea99a4
+kind: design-review
+item: 1-e2b-compatibility
+report: workitems/1-e2b-compatibility/records/96344c83b286eb313d760a9349ea99a4.md
+session: 6b1f6568-6e10-4267-8485-008023d22241
+created_at: '2026-10-20T05:10:59.286332+00:00'
+provenance: review-design-round1:session=6b1f6568-6e10-4267-8485-008023d22241;ticket=96344c83b286eb313d760a9349ea99a4;spec-v2=af46fe26;baseline=2b06e110
+requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+version: 2
+base_commit: null
+dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+result: pass
+read_hashes:
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md: a0ae7b6c038eb6c6981244781e5fa7dbb89bedfb23db6c31e5d3eab7ed2b2d1e
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md: d39b5517b3d323a6702789fa3bdfd1891dee8326a098ac936233ff33aa680f5f
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md: 39c8a82e6696006e4aa131ee6b8b78b07f67dc222b07297b1bcbae71dcfeb474
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md: 0e6f5b8ff728ae438ce2e9eb14e7ce1b1bfa90677f5469515dd5755a288fab72
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md: 681298fc3da189f07f261f4e1bc8b54de5e4fbff2a3c8371d37fd094d8d3589a
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+  /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: e4934ae327d101f992691bbacd61d420da6ebc31f1f40786b29f20a24734eab2
+  /Users/AGENTS.md: null
+  /Users/sophon/AGENTS.md: null
+  /AGENTS.md: null
+  /Users/sophon/Workspace/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/business-instructions.md: null

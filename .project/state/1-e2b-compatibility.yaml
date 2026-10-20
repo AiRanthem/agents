@@ -1,10 +1,835 @@
-owner:
-  session: 6b1f6568-6e10-4267-8485-008023d22241
-  token: e5de922bb0d554b52251cb40929d9baeb8ddfcc5fa4a992cb443b7d74142f5b1
-  machine: Sophon-1A.local
 workflow:
   design_authors:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
+  design_basis:
+    review:
+      id: 96344c83b286eb313d760a9349ea99a4
+      kind: design-review
+      item: 1-e2b-compatibility
+      report: workitems/1-e2b-compatibility/records/96344c83b286eb313d760a9349ea99a4.md
+      session: 6b1f6568-6e10-4267-8485-008023d22241
+      created_at: '2026-10-20T05:10:59.286332+00:00'
+      provenance: review-design-round1:session=6b1f6568-6e10-4267-8485-008023d22241;ticket=96344c83b286eb313d760a9349ea99a4;spec-v2=af46fe26;baseline=2b06e110
+      requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+      spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+      version: 2
+      base_commit: null
+      dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+      result: pass
+      read_hashes:
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md: a0ae7b6c038eb6c6981244781e5fa7dbb89bedfb23db6c31e5d3eab7ed2b2d1e
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md: d39b5517b3d323a6702789fa3bdfd1891dee8326a098ac936233ff33aa680f5f
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md: 39c8a82e6696006e4aa131ee6b8b78b07f67dc222b07297b1bcbae71dcfeb474
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md: 0e6f5b8ff728ae438ce2e9eb14e7ce1b1bfa90677f5469515dd5755a288fab72
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md: 681298fc3da189f07f261f4e1bc8b54de5e4fbff2a3c8371d37fd094d8d3589a
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+        /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: e4934ae327d101f992691bbacd61d420da6ebc31f1f40786b29f20a24734eab2
+        /Users/AGENTS.md: null
+        /Users/sophon/AGENTS.md: null
+        /AGENTS.md: null
+        /Users/sophon/Workspace/AGENTS.md: null
+        /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+        /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/business-instructions.md: null
+    approval:
+      requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+      spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+      version: 2
+      kind: user
+      source: 会话 bfa1920e-2676-4e3a-a8d9-70c449134a7b：用户先批准完整v1，随后明确要求在memory请求时显式返回400，并要求按最新版技能持续推进直到implementable、最多三轮审查；本次沿用原批准并纳入用户指定的内存请求拒绝变更，其余契约未变
+      session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+      recorded_by: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+    read:
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md
+      content: '# E2B 兼容性
+
+
+        # 项目背景
+
+
+        本项目管理 OKA 的 E2B 兼容性问题。项目名称为「E2B 兼容性」。具体问题、涉及的 SDK/协议版本、影响范围与验收标准，随实际问题提出后再确认。
+
+
+        ## 项目额外要求：先确认解决必要性，再进入设计
+
+
+        用户于 2026-10-20 明确要求：**解决任何 E2B 兼容性问题前，先讨论是否需要解决，确认需要解决的再进入设计。**
+
+
+        此要求适用于本项目的每个 E2B 兼容性问题及其后续子项。发现或记录兼容性差异后，先与用户讨论是否需要解决，记录用户的结论及理由；只有用户明确确认需要解决的具体问题，才可进入设计。项目创建、问题登记、技术差异存在或自动化测试失败，均不替代这一确认。
+
+
+        必要性讨论可以澄清现象、影响、适用版本与现有证据。尚未确认需要解决的问题保持待讨论；确认暂不解决或无需解决的问题保留结论。已确认问题的设计审批、实现、独立审查与验收继续遵循项目工作流。
+
+
+        ## 创建范围与待确认事项
+
+
+        本次创建项目并持久化上述项目约束。用户尚未提供具体兼容性问题，本次不预设 SDK/协议版本、问题清单、优先级、修复方案或交付承诺。后续逐项确认解决必要性后，再形成相应设计与验收标准。
+
+
+        Record overall goals, stable domain context, terminology and project-wide
+        constraints here. Individual requirements, acceptance and designs belong to
+        work items. Keep this introduction concise; link additional material only
+        when it is needed.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md
+      content: '# Main workspace association
+
+
+        Identity: **OKAWorkspace** (`oka`).
+
+
+        Recovery reference: `git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git`
+        at `refs/heads/master`.
+
+
+        Local binding: `.project-local/main-workspace.json`.
+
+
+        ## Project-specific instructions and routes
+
+
+        # OKA 主工作区关联
+
+
+        本项目关联 OKAWorkspace，主工作区根目录为 `/Users/sophon/Workspace/OKAWorkspace`，主工作区仓库为
+        `git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git`，主分支为 `refs/heads/master`。
+
+
+        主工作区原始 `AGENTS.md` 是业务约束、仓库布局、主检出与隔离 worktree 纪律、Python 环境及发布规则的权威入口。开展依赖主工作区的操作时读取该原始文件，按需加载相关业务技能。
+
+
+        项目管理记录使用独立 Git 仓库与专用远程分支，代码开发工作树位于项目内 `worktrees/`。共享 Python 环境为主工作区 `.venv/`。业务代码仓库、开发基线及交付目标随实际工作项确认。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md
+      content: '# Current project instructions
+
+
+        The program includes these current project sources in the operation''s read
+        payload for business background, constraints and main-workspace routes:
+
+
+        - `.project/context.md`
+
+        - `.project/main-workspace.md`
+
+
+        Keep only current effective requirements, design, decisions, knowledge and
+        business instructions in project documents. Replace superseded content; Git
+        retains earlier versions. Keep current approval, delivery and unresolved recovery
+        records. The generated entrypoints and installed skills define the shared
+        protocol.
+
+
+        Read required original main-workspace instructions before dependent work.
+        Preserve explicit permission, delivery and environment constraints. Migration
+        grants no design approval, implementation authorization, independent review
+        or delivery evidence.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md
+      content: '# E2B 兼容性
+
+
+        This is the management workspace for project `e2b-compatibility`. Use installed
+        `manage-workitems/scripts/project.py` and `manage-workitems/references/commands.md`.
+        The program owns configuration, YAML state, ownership, dependencies, document
+        routes and Git/Aone publication.
+
+
+        For each requested work-item operation, run `begin OP [ID]` with its typed
+        inputs. Read the complete returned `read` payload and actually read required
+        original external instruction paths. Edit only the absolute Markdown paths
+        in `editable`, then execute the returned `finish_command` unchanged; only
+        design review declares `--result pass|fail --provenance SOURCE` arguments
+        supplied after the actual assessment. `published` or `no_op` ends the operation;
+        the design owner continues any outstanding approval handoff; `partial` permits
+        only the returned resume command; `blocked` with `code: stale_ticket` permits
+        only its returned `next_command` to begin the same operation again; expired
+        tickets carrying authorization or review evidence return `code: stale_evidence`
+        without a continuation command; other blockers or missing input mean report
+        the listed facts and stop the affected operation. Do not choose extra project
+        documents, construct JSON mutations, edit YAML, calculate state, repeat Git/Aone
+        checks or choose recovery actions.
+
+
+        For execution-mode handoff, generation replacement and registered internal
+        resources, use the direct typed `lifecycle` commands in the command contract.
+        Preserve actual writer closure, source recovery, explicit lifecycle policy
+        and exact collection manifests. Diagnostic `ready` does not establish design
+        approval or implementation eligibility.
+
+
+        For project knowledge, run `knowledge-show ID` and use its returned complete
+        update/remove commands and byte guards. Maintain the current YAML metadata
+        and same-id Markdown body through those commands; replace current knowledge
+        in full or explicitly remove it.
+
+
+        The program includes current business instructions from `.project/project-instructions.md`
+        and current context in its inputs. Project documents contain only current
+        effective content; Git retains prior versions. Keep current approval, delivery
+        and unresolved recovery credentials. For an associated main workspace, required
+        original `AGENTS.md` paths must be returned and read before dependent work;
+        a copied summary does not replace them. Read the code repository''s applicable
+        instructions before source operations.
+
+
+        Use `manage-workitems` for requirements, `split-workitem` for requested decomposition,
+        `develop-workitem` for requested design/implementation, `complete-workitem`
+        for verified delivery and separately requested cleanup, and `upgrade-project`
+        for deterministic migration/instruction refresh. Creation ends at metadata
+        and requirement skeletons. Design and independent design review each require
+        the user''s request; reuse existing explicit authorization for unchanged scope.
+        The design owner presents the complete current candidate for a user decision
+        when covering approval is missing, records real approval against the unchanged
+        version, and reports pending approval separately from pending review. Reuse
+        approval of an unchanged complete contract. Implementation requires the current
+        independent design review or an actual user-scoped simple-requirement waiver,
+        plus delivered prerequisites and published ownership. For a simple requirement,
+        the user may explicitly authorize `development-start --skip-design-review
+        --approval-source SOURCE` for this unchanged contract; the program records
+        a requirement/spec/base/dependency-bound waiver, not a review pass. The agent
+        cannot decide to skip review itself. Project publication does not authorize
+        code commits or code pushes. Preserve main-workspace, cleanup, removal and
+        other user permission boundaries.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md
+      content: '# 当前上下文
+
+
+        本总项管理 E2B 兼容性。用户于 2026-10-20 要求先讨论每项解决必要性，确认后再设计；项目记录存储于 GitHub `AiRanthem/agents`
+        的 `projects/e2b-compatibility` 分支。
+
+
+        ## 已确认范围与批准
+
+
+        用户要求解决 #1083、#1084、#1085，并在必要性讨论后选择最小修复：#1083 完整修复列表筛选/排序/分页；#1084 的 `memory:false`
+        返回 400；#1085 支持 filesystem-only 快照、`names` 数组，对创建和列表的 `name` 返回 400。实际选择及完整批准原文见
+        `decision.md`。
+
+
+        用户随后明确回复「批准设计并授权独立评审」。批准通过项目工作流发布于 `0b10678f8f320da086c4df75275b43ea6a041546`，程序返回
+        `approval: current`。
+
+
+        当前批准目标未变：设计版本 1；`spec.md` SHA256 为 `f79b4857b1edb0b8797d79b61801b7e5764554f51592132a676c25b9eb2f9971`；`requirement.md`
+        SHA256 为 `3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656`。源码基线仍为
+        `openkruise/agents@2b06e110327f52da85053730a531ec3b3b0d6a46`，协议基线仍为 E2B `b52cd30c14bf7038ba5bfbd15456b1dabe567082`。没有把本地既有适配实现替换为新的源码基线。
+
+
+        ## filesystem-only 恢复补证已完成
+
+
+        用户要求补齐 E1 后，已完成源码/接入链、静态发布/编排两路只读取证，并取得公开产品契约。内部材料只保留本机，不上传公开项目仓库。
+
+
+        主要公开来源：
+
+
+        https://help.aliyun.com/zh/cs/user-guide/clone-agent-sandbox-using-checkpoint
+
+
+        取得时间：2026-10-20T04:28:52Z。官方文档明确：
+
+
+        - 适用 ACS Agent Sandbox 算力，要求 `acs-virtual-node >= v2.17.0` 及相关组件。
+
+        - Checkpoint 支持 filesystem；显式接口/CR/扩展头手动覆盖本次保留内容，未指定时才继承 Sandbox 配置。
+
+        - `x-e2b-kruise-snapshot-keep-running` 默认 true；false 时源 Pod 变为 Succeeded。
+
+        - 返回的 snapshotID 可用于创建 clone，并恢复源文件；CR 示例使用 PodTemplate 注解 `checkpoint.alibabacloud.com/restore-from=<checkpointId>`。
+
+        - filesystem 之外的保留内容会导致 Checkpoint 创建失败，不能据此声称该后端支持完整内存快照。
+
+
+        本地实际适配链已核验：同一恢复 ID 经现有后处理接缝进入 PodTemplate，再传给首次创建的 Pod；首次 clone 不依赖另一条 resume
+        路径的 checkpoint-id flag。单次内容传递和源长期策略保持也已核对。这里记录脱敏结论，不公开内部源码、私有依赖及镜像坐标。
+
+
+        上述是服务契约和实际接入链证据，不是现场运行证明；未测量服务端具体 build、真实快照产物或特定源/clone 组合。不能把静态发布记录、样例及测试用例当作已部署或测试成功。
+
+
+        ## 独立增量评审：pass，正式登记尚未完成
+
+
+        真实独立执行身份来自 Agent 工具返回：`ageneral-purpose-cef6072cf1d2a7f0`。完成通知 task `a94554b030741777c`
+        明确该执行已完成。评审者未参与设计编写；主会话没有以自评替代它。
+
+
+        脱敏报告：`/tmp/e2b-filesystem-source-evidence.Z89rSp/independent-review.md`。
+
+
+        已实际读取并核对 SHA256：`931ee5fb6b272915303532ebc7d1b0d441c5a14da10668d4761175e095660c5d`。
+
+
+        结论：**pass**，E1 在设计可实现性层面已充分补证；无已证实的阻塞设计问题。评审直接核验新增源码链与官方契约，复用旧独立报告中仍有效的列表、Pause、数组及权限边界覆盖。旧报告
+        SHA256 为 `a651d21b9b5bb6ff1ed9f3a681ecf185f48ef7274b0cccf61c75d0b4b7437a46`，其原结论
+        unable 未被伪造为旧 Pass。
+
+
+        关于源长期策略仍含 memory：评审认为请求级覆盖、按成功 Checkpoint ID 恢复及实际保持源策略的接入链，已足以支撑设计推论；这不是该组合的实测。关于
+        `memory:true`：合同要求请求 filesystem+memory，成功产物必须符合请求；结合 spec 第65行的真实后端失败约束，不是保证不支持内存的后端也成功，不能降级为
+        filesystem 后假报成功。没有修订设计或新增用户决策。
+
+
+        ### 正式登记阻塞
+
+
+        以真实 reviewer-session 和原样报告执行 `begin design-review` 后，程序返回：
+
+
+        - `status: blocked`
+
+        - `code: owner_conflict`
+
+        - `message: external design review registration requires an owned developing
+        item`
+
+
+        当前工作项是未占用的 aggregate，总项没有具体开发仓库/开发工作树。此登记操作没有 finish_command 或续行命令，已停止；未改
+        owner、未虚构 reviewer session、未用作者会话自评、未将状态手工改为 implementable。
+
+
+        独立质量结论、用户批准、正式状态持久化和实现准入是不同事实。当前已有真实批准与独立 pass 报告，尚无程序登记的正式评审通过状态。后续需使用符合当前工作项条件的独立评审登记路径，不重复补证或要求再次批准未变设计。
+
+
+        ## 本机材料与后续边界
+
+
+        - 公开契约摘录：`/tmp/e2b-filesystem-source-evidence.Z89rSp/public-contract.md`。
+
+        - 内部源码证据：`/tmp/e2b-filesystem-source-evidence.Z89rSp/source-evidence.md`，SHA256
+        `5b5de634a7487dc6f5ac1ab135f12ff6c651a36a581eaf2e8e9ee4fe0a64254e`。
+
+        - 内部离线发布/编排证据：`/tmp/e2b-backend-evidence.QMMKZF`，SHA256 `e963a3edfa80a710c886df3dcd293b29e5f1da2eb89008920e9fe0fb7b02d2e7`。
+
+
+        原始内部材料留在本机；此项目仓库已核验为 PUBLIC，未上传内部报告。没有读取备用钉钉私有文档，已有公开来源直接覆盖本题。
+
+
+        本轮未修改源码或设计、未运行测试/服务/部署、未查询集群、未创建代码 worktree、未提交或推送源码、未创建 PR 或关闭 Issue。源码实现仍需满足项目注册、正式评审和
+        development-start 等门禁；源码提交、推送、外部发布及交付需各自真实授权与证据。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md
+      content: '# 当前决策
+
+
+        ## 生效的范围与来源
+
+
+        日期：2026-10-20。用户来源会话：`bfa1920e-2676-4e3a-a8d9-70c449134a7b`。
+
+
+        用户要求解决 #1083、#1084、#1085，在必要性讨论后选择“最小修复 (Recommended)”，随后明确“批准设计并授权独立评审”。已批准的原完整设计为
+        v1，原 spec SHA256 `f79b4857b1edb0b8797d79b61801b7e5764554f51592132a676c25b9eb2f9971`，批准发布提交
+        `0b10678f8f320da086c4df75275b43ea6a041546`。
+
+
+        在官方仅支持 filesystem 的能力核对后，用户进一步要求：“生成修复方案：在 memory 请求时显式返回 400 错误”；说明修订结果后，用户要求：“按照最新版的技能持续推进直到
+        implementable，最多执行共三轮审查，如果三轮后还没有收敛则停止”。据此前完整批准、用户明确指定的行为变更与继续推进请求，沿用未变合同，纳入本次内存请求拒绝变更，不要求重复确认相同事实。
+
+
+        当前完整合同为 `spec.md` v2，SHA256 `af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603`；需求
+        SHA256 `3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656`。源码基线仍为
+        `openkruise/agents@2b06e110327f52da85053730a531ec3b3b0d6a46`。
+
+
+        ## 当前行为
+
+
+        - #1083：模板与时间筛选、asc/desc 且默认 desc、稳定同方向分页；其他既有查询行为不扩大重写。
+
+        - #1084：Pause memory:false 明确 400，省略/true 保持原策略；不实现单次暂停模式。
+
+        - #1085：Snapshot body memory:true 在创建前返回 400；内容扩展头任一值含 memory 也拒绝，不能通过冲突头或
+        body false 自动降级。memory:false 仍支持 filesystem-only。省略 body memory 且无有效内容头继续原有继承路径，包括其真实后端失败，不声称所有隐式内存行为已改成400。
+
+        - 快照 name 创建/查询明确 400，names 始终数组；不增加命名版本体系。
+
+        - 所有显式内存拒绝无 Checkpoint/SandboxTemplate 创建及源 Sandbox 状态/策略写入副作用；公共错误复用现有结构。
+
+
+        相对原设计：新增扩展头同等拒绝及其验收场景；将 body true 从调用后端请求完整内容改为 API 前置400；移除显式 true 可能成功创建内存快照的路径。filesystem-only、其他两个
+        Issue、省略值继承和既有权限/生命周期边界保持不变。
+
+
+        ## 本次有界审查授权
+
+
+        仅推进设计审查与必要设计修订，目标为程序登记的 `implementable`，不继续源码实现。自当前 v2 起最多三轮实际独立审查；首轮通过即停止；三轮后仍有阻塞则停止并报告。不得通过更换代理、并行重复审查或重新计数绕过上限。项目登记/网络重试不冒充新的审查结论。
+
+
+        独立评审须来自未实质编写或修订设计的会话；作者不自评。此前 v1 的真实独立报告只可在确认适用后复用未受影响覆盖，不能复制其 pass 到 v2。内部改进可在当前合同内修订，实质公共行为取舍仍须真实用户决定。
+
+
+        当前为 aggregate，自动开发调度器返回 `aggregate_manual_acceptance`；依最新版 review-design 的未占用项路径由独立会话直接执行普通
+        design-review。先前外部报告登记返回 `owner_conflict` 的操作保持结束，不改所有权来绕过，不用开发项外部登记路径替代普通独立会话。
+
+
+        ## 其他边界
+
+
+        项目文档发布不授权源码提交/推送、PR、Issue关闭、部署、人工验收或交付完成。内部取证报告留在本机，不上传公开项目远端。当前尚无注册源码仓库、开发项或实现工作树；本次达到设计目标不代表可直接绕过实现准入。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md
+      content: '# E2B 兼容性
+
+
+        ## 目标与项目约束
+
+
+        管理 OKA 的 E2B 兼容性问题；每个问题先记录现象与证据，与用户讨论解决必要性，经用户确认后再进入设计。此约束适用于本总项及后续子项；未确认的问题保持待讨论，不把项目创建或差异存在当成批准。
+
+
+        ## 本轮已确认范围
+
+
+        2026-10-20，用户要求「解决上游 #1083 #1084 #1085 三个 Issue」。核对最新上游后已讨论三项的必要性：合法列表请求返回错误空集，以及暂停/快照返回成功但未遵守请求语义，均需修复。
+
+
+        同日，用户在本会话关于“本轮对暂不支持的单次无内存暂停、命名快照采用明确 400，还是必须补齐完整能力？”的选择中明确回答“最小修复 (Recommended)”。据此确认三项均解决，但不扩展单次无内存暂停与命名版本能力。
+
+
+        ### #1083：Sandbox 列表筛选与排序
+
+
+        来源：https://github.com/openkruise/agents/issues/1083
+
+
+        修复 `GET /v2/sandboxes` 将 `order`、`template`、`startedAfter` 当作 metadata 的错误。按模板
+        ID 或现有别名筛选；按 RFC3339 时间筛选在给定时刻及之后启动的 Sandbox；支持 `asc`/`desc` 且默认 `desc`；分页游标与排序方向一致；不支持的参数值返回
+        400。保留相关既有 metadata 与其他列表功能。
+
+
+        ### #1084：Pause memory
+
+
+        来源：https://github.com/openkruise/agents/issues/1084
+
+
+        读取 `POST /sandboxes/{sandboxID}/pause` 的可选请求体。`memory:false` 明确返回 400，并说明单次
+        filesystem-only 暂停暂不支持；`memory:true` 或省略保留现有策略。不以修改 Sandbox 持久化策略模拟单次模式，不再静默忽略
+        false 并返回成功。
+
+
+        ### #1085：Snapshot 参数与响应
+
+
+        来源：https://github.com/openkruise/agents/issues/1085
+
+
+        复用既有 checkpoint 能力支持 `memory:false` 的 filesystem-only 快照；创建和列表响应的 `names`
+        始终为数组，至少为 `[]`。本轮明确拒绝创建和列表请求的 `name` 参数并返回 400，不忽略名称查询而返回全集，也不增加别名/tag/同名版本体系。
+
+
+        ## 验收条件
+
+
+        - 三个新列表参数不进入 metadata；筛选取交集、时间边界包含等号、默认降序与显式升序可观察，连续分页不因相同启动时间遗漏或重复对象。
+
+        - Pause 的 `memory:false` 无副作用地返回 400，省略/true 保持既有行为。
+
+        - filesystem-only 快照仅保存文件系统，不通过修改源 Sandbox 的长期策略实现。
+
+        - 创建/查询带 `name` 明确报错；合法创建及列表的 `names` 是 JSON 数组而非 `null`。
+
+        - 参数错误属于客户端错误；既有认证、资源归属、租户可见性、共享分页的其他调用和相关生命周期行为不退化。
+
+        - 请求字段、边界和兼容限制的完整候选见 `spec.md`；完整设计仍须批准及独立评审，范围确认不是对尚未展示细节的批准。
+
+
+        ## 证据与交付边界
+
+
+        三个 Issue 于 2026-10-20 查询时均为 OPEN、无评论；其报告基线为 OpenKruise Agents `ee289a6b0410f64eb03a59ee20b18f8cc59ed3cd`、E2B
+        OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082` 及 e2b SDK 2.56.0。已在当前 `upstream/master@2b06e110327f52da85053730a531ec3b3b0d6a46`
+        静态核对三项仍存在。
+
+
+        本项为需求管理总项，保留问题、用户结论及当前设计。修复目标源码仓库为 `openkruise/agents`；项目当前尚未注册具体代码仓库与开发项，未建立实现工作树。代码实现须先满足当前审批、独立评审和所有权门禁。项目记录发布不授权源码提交/推送、创建
+        PR 或关闭 Issue；具体交付记录以实际证据为准。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md
+      content: '# E2B #1083、#1084、#1085 最小兼容修复
+
+
+        ## Why：消除合法请求的错误结果与静默语义偏差
+
+
+        三项问题均影响官方 E2B SDK 的正常调用：列表查询可能错误返回空集，暂停/快照可能保存了调用者要求排除的内存，命名查询可能返回未经筛选的全集。即便本轮不实现全部新增能力，也必须明确拒绝无法履行的请求，不能继续返回误导性的成功。
+
+
+        用户已确认三项采用最小修复，并进一步要求“在 memory 请求时显式返回 400 错误”。当前范围为：完整修复 Sandbox 列表查询；暂停的
+        `memory:false` 明确 400；快照支持 filesystem-only，显式请求内存快照在 API 层返回 400，`names` 始终为数组，创建和列表的
+        `name` 明确 400。本次内存拒绝针对 Snapshot 创建，不扩大到 Pause、Connect 或直接操作 Checkpoint CR。
+
+
+        阿里云官方 Checkpoint 克隆契约明确仅支持 filesystem，其他保留内容会失败。对已知不支持的内存请求，应在创建任何资源之前给出明确客户端错误，而不是等待后端失败、超时或返回通用服务器错误；也不能自动降级为文件系统快照。
+
+
+        ## 基线与边界
+
+
+        - 源码基线：`openkruise/agents` 的 `upstream/master@2b06e110327f52da85053730a531ec3b3b0d6a46`。当前内部
+        `develop` 不是本设计的开源实现基线。
+
+        - 协议依据：E2B OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082`；问题中的 SDK 为 e2b
+        2.56.0。
+
+        - E2B API 层负责参数、验证、错误与返回形状。复用现有中立 checkpoint 能力；不把 E2B 参数下沉到 Manager/Infra，不新增
+        API 到具体后端的访问。
+
+        - 既有认证、租户可见性、资源归属、Sandbox ID、资源查找错误、暂停保留期限、快照超时/清理语义保持不变。原生与定制路由的同一操作行为一致。
+
+        - 本总项尚无已注册的开发仓库及具体开发项。设计描述不建立代码所有权；进入源码实现仍须满足项目注册、当前设计审批、独立评审和 development-start
+        门禁。
+
+
+        ## #1083：Sandbox 列表
+
+
+        `GET /v2/sandboxes` 将 `order`、`template`、`startedAfter` 识别为独立保留参数，不再作为 metadata
+        键；现有 `state`、`metadata`、`limit`、`nextToken` 和其他已支持的 metadata 查询行为不随此修复重写。
+
+
+        | 输入 | 可观察行为 |
+
+        | --- | --- |
+
+        | 省略 `order` | 按启动时间降序，新 Sandbox 在前。 |
+
+        | `order=asc` / `order=desc` | 按指定方向排序；空值或其他值返回 400。 |
+
+        | `template=<ID或别名>` | 与 Sandbox 的实际模板身份匹配，和其他条件取交集；合法但不存在的模板得到空数组。当前服务将 SandboxSet
+        名称同时作为模板 ID 与别名，不引入新的别名注册体系。空值返回 400。 |
+
+        | `startedAfter=<RFC3339时间>` | 仅返回启动时间大于或等于给定时刻的 Sandbox；支持合法时区偏移及小数秒，按时间点而非字符串比较；空值或无效格式返回
+        400。 |
+
+
+        新保留参数各为单值；重复提供时返回 400，避免请求出现多个互相冲突的语义。既有参数的重复值行为不在此修复中改变。显式 `metadata` 内名为
+        `order`、`template` 或 `startedAfter` 的普通业务键仍按 metadata 处理，不与顶层保留参数混淆。
+
+
+        启动时间使用现有 Sandbox 领取时间，与 `startedAt` 的数据来源一致，而不是 Pod/CR 创建时间。缺失或无法解析启动时间的对象不能参与时间有序列表，不伪造当前时间或零时间。
+
+
+        排序和游标使用同一时间顺序；同一启动时刻按稳定的 Sandbox ID 决定次序，两项共同构成完整顺序。相同查询与方向、数据集未变化时，连续翻页不得丢失或重复同一时刻的对象；最后一页不返回下一页
+        token，空列表返回 `[]`。筛选必须先于分页，不能先截取一页再筛选。
+
+
+        `nextToken` 是不透明的续页位置，不承诺跨排序/筛选变更或跨版本恢复一次旧遍历；改变这些条件或从旧默认升序升级后应重新开始遍历。保留已有游标编码及其既有读取能力，续页比较须服从当前排序方向；不为这次修复新增游标存储或会话。并发增删下沿用既有非快照式分页，不保证跨请求数据集冻结。
+
+
+        共享分页能力的其他调用者保持既有默认顺序，特别是快照列表不得因为 Sandbox 默认降序而被一起反转。
+
+
+        ## #1084：Pause 请求
+
+
+        `POST /sandboxes/{sandboxID}/pause` 读取可选 JSON 对象：
+
+
+        - 无请求体或 `{}`：保留现有行为。
+
+        - `{"memory":true}`：保留现有暂停策略，不重写 Sandbox 的持久化策略；这不保证覆盖模板/创建阶段已经选择的 filesystem-only
+        策略。
+
+        - `{"memory":false}`：返回 400，明确说明单次 filesystem-only 暂停暂不支持；即使模板原本不保存内存也一致拒绝该请求，不根据隐含策略伪装成支持。
+
+        - 非法 JSON、非对象请求体或 `memory` 不是布尔值（包括显式 `null`）：返回 400。
+
+
+        无效或不支持的请求不得触发暂停、写入 timeout/annotation 或改变持久化策略。保留既有认证与资源查找边界，不在未授权时披露资源诊断；成功仍为
+        204，既有 404/409/500 分类保持不变。
+
+
+        明确保留的限制是：本轮不实现单次暂停模式，不改 controller 生命周期策略，也不改变 connect/resume 的恢复模式。
+
+
+        ## #1085：Snapshot 请求与响应
+
+
+        ### 创建与 memory
+
+
+        `POST /sandboxes/{sandboxID}/snapshots` 仍要求 JSON 对象，请求体缺失、非法 JSON、非对象或 `memory`
+        非布尔值（包括显式 `null`）返回 400，而不是服务器错误。
+
+
+        - `memory:true`：在 API 校验阶段返回 HTTP 400，说明内存快照暂不支持；即使同时提供 filesystem 扩展头，也不覆盖
+        true 后继续执行。
+
+        - `memory:false`：该次 checkpoint 的持久化内容仅为 `filesystem`，不得包含 `memory`；复用现有 checkpoint
+        的 filesystem-only 创建及恢复路径。只要其余输入合法，不因字段出现就拒绝 false。
+
+        - 省略 `memory`：使用通过校验的扩展头；扩展头没有有效内容时继续继承 Sandbox 持久化策略。省略不隐式补成 true，也不擅自改成
+        false。
+
+
+        `x-e2b-kruise-snapshot-persistent-contents` 仍是请求级内容选择入口，按现有语法去除项两侧空白并解析集合。任一头值明确包含
+        `memory` 时返回同类 400，包括单独 memory、与 filesystem 混合、重复头中的 memory；不忽略该项、不降级、也不让
+        body false 覆盖掉显式内存请求。含非法内容的头仍返回参数错误 400。
+
+
+        对于通过上述拒绝校验的输入，body false 与有效扩展头同时出现时，扩展头内容集合必须为 filesystem，否则返回 400；比较忽略顺序及现有解析器合并的重复项。空头或解析为空集合的值沿用既有“无有效扩展覆盖”语义：body
+        false 选择 filesystem，body 省略则继承源策略，不为本轮另加格式限制。
+
+
+        | 创建输入 | 结果（其他条件合法时） |
+
+        | --- | --- |
+
+        | `{"memory":true}` | 400，内存快照不支持，不调用 checkpoint 创建。 |
+
+        | `{"memory":true}` + filesystem 头 | 同样 400，不静默改写请求。 |
+
+        | `{"memory":false}`，无有效内容头 | filesystem-only 创建；成功为 201。 |
+
+        | `{"memory":false}` + filesystem 头 | filesystem-only 创建；成功为 201。 |
+
+        | body 省略 memory + filesystem 头 | filesystem-only 创建；成功为 201。 |
+
+        | 任何 body + 含 memory 的内容头 | 400；即使 body false 或 memory 在后续重复头中也不执行。 |
+
+        | body 省略 memory，且无有效内容头 | 原有源策略继承路径及真实后端结果不变。 |
+
+        | memory 为 null、字符串、数字或其他非布尔值 | 参数类型错误 400，不当作省略。 |
+
+
+        内存不支持错误复用现有 E2B `web.ApiError` 响应结构，HTTP 状态固定为 400，消息为 `Memory snapshots are
+        not supported; use memory=false for a filesystem-only snapshot.`。不引入新错误结构、能力探测请求或全局开关，也不在公共错误中披露后端实现细节。认证、资源查找和授权失败仍按既有入口顺序处理，不要求内存错误覆盖这些错误。
+
+
+        所有显式内存拒绝均在 `CreateCheckpoint` 前完成；不得创建 Checkpoint/SandboxTemplate，不改变源 Sandbox
+        的状态、timeout、annotation 或长期策略。若同时有 name、非法 JSON 等错误，仍为既有客户端错误，不保证多项错误中的消息优先顺序。
+
+
+        模式只作用于本次 checkpoint，不修改源 Sandbox 的长期策略或模板。源 Sandbox 默认继续运行；显式使用既有 `snapshot-keep-running`
+        扩展头的调用继续遵守该头的既有语义。filesystem-only 快照不包含运行进程、内存状态或连接的恢复承诺，基于它创建的 Sandbox 按现有
+        filesystem-only 路径从磁盘重新启动；不扩大可保存的文件系统范围或新增存储能力。
+
+
+        保留的兼容限制：省略 body memory 且无有效内容头时，源策略即使含 memory 也仍交给既有继承路径，可能得到真实后端失败；本轮拒绝的是请求中显式选择内存，不新增读取或改写持久化策略的能力。因此不声称省略时具备
+        E2B 默认完整内存快照语义，或所有继承失败都已转成 400。调用者可显式使用 false 选择 filesystem-only。直接 Checkpoint
+        CR、其他 API 和后端内部校验不在此修复范围。
+
+
+        通过校验的请求继续沿用既有 TTL、同步等待、取消、失败清理和成功返回条件；不能将后端失败包装成成功。对拒绝路径不创建资源，也就不应依赖创建后的清理来满足无副作用保证。
+
+
+        ### 暂不支持的 name
+
+
+        - 创建 JSON 只要显式出现 `name`，包括空串或 `null`，即返回 400，说明命名快照暂不支持。
+
+        - `GET /snapshots` 只要出现 `name` 查询参数，包括空值，即返回 400，说明名称筛选暂不支持；不得忽略参数后返回全集。
+
+        - 不把随机 checkpoint 名称或某个 annotation 冒充 E2B 的模板别名/同名 build/tag 体系。
+
+        - 不带 `name` 的快照列表保留现有 `sandboxID`、`limit`、`nextToken`、可见性及排序规则。
+
+
+        ### 响应
+
+
+        创建成功仍为 201，返回既有 `snapshotID` 与 `names: []`。列表每个元素也总是包含 `names: []`，不得为 `null`
+        或省略字段；空列表为 `[]`。没有命名能力时不合成虚假的名字。
+
+
+        ## 可观察验收示例
+
+
+        1. 多个属于模板 `python` 的 Sandbox 存在时，附带 `template=python&order=desc` 不会仅因参数被误当
+        metadata 而返回空集；不匹配的模板合法返回空集。
+
+        2. 两个表示相同时刻的 RFC3339 时区写法在 `startedAfter` 中得到相同结果，恰好在边界的 Sandbox 被包含；相同领取时刻且不同
+        ID 的对象能够跨页完整遍历。
+
+        3. 省略排序得到从新到旧的 Sandbox 列表，指定 `asc` 得到相反时间方向；快照原有列表顺序保持不变。
+
+        4. Pause 的 `memory:false` 返回 400，且调用前后的 Sandbox 暂停状态、timeout、annotation 和持久化策略均不因该请求变化；省略和
+        `true` 保持原流程。
+
+        5. 内存持久化模板的 Sandbox 使用 `memory:false` 创建快照时，该 checkpoint 仅保存文件系统，源策略不变；`memory:true`
+        总在创建前返回内存不支持 400，任何 filesystem 头都不能使它变成成功。
+
+        6. 创建或查询带 `name` 时明确 400；不带 `name` 的创建与列表响应在 JSON 上都是数组类型的 `names`，空数组不会变成
+        `null`。
+
+        7. 错误 JSON、错误布尔类型和非法新增列表参数得到客户端错误；拒绝路径没有生命周期或 checkpoint 写入副作用，租户可见性和错误分类不退化。
+
+        8. body 省略或 false 时，内容头为 `memory`、`filesystem,memory`、`memory, filesystem`，或后续重复头包含
+        memory，均在调用后端前返回 400；仅 filesystem 头保持可用。
+
+        9. body 省略且内容头为空/无有效项时仍继承源策略；不隐式请求完整内存、不偷偷删除继承策略里的 memory，也不将继承路径未修改的失败声称为已处理的显式请求错误。
+
+
+        ## 非目标与取舍
+
+
+        不增加内存快照、单次 filesystem-only 暂停、命名快照/同名版本/别名注册、connect 的模式选择、全局分页新协议、CRD 字段、存储后端、监控指标或与三个
+        Issue 无关的 metadata 修复。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。显式拒绝未支持能力是本轮交付边界；只有后续明确需要完整能力时才重新讨论这些限制。
+
+
+        本设计不承诺运行环境已经验证，也不将设计完成等同于独立评审、实现、人工验收或上游 Issue 关闭。
+
+
+        ## 主要证据
+
+
+        以下代码位置均以本说明的开源基线为准：
+
+
+        - `pkg/servers/e2b/list.go:105`：列表参数解析；`:196`：筛选；`:222`：快照列表。
+
+        - `pkg/utils/pagination/pagination.go:59`：当前升序及稳定游标；Sandbox 与快照共用此能力。
+
+        - `pkg/servers/e2b/sandbox.go:119`、`:168`：模板身份与启动时间；`pkg/servers/e2b/templates.go:178`：已公开的模板
+        ID/别名。
+
+        - `pkg/servers/e2b/pause_resume.go:43`：暂停流程；`pkg/sandbox-manager/infra/interface.go:149`：现有
+        PauseOptions 不含单次持久化内容。
+
+        - `pkg/servers/e2b/snapshot.go:71`、`:96`：checkpoint 参数传递与解析；`pkg/servers/e2b/models/extensions.go:465`：快照扩展头。
+
+        - `pkg/sandbox-manager/infra/sandboxcr/clone.go:547`、`:586`：checkpoint 创建与单次内容覆盖；`api/v1alpha1/checkpoint_types.go:136`：KeepRunning
+        默认行为。
+
+        - https://github.com/e2b-dev/E2B/blob/b52cd30c14bf7038ba5bfbd15456b1dabe567082/spec/openapi.yml
+        ：`SandboxPauseRequest`、`SandboxSnapshotRequest`、`GET /v2/sandboxes` 与 `/snapshots`。
+
+        - https://github.com/openkruise/agents/issues/1083
+
+        - https://github.com/openkruise/agents/issues/1084
+
+        - https://github.com/openkruise/agents/issues/1085
+
+        - https://help.aliyun.com/zh/cs/user-guide/clone-agent-sandbox-using-checkpoint
+        ：官方当前仅支持 filesystem，请求级覆盖、KeepRunning 默认值及按快照 ID 恢复文件的契约；实际使用须具备文档要求的 ACS
+        后端及接入组件，不等同于纯开源默认构建已具备完整后端。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/AGENTS.md
+      content: '# Workspace
+
+
+        - `agents/`：OpenKruise Agents 源码仓库。
+
+        - `agents-harness/`：OpenKruise Agents 测试仓库。
+
+        - `ack-components/`：ACK 线上编排仓库。
+
+        - `openkruise.io/`：OpenKruise 官方文档与网站仓库；主检出保持在 `master`，文档变更在 `worktrees/`
+        下的隔离 worktree 中完成。
+
+        - `agents/` 的 remote 由 `$setup` 统一维护：`upstream` 指向 GitHub 开源仓库，`origin` 指向内部
+        GitLab；开源基线使用 `upstream/master`，内部开发与发布引用使用 `origin/develop`、`origin/release/*`。
+
+
+        # 任务纪律
+
+        - Workspace 中所有代码仓库的原始目录必须始终保持在约定主分支，不得切换：存在 `develop` 分支的仓库以 `develop` 为主分支，否则以
+        `master` 为主分支。
+
+        - 任何需要切换分支或检出 tag 的操作，都必须在 `worktrees/` 目录下创建隔离的 Git worktree，并根据任务使用简洁、清晰的名称。
+
+        - 创建开发分支时，先核对目标仓库现有的分支命名风格，并按该风格选取分支名。
+
+        - 任务完成后，如果确认该 worktree 不再需要，必须将其清理。
+
+        - 直接克隆进 Workspace 的仓库原始目录（非 `worktrees/` 下的隔离 worktree），在对它做任何操作前，必须确保位于约定主分支并先
+        `git pull` 更新到远端最新，再基于最新状态创建 worktree、读取引用或做规划；不依赖陈旧的本地分支或远端跟踪引用。
+
+        - 运行任何 `ali` CLI 命令时必须从第一次执行起申请提权，不得先在受限沙箱中尝试后再重试。
+
+        - 修改 Skill 时直接描述"应该怎么做"，不保留"不做旧行为"的否定式描述（如"without MR"/"not why"），避免历史脏数据。
+
+
+        # Python 环境
+
+
+        - 主工作区唯一的 Python 虚拟环境为根目录 `.venv/`，由 Git 忽略；子仓库、隔离 worktree 和任务目录共用这个环境。
+
+        - 执行 Python 前确定主工作区绝对路径 `WORKSPACE_ROOT`（包含本文件与 `.agents/skills/setup-readonly/`
+        的主检出），始终使用 `"$WORKSPACE_ROOT/.venv/bin/python"`；pip 和 pytest 分别通过该解释器的 `-m
+        pip`、`-m pytest` 调用。
+
+        - 完整 setup 与只读 setup 均调用 `.agents/skills/setup-readonly/scripts/setup-python.sh`：环境已存在则跳过，缺失则创建并安装该目录
+        `requirements.txt` 中所有工作区技能及测试依赖。系统 Python 仅用于此次环境创建。
+
+        - Agent 可自行使用主工作区解释器向 `.venv/` 安装任何需要的包（`"$WORKSPACE_ROOT/.venv/bin/python"
+        -m pip install ...`），无需事先询问。安装后自行验证可用。
+
+        - 工作区技能及测试的公共依赖仍统一维护在 `setup-readonly` 目录的 `requirements.txt`：新增此类共享依赖时同步更新该清单，临时或任务专用包则按需直接安装，无需登记。
+
+        - 技能脚本及其本地 Python 子进程使用同一解释器，子进程通过 `sys.executable` 继承。
+
+
+        # OKA 版本与发布规则
+
+
+        - 应用产物是镜像，不具有预发或生产阶段；ACK 组件产物是 `ack-components` 中的 Helm 包或 YAML，只有组件版本具有预发、生产和测试状态。`manager`、`sandbox-manager`、`sandbox-api`
+        指同一应用，内部发布分支、tag 和应用说明统一沿用 `sandbox-api`。
+
+        - 所有版本中，裸 `vX.Y.Z` 与 `vX.Y.Z-release.1` 等价；比较、推荐和冲突检查按同一逻辑版本处理，记录与 Git 引用保留实际写法，二者同时存在时报告冲突。
+
+        - 社区 master commit 按 minor 边界 tag 的区间 `[vX.Y, 下一边界)` 归属；边界之前的历史默认 `v0.6`，后续按
+        `v0.7` 等已核验边界划分，不补建历史 tag。通过 develop 的社区同步记录核验来源，不能从应用镜像或内部 Git tag 反推社区版本。
+
+        - 应用 feature/重要优化必须先合入 develop，再从 develop 切 `release/ack-APP-vX.Y.Z`，创建不可变正式
+        tag `ack-APP-vX.Y.Z-release.1`；X/Y 取社区归属，与该应用上版相同则 Z+1，否则 Z=0。应用 fix 从 develop
+        以 `cherry-pick -x` 回补该应用最新正式 release 分支，递增 `release.N`。既有正式 tag 不得移动；回补后的
+        SHA 不同不代表 develop 缺少修复，须核验补丁及最终行为。
+
+        - 组件按发布周期独立递增，普通正式版为 `vX.Y.Z-release.1`。组件可选择任意已核验应用镜像，不从镜像 tag 推导组件版本或状态。生产开始灰度
+        rollout 才算线上正式版；代码推送或最大版本号不能证明已上线。
+
+        - 线上正式版开始 rollout 后，立即准备下一预发正式版；同 minor 原样复制镜像与编排，仅修改组件版本元数据。跨 minor 由用户明确选择新的组件版本线，应用镜像仍按实际选择记录。周期开发只更新尚未上线的预发正式版，并在公共组件文档汇总变更。
+
+        - 组件紧急修复从用户指定的线上正式版派生 `release.N+1`，不夹带下一预发版内容，可跳过预发验证。完成后询问是否把编排修复带入正式预发；镜像一律不带入，含模板或引用间接造成的镜像变化。非紧急修复优先随下一周期发布。
+
+        - 应用 release 版本从 develop 切 `release/ack-APP-vX.Y.Z`，创建不可变正式 tag `ack-APP-vX.Y.Z-release.1`。应用
+        alpha 版本同样从 develop 切 `release/ack-APP-vX.Y.Z-alpha.N`，创建 tag `ack-APP-vX.Y.Z-alpha.N`；X/Y/Z
+        取下一正式版本，N 按同应用同目标版本递增。组件测试版为下一正式 X/Y/Z 的 `alpha.N`，同组件、同目标版本的所有测试共享递增 N；线上换版后改用新的下一正式版本并重新计数。仅最新
+        alpha 且周期未切换时，可由用户选择原版本修改并卸载重装；不可覆盖预发正式版。按数字版本段推荐，并核验平台升级顺序，不能假设字符串字典序正确。
+
+        - 版本工作流通过 release note 共享上下文：应用构建验证后，将仓库、源码 commit、镜像/digest、可选 Git tag 及流水线信息写入
+        `release-notes/APP/images/PIPELINE_ID.md` 的结构化 frontmatter。组件技能默认直接消费已核验镜像记录，在
+        `release-notes/components/ACK-COMPONENT/` 保存镜像元数据及源 note 哈希快照，并另记编排 commit；缺失或冲突时才回查产物。应用镜像发布和组件更新分开调用。对外文档只发布组件白名单版本/日期/变更内容，排除镜像、commit、流水线、内部路径等元数据；具体格式共用
+        `release-oka-app/references/release-note-contract.md`。
+
+        - 组件更新先询问 `ack-components` 的目标版本分支，在 `worktrees/` 隔离检出，依据分支现状推荐 release/alpha
+        给用户选择；完成编排修改与该分支代码推送即结束，不自动建 MR、部署或启动生产 rollout。修改公共组件说明只产生本地文件；发布它需另有授权。
+
+        '
+    read_hashes:
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md: a0ae7b6c038eb6c6981244781e5fa7dbb89bedfb23db6c31e5d3eab7ed2b2d1e
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md: d39b5517b3d323a6702789fa3bdfd1891dee8326a098ac936233ff33aa680f5f
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md: 39c8a82e6696006e4aa131ee6b8b78b07f67dc222b07297b1bcbae71dcfeb474
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md: 0e6f5b8ff728ae438ce2e9eb14e7ce1b1bfa90677f5469515dd5755a288fab72
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md: 681298fc3da189f07f261f4e1bc8b54de5e4fbff2a3c8371d37fd094d8d3589a
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+      /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: e4934ae327d101f992691bbacd61d420da6ebc31f1f40786b29f20a24734eab2
+      /Users/AGENTS.md: null
+      /Users/sophon/AGENTS.md: null
+      /AGENTS.md: null
+      /Users/sophon/Workspace/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/business-instructions.md: null
 design:
   approval:
     requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
@@ -14,3 +839,33 @@ design:
     source: 会话 bfa1920e-2676-4e3a-a8d9-70c449134a7b：用户先批准完整v1，随后明确要求在memory请求时显式返回400，并要求按最新版技能持续推进直到implementable、最多三轮审查；本次沿用原批准并纳入用户指定的内存请求拒绝变更，其余契约未变
     session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
     recorded_by: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+  review:
+    id: 96344c83b286eb313d760a9349ea99a4
+    kind: design-review
+    item: 1-e2b-compatibility
+    report: workitems/1-e2b-compatibility/records/96344c83b286eb313d760a9349ea99a4.md
+    session: 6b1f6568-6e10-4267-8485-008023d22241
+    created_at: '2026-10-20T05:10:59.286332+00:00'
+    provenance: review-design-round1:session=6b1f6568-6e10-4267-8485-008023d22241;ticket=96344c83b286eb313d760a9349ea99a4;spec-v2=af46fe26;baseline=2b06e110
+    requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+    spec_sha256: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+    version: 2
+    base_commit: null
+    dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+    result: pass
+    read_hashes:
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/context.md: a0ae7b6c038eb6c6981244781e5fa7dbb89bedfb23db6c31e5d3eab7ed2b2d1e
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/main-workspace.md: d39b5517b3d323a6702789fa3bdfd1891dee8326a098ac936233ff33aa680f5f
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/project-instructions.md: 39c8a82e6696006e4aa131ee6b8b78b07f67dc222b07297b1bcbae71dcfeb474
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/AGENTS.md: 0e6f5b8ff728ae438ce2e9eb14e7ce1b1bfa90677f5469515dd5755a288fab72
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/context.md: 681298fc3da189f07f261f4e1bc8b54de5e4fbff2a3c8371d37fd094d8d3589a
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/decision.md: c382231ddfe84f7b747e36f01598ae2341e9a53fa1ec16085b4b132070a0cb13
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/requirement.md: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/workitems/1-e2b-compatibility/spec.md: af46fe26a40c3d52c10622b88079239647860b0eaced7a040366a714524e1603
+      /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: e4934ae327d101f992691bbacd61d420da6ebc31f1f40786b29f20a24734eab2
+      /Users/AGENTS.md: null
+      /Users/sophon/AGENTS.md: null
+      /AGENTS.md: null
+      /Users/sophon/Workspace/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/.project/business-instructions.md: null
