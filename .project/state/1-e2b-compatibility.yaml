@@ -1,7 +1,13 @@
-owner:
-  session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
-  token: 87d8c9ef71c322083e96c2f8c9dcbff8c1280dc9252ea2dba9af111c1f74ec55
-  machine: Sophon-1A.local
 workflow:
   design_authors:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
+design:
+  approval:
+    requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
+    spec_sha256: f79b4857b1edb0b8797d79b61801b7e5764554f51592132a676c25b9eb2f9971
+    version: 1
+    kind: user
+    source: 用户于会话 bfa1920e-2676-4e3a-a8d9-70c449134a7b 明确回复：批准设计并授权独立评审；批准上一轮展示的完整设计
+      v1
+    session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+    recorded_by: bfa1920e-2676-4e3a-a8d9-70c449134a7b
