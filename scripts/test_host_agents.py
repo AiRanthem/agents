@@ -33,88 +33,7 @@ def install_fixture(home, host):
 
 
 class HostAgentTests(unittest.TestCase):
-    def test_receipt_helper_preserves_native_evidence_and_derives_result_binding(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp).resolve()
-            raw = {"arguments": {"path_prefix": "/root/reviewer"}, "result": {"agents": [
-                {"agent_name": "/root/reviewer", "agent_status": {"completed": "Actual report ready"}},
-                {"agent_name": "/root/reviewer/quality", "agent_status": {"completed": "Reviewed"}}]}}
-            (root / "raw.json").write_text(json.dumps(raw))
-            context = {"status": "ready", "worker_paused": False, "worker_id": "/root/reviewer",
-                       "attempt": "a" * 32, "role": "code-review", "input_binding": {"version": 3},
-                       "read": [{"path": "actual-input"}], "approved_contract": {"spec": "approved"},
-                       "code_context": {"worktree": "actual-worktree"}}
-            (root / "dispatch.json").write_text(json.dumps(context))
-            (root / "report.md").write_text("Actual independent report\n")
-            argv = ["receipt", "--host", "codex", "--tool", "collaboration.list_agents",
-                    "--raw-file", str(root / "raw.json"), "--dispatch-file", str(root / "dispatch.json"),
-                    "--report-file", str(root / "report.md"), "--outcome", "pass", "--terminal-status", "completed",
-                    "--descendants-stopped", "--output", str(root / "receipt.json")]
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(argv), 0)
-            captured = json.loads((root / "receipt.json").read_text())
-            self.assertEqual(captured["raw"], raw)
-            for key in ("attempt", "worker_id", "role", "input_binding"):
-                self.assertEqual(captured[key], context[key])
-            self.assertNotIn("call_id", captured)
-            original = (root / "receipt.json").read_bytes()
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(argv), 1)
-            self.assertEqual((root / "receipt.json").read_bytes(), original)
-            context["role"] = "design-review"
-            (root / "dispatch.json").write_text(json.dumps(context))
-            candidate = root / "candidate.md"
-            candidate.write_text("Approved design with a corrected reference.\n")
-            mechanical = argv[:-1] + [str(root / "mechanical.json"),
-                "--candidate-file", str(candidate), "--mechanical-correction", "--contract-unchanged"]
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(mechanical), 0)
-            corrected = json.loads((root / "mechanical.json").read_text())
-            self.assertEqual(corrected["raw"], raw)
-            self.assertEqual(corrected["candidate_file"], str(candidate))
-            self.assertTrue(corrected["mechanical_correction"])
-            self.assertTrue(corrected["contract_unchanged"])
-            incomplete = mechanical[:-1]
-            incomplete[incomplete.index("--output") + 1] = str(root / "incomplete.json")
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(incomplete), 1)
-            self.assertFalse((root / "incomplete.json").exists())
-            for name, mutate in (("wrong_worker", lambda: raw["result"]["agents"].pop(0)),
-                                 ("paused_context", lambda: context.update(worker_paused=True))):
-                with self.subTest(name=name):
-                    mutate()
-                    (root / "raw.json").write_text(json.dumps(raw))
-                    (root / "dispatch.json").write_text(json.dumps(context))
-                    argv[-1] = str(root / (name + ".json"))
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(host_agents.main(argv), 1)
-                    self.assertFalse(Path(argv[-1]).exists())
 
-    def test_spawn_receipt_accepts_targeted_followup_without_fabricating_identity(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp).resolve()
-            raw = {"arguments": {"target": "/root/worker", "message": "Wait for accepted context"}, "result": {}}
-            (root / "raw.json").write_text(json.dumps(raw))
-            argv = ["receipt", "--host", "codex", "--tool", "collaboration.followup_task",
-                    "--worker-id", "/root/worker", "--raw-file", str(root / "raw.json"),
-                    "--output", str(root / "spawn.json")]
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(argv), 0)
-            self.assertEqual(json.loads((root / "spawn.json").read_text())["raw"], raw)
-            for failure in ({"error": {"code": "worker_not_found"}}, {"isError": True}):
-                with self.subTest(failure=failure):
-                    (root / "raw.json").write_text(json.dumps({**raw, "result": failure}))
-                    argv[-1] = str(root / "failed.json")
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(host_agents.main(argv), 1)
-                    self.assertFalse((root / "failed.json").exists())
-            link = root / "linked.json"
-            link.symlink_to(root / "raw.json")
-            argv[argv.index("--raw-file") + 1] = str(link)
-            argv[-1] = str(root / "bad.json")
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(host_agents.main(argv), 1)
-            self.assertFalse((root / "bad.json").exists())
 
     def test_missing_installation_reports_roles_and_skill_entries(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -220,7 +139,7 @@ class HostAgentTests(unittest.TestCase):
                     self.assertEqual(role["effort"], "xhigh" if reviewer else "max")
                 body = role["developer_instructions"]
                 self.assertIn("references/stage-executor.md", body)
-                self.assertIn("attempt", body)
+                self.assertIn("direct stage assignment", body)
                 if host == "qoder":
                     self.assertNotIn("freely delegate", body)
                 else:

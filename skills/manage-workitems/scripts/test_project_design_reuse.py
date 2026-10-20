@@ -241,7 +241,7 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         self.assertEqual(self.f.record()["design"]["review"], old)
         self.assertEqual(self.a.state()["next_role"], "implementation")
         execution = self.a.dispatch("implementation", "implementer")
-        self.assertEqual(workflow.begin(self.root, "design-reuse", "A", publish=self.f.publisher)["status"], "blocked")
+        self.assertEqual(workflow.begin(self.root, "design-reuse", "A", publish=self.f.publisher)["status"], "ready")
         self.a.finish_execution(execution)
         self.assertEqual(self.a.state()["next_role"], "code-review")
 
@@ -268,8 +268,9 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         self.assertEqual(self.f.record()["workflow"]["autonomy"]["authorization"], original)
         self.assertEqual(self.a.state()["next_role"], "design-review")
         review = self.a.dispatch("design-review", "original-reviewer")
-        with self.assertRaisesRegex(runtime.ProjectError, "contract"):
-            autonomy.result(self.root, "A", receipt=self.a.receipt(review), publish=self.f.publisher)
+        self.f.edit(review, "Missing unchanged-contract declaration.\n", "report.md")
+        result = workflow.finish(self.root, review["ticket"], options={"result": "pass", "provenance": "Actual review"}, publish=self.f.publisher)
+        self.assertEqual(result["status"], "blocked", result)
         self.a.finish_execution(review, "fail")
         self.assertEqual(self.a.state()["next_role"], "design-revision")
         revision = self.a.dispatch("design-revision", "separate-designer")
@@ -288,11 +289,12 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         self.a.snapshot["dirty_digest"] = "d" * 64
         result = workflow.finish(self.root, edit["ticket"], options={"result": "pass", "provenance": "Owner assessment"}, publish=self.f.publisher)
         self.assertEqual(result["code"], "stale_evidence", result)
-        writer = self.a.dispatch("implementation", "implementer")
-        self.a.finish_execution(writer, "contract-change")
-        self.assertNotIn("design_basis", self.f.record()["workflow"])
-        self.assertNotIn("design_reuse", self.f.record()["workflow"])
-        self.assertEqual(self.a.state()["state"], "blocked")
+        edit = self.f.begin("requirement-update")
+        self.f.edit(edit, "Materially different user requirement.\n")
+        self.assertEqual(self.f.finish(edit)["status"], "published")
+        self.assertNotIn("approval", self.f.record()["design"])
+        with self.assertRaises(runtime.ProjectError):
+            workflow._approved(runtime._working_files(self.root), self.f.record())
 
     def test_failed_readonly_reviewer_can_recheck_a_separate_authors_revision(self):
         self.a.finish_execution(self.a.dispatch("implementation", "implementer"))
@@ -301,15 +303,15 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         self.a.approved("B")
         autonomy.authorize(self.root, items=["B"], approval_source="User advances B", publish=self.f.publisher)
         review = self.a.dispatch("design-review", "same-reviewer", "B")
-        result = autonomy.result(self.root, "B", receipt=self.a.receipt(review, "fail"), publish=self.f.publisher)
+        result = self.a.finish_execution(review, "fail")
         self.assertEqual(result["status"], "published", result)
         revision = self.a.dispatch("design-revision", "separate-designer", "B")
         candidate = self.f.directory / "separate-revision.md"
         candidate.write_text("# Revised internal design\n\nSame user contract; blocker repaired.\n")
-        result = autonomy.result(self.root, "B", receipt=self.a.receipt(revision, "revised", candidate_file=str(candidate)), publish=self.f.publisher)
+        result = self.a.finish_execution(revision, "revised", candidate_file=str(candidate))
         self.assertEqual(result["status"], "published", result)
         review = self.a.dispatch("design-review", "same-reviewer", "B")
-        result = autonomy.result(self.root, "B", receipt=self.a.receipt(review, contract_unchanged=True), publish=self.f.publisher)
+        result = self.a.finish_execution(review, contract_unchanged=True)
         self.assertEqual(result["status"], "published", result)
         self.assertEqual(self.f.record("B")["design"]["review"]["session"], "same-reviewer")
 
@@ -320,16 +322,17 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         review = self.a.dispatch("design-review", "mechanical-reviewer", "B")
         candidate = self.f.directory / "mechanical.md"
         candidate.write_text("# Design\n\nApproved behavior and acceptance.\n\n")
-        with self.assertRaisesRegex(runtime.ProjectError, "candidate"):
-            autonomy.result(self.root, "B", receipt=self.a.receipt(review, candidate_file=str(candidate)), publish=self.f.publisher)
-        receipt = self.a.receipt(review, candidate_file=str(candidate), mechanical_correction=True, contract_unchanged=True)
-        result = autonomy.result(self.root, "B", receipt=receipt, publish=self.f.publisher)
+        self.f.edit(review, candidate.read_text(), "spec.md")
+        self.f.edit(review, "Actual independent mechanical correction and final assessment.\n", "report.md")
+        result = workflow.finish(self.root, review["ticket"], options={"result": "pass", "provenance": "Actual final candidate review"}, publish=self.f.publisher)
+        self.assertEqual(result["status"], "blocked", result)
+        result = workflow.finish(self.root, review["ticket"], options={"result": "pass", "provenance": "Actual final candidate review", "mechanical_correction": True, "contract_unchanged": True}, publish=self.f.publisher)
         self.assertEqual(result["status"], "published", result)
         item = self.f.record("B")
         self.assertEqual(item["design"]["author_session"], original["author_session"])
         self.assertNotIn("mechanical-reviewer", workflow._design_authors(item))
-        self.assertEqual(item["design"]["review"]["execution"], review["attempt"])
-        self.assertEqual(item["workflow"]["autonomy"]["executions"][review["attempt"]]["input_binding"], review["input_binding"])
+        self.assertTrue(item["design"]["review"]["mechanical_correction"])
+        self.assertNotIn("executions", item["workflow"]["autonomy"])
         workflow._approved(runtime._working_files(self.root), item)
         self.assertEqual(self.a.state("B")["next_role"], "implementation")
 

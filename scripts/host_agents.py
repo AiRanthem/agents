@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Check project-stage agents, print native roles, or assemble captured host receipts."""
+"""Check project-stage agents or print native role definitions."""
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
@@ -117,73 +116,9 @@ def check(host, home, *, agents_dir=None, roles_file=None, skills_dir=None):
             "runtime_verified": False}
 
 
-def _receipt_runtime():
-    sys.path.insert(0, str(ROOT / "skills" / "manage-workitems" / "scripts"))
-    import project_autonomy
-    return project_autonomy
-
-
-def _regular_input(path):
-    path = path.absolute()
-    if any(part.is_symlink() for part in (path, *path.parents)) or not path.is_file():
-        raise ValueError(f"capture input must be a regular file without symlink components: {path}")
-    return path
-
-
-def capture_receipt(args):
-    """Assemble actual coordinator-captured tool data; this does not call a host."""
-    api = _receipt_runtime()
-    raw = api.runtime.read_json(_regular_input(args.raw_file))
-    receipt = {"host": args.host, "tool": args.tool, "raw": raw}
-    if args.call_id:
-        receipt["call_id"] = args.call_id
-    if args.dispatch_file:
-        context = api.runtime.read_json(_regular_input(args.dispatch_file))
-        if (not isinstance(context, dict) or context.get("status") != "ready" or context.get("worker_paused") is not False or
-                any(not context.get(key) for key in ("attempt", "worker_id", "role", "input_binding",
-                                                       "approved_contract", "read", "code_context"))):
-            raise ValueError("result receipt requires the complete accepted ready dispatch")
-        receipt.update({key: context[key] for key in ("attempt", "worker_id", "role", "input_binding")})
-        if args.worker_id and args.worker_id != receipt["worker_id"]:
-            raise ValueError("worker differs from the accepted dispatch")
-        if not args.report_file or not args.outcome or not args.terminal_status:
-            raise ValueError("result receipt requires report, outcome and observed terminal status")
-        receipt.update(outcome=args.outcome, terminal_status=args.terminal_status,
-                       descendants_stopped=args.descendants_stopped,
-                       report_file=str(_regular_input(args.report_file)))
-        api._read_report(receipt["report_file"])
-        if args.candidate_file:
-            receipt["candidate_file"] = str(_regular_input(args.candidate_file))
-            api._read_report(receipt["candidate_file"])
-        if args.outcome == "revised" and not args.candidate_file:
-            raise ValueError("revised result requires the actual candidate file")
-        if args.contract_unchanged:
-            receipt["contract_unchanged"] = True
-        if args.mechanical_correction:
-            receipt["mechanical_correction"] = True
-    else:
-        if any((args.outcome, args.report_file, args.candidate_file, args.terminal_status,
-                args.descendants_stopped, args.contract_unchanged, args.mechanical_correction)):
-            raise ValueError("result fields require an accepted dispatch file")
-        receipt["worker_id"] = args.worker_id
-    api._receipt(receipt)
-    if args.dispatch_file:
-        api._result_outcome(receipt)
-    output = args.output.absolute()
-    if any(part.is_symlink() for part in (output, *output.parents)) or not output.parent.is_dir():
-        raise ValueError("receipt output requires an existing directory without symlink components")
-    data = json.dumps(receipt, ensure_ascii=False, indent=2) + "\n"
-    # Exclusive creation preserves the exact raw evidence on repeated invocation.
-    with output.open("x", encoding="utf-8") as stream:
-        output.chmod(0o600)
-        stream.write(data)
-    return {"status": "captured", "receipt_file": str(output), "worker_id": receipt["worker_id"],
-            "sha256": hashlib.sha256(data.encode("utf-8")).hexdigest()}
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("check", "role", "receipt"))
+    parser.add_argument("command", choices=("check", "role"))
     parser.add_argument("--host", required=True, choices=("codex", "cursor", "qoder"))
     parser.add_argument("--home", type=Path, default=Path.home())
     sources = parser.add_mutually_exclusive_group()
@@ -191,31 +126,8 @@ def main(argv=None):
     sources.add_argument("--roles-file", type=Path, help="Cursor injected role definitions and actual sources (JSON)")
     parser.add_argument("--skills-dir", type=Path, help="Cursor skill directory; accepts exact copies or repository links")
     parser.add_argument("--name", choices=ROLES, help="Native stage role for explicit dispatch")
-    parser.add_argument("--tool", help="Actual native tool name for receipt assembly")
-    parser.add_argument("--raw-file", type=Path, help="Unchanged actual tool arguments/result JSON")
-    parser.add_argument("--worker-id", help="Native worker identity; required for a spawn receipt")
-    parser.add_argument("--dispatch-file", type=Path, help="Complete accepted dispatch for a result receipt")
-    parser.add_argument("--outcome", choices=("pass", "fail", "blocked", "revised", "contract-change"))
-    parser.add_argument("--report-file", type=Path)
-    parser.add_argument("--candidate-file", type=Path)
-    parser.add_argument("--terminal-status", choices=("completed", "failed", "stopped"))
-    parser.add_argument("--descendants-stopped", action="store_true")
-    parser.add_argument("--contract-unchanged", action="store_true")
-    parser.add_argument("--mechanical-correction", action="store_true",
-                        help="Actual deterministic candidate correction confirmed by the independent design reviewer")
-    parser.add_argument("--call-id", help="Only an ID exposed by the actual host tool")
-    parser.add_argument("--output", type=Path, help="New controller-owned receipt file")
     args = parser.parse_args(argv)
     try:
-        if args.command == "receipt":
-            if not args.raw_file or not args.output or not args.tool:
-                parser.error("receipt requires --raw-file, --output and --tool")
-            try:
-                result = capture_receipt(args)
-            except _receipt_runtime().ProjectError as error:
-                raise ValueError(str(error)) from error
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 0
         if args.command == "role":
             if args.name is None:
                 parser.error("role requires --name")
@@ -227,9 +139,7 @@ def main(argv=None):
         print(json.dumps(result, indent=2))
         return 0 if result["disk_ready"] else 1
     except (OSError, ValueError, KeyError, TypeError) as error:
-        failure = ({"host": args.host, "status": "blocked", "error": str(error)}
-                   if args.command == "receipt" else
-                   {"host": args.host, "disk_ready": False, "missing": [str(error)]})
+        failure = {"host": args.host, "disk_ready": False, "missing": [str(error)]}
         print(json.dumps(failure))
         return 1
 

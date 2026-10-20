@@ -31,12 +31,12 @@ ProjectError = runtime.ProjectError
 OPERATIONS = {
     "create": {"title", "slug", "parent", "repository", "kind", "depends_on", "delivery_required"},
     "fix": {"title", "slug", "fixes", "parent", "repository", "delivery_required"},
-    "requirement-update": set(), "design-update": {"execution"},
+    "requirement-update": set(), "design-update": {"author_session", "contract_unchanged"},
     "decision-record": {"approval_source"},
-    "design-review": {"execution", "reviewer_session", "review_file"},
+    "design-review": {"reviewer_session", "review_file"},
     "design-reuse": set(),
-    "development-start": {"execution", "base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
-    "development-finish": {"execution", "result", "provenance", "reviewer_session", "review_file"},
+    "development-start": {"author_session", "base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
+    "development-finish": {"result", "provenance", "reviewer_session", "review_file"},
     "delivery-record": {"kind", "reference", "commit", "provenance"},
     "context-update": set(), "log-record": set(),
     "cleanup-record": {"cleanup_status", "reference", "mode", "approval_source", "discard_development"},
@@ -143,17 +143,19 @@ def _session():
     return session
 
 
-def _identity(root):
+def _identity(root, *, item=None, create=True):
     session = _session()
-    directory = _local(root, "identities")
+    directory = _local(root, "identities") if create else root / ".project-local/identities"
     path = directory / (_hash(session) + ".yaml")
-    if path.is_symlink():
-        raise ProjectError("identity cannot use a symlink")
+    runtime._no_links(root, path.relative_to(root).as_posix())
     if path.exists():
         identity = store.load_yaml(path.read_bytes(), str(path))
         if identity.get("session") != session:
             raise ProjectError("invalid stored workflow identity")
-        return identity
+        token = identity.get("claims", {}).get(item, identity["token"])
+        return {"machine": identity["machine"], "session": session, "token": token}
+    if not create:
+        return {"session": session, "token": None, "machine": socket.gethostname()}
     identity = {"session": session, "token": secrets.token_hex(32), "machine": socket.gethostname()}
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -272,9 +274,15 @@ def _design_authors(item):
             *(workflow.get("autonomy") or {}).get("design_authors", [])] if value}
 
 
-def _review_ready(files, item, actor=None, *, execution=False):
+def _code_authors(item):
+    state = item.get("workflow") or {}
+    return {value for value in [(item.get("development") or {}).get("author_session"),
+            *state.get("code_authors", []), *(state.get("autonomy") or {}).get("code_authors", [])] if value}
+
+
+def _review_ready(files, item, actor=None):
     approval = _design(item).get("approval")
-    allowed = {"draft", "review-pending", "implementable"} if execution else {"review-pending"}
+    allowed = {"draft", "review-pending", "implementable"}
     if (not isinstance(approval, dict) or not approval.get("source") or
             _design(item).get("state") not in allowed or
             any(approval.get(key) != value for key, value in _approval_binding(files, item).items())):
@@ -305,9 +313,6 @@ def gates(files, item, actor=None):
             predicate()
         except (ProjectError, store.StoreError, KeyError, ValueError) as exc:
             reasons.append(str(exc))
-        autonomy = (item.get("workflow") or {}).get("autonomy") or {}
-        if autonomy.get("current") or autonomy.get("authorization"):
-            reasons.append("autonomous stage requires its bound captured execution attempt")
         result[operation] = {"eligible": not reasons, "blockers": reasons,
                              "requires_begin": True}
     approval = _design(item).get("approval") or {}
@@ -335,7 +340,7 @@ def _design_reuse():
     return project_design_reuse
 
 
-def _approved(files, item):
+def _approved(files, item, *, missing_root=None):
     if _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation is required before implementation")
     actual_base = (item.get("development") or {}).get("base_commit")
@@ -348,7 +353,7 @@ def _approved(files, item):
             return
     design = _design(item)
     approval, review = design.get("approval"), design.get("review")
-    reused = isinstance(review, dict) and _design_reuse().current(files, item, review)
+    reused = isinstance(review, dict) and _design_reuse().current(files, item, review, missing_root=missing_root)
     if not isinstance(approval, dict) or not isinstance(review, dict):
         raise ProjectError("current user approval and independent design review are required")
     if (design.get("state") != "implementable" or review.get("result") != "pass" or
@@ -356,7 +361,7 @@ def _approved(files, item):
             (not reused and any(review.get(key) != value for key, value in _binding(files, item, actual_base).items())) or
             review.get("session") in _design_authors(item) or
             not review.get("provenance") or item.get("needs_review") or
-            not (reused or _autonomy_module().review_inputs_current(files, item, review))):
+            not (reused or _autonomy_module().review_inputs_current(files, item, review, missing_root=missing_root))):
         raise ProjectError("design approval or independent review is stale or incomplete")
 
 
@@ -365,8 +370,13 @@ def _implementation_approved(files, item, *, missing_root=None):
     review = development.get("review") or {}
     if item.get("kind") == "aggregate":
         return
+    if (item.get("design", {}).get("review", {}).get("result") == "fail" or
+            (item.get("workflow") or {}).get("design_review_failure")):
+        raise ProjectError("unresolved independent design findings block implementation acceptance")
+    if _autonomous(item):
+        _approved(files, item, missing_root=missing_root)
     if (review.get("result") != "pass" or not review.get("provenance") or
-            not review.get("session") or review.get("session") == development.get("author_session") or
+            not review.get("session") or review.get("session") in _code_authors(item) or
             review.get("code_snapshot") != development.get("reviewed_snapshot") or
             not _autonomy_module().review_inputs_current(files, item, review, missing_root=missing_root) or
             any(review.get(key) != value for key, value in _binding(files, item, development.get("base_commit")).items())):
@@ -384,7 +394,7 @@ def _read_payload(root, files, item, operation):
     if operation in {"requirement-update", "design-update", "decision-record", "design-review", "design-reuse",
                      "development-start", "development-finish", "delivery-record"}:
         selected.add(_spec(item))
-    if operation in {"design-update", "decision-record", "design-review", "design-reuse", "development-start"}:
+    if operation in {"design-update", "decision-record", "design-review", "design-reuse", "development-start", "development-finish"}:
         selected.add(documents["decision"])
     result = [{"path": str(Path(root) / path), "content": files[path].decode("utf-8")}
               for path in sorted(selected) if path in files]
@@ -453,13 +463,12 @@ def _options(operation, options):
             raise ProjectError("review result must be pass or fail")
         if "provenance" in options:
             _text(options["provenance"], "review provenance")
-        if operation == "development-finish":
-            if options.get("result") not in {"pass", "fail"}:
-                raise ProjectError("review result must be pass or fail")
-            _text(options.get("provenance"), "review provenance")
     if operation == "design-review" and {"reviewer_session", "review_file"}.intersection(options):
         _text(options.get("reviewer_session"), "actual independent design reviewer session")
-        _text(options.get("review_file"), "independent design review file")
+    if "author_session" in options:
+        _text(options["author_session"], "actual source/design author")
+    if "contract_unchanged" in options and type(options["contract_unchanged"]) is not bool:
+        raise ProjectError("contract_unchanged must be an explicit boolean")
     if operation == "decision-record" and "approval_source" in options:
         _text(options["approval_source"], "actual user approval source")
     if operation == "delivery-record":
@@ -533,9 +542,18 @@ def _new_item(items, options, operation):
 
 
 def _ownership(item, identity):
-    owner = item.get("owner")
-    if owner is not None and (owner.get("session") != identity["session"] or owner.get("token") != identity["token"]):
-        raise ProjectError("work item is owned by another session; release or explicit takeover is required")
+    claim = _ownership_module().claim_token(item)
+    if ((claim is not None and claim != identity["token"]) or
+            not _ownership_module().authorized(item, identity)):
+        raise ProjectError("work item has another control claim; use explicit takeover")
+
+
+def _ownership_module():
+    try:
+        import project_ownership
+    except ImportError:
+        from . import project_ownership
+    return project_ownership
 
 
 def _development_module():
@@ -578,35 +596,19 @@ def _autonomy_module():
     return project_autonomy
 
 
-def _execution(root, files, item, operation, options, *, require_result=False):
-    attempt = options.get("execution")
-    if not attempt:
-        handoff = ((item.get("workflow") or {}).get("lifecycle") or {}).get("handoff")
-        if handoff and operation != "design-review" and handoff["to"] != _session():
-            raise ProjectError("item handed to another session; use its recorded coordinator")
-        autonomy = ((item.get("workflow") or {}).get("autonomy") or {})
-        if autonomy.get("current") or (autonomy.get("authorization") and operation in {"design-review", "development-start", "development-finish"}):
-            raise ProjectError("autonomous stage requires its bound captured execution attempt")
-        return None
-    entry = _autonomy_module().execution(root, files, item, attempt, operation, require_result=require_result)
-    expected_result = "fail" if entry.get("result", {}).get("outcome") == "revised" else entry.get("result", {}).get("outcome")
-    if require_result and operation in {"design-review", "development-finish"} and options.get("result") != expected_result:
-        raise ProjectError("review result does not match captured host execution")
-    return entry
 
 
-def _actor(item, identity, execution, operation, options):
-    actor = execution["worker_id"] if execution else identity["session"]
+def _actor(item, identity, operation, options):
+    actor = options.get("author_session", identity["session"])
     if operation in {"design-review", "development-finish"} and options.get("reviewer_session"):
-        reviewer = options["reviewer_session"]
-        if operation == "design-review" and not execution and (item.get("status") != "developing" or not item.get("owner")):
-            raise ProjectError("external design review registration requires an owned developing item")
-        if execution and reviewer != actor:
-            raise ProjectError("reviewer session does not match captured host execution")
-        if reviewer == identity["session"]:
+        actor = options["reviewer_session"]
+        if actor == identity["session"]:
             raise ProjectError("reviewer must be independent from the registering session")
-        actor = reviewer
     return actor
+
+
+def _autonomous(item):
+    return bool((item.get("workflow", {}).get("autonomy") or {}).get("authorization"))
 
 
 def _begin(root, operation, selector=None, *, options=None, publish=None):
@@ -616,12 +618,11 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     options = _options(operation, options)
     root = runtime.find_project(root)
     files = _snapshot(root)
-    identity = _identity(root)
     items = store.items(files)
     item = _new_item(items, options, operation) if operation in {"create", "fix"} else copy.deepcopy(items[_resolve(items, selector)])
     identifier = item["id"]
-    execution = _execution(root, files, item, operation, options)
-    actor = _actor(item, identity, execution, operation, options)
+    identity = _identity(root, item=identifier)
+    actor = _actor(item, identity, operation, options)
     if item.get("archived") and operation != "archive":
         raise ProjectError("archived work item cannot be edited")
     if item.get("status") == "done" and operation not in {"context-update", "log-record", "archive", "rename", "cleanup-record"}:
@@ -630,39 +631,31 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
+        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
             _implementation_approved(files, item)
-        elif operation != "development-finish" or item.get("status") != "awaiting_delivery":
+        elif operation != "development-finish" or item.get("status") != "awaiting_delivery" or _autonomous(item):
             _approved(files, item)
     if operation == "design-reuse":
-        _design_reuse().ready(item, identity["session"])
+        _design_reuse().ready(item, identity)
     if operation == "design-review":
-        _review_ready(files, item, actor, execution=bool(execution))
+        _review_ready(files, item, actor)
     if operation == "development-finish":
         if not item.get("development") or item.get("status") not in {"developing", "awaiting_delivery"}:
             raise ProjectError("development review requires active development")
-        if options["reviewer_session"] in {item["development"].get("author_session"), identity["session"]}:
+        if options["reviewer_session"] in _code_authors(item) | {identity["session"]}:
             raise ProjectError("implementation reviewer must use a different session")
     review_source = None
     if options.get("review_file"):
-        if execution:
-            if options["review_file"] != (execution.get("result") or {}).get("report_file"):
-                raise ProjectError("review source differs from the captured execution report")
-            body = _autonomy_module()._captured_body(execution, "report")
-            review_source = {"body": body, "sha256": _hash(body)}
-        else:
-            source = Path(options["review_file"]).absolute()
-            for component in (source, *source.parents):
-                if component.is_symlink():
-                    raise ProjectError("review source cannot use symlinks")
-            if not source.is_file():
-                raise ProjectError("review source must be an actual report file")
-            review_source = {"path": str(source), "sha256": _hash(source.read_bytes())}
-    if operation == "development-finish" and review_source is None:
-        raise ProjectError("implementation review requires an actual review_file")
+        source = Path(options["review_file"]).absolute()
+        for component in (source, *source.parents):
+            if component.is_symlink():
+                raise ProjectError("review source cannot use symlinks")
+        if not source.is_file():
+            raise ProjectError("review source must be an actual report file")
+        review_source = {"path": str(source), "sha256": _hash(source.read_bytes())}
     if operation == "cleanup-record":
         _validate_discard(root, files, item, options)
     if operation in METADATA_OPERATIONS:
@@ -727,12 +720,9 @@ def _prepare_context(root, directory, manifest, files, publish):
     manifest["item"] = item
     if operation in CODE_PREPARATION_OPERATIONS and item.get("repository"):
         development = dict(item.get("development") or {})
-        development.update(_development_module().prepare(root, item, store.project(files), options=options, publish_branch=not bool(options.get("execution"))))
+        development.update(_development_module().prepare(root, item, store.project(files), options=options, publish_branch=not _autonomous(item)))
         if development != item.get("development"):
             item["development"] = development
-            if options.get("execution"):
-                entry = item["workflow"]["autonomy"]["executions"][options["execution"]]
-                entry["input_binding"] = _autonomy_module()._binding(root, files, item)
             item.setdefault("workflow", {}).pop("development_discard_record", None)
             item["cleanup"] = "pending"
             writes = store.write_item(files, item)
@@ -775,10 +765,10 @@ def _open_edit(root, directory, manifest, files):
     read = _read_payload(root, files, item, operation)
     manifest["read"] = read
     manifest["read_hashes"] = (_autonomy_module()._read_hashes(root, files, item, "design-review", read=read)
-                               if operation in {"design-review", "design-reuse"} else
+                               if operation in {"design-review", "design-reuse", "development-start", "development-finish"} else
                                {entry["path"]: _hash(Path(entry["path"]).read_bytes()) for entry in read})
     if operation == "design-reuse":
-        _design_reuse().ready(item, manifest["identity"]["session"])
+        _design_reuse().ready(item, manifest["identity"])
         manifest["reuse_target"] = _design_reuse().target(root, files, item)
         manifest["read_hashes"] = manifest["reuse_target"]["read_hashes"]
     manifest["state"] = "editing"
@@ -797,6 +787,12 @@ def _open_edit(root, directory, manifest, files):
     _save(root, directory, manifest)
     result = {"status": "editing", "ticket": manifest["ticket"], "read": read,
               "editable": editable, "finish_command": _finish_command(root, manifest["ticket"])}
+    approved_contract = ((item.get("workflow") or {}).get("autonomy") or {}).get("approved_contract")
+    if approved_contract and operation in {"design-review", "design-update", "development-start", "development-finish"}:
+        result["approved_contract"] = copy.deepcopy(approved_contract)
+    prerequisites = _autonomy_module()._predevelopment().pins(item)
+    if prerequisites:
+        result["prerequisites"] = copy.deepcopy(prerequisites)
     lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
     if lifecycle.get("generations"):
         result["retained_sources"] = copy.deepcopy(lifecycle["generations"])
@@ -806,9 +802,9 @@ def _open_edit(root, directory, manifest, files):
     if operation == "design-review" and item.get("workflow", {}).get("design_basis"):
         result["design_basis"] = copy.deepcopy(item["workflow"]["design_basis"])
     if operation == "design-reuse":
-        result["design_basis"] = copy.deepcopy(_design_reuse().ready(item, manifest["identity"]["session"]))
+        result["design_basis"] = copy.deepcopy(_design_reuse().ready(item, manifest["identity"]))
         result["current_target"] = copy.deepcopy(manifest["reuse_target"])
-    if operation in {"design-review", "design-reuse"}:
+    if operation in {"design-review", "design-reuse", "development-finish"}:
         result["finish_options"] = "--result pass|fail --provenance SOURCE"
         if operation == "design-review" and _design_reuse().pending(files, item):
             result["finish_options"] += " --contract-unchanged (required for pass)"
@@ -900,6 +896,7 @@ def _invalidate_implementation(item):
     autonomy = (item.get("workflow") or {}).get("autonomy")
     if autonomy:
         autonomy.pop("acceptance", None)
+        autonomy.pop("implementation", None)
     if item.get("status") == "awaiting_delivery":
         item["status"] = "in_progress"
     development = item.get("development")
@@ -916,15 +913,7 @@ def _prepare_finish(root, manifest, files, drafts):
     items = store.items(files)
     item = copy.deepcopy(manifest["item"] if operation in {"create", "fix"} else items[manifest["item"]["id"]])
     identifier = item["id"]
-    execution = _execution(root, files, item, operation, options, require_result=operation != "development-start")
-    actor = _actor(item, identity, execution, operation, options)
-    if execution and operation in {"design-review", "development-finish", "design-update"}:
-        expected = execution.get("candidate_sha256") if operation == "design-update" else execution["report"]["sha256"]
-        content = drafts.get("spec.md") if operation == "design-update" else drafts.get("report.md")
-        if _hash(content) != expected:
-            raise ProjectError("stage draft differs from the captured execution artifact")
-        if operation == "design-review" and options.get("mechanical_correction") and _hash(drafts.get("spec.md")) != execution.get("candidate_sha256"):
-            raise ProjectError("mechanical candidate differs from the captured execution artifact")
+    actor = _actor(item, identity, operation, options)
     approval = _design(item).get("approval")
     if isinstance(approval, dict):
         approval.pop("record", None)
@@ -934,12 +923,12 @@ def _prepare_finish(root, manifest, files, drafts):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=bool(execution) and operation != "delivery-record")
+        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record")
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
             _implementation_approved(files, item)
-        elif operation != "development-finish" or item.get("status") != "awaiting_delivery":
+        elif operation != "development-finish" or item.get("status") != "awaiting_delivery" or _autonomous(item):
             _approved(files, item)
     documents = _documents(item)
     writes = {}
@@ -976,18 +965,14 @@ def _prepare_finish(root, manifest, files, drafts):
             for author in (design.get("author_session"), actor):
                 if author and author not in authors:
                     authors.append(author)
-            if execution and design.get("author_session"):
-                authors = item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("design_authors", [])
-                if design["author_session"] not in authors:
-                    authors.append(design["author_session"])
             design["version"] += 1
             design["author_session"] = actor
             design["state"] = "draft"
             design.pop("approval", None)
             design.pop("review", None)
-            if execution:
-                if execution["result"].get("outcome") != "revised":
-                    raise ProjectError("autonomous design update requires a captured revised result")
+            if options.get("contract_unchanged"):
+                if not _autonomous(item):
+                    raise ProjectError("contract-preserving revision requires scoped advancement authorization")
                 original = copy.deepcopy(approval)
                 if not original:
                     raise ProjectError("contract-internal revision requires the original user approval")
@@ -995,10 +980,10 @@ def _prepare_finish(root, manifest, files, drafts):
                 derived = {**_approval_binding(prospective, item), "kind": "derived_revision",
                            "source": original["source"], "session": actor,
                            "original_user_approval": original.get("original_user_approval", original),
-                           "execution": execution["attempt"]}
+                           "revision": manifest["ticket"]}
                 design["approval"] = derived
                 design["state"] = "review-pending"
-                item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("design_authors", []).append(actor)
+                item.setdefault("workflow", {}).setdefault("design_authors", []).append(actor)
             elif pending_revision:
                 # Candidate repair retains only the original comparison mandate;
                 # an independent unchanged-contract pass is still required.
@@ -1040,7 +1025,7 @@ def _prepare_finish(root, manifest, files, drafts):
             raise ProjectError("pending approval requires independent contract_unchanged confirmation")
         design = _design(item)
         approval = design.get("approval")
-        _review_ready(files, item, actor, execution=bool(execution))
+        _review_ready(files, item, actor)
         # The approval baseline is the design's baseline, not the subsequent
         # management commit that recorded approval or claimed this edit.
         manifest["base_commit"] = _base(item)
@@ -1052,7 +1037,7 @@ def _prepare_finish(root, manifest, files, drafts):
             original_approval = copy.deepcopy(approval)
             design["approval"] = {**_approval_binding(review_files, item), "kind": "derived_mechanical",
                 "source": approval["source"], "original_user_approval": approval.get("original_user_approval", original_approval),
-                "review": manifest["ticket"], "execution": options.get("execution")}
+                "review": manifest["ticket"]}
             approval = design["approval"]
         record = _report(root, manifest, item, review_files, writes, operation, drafts["report.md"])
         if mechanical:
@@ -1073,13 +1058,10 @@ def _prepare_finish(root, manifest, files, drafts):
         record["read_hashes"] = copy.deepcopy(manifest["read_hashes"])
         if mechanical:
             record["read_hashes"][str(Path(root) / _spec(item))] = _hash(drafts["spec.md"])
-        if execution or options.get("reviewer_session"):
+        if options.get("reviewer_session"):
             record.update(session=actor, recorded_by=identity["session"])
         if manifest.get("review_source"):
             record["source"] = copy.deepcopy(manifest["review_source"])
-        if execution:
-            record.update(execution=execution["attempt"],
-                          contract_unchanged=execution["result"].get("contract_unchanged"))
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         if any(approval.get(key) != value for key, value in _approval_binding(review_files, item).items()):
             raise ProjectError("design approval is stale")
@@ -1113,34 +1095,45 @@ def _prepare_finish(root, manifest, files, drafts):
         else:
             _approved(files, item)
         if item.get("status") != "developing":
-            item["development"] = _development_module().prepare(root, item, store.project(files), options=options, publish_branch=not bool(options.get("execution")))
-            item["development"]["author_session"] = actor
-        if execution:
-            authors = item.setdefault("workflow", {}).setdefault("autonomy", {}).setdefault("code_authors", [])
-            if actor not in authors:
-                authors.append(actor)
+            item["development"] = _development_module().prepare(root, item, store.project(files), options=options, publish_branch=not _autonomous(item))
+        item["development"]["author_session"] = actor
+        authors = item.setdefault("workflow", {}).setdefault("code_authors", [])
+        if actor not in authors:
+            authors.append(actor)
         item.setdefault("workflow", {}).pop("development_discard_record", None)
         item["status"] = "developing"
         item["owner"] = identity
         item["cleanup"] = "pending"
+        if _autonomous(item):
+            state = item["workflow"]["autonomy"]
+            state.pop("implementation", None)
+            state.pop("acceptance", None)
+            state["implementation_basis"] = {"binding": _autonomy_module()._binding(root, files, item, code=False),
+                                                "read_hashes": copy.deepcopy(manifest["read_hashes"])}
     elif operation == "development-finish":
         development = item.get("development") or {}
-        if options["reviewer_session"] in {development.get("author_session"), identity["session"]}:
+        if options.get("result") not in {"pass", "fail"}:
+            raise ProjectError("finish review requires an explicit result pass or fail")
+        _text(options.get("provenance"), "review provenance")
+        if options["reviewer_session"] in _code_authors(item) | {identity["session"]}:
             raise ProjectError("implementation review must be independent")
         current = _code_snapshot(root, item, store.project(files))
         if current != manifest.get("code_snapshot"):
             raise ProjectError("code snapshot changed during implementation review; begin review again")
         record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
         record.update(result=options["result"], code_snapshot=current, session=options["reviewer_session"],
-                      recorded_by=identity["session"])
-        if execution:
-            record["execution"] = execution["attempt"]
+                      recorded_by=identity["session"], read_hashes=copy.deepcopy(manifest["read_hashes"]))
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         development["review"] = record
         development["reviewed_snapshot"] = current
         if options["result"] == "pass":
             item["status"] = "awaiting_delivery"
             item["owner"] = None
+            pre = _autonomy_module()._predevelopment().state(item) or {}
+            if pre.get("phase") == "reconciling":
+                if not pre.get("rebased"):
+                    raise ProjectError("formal code review requires completed convergence")
+                pre["phase"] = "formal"
     elif operation == "delivery-record":
         if ((item.get("workflow") or {}).get("autonomy") or {}).get("authorization") and not _autonomy_module()._acceptance_valid(root, files, item):
             raise ProjectError("delivery requires current explicit user acceptance")
@@ -1250,6 +1243,7 @@ def _prepare_finish(root, manifest, files, drafts):
         item["archived"] = options["archived"]
     if operation not in {"development-start", "development-finish"} and item.get("status") != "developing":
         item["owner"] = None
+    _autonomy_module().release_execution_state(item)
     writes.update(store.write_item(files, item))
     if operation in {"create", "fix", "dependency-update"}:
         _bump_graph(files, writes)
@@ -1268,10 +1262,6 @@ def _compact_finished(root, directory, manifest):
         (directory / name).unlink(missing_ok=True)
     tombstone = {key: manifest[key] for key in ("ticket", "operation", "identity", "created_at", "state")}
     tombstone["item"] = {"id": manifest["item"]["id"]}
-    execution = manifest.get("execution") or manifest.get("options", {}).get("execution")
-    if execution:
-        tombstone["execution"] = execution
-        tombstone["read_hashes"] = manifest.get("read_hashes", {})
     if manifest != tombstone:
         _save(root, directory, tombstone)
     return tombstone
@@ -1281,7 +1271,7 @@ def _finish(root, ticket, *, options=None, publish=None):
     """Validate fixed drafts and publish the retained intent without stale writes."""
     root = runtime.find_project(root)
     directory, manifest = _load(root, ticket)
-    if _identity(root) != manifest["identity"]:
+    if _identity(root, item=manifest["item"]["id"]) != manifest["identity"]:
         raise ProjectError("edit ticket belongs to another session")
     if manifest["state"] == "finished":
         manifest = _compact_finished(root, directory, manifest)
@@ -1291,8 +1281,8 @@ def _finish(root, ticket, *, options=None, publish=None):
             result["code_context"] = _code_context(root, store.item(files, manifest["item"]["id"]), store.project(files))
         return result
     if options:
-        if manifest["operation"] not in {"design-review", "design-reuse"} or set(options) - ({"result", "provenance", "contract_unchanged", "mechanical_correction"} if manifest["operation"] == "design-review" else {"result", "provenance"}):
-            raise ProjectError("finish accepts typed result/provenance only for design-review or design-reuse")
+        if manifest["operation"] not in {"design-review", "design-reuse", "development-finish"} or set(options) - ({"result", "provenance", "contract_unchanged", "mechanical_correction"} if manifest["operation"] == "design-review" else {"result", "provenance"}):
+            raise ProjectError("finish accepts typed result/provenance only for design-review, design-reuse or development-finish")
         merged = {**manifest["options"], **options}
         if merged.get("result") not in {"pass", "fail"}:
             raise ProjectError("review result must be pass or fail")
@@ -1347,7 +1337,7 @@ def _finish(root, ticket, *, options=None, publish=None):
         return _continue_context(root, directory, manifest, files, publish)
     if manifest["operation"] == "design-reuse":
         reuse_item = store.item(files, manifest["item"]["id"])
-        _design_reuse().ready(reuse_item, manifest["identity"]["session"])
+        _design_reuse().ready(reuse_item, manifest["identity"])
         if manifest.get("code_snapshot") is not None and _code_snapshot(root, reuse_item, store.project(files)) != manifest["code_snapshot"]:
             return _stale(root, manifest, "Assessment source snapshot changed; draft is retained.")
         if manifest["state"] == "prepared":
@@ -1365,7 +1355,7 @@ def _finish(root, ticket, *, options=None, publish=None):
         current = _checks(files, manifest["item"], manifest["operation"])
         if manifest["operation"] in {"development-start", "development-finish", "delivery-record"}:
             try:
-                _blocked(store.items(files), manifest["item"]["id"], speculative=bool(manifest.get("options", {}).get("execution")) and manifest["operation"] != "delivery-record")
+                _blocked(store.items(files), manifest["item"]["id"], speculative=_autonomous(store.item(files, manifest["item"]["id"])) and manifest["operation"] != "delivery-record")
                 if manifest["operation"] == "delivery-record":
                     _implementation_approved(files, store.item(files, manifest["item"]["id"]))
                 elif (manifest["operation"] != "development-finish" or store.item(files, manifest["item"]["id"]).get("status") != "awaiting_delivery") and not (manifest["operation"] == "development-start" and manifest["options"].get("skip_design_review")):
@@ -1430,7 +1420,7 @@ def _finish(root, ticket, *, options=None, publish=None):
 
 def _failure(error):
     message = str(error)
-    rules = (("owned", "owner_conflict"), ("another session", "session_conflict"),
+    rules = (("control claim", "control_claim_required"), ("owned", "owner_conflict"), ("another session", "session_conflict"),
              ("approval", "approval_required"), ("independent", "independent_review_required"),
              ("checkpoint blocked", "checkpoint_blocked"), ("snapshot changed", "code_changed"),
              ("symlink", "unsafe_path"), ("manifest", "invalid_ticket"),
@@ -1489,10 +1479,10 @@ def resume(root, ticket=None, *, publish=None):
         try:
             root = runtime.find_project(root)
             candidates = []
-            identity = _identity(root)
             for directory in _local(root, "edits").iterdir():
                 if TICKET.fullmatch(directory.name):
                     _, manifest = _load(root, directory.name)
+                    identity = _identity(root, item=manifest["item"]["id"])
                     if manifest["state"] in {"prepared", "claim-pending", "context-pending", "context-publication-pending"} and manifest["identity"] == identity:
                         candidates.append((manifest["created_at"], directory.name))
             if not candidates:

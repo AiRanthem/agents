@@ -5,7 +5,7 @@ description: Autonomously advance an explicitly requested managed-project scope 
 
 # Advance Project
 
-Coordinate from the management project root and directly dispatch one executor per item stage. Advance every ready development item within the requested scope, subject to actual host capacity. Keep project records and lifecycle operations with the controller; keep code, investigation and review with stage executors. Do not introduce work-item managers.
+Coordinate from the management project root and manage each item’s stage task tree directly. Project state tracks current artifacts and control claims; native executors and their liveness belong to the advancing agent. Advance every ready development item within the requested scope, subject to actual host capacity. Keep project records and lifecycle operations with the controller; keep code, investigation and review with stage executors. Do not introduce work-item managers.
 
 Read [discussion and authorization](references/discussion-and-authorization.md). In Agent mode, read [coordinator](references/coordinator.md) and the selected host adapter before dispatch. A delegated stage executor instead reads [stage-executor](references/stage-executor.md) and its stage skill; it does not become a project controller.
 
@@ -13,4 +13,4 @@ Native Plan is a read-only host mode, not an autonomous execution mode. Inspect 
 
 When explicitly enabled or resuming an existing generation, also read [predevelopment](references/predevelopment.md). It defines frozen prerequisite snapshots and mandatory formal convergence; default advancement retains ordinary prerequisite gates.
 
-End the round only when no item is ready or running and every in-scope item is waiting for human acceptance, accepted but awaiting delivery, speculatively waiting for prerequisite delivery, completed or blocked. These terminal dispositions may coexist; keep following every outstanding executor. Report exact items, real evidence, acceptance and delivery gaps. AI approval, this run ending and project completion are distinct facts. Leave formal source uncommitted; the explicit predevelopment exception covers only its isolated snapshot and Git transformation stages. Other source publication and PRs require covering user instructions.
+End the round only when no item is ready and this run’s task trees are accounted for and every in-scope item is waiting for human acceptance, accepted but awaiting delivery, speculatively waiting for prerequisite delivery, completed or blocked. These terminal dispositions may coexist; keep following every outstanding executor. Report exact items, real evidence, acceptance and delivery gaps. AI approval, this run ending and project completion are distinct facts. Leave formal source uncommitted; the explicit predevelopment exception covers only its isolated snapshot and Git transformation stages. Other source publication and PRs require covering user instructions.

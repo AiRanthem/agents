@@ -45,24 +45,13 @@ python3 <dev-kit-root>/scripts/host_agents.py check --host codex
 或每次命令的新值用作主控身份。需要 `PROJECT_SESSION_ID` 的客户端应从当前真实
 会话元数据赋值；App Server 提供 `thread.sessionId`，不从 fork 的 thread ID 推导它。
 
-主控按共享 coordinator 合同捕获 spawn / wait / follow-up 的真实调用与回执，保存
-`host=codex`、实际 `tool`、`worker_id` 和原始 `raw`，交给项目 runtime。
-`call_id` 仅在真实工具直接暴露时记录，否则省略，由 runtime 的
-`coordinator-capture-sha256` 和 `attempt` 关联。不能用本地 ID 冒充宿主 call ID，
-也不读取私有 transcripts / logs 补取 ID。
-只记录原生回执直接暴露的实际模型/effort；未暴露则标记未验证，不额外检查执行者设置。
-配置值与实际型号不能混作同一证据。执行者先等待主控登记，收到 `attempt` 和
-`input_binding` 后才执行。恢复先用原生可用工具确认原任务状态，不以超时推断死亡。
+推进 agent 直接向原生阶段角色交付完整当前合同、源代码位置、基线与允许输出路径，
+并自行维护真实任务 ID、等待、结果整合和后代资源收尾。项目状态只保存内容绑定的
+成果、实际作者及独立审查证据，不登记执行者或以其存活状态锁住工作项。跨宿主接管
+从当前可访问成果继续；原宿主任务不可查询时，不要求恢复旧任务或用户证明其停止。
+实际代码写入协调与必要隔离由推进 agent 负责。只报告工具直接暴露的型号与执行事实，
+未暴露则标记未验证，不读取私有会话日志补取身份或伪造回执。
 
 继承真实 harness sandbox 和审批模式；原生 Plan 保持只读。技能发现隐藏可通过已授权
 文件入口显式加载；本轮授权的阶段技能可按宿主允许的显式入口调用；`disable-model-invocation`
 限制自动调用时不能假称自动激活。实际禁用或工具拒绝不能以读文件绕过。不能为减少阶段确认而放宽宿主权限。
-
-## 宿主回执与暂停任务
-
-使用共享的 [回执装配说明](../skills/advance-project/references/host-receipts.md)，通过
-`host_agents.py receipt` 保留实际工具 raw 并从完整 accepted dispatch 派生结果绑定。
-这个命令只装配主控实际捕获的数据，不运行代理，也不证明宿主签名或模型身份。
-原生暂停确认结束后，用当前宿主可用的 follow-up / resume 操作向同一 worker 交付
-accepted context 并唤醒任务；单向消息不一定会唤醒 idle worker。保持原 attempt，
-正式结果仍要求实际终态及全部后代停止。

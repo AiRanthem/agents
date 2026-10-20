@@ -87,9 +87,8 @@ def _candidate(root, files, item, coordinator):
         return captured if (captured["binding"]["project_sha256"] == workflow._hash(files[store.project_path(files)]) and
                             all(captured["binding"].get(key) == value for key, value in current.items())) else None
     authorization = (item.get("workflow") or {}).get("autonomy", {}).get("authorization", {})
-    if (authorization.get("coordinator") != coordinator or not authorization.get("predevelop") or
-            item.get("kind") != "development" or item.get("status") != "awaiting_delivery" or
-            (item.get("workflow") or {}).get("autonomy", {}).get("current")):
+    if (not workflow._ownership_module().authorized(item, workflow._identity(root, item=item["id"], create=False)) or not authorization.get("predevelop") or
+            item.get("kind") != "development" or item.get("status") != "awaiting_delivery"):
         return None
     try:
         workflow._implementation_approved(files, item)
@@ -158,8 +157,8 @@ def _record_writes(captured, body=None):
 
 def snapshot(root, selector, *, publish=None):
     root, files = _autonomy()._files(root)
-    owner = workflow._identity(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
+    owner = workflow._identity(root, item=item["id"])
     _autonomy()._owned(item, owner)
     _guard_configuration(files, item)
     authorization = _autonomy()._state(item).get("authorization", {})
@@ -168,8 +167,6 @@ def snapshot(root, selector, *, publish=None):
     pending = [value for value in captures.values() if value["status"] != "published"]
     if not authorization.get("predevelop") and not prior_authorization and not pending:
         raise ProjectError("snapshot publication requires explicit predevelopment authorization for this item")
-    if _autonomy()._state(item).get("current"):
-        raise ProjectError("cannot freeze while an executor is active")
     if len(pending) > 1:
         raise ProjectError("ambiguous pending snapshot; preserve existing publication intents")
     project = store.project(files)
@@ -334,12 +331,10 @@ def _new_worktree(root, files, item, generation, start, label):
 
 def prepare(root, selector, *, publish=None):
     root, files = _autonomy()._files(root)
-    owner = workflow._identity(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
+    owner = workflow._identity(root, item=item["id"])
     _autonomy()._owned(item, owner)
     _guard_configuration(files, item)
-    if _autonomy()._state(item).get("current"):
-        raise ProjectError("cannot prepare a generation with an active worker")
     current = state(item)
     if current and current["phase"] != "formal":
         if current["phase"] not in {"preparing", "speculative"}:
@@ -368,7 +363,6 @@ def prepare(root, selector, *, publish=None):
             "source": own["snapshot"], "old_base": item["development"]["base_commit"], "target": target})
         workflow._invalidate_implementation(item)
         item["design"].pop("review", None)
-        _autonomy()._state(item)["next_role"] = "rebase"
         return _save(root, files, item, owner, "Begin formal convergence " + item["id"], publish)
     if not current:
         _lifecycle().capacity(item)
@@ -450,17 +444,16 @@ def prepare(root, selector, *, publish=None):
     workflow._invalidate_implementation(item)
     item["design"].pop("review", None)
     item["status"], item["owner"], item["cleanup"] = "in_progress", None, "pending"
-    _autonomy()._state(item)["next_role"] = "design-review" if complete else "baseline"
     return _save(root, files, item, owner, "Prepare predevelopment baseline " + item["id"], publish)
 
 
-def prepare_writer(root, files, item, role):
-    """Called after the worker attempt/ownership has been durably reserved."""
+def prepare_writer(root, files, item, role, *, author_session):
+    """Prepare the authorized generation and retain source authorship."""
     current = state(item)
     if role == "rebase":
         plan = current["rebase"]
         old = item["development"]
-        # A dispatch continuation reuses the same adopted generation.
+        # Repeated preparation reuses the same adopted generation.
         if old.get("predevelopment_generation") != plan["generation"]:
             project = store.project(files)
             checkout = development._checkout(root, item, project, development._repository(item, project), {})
@@ -471,7 +464,10 @@ def prepare_writer(root, files, item, role):
             item["development"] = descriptor
     _validate_generation(root, files, item)
     item["status"] = "developing"
-    item["development"]["author_session"] = _autonomy()._state(item)["executions"][_autonomy()._state(item)["current"]]["worker_id"]
+    item["development"]["author_session"] = author_session
+    authors = item.setdefault("workflow", {}).setdefault("code_authors", [])
+    if author_session not in authors:
+        authors.append(author_session)
 
 
 def writer_context(item, role):
@@ -534,7 +530,6 @@ def complete_writer(root, files, item, role):
     development._git(location, "config", "branch." + item["development"]["branch"] + ".project-base-commit", target)
     workflow._invalidate_implementation(item)
     item["design"].pop("review", None)
-    _autonomy()._state(item)["next_role"] = "design-review"
 
 
 def validate(item):

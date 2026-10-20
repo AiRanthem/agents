@@ -9,7 +9,7 @@ Use installed [project.py](scripts/project.py) and the [command contract](refere
 
 ## Progress report
 
-A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items already include the lifecycle summary plus stored predevelopment markers. Scheduling collections during advancement come from `autonomy status` for the recorded coordinator session; a progress report uses `progress`.
+A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items already include the lifecycle summary plus stored predevelopment markers. Scheduling collections during advancement come from `autonomy status` for the current control claim; a progress report uses `progress`.
 
 Write every item as its full ID and title. Include kind, status, design state and version, delivery status and required evidence, dependencies, branch, worktree, and implementation review result when the JSON has them. When `predevelop` is true, include the authorization source. When `predevelopment` is present, include phase, generation, formal base, baseline, each pin's snapshot id and commit, the retained original worktree and branch, and the item's own snapshot id, status, commit and prerequisite map.
 

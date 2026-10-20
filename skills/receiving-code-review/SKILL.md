@@ -29,7 +29,7 @@ If authorization covers evaluation alone, finish the evidence-backed evaluation 
 
 ## Correct and return evidence
 
-Use `$implement-design` in the current conversation for authorized corrections, supplying accepted targets as the correction contract, supporting evidence, current target identity and rejected boundaries. Do not ask the user to invoke it separately or reconfirm unchanged targets. It owns decomposition, implementation self-review and verification. In an autonomous fix attempt, retain the same assigned stage and write boundaries when loading it; do not enter the ordinary project workflow or seek a new design-status approval for those corrections.
+Use `$implement-design` in the current conversation for authorized corrections, supplying accepted targets as the correction contract, supporting evidence, current target identity and rejected boundaries. Do not ask the user to invoke it separately or reconfirm unchanged targets. It owns decomposition, implementation self-review and verification. In an autonomous fix stage, retain the same assigned stage and write boundaries when loading it; do not enter the ordinary project workflow or seek a new design-status approval for those corrections.
 
 If implementation reveals a material contract defect, return the evidence and proposed correction to the applicable decision owner and continue independent authorized work. Review findings do not authorize extra features or weaker acceptance criteria.
 

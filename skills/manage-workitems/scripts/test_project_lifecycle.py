@@ -9,6 +9,7 @@ import project
 import project_autonomy as autonomy
 import project_development as development
 import project_lifecycle as lifecycle
+import project_ownership as ownership
 import project_predevelopment as predevelopment
 import project_removal as removal
 import project_runtime as runtime
@@ -210,16 +211,35 @@ class LifecycleTest(unittest.TestCase):
         newer = predevelopment.snapshot(self.root, 'A', publish=self.f.publisher)['snapshot']
         self.assertNotEqual(frozen['id'], newer['id'])
 
-    def test_live_worker_and_foreign_coordinator_block_replan(self):
+
+    def test_project_does_not_require_executor_closure_but_foreign_claim_is_fenced(self):
         self.p.configure('A')
         self.p.authorize('A')
         self.policy('A')
-        execution = self.p.dispatch('design-review', 'running-reviewer', 'A')
-        with self.assertRaisesRegex(runtime.ProjectError, 'worker liveness'):
-            lifecycle.replan(self.root, 'A', approval_source='Replan cannot invent termination', publish=self.f.publisher)
-        self.p.finish('A', execution)
-        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'other'}), self.assertRaisesRegex(runtime.ProjectError, 'coordinator'):
-            lifecycle.replan(self.root, 'A', approval_source='New session does not prove old liveness', publish=self.f.publisher)
+        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'other'}), self.assertRaisesRegex(runtime.ProjectError, 'control claim'):
+            lifecycle.replan(self.root, 'A', approval_source='Unauthorized foreign claim', publish=self.f.publisher)
+        item = self.p.item('A')
+        item['workflow']['autonomy'].update(current='0' * 32, executions={})
+        self.f.install(item)
+        result = lifecycle.replan(self.root, 'A', approval_source='User replans source managed by this agent', publish=self.f.publisher)
+        self.assertEqual(result['status'], 'published', result)
+        self.assertNotIn('current', self.p.item('A')['workflow']['autonomy'])
+
+    def test_legacy_cache_is_retained_without_worker_history(self):
+        self.source()
+        self.policy('A')
+        item = self.p.item('A')
+        relative = '.project-local/autonomy-results/' + '0' * 32
+        key, row = lifecycle._resource(item, 'runtime-cache', relative, relative_path=relative, attempt='0' * 32, retained_by=[])
+        row['state'] = 'released'
+        lifecycle.state(item).setdefault('resources', {})[key] = row
+        cache = self.root / relative
+        cache.mkdir(parents=True)
+        (cache / 'user-data.txt').write_text('Only copy of old unfinished work.\n')
+        self.f.install(item)
+        plan = lifecycle.plan(self.root, 'A', publish=self.f.publisher)
+        self.assertNotIn(key, [entry['id'] for entry in plan['resources']])
+        self.assertTrue((cache / 'user-data.txt').is_file())
 
     def test_mode_handoff_preserves_speculative_baseline_and_does_not_authorize_gc(self):
         self.p.configure('A')
@@ -330,69 +350,22 @@ class LifecycleTest(unittest.TestCase):
         self.assertIn('recovery checkpoint', result['message'])
         self.assertEqual(git(self.p.code, 'rev-parse', branch), head)
 
-    def test_completed_runtime_caches_are_recoverable_and_unknown_files_are_retained(self):
-        self.source()
-        self.policy('A')
-        executions = autonomy._state(self.p.item('A'))['executions']
-        attempt = next(iter(executions))
-        cache = self.root / '.project-local/autonomy-results' / attempt
-        (cache / 'user-data.txt').write_text('retain unknown local data\n')
-        plan = self.collect('A')
-        self.assertTrue(any('unregistered data' in value['reason'] for value in plan['blocked_resources']))
-        self.assertTrue((cache / 'user-data.txt').is_file())
-        completed = [key for key in executions if key != attempt][0]
-        self.assertFalse((self.root / '.project-local/autonomy-results' / completed).exists())
-        retained = autonomy._state(self.p.item('A'))['executions'][completed]
-        self.assertTrue(retained['report']['body'])
-        self.assertEqual(autonomy.resume(self.root, 'A', attempt=completed, publish=self.f.publisher)['status'], 'no_op')
 
-    def test_runtime_collection_rechecks_exact_path_and_preserves_concurrent_unknown_data(self):
-        self.source()
-        self.policy('A')
-        plan = lifecycle.plan(self.root, 'A', publish=self.f.publisher)
-        record = self.p.item('A')
-        intent = lifecycle.state(record)['gc']
-        row = next(value for value in intent['resources'] if value['kind'] == 'runtime-cache' and not value.get('absent'))
-        canonical = row['path']
-        unrelated = self.f.directory / 'unrelated-data'
-        unrelated.mkdir()
-        (unrelated / 'keep.txt').write_text('retain\n')
-        row['path'] = str(unrelated)
-        lifecycle.state(record)['resources'][row['id']]['path'] = str(unrelated)
-        intent['digest'] = lifecycle._intent_digest(intent)
-        for name, body in store.write_item(runtime._working_files(self.root), record).items():
-            self.f.write(self.root, name, body)
-        blocked = lifecycle.collect(self.root, 'A', intent=intent['id'], confirm=intent['digest'], publish=self.f.publisher)
-        self.assertIn('path changed', blocked['message'])
-        self.assertTrue((unrelated / 'keep.txt').is_file())
-        record = self.p.item('A')
-        intent = lifecycle.state(record)['gc']
-        next(value for value in intent['resources'] if value['id'] == row['id'])['path'] = canonical
-        lifecycle.state(record)['resources'][row['id']]['path'] = canonical
-        intent['digest'] = lifecycle._intent_digest(intent)
-        for name, body in store.write_item(runtime._working_files(self.root), record).items():
-            self.f.write(self.root, name, body)
-        inspect = lifecycle._inspect
-        def after_inspection(root, files, item, candidate):
-            result = inspect(root, files, item, candidate)
-            if candidate['id'] == row['id']:
-                (Path(canonical) / 'new-user-data.txt').write_text('retain data arriving after inspection\n')
-            return result
-        with mock.patch.object(lifecycle, '_inspect', side_effect=after_inspection):
-            blocked = lifecycle.collect(self.root, 'A', intent=intent['id'], confirm=intent['digest'], publish=self.f.publisher)
-        self.assertEqual(blocked['code'], 'resource_collection_pending')
-        self.assertTrue((Path(canonical) / 'new-user-data.txt').is_file())
-        (Path(canonical) / 'new-user-data.txt').unlink()
-        original = os.unlink
-        def concurrent(path, *args, **kwargs):
-            result = original(path, *args, **kwargs)
-            if path == 'manifest.yaml' and kwargs.get('dir_fd') is not None:
-                (Path(canonical) / 'new-user-data.txt').write_text('retain concurrent data\n')
-            return result
-        with mock.patch.object(lifecycle.os, 'unlink', side_effect=concurrent):
-            blocked = lifecycle.collect(self.root, 'A', intent=intent['id'], confirm=intent['digest'], publish=self.f.publisher)
-        self.assertEqual(blocked['code'], 'resource_collection_pending')
-        self.assertTrue((Path(canonical) / 'new-user-data.txt').is_file())
+    def test_takeover_continues_exact_collection_without_original_conversation(self):
+        self.retired_clean_source()
+        plan = lifecycle.plan(self.root, 'B', publish=self.f.publisher)
+        self.assertTrue(plan['resources'])
+        original = copy.deepcopy(lifecycle.state(self.p.item('B'))['gc'])
+        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'receiving-controller'}):
+            transferred = ownership.takeover(self.root, 'B', approval_source='User continues B in the receiving conversation',
+                                             publish=self.f.publisher)
+            self.assertEqual(transferred['status'], 'published', transferred)
+            self.assertEqual(lifecycle.state(self.p.item('B'))['gc'], original)
+            result = lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)
+            self.assertEqual(result['status'], 'published', result)
+        with self.assertRaisesRegex(runtime.ProjectError, 'control claim'):
+            lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)
+
 
     def test_cross_host_handoff_opens_fresh_baseline_without_reinterpreting_old_path(self):
         source = self.source()

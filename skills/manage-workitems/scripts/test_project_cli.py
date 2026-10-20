@@ -558,16 +558,13 @@ class ProjectOutputTest(unittest.TestCase):
         self.assertEqual(result['action'], 'resume')
         self.assertLess(len(json.dumps(result)), 1000)
 
-    def test_pending_stage_result_selects_its_attempt_continuation(self):
-        continuation = "python project.py --root /project autonomy resume A --attempt actual-attempt"
-        result = project._public_result(
-            {"status": "partial", "stage_result_pending": True,
-             "continuation_command": continuation,
-             "recovery": {"identity_file": "/project/identity.json", "journal": "/project/journal.json"}},
-            argparse.Namespace(root="/project", command="autonomy"))
-        self.assertEqual(result["next_command"], continuation)
-        self.assertEqual(shlex.split(result["publication_next_command"])[-4:],
-                         ["--identity-file", "/project/identity.json", "--journal", "/project/journal.json"])
+    def test_complete_and_transform_cli_have_artifact_inputs_and_no_worker_options(self):
+        complete = project.parser().parse_args(['autonomy', 'complete', 'A', '--role', 'fix', '--report-file', '/tmp/report.md', '--provenance', 'Actual completed fix'])
+        self.assertEqual(complete.role, 'fix')
+        transform = project.parser().parse_args(['autonomy', 'begin-transform', 'A', '--role', 'rebase', '--author-session', 'actual-author'])
+        self.assertEqual(transform.author_session, 'actual-author')
+        result = project._public_result({'status': 'partial', 'ticket': 'actual-ticket'}, argparse.Namespace(root='/project', command='finish'))
+        self.assertEqual(shlex.split(result['next_command'])[-2:], ['--ticket', 'actual-ticket'])
 
     def test_progress_item_adds_predevelopment_marker_without_changing_status_summary(self):
         record = {

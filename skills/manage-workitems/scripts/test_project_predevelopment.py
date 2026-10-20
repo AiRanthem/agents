@@ -77,7 +77,7 @@ class PredevelopmentTest(unittest.TestCase):
         self.assertEqual(result["status"], "published", result)
 
     def finish(self, identifier, execution, **options):
-        result = autonomy.result(self.root, identifier, receipt=self.receipt(execution, **options), publish=self.f.publisher)
+        result = helpers.AutonomyTest.finish_execution(self, execution, **options)
         self.assertEqual(result["status"], "published", result)
 
     def develop(self, identifier):
@@ -269,14 +269,14 @@ class PredevelopmentTest(unittest.TestCase):
         branch = git(location, "symbolic-ref", "--short", "HEAD")
         git(location, "checkout", "--quiet", "-b", "unassigned-writer-branch")
         with self.assertRaisesRegex(runtime.ProjectError, "changed branches"):
-            autonomy.result(self.root, "C", receipt=receipt, publish=self.f.publisher)
+            autonomy.complete(self.root, "C", **receipt, publish=self.f.publisher)
         self.assertEqual(git(location, "symbolic-ref", "--short", "HEAD"), "unassigned-writer-branch")
         git(location, "checkout", "--quiet", branch)
         with self.assertRaisesRegex(runtime.ProjectError, "omits"):
-            autonomy.result(self.root, "C", receipt=receipt, publish=self.f.publisher)
+            autonomy.complete(self.root, "C", **receipt, publish=self.f.publisher)
         for commit in execution["git_operation"]["commits"]:
             git(location, "merge", "--quiet", "--no-edit", commit)
-        result = autonomy.result(self.root, "C", receipt=receipt, publish=self.f.publisher)
+        result = autonomy.complete(self.root, "C", **receipt, publish=self.f.publisher)
         self.assertEqual(result["status"], "published", result)
         self.assertTrue((location / "A.txt").exists() and (location / "B.txt").exists())
         self.assertEqual(self.state("C")["next_role"], "design-review")
@@ -334,7 +334,7 @@ class PredevelopmentTest(unittest.TestCase):
         self.assertTrue((location / "B.txt").is_file())
         self.assertEqual(self.state("C")["next_role"], "design-review")
 
-    def test_conflicted_baseline_can_record_a_blocked_terminal_result(self):
+    def test_conflicted_baseline_remains_available_for_agent_owned_recovery(self):
         for identifier, dependencies in (("A", []), ("B", []), ("C", ["A", "B"])):
             self.configure(identifier, dependencies)
         self.authorize("A", "B", "C")
@@ -354,17 +354,10 @@ class PredevelopmentTest(unittest.TestCase):
         conflicts = git(location, "ls-files", "--unmerged")
         self.assertTrue(conflicts)
         with self.assertRaisesRegex(runtime.ProjectError, "resolved index conflicts"):
-            autonomy.result(self.root, "C", receipt=self.receipt(execution), publish=self.f.publisher)
-        receipt = self.receipt(execution, outcome="blocked")
-        with self.assertRaisesRegex(runtime.ProjectError, "mismatches execution input_binding"):
-            autonomy.result(self.root, "C", receipt={**receipt, "input_binding": {}}, publish=self.f.publisher)
-        self.finish("C", execution, outcome="blocked")
-        current = self.item("C")["workflow"]["autonomy"]
-        self.assertNotIn("current", current)
-        self.assertTrue(current["executions"][execution["attempt"]]["finished_at"])
-        self.assertEqual(current["blocker"], "executor_blocked")
+            autonomy.complete(self.root, "C", **self.receipt(execution), publish=self.f.publisher)
         self.assertEqual(git(location, "ls-files", "--unmerged"), conflicts)
-        self.assertEqual(self.state("C")["state"], "blocked")
+        self.assertNotIn("executions", self.item("C")["workflow"]["autonomy"])
+        self.assertEqual(self.state("C")["next_role"], "baseline")
 
     def test_ordinary_human_acceptance_unlocks_autonomous_dependency_after_delivery(self):
         self.configure("A")

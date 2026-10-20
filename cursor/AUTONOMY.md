@@ -53,24 +53,15 @@ Cursor hook 的 `conversation_id` 在多轮间稳定；`sessionStart.session_id`
 不能使用逐轮变化的 `generation_id`、worker ID 或随机值替代。无需为此新装 hook；
 若当前会话完全不暴露身份，报告缺失能力并阻塞项目状态写入。
 
-按共享 coordinator 合同捕获真实 spawn / completion / resume 回执，保存 `host=cursor`、
-实际 `tool`、`worker_id` 和原始 `raw`。`call_id` 仅在真实工具直接暴露时记录，否则省略，
-由 runtime 的 `coordinator-capture-sha256` 和 `attempt` 关联。不能用本地 ID 冒充宿主
-call ID，也不读取私有 transcripts / logs 补取 ID。
-后台任务返回的 agent ID 可用于恢复；等待与完成必须来自当前工具实际返回，不能从摘要
-推断。一级执行者在主控登记并交付 `attempt`、`input_binding` 后才开始工作。
+推进 agent 直接向原生阶段角色交付完整当前合同、源代码位置、基线与允许输出路径，
+并自行维护真实任务 ID、等待、结果整合和后代资源收尾。项目状态只保存内容绑定的
+成果、实际作者及独立审查证据，不登记执行者或以其存活状态锁住工作项。跨宿主接管
+从当前可访问成果继续；原宿主任务不可查询时，不要求恢复旧任务或用户证明其停止。
+实际代码写入协调与必要隔离由推进 agent 负责。只报告工具直接暴露的型号与执行事实，
+未暴露则标记未验证，不读取私有会话日志补取身份或伪造回执。
 
 继承当前权限；原生 Plan 保持只读。文件可读不表示实际禁用的技能获准调用；发现隐藏
 与实际禁用分别处理；本轮授权阶段按宿主允许的显式入口加载，不假称
 `disable-model-invocation` 技能自动激活，实际禁用与工具政策仍生效。共享 skill、原生角色
 及本仓库适配必须在实际执行环境可读；云端不具备本机文件时先按安装合同配置环境，
 不从本机链接推断云端已安装。
-
-## 宿主回执与暂停任务
-
-使用共享的 [回执装配说明](../skills/advance-project/references/host-receipts.md)，通过
-`host_agents.py receipt` 保留实际工具 raw 并从完整 accepted dispatch 派生结果绑定。
-这个命令只装配主控实际捕获的数据，不运行代理，也不证明宿主签名或模型身份。
-原生暂停确认结束后，用当前宿主可用的 follow-up / resume 操作向同一 worker 交付
-accepted context 并唤醒任务；单向消息不一定会唤醒 idle worker。保持原 attempt，
-正式结果仍要求实际终态及全部后代停止。

@@ -206,8 +206,7 @@ class WorkflowTest(unittest.TestCase):
         report.write_text(body)
         unowned = workflow.begin(self.a, "design-review", "A",
             options={"reviewer_session": "fresh-reviewer", "review_file": str(report)}, publish=self.publisher)
-        self.assertEqual(unowned["status"], "blocked")
-        self.assertIn("owned developing item", unowned["message"])
+        self.assertEqual(unowned["status"], "ready")
         self.assertEqual(self.finish(self.begin("development-start"))["status"], "published")
         original = copy.deepcopy(self.record())
         revision = self.begin("design-update")
@@ -219,7 +218,7 @@ class WorkflowTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "fresh-reviewer"}):
             blocked = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
             self.assertEqual(blocked["status"], "blocked")  # No takeover of source ownership.
-        for inputs in ({"reviewer_session": "fresh-reviewer"}, {"review_file": str(report)},
+        for inputs in ({"review_file": str(report)},
                        {"reviewer_session": "author", "review_file": str(report)}):
             with self.subTest(inputs=inputs):
                 blocked = workflow.begin(self.a, "design-review", "A", options=inputs, publish=self.publisher)
@@ -760,7 +759,7 @@ class WorkflowTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "foreign"}):
             item["owner"] = workflow._identity(self.a)
         self.install(item)
-        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["code"], "owner_conflict")
+        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["code"], "control_claim_required")
         item["owner"] = None
         item.update(status="done", delivery={"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "sha"}]})
         self.install(item)

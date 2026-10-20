@@ -973,6 +973,13 @@ def _validate_bundle(bundle):
 
 
 def _check_owners(bundle, current, prospective):
+    try:
+        import project_ownership
+    except ImportError:
+        from . import project_ownership
+    transfer = None
+    if "ownership_transfer" in bundle:
+        transfer = project_ownership.validate_transfer(bundle, current, prospective)
     touched = {identifier for name in bundle["writes"] if (identifier := _item_for_path(name)) is not None}
     for identifier in touched:
         for snapshot in (current, prospective):
@@ -990,14 +997,26 @@ def _check_owners(bundle, current, prospective):
             raise ProjectError(str(exc)) from exc
         if not new:
             raise ProjectError(f"workitem deletion is forbidden: {identifier}")
+        if store.is_v2(current):
+            claim = project_ownership.claim_token(old)
+            authorized = project_ownership.authorized(old, {"session": bundle["session"], "token": bundle["token"]})
+            if ((claim is not None and claim != bundle["token"]) or not authorized) and transfer != identifier:
+                raise ProjectError(f"item {identifier} has another control claim; use explicit takeover")
+            if project_ownership.claim_token(new) not in {None, bundle["token"]}:
+                raise ProjectError(f"item {identifier}: new control claim must match the publication token")
         owner = old.get("owner")
         if owner is not None:
-            if not isinstance(owner, dict) or owner.get("session") != bundle["session"] or owner.get("token") != bundle["token"]:
-                raise ProjectError(f"item {identifier} is owned by another session/token; no takeover is available")
+            matching = (isinstance(owner, dict) and owner.get("token") == bundle["token"] and
+                        (store.is_v2(current) or owner.get("session") == bundle["session"]))
+            if not matching and transfer != identifier:
+                if not store.is_v2(current):
+                    raise ProjectError(f"item {identifier} is owned by another session/token; migrate before takeover")
+                raise ProjectError(f"item {identifier} has another control claim; use explicit takeover")
         new_owner = new.get("owner")
         if new_owner is not None:
-            if (not isinstance(new_owner, dict) or new_owner.get("session") != bundle["session"] or
-                    new_owner.get("token") != bundle["token"]):
+            unchanged_claim = store.is_v2(current) and new_owner == owner
+            if (not isinstance(new_owner, dict) or new_owner.get("token") != bundle["token"] or
+                    not unchanged_claim and new_owner.get("session") != bundle["session"]):
                 raise ProjectError(f"item {identifier}: claim owner.session/token must match bundle.session/token; release before handoff")
         if old.get("delivery", {}).get("status") == "delivered" and (
                 new.get("status") != "done" or new.get("delivery", {}).get("status") != "delivered"):

@@ -108,8 +108,11 @@ def _bundle(files, writes, request, message, identifiers, checks=None):
     # Caller checks bind the edit to its original read, never to this later read.
     if checks is not None:
         guarded.update(checks)
-    return {"checks": guarded, "writes": writes, "session": request["session"],
-            "token": request["token"], "message": message}
+    result = {"checks": guarded, "writes": writes, "session": request["session"],
+              "token": request["token"], "message": message}
+    if "ownership_transfer" in request:
+        result["ownership_transfer"] = request["ownership_transfer"]
+    return result
 
 
 def _sync_files(root, identifiers):
@@ -279,7 +282,7 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
     prospective = store.apply_writes(files, changes)
     config = store.project(prospective)
     sync_ids, adapter = [], None
-    if config.get("backends", {}).get("aone") is not None and identifiers:
+    if config.get("backends", {}).get("aone") is not None and identifiers and "ownership_transfer" not in identity:
         adapter = adapter_factory(config)
         for identifier in identifiers:
             if store.item_path(prospective, identifier) not in prospective:
@@ -715,17 +718,21 @@ def parser():
             command.add_argument("--approval-source", required=True)
             command.add_argument("--skip-design-review", action="store_true")
             command.add_argument("--predevelop", action="store_true")
-    for action in ("dispatch", "result", "accept", "resume", "retire", "snapshot", "prepare"):
+    for action in ("complete", "begin-transform", "accept", "snapshot", "prepare"):
         command = advancing.add_parser(action)
         command.add_argument("item")
-        if action in {"dispatch", "result", "retire"}:
-            command.add_argument("--receipt-file", required=True)
-        if action == "dispatch":
-            command.add_argument("--role", choices=("design-review", "implementation", "code-review", "fix", "design-revision", "baseline", "rebase"), required=True)
+        if action in {"complete", "begin-transform"}:
+            command.add_argument("--role", choices=("baseline", "rebase") if action == "begin-transform" else ("implementation", "fix", "baseline", "rebase"), required=True)
+        if action == "complete":
+            command.add_argument("--report-file", required=True)
+            command.add_argument("--provenance", required=True)
+        if action == "begin-transform":
+            command.add_argument("--author-session", required=True)
         if action == "accept":
             command.add_argument("--approval-source", required=True)
-        if action == "resume":
-            command.add_argument("--attempt", required=True)
+    takeover = sub.add_parser("takeover")
+    takeover.add_argument("item")
+    takeover.add_argument("--approval-source", required=True)
     lifecycle = sub.add_parser("lifecycle")
     lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
     lifecycle_status = lifecycle_actions.add_parser("status")
@@ -766,10 +773,11 @@ def parser():
     begin.add_argument("operation")
     begin.add_argument("selector", nargs="?")
     for name in ("title", "slug", "parent", "repository", "approval-source", "result", "provenance",
-                 "reviewer-session", "review-file", "branch", "execution",
+                 "reviewer-session", "review-file", "branch", "author-session",
                  "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode"):
         begin.add_argument("--" + name)
     begin.add_argument("--skip-design-review", action="store_true", default=None)
+    begin.add_argument("--contract-unchanged", action="store_true", default=None)
     begin.add_argument("--discard-development", action="store_true", default=None)
     begin.add_argument("--kind", action="append")
     begin.add_argument("--reference", action="append")
@@ -906,9 +914,6 @@ def _public_result(result, args):
         if recovery.get("journal"):
             command += ["--journal", recovery["journal"]]
         result["next_command"] = shlex.join(command)
-        if result.get("stage_result_pending") and result.get("continuation_command"):
-            result["publication_next_command"] = result["next_command"]
-            result["next_command"] = result["continuation_command"]
         result["action"] = "resume"
         result.pop("finish_command", None)
     if result.get("status") in {"partial", "blocked"}:
@@ -928,17 +933,17 @@ def main(argv=None):
                 if action == "authorize":
                     options.update(approval_source=args.approval_source, skip_design_review=args.skip_design_review, predevelop=args.predevelop, publish=publish_changes)
                 result = getattr(autonomy, action)(args.root, **options)
-            elif action == "resume":
-                result = autonomy.resume(args.root, args.item, attempt=args.attempt, publish=publish_changes)
+            elif action == "begin-transform":
+                result = autonomy.begin_transform(args.root, args.item, role=args.role, author_session=args.author_session, publish=publish_changes)
+            elif action == "complete":
+                result = autonomy.complete(args.root, args.item, role=args.role, report_file=args.report_file, provenance=args.provenance, publish=publish_changes)
             elif action == "accept":
                 result = autonomy.accept(args.root, args.item, approval_source=args.approval_source, publish=publish_changes)
             elif action in {"snapshot", "prepare"}:
                 result = getattr(_module("project_predevelopment"), action)(args.root, args.item, publish=publish_changes)
-            else:
-                options = {"receipt": _json_input(args.receipt_file), "publish": publish_changes}
-                if action == "dispatch":
-                    options["role"] = args.role
-                result = getattr(autonomy, action)(args.root, args.item, **options)
+        elif args.command == "takeover":
+            result = _module("project_ownership").takeover(args.root, args.item,
+                approval_source=args.approval_source, publish=publish_changes)
         elif args.command == "lifecycle":
             lifecycle = _module("project_lifecycle")
             action = args.lifecycle_action

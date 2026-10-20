@@ -40,23 +40,19 @@ def capture(root, files, item, *, reviewed=False, read=None, read_hashes=None):
     state.pop("design_review_failure", None)
 
 
-def ready(item, session=None):
-    """Reject known failures, self-review and concurrent or foreign coordinators."""
+def ready(item, identity=None):
+    """Require independent coverage and the current control claim."""
     state = item.get("workflow") or {}
-    autonomy = state.get("autonomy") or {}
     basis = state.get("design_basis") or {}
     review = basis.get("review") or {}
     if (not basis.get("approval", {}).get("source") or not basis.get("read") or
             review.get("result") != "pass" or not review.get("provenance") or
             not review.get("session") or review.get("session") in workflow._design_authors(item) or
             item.get("design", {}).get("review", {}).get("result") == "fail" or
-            state.get("design_review_failure") or autonomy.get("blocker") or autonomy.get("next_role") == "design-revision"):
+            state.get("design_review_failure")):
         raise workflow.ProjectError("design reuse requires a retained independent pass without unresolved blocking findings")
-    if autonomy.get("current"):
-        raise workflow.ProjectError("design reuse cannot run with an active execution attempt")
-    authorization = autonomy.get("authorization")
-    if session and authorization and authorization.get("coordinator") != session:
-        raise workflow.ProjectError("design reuse requires the authorized coordinator session")
+    if identity and not workflow._ownership_module().authorized(item, identity):
+        raise workflow.ProjectError("design reuse requires the current control claim")
     return basis
 
 
@@ -66,7 +62,7 @@ def target(root, files, item):
             "authorization": copy.deepcopy((item.get("workflow", {}).get("autonomy") or {}).get("authorization"))}
 
 
-def current(files, item, review):
+def current(files, item, review, *, missing_root=None):
     """Resolve old immutable review plus a precise current applicability record."""
     state = item.get("workflow") or {}
     basis, reuse = state.get("design_basis") or {}, state.get("design_reuse") or {}
@@ -93,7 +89,7 @@ def current(files, item, review):
     # Context, inherited instructions and even formerly absent sources remain
     # exact guards. Never rewrite the original independent execution receipt.
     try:
-        workflow._autonomy_module()._validate_reads(expected)
+        workflow._autonomy_module()._validate_reads(expected, missing_root=missing_root)
     except workflow.ProjectError:
         return False
     return bool(expected.get("read_hashes"))
@@ -138,6 +134,9 @@ def pending(files, item):
     state = item.get("workflow") or {}
     reuse = state.get("design_reuse") or {}
     basis = state.get("design_basis") or {}
+    if approval.get("kind") == "derived_revision":
+        return bool(approval.get("original_user_approval", {}).get("kind") == "user" and
+                    all(approval.get(key) == value for key, value in workflow._approval_binding(files, item).items()))
     comparison = (approval.get("kind") == "derived_reuse_pending" and approval.get("assessment") == reuse.get("id") or
                   approval.get("kind") == "derived_revision" and state.get("design_review_failure"))
     return bool(comparison and reuse.get("result") == "fail" and
@@ -148,12 +147,12 @@ def pending(files, item):
 
 def needed(root, files, item, session):
     try:
-        ready(item, session)
+        ready(item, workflow._identity(root, item=item["id"], create=False))
         workflow._approved(files, item)
         return False
     except workflow.ProjectError:
         try:
-            ready(item, session)
+            ready(item, workflow._identity(root, item=item["id"], create=False))
         except workflow.ProjectError:
             return False
     previous = (item.get("workflow") or {}).get("design_reuse") or {}
@@ -161,7 +160,7 @@ def needed(root, files, item, session):
 
 
 def finish(root, manifest, files, item, writes, report):
-    basis = ready(item, manifest["identity"]["session"])
+    basis = ready(item, manifest["identity"])
     captured = manifest["reuse_target"]
     if captured != target(root, files, item):
         raise workflow.ProjectError("design reuse target changed; begin a fresh assessment")
@@ -189,7 +188,6 @@ def finish(root, manifest, files, item, writes, report):
                                  design_reuse=record["id"])
         if (workflow._autonomy_module()._predevelopment().state(item) or {}).get("rebased"):
             item["status"] = "developing"
-            autonomy["next_role"] = "code-review"
     else:
         # A failed assessment cannot hide behind the stale pass or a waiver.
         workflow._invalidate_implementation(item)
@@ -202,5 +200,4 @@ def finish(root, manifest, files, item, writes, report):
                 "original_user_approval": original.get("original_user_approval", original)}
         item["design"]["state"] = "review-pending" if item["design"].get("approval") else "draft"
         autonomy = item["workflow"].get("autonomy") or {}
-        autonomy["next_role"] = "design-review"
     writes["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)

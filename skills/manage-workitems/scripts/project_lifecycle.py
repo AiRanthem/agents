@@ -55,19 +55,16 @@ def _command(root, action, *args):
 def _item(root, selector):
     root, files = autonomy._files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
-    return root, files, item, workflow._identity(root)
+    return root, files, item, workflow._identity(root, item=item["id"])
 
 
 def _quiescent(root, files, item, identity):
     workflow._ownership(item, identity)
-    auth = (item.get('workflow') or {}).get('autonomy') or {}
     handoff = state(item).get('handoff')
-    if handoff and handoff['to'] != identity['session']:
-        raise ProjectError('lifecycle ownership has been handed to another coordinator')
-    if auth.get('current'):
-        raise ProjectError('active or unknown worker liveness; settle the original attempt before lifecycle changes')
-    if auth.get('authorization') and auth['authorization']['coordinator'] != identity['session']:
-        raise ProjectError('lifecycle transition requires the existing coordinator; explicitly hand off first')
+    if handoff and not workflow._ownership_module().handoff_authorized(handoff, identity):
+        raise ProjectError('lifecycle has another control claim; use explicit takeover')
+    if not workflow._ownership_module().authorized(item, identity):
+        raise ProjectError('lifecycle has another control claim; use explicit takeover')
     # Unsettled metadata publications may still contain old pins or resource state.
     directory = root / '.project-local/publish'
     runtime._no_links(root, '.project-local/publish')
@@ -127,18 +124,10 @@ def _policy(item):
     return value
 
 
-def capacity(item, *, retiring=False, snapshot=False, runtime_cache=False):
+def capacity(item, *, retiring=False, snapshot=False):
     lifecycle = (item.get('workflow') or {}).get('lifecycle') or {}
     policy = lifecycle.get('policy')
     if not policy:
-        return
-    if runtime_cache:
-        executions = ((item.get('workflow') or {}).get('autonomy') or {}).get('executions', {})
-        resident = [key for key, value in executions.items() if value.get('finished_at') and value.get('result') and
-                    lifecycle.get('resources', {}).get(_local_id(item, 'runtime-cache',
-                        '.project-local/autonomy-results/' + key), {}).get('state') != 'deleted']
-        if len(resident) >= policy.get('max_snapshots', 20):
-            raise ProjectError('completed result-cache capacity reached; collect recoverable runtime copies')
         return
     if snapshot:
         captures = list(((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}).values())
@@ -312,17 +301,17 @@ def inventory(files, selector=None):
                                  host=descriptor.get('host', socket.gethostname()))
             row = {**saved.get(key, {}), **row}
             rows.append(row)
-        executions = ((item.get('workflow') or {}).get('autonomy') or {}).get('executions', {})
-        current = ((item.get('workflow') or {}).get('autonomy') or {}).get('current')
-        for attempt, execution in executions.items():
-            relative = '.project-local/autonomy-results/' + attempt
-            reasons = [] if execution.get('finished_at') and execution.get('result') and current != attempt else ['unsettled-execution:' + attempt]
-            key, row = _resource(item, 'runtime-cache', relative, relative_path=relative,
-                                 attempt=attempt, retained_by=reasons)
-            rows.append({**saved.get(key, {}), **row})
         # Preserve tombstones, even when the current pointer no longer mentions a resource.
         present = {row['id'] for row in rows}
-        rows.extend(copy.deepcopy(row) for key, row in saved.items() if key not in present)
+        for key, row in saved.items():
+            if key not in present:
+                row = copy.deepcopy(row)
+                if row.get('kind') == 'runtime-cache' and row.get('state') != 'deleted':
+                    # known-limit: legacy caches can contain the only unpublished
+                    # report. Retain them until a dedicated archival verifier can
+                    # prove recovery from formal content, independent of workers.
+                    row['retained_by'] = ['historical-runtime-cache']
+                rows.append(row)
     return rows
 
 
@@ -688,20 +677,7 @@ def _inspect(root, files, item, row):
         result = dict(row, path=str(path))
         if not path.exists():
             return dict(result, absent=True)
-        if not path.is_dir() or {value.name for value in path.iterdir()} != {'manifest.yaml'}:
-            raise ProjectError('runtime cache contains unregistered data')
-        runtime._no_links(root, row['relative_path'] + '/manifest.yaml')
-        runtime._no_links(root, '.project-local/workflow.key')
-        if not (root / '.project-local/workflow.key').is_file():
-            raise ProjectError('runtime cache has no original verification key')
-        cached = workflow._load_manifest(root, path)
-        entry = autonomy._state(item).get('executions', {}).get(row['attempt']) or {}
-        if (not entry.get('finished_at') or not entry.get('result') or
-                cached.get('item') != item['id'] or
-                cached.get('dispatch_sha256') != workflow._hash(workflow._canonical(entry['spawn'])) or
-                any(cached.get(key) != entry.get(key) for key in ('result', 'report', 'candidate', 'candidate_sha256'))):
-            raise ProjectError('runtime result cache is not recoverable from its completed execution')
-        return dict(result, content_sha256=workflow._hash((path / 'manifest.yaml').read_bytes()))
+        raise ProjectError('historical runtime cache requires explicit archival verification')
     checkout = _checkout(root, files, item, row)
     result = copy.deepcopy(row)
     common = development._text(checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir')
@@ -838,8 +814,6 @@ def collect(root, selector, *, intent, confirm, publish=None):
     pending = lifecycle.get('gc') or {}
     if pending.get('id') != intent or pending.get('digest') != confirm:
         raise ProjectError('collection requires the exact program-generated intent and digest')
-    if pending['recorded_by'] != identity['session']:
-        raise ProjectError('collection belongs to the original coordinator')
     if pending['state'] == 'completed':
         return {'status': 'no_op', 'intent': intent}
     # Check every candidate even when the project currently has no frozen pins.
@@ -970,10 +944,9 @@ def validate(item):
             raise ProjectError('resource belongs to another item')
         if value['kind'] == 'runtime-cache':
             attempt = value.get('attempt')
-            executions = ((item.get('workflow') or {}).get('autonomy') or {}).get('executions', {})
             relative = '.project-local/autonomy-results/' + str(attempt)
-            if attempt not in executions or value.get('relative_path') != relative:
-                raise ProjectError('runtime cache must name its registered execution')
+            if not autonomy._predevelopment()._matches(workflow.TICKET.pattern, attempt) or value.get('relative_path') != relative:
+                raise ProjectError('historical runtime cache must name its exact registered path')
             expected = _local_id(item, 'runtime-cache', relative, value.get('host'))
         elif value['kind'] in {'remote-ref', 'local-ref'}:
             captured = captures.get(value.get('snapshot')) if isinstance(value.get('snapshot'), str) else None

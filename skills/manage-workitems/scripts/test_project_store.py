@@ -65,7 +65,7 @@ class StoreTest(unittest.TestCase):
                 writes = store.write_item(current, claimed)
                 bundle = {"session": "s", "token": "real", "writes": writes,
                           "checks": {name: None for name in writes}}
-                with self.assertRaisesRegex(runtime.ProjectError, "owner.session/token"):
+                with self.assertRaisesRegex(runtime.ProjectError, "token"):
                     runtime._check_owners(bundle, current, store.apply_writes(current, writes))
                 claimed["owner"]["token"] = "real"
                 writes = store.write_item(current, claimed)
@@ -136,8 +136,8 @@ class V2PublicationTest(unittest.TestCase):
         ownerless = store.apply_writes(files, store.write_item(files, record))
         self.assertEqual(runtime._business_digest(files, "A"), runtime._business_digest(ownerless, "A"))
         writes = store.write_item(files, record)
-        bundle.update(writes=writes, checks={name: hashlib.sha256(files[name]).hexdigest() for name in writes}, session="other")
-        with self.assertRaisesRegex(runtime.ProjectError, "owned by another"):
+        bundle.update(writes=writes, checks={name: hashlib.sha256(files[name]).hexdigest() for name in writes}, session="other", token="other")
+        with self.assertRaisesRegex(runtime.ProjectError, "control claim"):
             self.publish(self.a, bundle)
 
     def test_deletion_requires_same_id_replacement(self):
