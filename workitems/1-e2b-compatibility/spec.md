@@ -4,7 +4,9 @@
 
 三项问题均影响官方 E2B SDK 的正常调用：列表查询可能错误返回空集，暂停/快照可能保存了调用者要求排除的内存，命名查询可能返回未经筛选的全集。即便本轮不实现全部新增能力，也必须明确拒绝无法履行的请求，不能继续返回误导性的成功。
 
-2026-10-20，用户要求解决三个 Issue；在讨论影响及能力成本后，于本会话选择“最小修复 (Recommended)”。确认范围为：完整修复 Sandbox 列表查询；暂停的 `memory:false` 明确 400；快照支持 filesystem-only、`names` 始终为数组，创建和列表的 `name` 明确 400。本说明将该范围补充为完整行为候选，范围选择不冒充对随后新增细节的批准。
+用户已确认三项采用最小修复，并进一步要求“在 memory 请求时显式返回 400 错误”。当前范围为：完整修复 Sandbox 列表查询；暂停的 `memory:false` 明确 400；快照支持 filesystem-only，显式请求内存快照在 API 层返回 400，`names` 始终为数组，创建和列表的 `name` 明确 400。本次内存拒绝针对 Snapshot 创建，不扩大到 Pause、Connect 或直接操作 Checkpoint CR。
+
+阿里云官方 Checkpoint 克隆契约明确仅支持 filesystem，其他保留内容会失败。对已知不支持的内存请求，应在创建任何资源之前给出明确客户端错误，而不是等待后端失败、超时或返回通用服务器错误；也不能自动降级为文件系统快照。
 
 ## 基线与边界
 
@@ -54,15 +56,34 @@
 
 `POST /sandboxes/{sandboxID}/snapshots` 仍要求 JSON 对象，请求体缺失、非法 JSON、非对象或 `memory` 非布尔值（包括显式 `null`）返回 400，而不是服务器错误。
 
-- `memory:false`：该次 checkpoint 的持久化内容仅为 `filesystem`，不得包含 `memory`；复用现有 checkpoint 的 filesystem-only 创建及恢复路径。
-- `memory:true`：该次 checkpoint 同时保存 `filesystem` 与 `memory`。
-- 省略 `memory`：保持现有扩展头优先、否则继承 Sandbox 持久化内容的行为，不借此修改已有默认策略。这是保留的兼容限制，并非声称所有模板都符合 E2B 省略时默认完整内存快照的语义。
+- `memory:true`：在 API 校验阶段返回 HTTP 400，说明内存快照暂不支持；即使同时提供 filesystem 扩展头，也不覆盖 true 后继续执行。
+- `memory:false`：该次 checkpoint 的持久化内容仅为 `filesystem`，不得包含 `memory`；复用现有 checkpoint 的 filesystem-only 创建及恢复路径。只要其余输入合法，不因字段出现就拒绝 false。
+- 省略 `memory`：使用通过校验的扩展头；扩展头没有有效内容时继续继承 Sandbox 持久化策略。省略不隐式补成 true，也不擅自改成 false。
 
-与 `x-e2b-kruise-snapshot-persistent-contents` 的关系：未显式提供 `memory` 时，扩展头沿用既有语义；两者同时提供时，解析后的内容集合必须与显式 `memory` 所要求的集合一致，否则返回 400。集合比较忽略顺序，不静默选择任一方覆盖另一方；扩展头自身无效仍返回 400。
+`x-e2b-kruise-snapshot-persistent-contents` 仍是请求级内容选择入口，按现有语法去除项两侧空白并解析集合。任一头值明确包含 `memory` 时返回同类 400，包括单独 memory、与 filesystem 混合、重复头中的 memory；不忽略该项、不降级、也不让 body false 覆盖掉显式内存请求。含非法内容的头仍返回参数错误 400。
+
+对于通过上述拒绝校验的输入，body false 与有效扩展头同时出现时，扩展头内容集合必须为 filesystem，否则返回 400；比较忽略顺序及现有解析器合并的重复项。空头或解析为空集合的值沿用既有“无有效扩展覆盖”语义：body false 选择 filesystem，body 省略则继承源策略，不为本轮另加格式限制。
+
+| 创建输入 | 结果（其他条件合法时） |
+| --- | --- |
+| `{"memory":true}` | 400，内存快照不支持，不调用 checkpoint 创建。 |
+| `{"memory":true}` + filesystem 头 | 同样 400，不静默改写请求。 |
+| `{"memory":false}`，无有效内容头 | filesystem-only 创建；成功为 201。 |
+| `{"memory":false}` + filesystem 头 | filesystem-only 创建；成功为 201。 |
+| body 省略 memory + filesystem 头 | filesystem-only 创建；成功为 201。 |
+| 任何 body + 含 memory 的内容头 | 400；即使 body false 或 memory 在后续重复头中也不执行。 |
+| body 省略 memory，且无有效内容头 | 原有源策略继承路径及真实后端结果不变。 |
+| memory 为 null、字符串、数字或其他非布尔值 | 参数类型错误 400，不当作省略。 |
+
+内存不支持错误复用现有 E2B `web.ApiError` 响应结构，HTTP 状态固定为 400，消息为 `Memory snapshots are not supported; use memory=false for a filesystem-only snapshot.`。不引入新错误结构、能力探测请求或全局开关，也不在公共错误中披露后端实现细节。认证、资源查找和授权失败仍按既有入口顺序处理，不要求内存错误覆盖这些错误。
+
+所有显式内存拒绝均在 `CreateCheckpoint` 前完成；不得创建 Checkpoint/SandboxTemplate，不改变源 Sandbox 的状态、timeout、annotation 或长期策略。若同时有 name、非法 JSON 等错误，仍为既有客户端错误，不保证多项错误中的消息优先顺序。
 
 模式只作用于本次 checkpoint，不修改源 Sandbox 的长期策略或模板。源 Sandbox 默认继续运行；显式使用既有 `snapshot-keep-running` 扩展头的调用继续遵守该头的既有语义。filesystem-only 快照不包含运行进程、内存状态或连接的恢复承诺，基于它创建的 Sandbox 按现有 filesystem-only 路径从磁盘重新启动；不扩大可保存的文件系统范围或新增存储能力。
 
-TTL、同步等待、取消、创建失败后的清理和成功返回条件全部沿用既有 checkpoint 实现。前置参数错误不得创建 Checkpoint/SandboxTemplate 或触发源 Sandbox 状态变化；不会将后端失败包装成成功。
+保留的兼容限制：省略 body memory 且无有效内容头时，源策略即使含 memory 也仍交给既有继承路径，可能得到真实后端失败；本轮拒绝的是请求中显式选择内存，不新增读取或改写持久化策略的能力。因此不声称省略时具备 E2B 默认完整内存快照语义，或所有继承失败都已转成 400。调用者可显式使用 false 选择 filesystem-only。直接 Checkpoint CR、其他 API 和后端内部校验不在此修复范围。
+
+通过校验的请求继续沿用既有 TTL、同步等待、取消、失败清理和成功返回条件；不能将后端失败包装成成功。对拒绝路径不创建资源，也就不应依赖创建后的清理来满足无副作用保证。
 
 ### 暂不支持的 name
 
@@ -81,13 +102,15 @@ TTL、同步等待、取消、创建失败后的清理和成功返回条件全�
 2. 两个表示相同时刻的 RFC3339 时区写法在 `startedAfter` 中得到相同结果，恰好在边界的 Sandbox 被包含；相同领取时刻且不同 ID 的对象能够跨页完整遍历。
 3. 省略排序得到从新到旧的 Sandbox 列表，指定 `asc` 得到相反时间方向；快照原有列表顺序保持不变。
 4. Pause 的 `memory:false` 返回 400，且调用前后的 Sandbox 暂停状态、timeout、annotation 和持久化策略均不因该请求变化；省略和 `true` 保持原流程。
-5. 内存持久化模板的 Sandbox 使用 `memory:false` 创建快照时，该 checkpoint 仅保存文件系统，源策略不变；`memory:true` 选择完整内容，互相冲突的持久化头在创建前返回 400。
+5. 内存持久化模板的 Sandbox 使用 `memory:false` 创建快照时，该 checkpoint 仅保存文件系统，源策略不变；`memory:true` 总在创建前返回内存不支持 400，任何 filesystem 头都不能使它变成成功。
 6. 创建或查询带 `name` 时明确 400；不带 `name` 的创建与列表响应在 JSON 上都是数组类型的 `names`，空数组不会变成 `null`。
 7. 错误 JSON、错误布尔类型和非法新增列表参数得到客户端错误；拒绝路径没有生命周期或 checkpoint 写入副作用，租户可见性和错误分类不退化。
+8. body 省略或 false 时，内容头为 `memory`、`filesystem,memory`、`memory, filesystem`，或后续重复头包含 memory，均在调用后端前返回 400；仅 filesystem 头保持可用。
+9. body 省略且内容头为空/无有效项时仍继承源策略；不隐式请求完整内存、不偷偷删除继承策略里的 memory，也不将继承路径未修改的失败声称为已处理的显式请求错误。
 
 ## 非目标与取舍
 
-不增加单次 filesystem-only 暂停、命名快照/同名版本/别名注册、connect 的模式选择、全局分页新协议、CRD 字段、存储后端、监控指标或与三个 Issue 无关的 metadata 修复。显式拒绝未支持能力是用户本轮接受的交付边界；只有后续明确需要完整能力时才重新讨论这些限制。
+不增加内存快照、单次 filesystem-only 暂停、命名快照/同名版本/别名注册、connect 的模式选择、全局分页新协议、CRD 字段、存储后端、监控指标或与三个 Issue 无关的 metadata 修复。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。显式拒绝未支持能力是本轮交付边界；只有后续明确需要完整能力时才重新讨论这些限制。
 
 本设计不承诺运行环境已经验证，也不将设计完成等同于独立评审、实现、人工验收或上游 Issue 关闭。
 
@@ -105,3 +128,4 @@ TTL、同步等待、取消、创建失败后的清理和成功返回条件全�
 - https://github.com/openkruise/agents/issues/1083
 - https://github.com/openkruise/agents/issues/1084
 - https://github.com/openkruise/agents/issues/1085
+- https://help.aliyun.com/zh/cs/user-guide/clone-agent-sandbox-using-checkpoint ：官方当前仅支持 filesystem，请求级覆盖、KeepRunning 默认值及按快照 ID 恢复文件的契约；实际使用须具备文档要求的 ACS 后端及接入组件，不等同于纯开源默认构建已具备完整后端。
