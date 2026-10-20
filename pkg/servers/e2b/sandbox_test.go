@@ -150,23 +150,23 @@ func TestConvertToE2BSandboxClaimMethodMetadata(t *testing.T) {
 		wantValue   string
 		wantPresent bool
 	}{
-		{name: "label exposed", labels: map[string]string{agentsv1alpha1.LabelSandboxClaimMethod: "update"}, wantValue: "update", wantPresent: true},
+		{name: "label exposed", labels: map[string]string{agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodHotStart}, wantValue: agentsv1alpha1.ClaimMethodHotStart, wantPresent: true},
 		{name: "missing label", annotations: map[string]string{"user-key": "user-value"}},
 		{
 			name: "annotation cannot override label",
 			labels: map[string]string{
-				agentsv1alpha1.LabelSandboxClaimMethod: "update",
+				agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodHotStart,
 			},
 			annotations: map[string]string{
-				agentsv1alpha1.LabelSandboxClaimMethod: "create",
+				agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodColdStart,
 			},
-			wantValue:   "update",
+			wantValue:   agentsv1alpha1.ClaimMethodHotStart,
 			wantPresent: true,
 		},
 		{
 			name: "annotation only is omitted",
 			annotations: map[string]string{
-				agentsv1alpha1.LabelSandboxClaimMethod: "speculate",
+				agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodColdStart,
 			},
 		},
 	}

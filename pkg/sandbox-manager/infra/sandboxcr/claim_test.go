@@ -354,7 +354,7 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 			},
 			postCheck: func(t *testing.T, sbx infra.Sandbox) {
 				assert.Equal(t, user, sbx.GetPodLabels()[v1alpha1.AnnotationOwner])
-				assert.Equal(t, string(infra.LockTypeUpdate), sbx.GetLabels()[v1alpha1.LabelSandboxClaimMethod])
+				assert.Equal(t, v1alpha1.ClaimMethodHotStart, sbx.GetLabels()[v1alpha1.LabelSandboxClaimMethod])
 			},
 		},
 		{
@@ -604,7 +604,7 @@ func TestInfra_ClaimSandbox(t *testing.T) {
 			},
 			postCheck: func(t *testing.T, sbx infra.Sandbox) {
 				assert.Equal(t, tmpl.Template.Spec.Containers[0].Name, sbx.(*Sandbox).Spec.Template.Spec.Containers[0].Name)
-				assert.Equal(t, string(infra.LockTypeCreate), sbx.GetLabels()[v1alpha1.LabelSandboxClaimMethod])
+				assert.Equal(t, v1alpha1.ClaimMethodColdStart, sbx.GetLabels()[v1alpha1.LabelSandboxClaimMethod])
 			},
 		},
 		{
@@ -820,7 +820,7 @@ func TestClaimSandboxFailed(t *testing.T) {
 				}
 			},
 			expectError:       "sandbox startup failed (reason=StartContainerFailed)",
-			expectClaimMethod: string(infra.LockTypeUpdate),
+			expectClaimMethod: v1alpha1.ClaimMethodHotStart,
 		},
 		{
 			name: "start container failed, reserved forever keeps existing shutdown time",
@@ -4572,10 +4572,12 @@ func TestModifyPickedSandboxClaimMethod(t *testing.T) {
 		lockType infra.LockType
 		initial  string
 		want     string
+		wantErr  string
 	}{
-		{name: "create", lockType: infra.LockTypeCreate, want: "create"},
-		{name: "update", lockType: infra.LockTypeUpdate, initial: "create", want: "update"},
-		{name: "speculate", lockType: infra.LockTypeSpeculate, initial: "update", want: "speculate"},
+		{name: "create", lockType: infra.LockTypeCreate, want: v1alpha1.ClaimMethodColdStart},
+		{name: "update", lockType: infra.LockTypeUpdate, initial: v1alpha1.ClaimMethodColdStart, want: v1alpha1.ClaimMethodHotStart},
+		{name: "speculate", lockType: infra.LockTypeSpeculate, initial: v1alpha1.ClaimMethodColdStart, want: v1alpha1.ClaimMethodHotStart},
+		{name: "unknown", lockType: infra.LockType("other"), wantErr: `unsupported lock type "other"`},
 	}
 
 	for _, tt := range tests {
@@ -4601,6 +4603,10 @@ func TestModifyPickedSandboxClaimMethod(t *testing.T) {
 				Template:   "test-template",
 				LockString: "lock-" + tt.name,
 			})
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
 			require.NoError(t, err)
 			require.NoError(t, performLockSandbox(t.Context(), sbx, tt.lockType, infra.ClaimSandboxOptions{
 				User:       "test-user",

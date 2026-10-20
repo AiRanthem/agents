@@ -24,8 +24,15 @@ const (
 	LabelSandboxTemplate = InternalPrefix + "sandbox-template"
 	// LabelSandboxIsClaimed indicates whether the sandbox has been claimed by user
 	LabelSandboxIsClaimed = InternalPrefix + "sandbox-claimed"
-	// LabelSandboxClaimMethod records the latest claim lock method, not delivery success.
+	// LabelSandboxClaimMethod records the latest exposed claim method, not delivery success.
+	// Values are ClaimMethodColdStart and ClaimMethodHotStart.
 	LabelSandboxClaimMethod = InternalPrefix + "claim-method"
+
+	// ClaimMethodColdStart is recorded when the claim creates a new sandbox.
+	ClaimMethodColdStart = "cold-start"
+	// ClaimMethodHotStart is recorded when the claim takes a pooled sandbox,
+	// including one that is still creating.
+	ClaimMethodHotStart = "hot-start"
 	// LabelSandboxClaimName indicates the name of the SandboxClaim that claimed this sandbox
 	LabelSandboxClaimName = InternalPrefix + "claim-name"
 	LabelTemplateHash     = InternalPrefix + "template-hash"

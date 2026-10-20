@@ -646,7 +646,7 @@ func TestCommonControl_EnsureClaimClaiming_ClaimedGreaterThanZero(t *testing.T) 
 
 	claimed := &agentsv1alpha1.Sandbox{}
 	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(availableSandbox), claimed))
-	assert.Equal(t, "update", claimed.Labels[agentsv1alpha1.LabelSandboxClaimMethod], "controller claim must overwrite user-supplied claim method")
+	assert.Equal(t, agentsv1alpha1.ClaimMethodHotStart, claimed.Labels[agentsv1alpha1.LabelSandboxClaimMethod], "controller claim must overwrite user-supplied claim method")
 
 	var updated agentsv1alpha1.UpdatedMetadataInClaim
 	require.NoError(t, json.Unmarshal([]byte(claimed.Annotations[agentsv1alpha1.AnnotationUpdatedMetadataInClaim]), &updated))

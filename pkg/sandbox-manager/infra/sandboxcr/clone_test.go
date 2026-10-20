@@ -1738,7 +1738,7 @@ func TestCloneSandbox(t *testing.T) {
 					Name:      checkpointID, // Same name as checkpoint
 					Namespace: "default",
 					Labels: map[string]string{
-						v1alpha1.LabelSandboxClaimMethod: string(infra.LockTypeUpdate),
+						v1alpha1.LabelSandboxClaimMethod: v1alpha1.ClaimMethodHotStart,
 					},
 				},
 				Spec: v1alpha1.SandboxTemplateSpec{

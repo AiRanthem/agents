@@ -478,7 +478,7 @@ func TestBuildUserMetadataKeys(t *testing.T) {
 			name: "system-owned labels are excluded while same annotation keys remain distinct",
 			labels: map[string]string{
 				v1alpha1.LabelSandboxID:          "short-id",
-				v1alpha1.LabelSandboxClaimMethod: "create",
+				v1alpha1.LabelSandboxClaimMethod: v1alpha1.ClaimMethodColdStart,
 				"user-label":                     "value",
 			},
 			annotations: map[string]string{
@@ -490,7 +490,7 @@ func TestBuildUserMetadataKeys(t *testing.T) {
 		},
 		{
 			name:      "only system-owned labels returns nil",
-			labels:    map[string]string{v1alpha1.LabelSandboxID: "short-id", v1alpha1.LabelSandboxClaimMethod: "create"},
+			labels:    map[string]string{v1alpha1.LabelSandboxID: "short-id", v1alpha1.LabelSandboxClaimMethod: v1alpha1.ClaimMethodColdStart},
 			expectNil: true,
 		},
 	}

@@ -258,13 +258,13 @@ func TestParseListSandboxesRequestRejectsClaimMethodMetadata(t *testing.T) {
 		{
 			name: "metadata parameter",
 			query: url.Values{
-				"metadata": []string{claimMethod + "=create"},
+				"metadata": []string{claimMethod + "=" + agentsv1alpha1.ClaimMethodColdStart},
 			}.Encode(),
 		},
 		{
 			name: "direct metadata key",
 			query: url.Values{
-				claimMethod: []string{"create"},
+				claimMethod: []string{agentsv1alpha1.ClaimMethodColdStart},
 			}.Encode(),
 		},
 	}

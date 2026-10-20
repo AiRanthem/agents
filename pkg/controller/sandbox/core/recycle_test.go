@@ -1171,7 +1171,7 @@ func TestResetSandboxForPool(t *testing.T) {
 						agentsv1alpha1.LabelSandboxPool:        "test-pool",
 						agentsv1alpha1.LabelSandboxIsClaimed:   "true",
 						agentsv1alpha1.LabelSandboxClaimName:   "my-claim",
-						agentsv1alpha1.LabelSandboxClaimMethod: "create",
+						agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodColdStart,
 						"user-label":                           "user-value",
 					},
 					Annotations: map[string]string{
@@ -1220,7 +1220,7 @@ func TestResetSandboxForPool(t *testing.T) {
 			expectLabels: map[string]string{
 				agentsv1alpha1.LabelSandboxPool:        "test-pool",
 				agentsv1alpha1.LabelSandboxIsClaimed:   agentsv1alpha1.False,
-				agentsv1alpha1.LabelSandboxClaimMethod: "create",
+				agentsv1alpha1.LabelSandboxClaimMethod: agentsv1alpha1.ClaimMethodColdStart,
 			},
 		},
 		{
