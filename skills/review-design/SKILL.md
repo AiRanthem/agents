@@ -5,7 +5,7 @@ description: Independently challenge a design against original requirements and 
 
 # Review Design
 
-Find concrete mistakes and omissions in a design's coherence, evidence, precision and safe feasibility. Do not invent objections to demonstrate independence. A pass is bound to the actual reviewed contract, artifacts and assumptions; it does not authorize implementation or replace code review or human acceptance.
+Assess whether the proposed change is ready for implementation under the approved contract. Use the same attribution, severity and Pass principles as implementation review: no blocking problem introduced or assigned to this change within adequate coverage. Low findings and pre-existing warnings may remain. A pass is bound to the actual reviewed contract, artifacts and assumptions; it does not authorize implementation or replace code review or human acceptance.
 
 ## Load the active context
 
@@ -30,36 +30,28 @@ Infer the target only when evidence supports one safe interpretation. Resolve fa
 
 ## Challenge the proposal
 
-First read original requirements and relevant entry points. Privately establish the observable promise, main constraints and important failure boundaries before absorbing proposal rationale; do not create a competing full design. Then read the complete design and test its assumptions against actual behavior. Evaluate:
+Read the shared [implementable criteria](references/implementable-gate.md), including attribution, severity and verdict rules. Use this same standard across host and project modes; their approval, dependency and persistence rules remain separate.
 
-- **Requirement fit:** required outcomes, respected non-goals, preserved unchanged behavior and model assumptions misrepresented as requirements.
-- **Runtime coherence:** ownership, component boundaries, states, ordering, interfaces and data flow.
-- **Failure semantics:** relevant retries, ambiguous outcomes, partial success, cancellation, recovery, concurrency and resource cleanup.
-- **Safety and compatibility:** affected trust boundaries, access control, public or stored contracts, deletion, upgrades and irreversible effects.
-- **Feasibility:** support in the real platform and repository, hidden preconditions and consequential decisions deferred as implementation details.
-- **Observability:** falsifiable promises and plausible wrong behavior that later validation must distinguish, without adding a test plan to the design.
-- **Simplicity:** optional scope's concrete benefit against code and verification cost; respect deliberate approved tradeoffs.
-
-Review depth follows consequences, not expected diff size. Avoid hypothetical distributed-systems, security or extensibility requirements that the actual boundary does not need. The absence of implementation TODOs or a How section is not a defect.
+First read original requirements and relevant entry points. Privately establish the observable promise, main constraints and important failure boundaries before absorbing proposal rationale; do not create a competing full design. Then read the complete design and examine the affected dimensions against actual behavior and the baseline. Review depth follows consequences, not expected diff size. Apply the standard to the contract itself, without requiring a reflection log or per-dimension certification.
 
 ## Resolve findings by evidence
 
-For each material issue, establish the relevant requirement, trigger, expected result, contradictory design clause or repository behavior, impact and evidence. Classify it as a demonstrated design defect, a necessary user-owned decision, a contract-internal implementation detail, or an optional preference. Normally omit preferences without a demonstrated correctness or material code-cost benefit. Private types and local choices within the approved contract do not need new approval.
+Establish attribution before severity and acceptance impact. Use the shared standard's evidence threshold for every finding; pre-existing warnings stay outside the acceptance decision. Private types and local choices within the approved contract do not need new approval.
 
 Validate findings against surrounding code and safeguards. State inspected facts, inferences and remaining uncertainty. Search absence does not prove capability absence. Preserve resolved decisions and evidence; reopen only for new evidence. Neither model reputation nor voting settles disagreements. When new evidence stops appearing, report the uncertainty or escalate a necessary user decision instead of polling more models; there is no fixed review-round limit.
 
 Do not silently change a user-owned contract. Use the shared discussion rules for changes to requirements, public or stored interfaces, compatibility, key constraints, explicit tradeoffs, security or correctness guarantees, or acceptance criteria. Finish independent investigation and merge genuine decision needs before returning them to the controller or user; pause only dependent work.
 
-In an autonomous design-review stage, you may invoke `$explore-design` to correct an assigned candidate within the approved contract. Return its exact revised identity and rationale. Participation in revision makes you an author of that version: report that fresh independent review is required, and do not pass your revised design. The controller arranges a new reviewer and owns official publication. Ordinary review routes corrections to `$explore-design` without editing design content. Native Plan corrections stay in conversation.
+In an autonomous design-review stage, use `$explore-design` to correct an assigned candidate when a blocking finding requires design revision within the approved contract. If only non-blocking findings remain, return pass with those findings and leave the candidate unchanged. Return a necessary revision's exact identity and rationale. Participation in revision makes you an author of that version: report that fresh independent review is required, and do not pass your revised design. The controller arranges a new reviewer and owns official publication. Ordinary review routes required design corrections to `$explore-design` without editing design content. Native Plan corrections stay in conversation.
 
 ## Report and exit
 
-Write in the user's language. Lead with substantive findings, highest impact first, including design sections and repository locations, concrete scenarios, consequences, evidence, uncertainty and required outcomes. Then state one assessment:
+Write in the user's language. Lead with supported findings introduced or assigned to this change, highest impact first, including design sections and repository locations, concrete scenarios, consequences, evidence, uncertainty and required outcomes. Keep pre-existing warnings separate. Then state one assessment:
 
-- **Independent review passed:** no material blocker within stated coverage, with exact contract and artifact identity. Mode-specific rules determine whether official `implementable` status can be recorded.
-- **Design changes required:** a demonstrated material defect remains, or a revised candidate needs a fresh independent review.
-- **Unable to conclude:** a necessary decision, source, independent perspective or real capability is missing.
+- **Independent review passed:** adequate review found no blocking introduced or assigned problem and no essential assessment gap remains. Low findings and baseline warnings may remain; a nonempty findings list does not change Pass. Mode-specific rules determine whether official `implementable` status can be recorded.
+- **Design changes required:** a concrete blocking finding remains, or a necessary revised candidate needs a fresh independent review.
+- **Unable to conclude:** an essential contract, stable target, decision, evidence or independent reviewer is missing.
 
-Summarize coverage, actual independence, checks, unverified assumptions and unresolved consequential issues. Bind the result to current inputs rather than relying on “done” or “tests passed”. When useful, include accepted invariants and counterexamples with sources as a handoff, without inventing another contract.
+Summarize the gate assessment, coverage, actual independence, checks, unverified assumptions and unresolved consequential issues. Distinguish design quality, user approval, official status persistence and permission to implement. Bind the result to current inputs rather than relying on “done” or “tests passed”. When useful, include accepted invariants and counterexamples with sources as a handoff, without inventing another contract.
 
 Use the active mode reference for permitted persistence. An autonomous stage report never claims official state was updated. End this skill before separately authorized implementation; a reviewer may later implement the accepted design, but cannot independently review the resulting code it authored.

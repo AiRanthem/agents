@@ -23,6 +23,13 @@ Follow applicable user, repository and harness instructions. Read requirements, 
 
 Trace relevant behavior end to end: callers, responsibilities, state and data flow, failure outcomes, and existing patterns. Separate user requirements and confirmed constraints from verified facts, proposed choices and assumptions. The design owner must directly inspect evidence that determines consequential choices; research summaries are indexes, not substitutes for understanding the flow.
 
+Apply the outcome, depth and range lenses from [How to be more ambitious](https://felixrieseberg.com/how-to-be-more-ambitious-a-tutorial-for-humans-with-models/):
+
+- **Outcome:** Identify the result beyond the requested artifact and how this design makes it observable. Challenge a proposed mechanism when it cannot deliver that result; keep scope changes subject to user approval.
+- **Depth:** Identify the raw evidence, professional methods and tools needed to test consequential assumptions. Use actual contracts, callers, data or platform behavior; stronger wording is not stronger evidence.
+- **Range:** Use relevant adjacent disciplines to expose blind spots, such as operations for recovery or security for trust boundaries. Apply their methods to concrete scenarios, without adding unrelated requirements or role-play.
+- **External validation:** Identify what outside the author's confidence can falsify the design: authoritative contracts, existing behavior, a permitted focused check or an independent challenge. Self-reflection prepares the design; it cannot replace independent review.
+
 Use authorized, supported delegation for bounded discovery, caller enumeration, documented API checks, source lookup or polishing. Require paths, relevant symbols or lines, observations and unknowns. Keep framing, architecture, invariants, public or stored contracts, trust boundaries and consequential tradeoffs with the design owner. Do not infer model identity or cross-provider execution. Do not create competing full designs just to consume capacity; a focused independent challenge may test a material assumption without replacing the later independent review.
 
 ## Resolve consequential choices
@@ -49,12 +56,24 @@ Specify interfaces and data shapes when they are actual contract decisions; leav
 
 For optional choices, weigh concrete incremental benefit against components, interfaces, callers, code volume and verification burden. Prefer omission or existing behavior when sufficient. Never weaken essential correctness, security, data protection or acceptance requirements to reduce code. Record material tradeoffs as rationale, non-goals and accepted limitations with a revisit condition.
 
-## Refine review findings and converge
+## Reflect on completeness before writing
 
-Read the current design, original requirements, confirmed decisions and relevant evidence. Adopt supported corrections, adapt partially valid findings and explain material findings not adopted; an unsupported preference does not justify a change. Report proposed decision changes under Added, Modified and Removed in the report's language, explicitly identifying empty categories, and summarize the unchanged contract.
+Read the shared [implementable criteria](../review-design/references/implementable-gate.md). Before presenting a design as complete, requesting final contract approval, writing or revising a spec/design candidate, or handing off to implementation planning, perform a mandatory completeness reflection:
+
+1. Revisit the original requirements and the intended outcome using the lenses above. Walk representative success and consequential failure scenarios through the full affected flow, including callers and dependencies. Attempt to construct a counterexample to each critical guarantee; check it against primary evidence and existing safeguards.
+2. Examine the affected dimensions in the shared standard with adequate coverage. Identify omitted behavior, conflicting clauses, unsupported assumptions and unresolved consequential choices; apply its attribution and severity rules. Distinguish blockers from Low improvements, baseline warnings and choices left to implementation. A checklist tick or “looks comprehensive” is insufficient.
+3. For each blocker, return to investigation and design, resolve it within existing authorization or consolidate the necessary user decisions, then reflect again on the revised whole contract and its interactions. Continue automatically after answers. Repeat until no blocking introduced or assigned problem or essential assessment gap remains; no fixed round count, elapsed time or prior approval substitutes for this result. Low improvements and baseline warnings do not require another design round.
+
+A complete design defines the consequential Why/What sufficiently for implementation within the agreed scope and assumptions; it may retain non-blocking findings. Do not claim proof that unknown defects cannot exist, expand scope indefinitely or strengthen requirements merely to keep reflecting. When essential evidence or a required user-owned decision is genuinely unavailable, preserve the precise blocker and continue unaffected work; do not publish a completed spec or claim convergence. An explicitly requested incomplete draft must still undergo reflection and remain labeled incomplete.
+
+Provide a concise reflection result in the conversation or assigned report: the scope checked, material gaps found and their resolution/evidence, accepted limitations and any remaining blocker. Record final behavior and rationale in the spec; keep iteration logs and tool output outside it. After serializing the design, verify that it preserves the reflected contract. A substantive change reopens the affected criteria and their interactions before completion.
+
+## Refine review findings and hand off
+
+Read the current design, original requirements, confirmed decisions and relevant evidence. Resolve supported blocking findings, adapt partially valid findings and explain blocking claims not adopted. Low improvements remain optional; baseline warnings are not mandatory fixes. Do not open a design revision merely to clear those observations. Report proposed decision changes under Added, Modified and Removed in the report's language, explicitly identifying empty categories, and summarize the unchanged contract.
 
 State the complete Why/What, rationale, non-goals and accepted limitations in ordinary language. Remove repetition and superseded statements. Distinguish existing approvals from new decisions. If a decision batch explicitly presents all alternatives of a complete contract, the user's selected answers can approve the resulting contract without another confirmation round. A material gap beyond those alternatives requires approval of the changed contract.
 
 A reviewer who edits a candidate becomes an author of that version and cannot independently approve it. Return the exact revised artifact and evidence for a fresh independent review; keep review status pending. In a delegated stage, the controller arranges that review and owns all official writeback.
 
-Before handoff, re-read against original requirements, approved decisions and primary evidence. Check that consequential unknowns are resolved or honestly blocked, optional costly choices are justified, and mode-specific writes and checks stayed within scope. Use the loaded mode reference for the handoff. Do not claim independent review or implementation occurred.
+Apply the completeness loop to review-driven revisions as well as initial designs. Before handoff, confirm that the reflection covers the current contract and that mode-specific writes and checks stayed within scope. Use the loaded mode reference for the handoff. Do not claim independent review or implementation occurred.
