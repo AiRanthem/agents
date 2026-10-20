@@ -15,7 +15,7 @@
 - `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
 - `codex/`：Codex 全局指令、固定自主阶段角色，以及按模型组装的主代理与 Astra 子代理委派 hooks。
 - `cursor/`：Cursor 用户级规则、`~/.cursor/skills` 入口、CLI status line 和 CLI 偏好。
-- `qoder/`：Qoder 固定自主阶段角色、会话身份 hook 和自主推进适配。
+- `qoder/`：Qoder 固定自主阶段角色、会话身份 hook、CLI status line 和自主推进适配。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
 
 ## 安装与更新

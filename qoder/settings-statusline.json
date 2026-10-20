@@ -1,0 +1,4 @@
+{
+  "command": "bash ~/.qoder/statusline.sh",
+  "type": "command"
+}

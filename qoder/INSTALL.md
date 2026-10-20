@@ -1,24 +1,27 @@
 # Qoder 配置安装与更新
 
-本目录维护 Qoder 的自主阶段角色、会话身份 hook 和[自主推进适配](AUTONOMY.md)。共享
-skills 按 [`skills/INSTALL.md`](../skills/INSTALL.md) 安装为 `~/.agents/skills/<name>`
+本目录维护 Qoder 的自主阶段角色、会话身份 hook、CLI status line 和[自主推进适配](AUTONOMY.md)。
+共享 skills 按 [`skills/INSTALL.md`](../skills/INSTALL.md) 安装为 `~/.agents/skills/<name>`
 的独立软链接；Qoder 在用户级直接发现这些链接（`qoder skills list` 的 Location 可
-核实），本目录不在 `~/.qoder/skills` 重复安装。本目录不维护主代理规则、status line
-或 subagent 委派路由。
+核实），本目录不在 `~/.qoder/skills` 重复安装。本目录不维护主代理规则或 subagent
+委派路由。
 
 ## 安装
 
-1. 读取仓库根目录的 `AGENTS.md`，并读取维护当日与 Qoder Subagents、Skills、Hooks 和模型选择相关的官方文档（[Subagent](https://docs.qoder.com/cli/subagent.md)、[Skills](https://docs.qoder.com/cli/Skills.md)、[Hooks](https://docs.qoder.com/cli/hooks.md)、[Model](https://docs.qoder.com/cli/model.md)）。
+1. 读取仓库根目录的 `AGENTS.md`，并读取维护当日与 Qoder Subagents、Skills、Hooks、Status Bar 和模型选择相关的官方文档（[Subagent](https://docs.qoder.com/cli/subagent.md)、[Skills](https://docs.qoder.com/cli/Skills.md)、[Hooks](https://docs.qoder.com/cli/hooks.md)、[Settings](https://docs.qoder.com/cli/settings.md)、[Model](https://docs.qoder.com/cli/model.md)）。
 2. 解析本仓库的绝对路径，并确保 `~/.qoder/agents` 与 `~/.qoder/hooks` 存在。
 3. 使用 `find qoder/agents -maxdepth 1 -name '*.md'` 发现本目录收录的角色模板，并校验每个文件 frontmatter 的 `name` 与文件名一致、`model` 与 `effort` 非空。将每个 `~/.qoder/agents/<name>.md` 安装为与仓库内容一致的普通文件：Qoder 的 agent 发现不跟随软链接（2026-10-19 本机实测），角色不得安装为链接。现存目标为指向本仓库对应源文件的软链接时，以同内容普通文件替换该链接；内容一致的普通文件不改。已有目标不同且包含仓库未收录内容时，先展示准确差异并取得用户决定。保留 `~/.qoder/agents` 中仓库未收录的其他条目（如个人 agents）。
 4. 清理时只移除可确认由本仓库管理且源文件已删除的目标；无法确认归属的普通文件保留并报告。移除指向本仓库 `qoder/agents/` 的遗留角色软链接。保留其余无关文件和软链接。
 5. 将 `hooks/session-identity.py` 安装为 `~/.qoder/hooks/session-identity.py` 的绝对软链接，保留目录中无关文件；目标已正确链接时不修改，其他目标先比较并保留未收录内容。确认仓库脚本可执行。
 6. 读取 `~/.qoder/settings.json`，在 `hooks.SessionStart` 数组合并一个 handler：`{"hooks": [{"type": "command", "command": "python3 ~/.qoder/hooks/session-identity.py", "timeout": 10}]}`。以 command 包含 `session-identity.py` 识别本仓库 handler：已存在则原位更新，不存在则追加到 `SessionStart` 数组末尾。保留其他顶层键、其他事件、同组无关 handler 及其顺序。写入前用 JSON 解析器验证完整结果。
-7. 运行 `qoder --list-models`，确认 `Qwen3.8-Max` 与 `DeepSeek-Flash` 当前仍可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)确认二者仍分别支持 `xhigh` 与 `max` effort。不支持时报告具体缺口，不换用其他模型或档位。
+7. 将 `statusline.sh` 与 `statusline-fmt-check.sh` 安装为 `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的绝对软链接，保留 `~/.qoder` 中的无关文件。目标已正确链接时不修改；目标是内容已由本目录完整收录的普通文件时替换为软链接；目标包含仓库尚未收录的内容时，先展示准确差异并取得用户决定。确认本目录两个脚本可执行。
+8. 读取 `~/.qoder/settings.json` 与本目录的 `settings-statusline.json`，将后者作为 `statusLine` 键写入目标并覆盖同名键。以 `statusLine.command` 引用 `~/.qoder/statusline.sh` 识别本仓库的 status line：不存在时写入 `statusLine`，存在时更新为 `settings-statusline.json` 的完整内容。保留目标中仓库未列出的其他键。写入前用 JSON 解析器验证完整结果。
+9. 清理 `~/.qoder` 顶层：删除解析目标位于本目录、但文件名不属于本目录当前收录 status line 文件的软链接；删除文件名匹配 `statusline*.sh`、不属于本目录当前收录名称、且内容已由本目录 `statusline.sh` 或 `statusline-fmt-check.sh` 完整收录的普通文件。无法确认内容归属时展示差异并取得用户决定。保留其余无关文件和软链接。
+10. 运行 `qoder --list-models`，确认 `Qwen3.8-Max` 与 `DeepSeek-Flash` 当前仍可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)确认二者仍分别支持 `xhigh` 与 `max` effort。不支持时报告具体缺口，不换用其他模型或档位。
 
 ## 更新
 
-仓库更新后重新执行安装流程。hook 软链接直接使用仓库版本；角色是普通文件，仓库更新后须按安装流程重新复制为与仓库一致的内容；settings.json 中的身份 handler 在内容变化后重新合并。新增角色补装；移除角色只清理可确认由本仓库管理且源文件已删除的目标。已打开的会话需要 `/agents reload` 或新会话才能加载变化。
+仓库更新后重新执行安装流程。hook 与 status line 软链接直接使用仓库版本；角色是普通文件，仓库更新后须按安装流程重新复制为与仓库一致的内容；settings.json 中的身份 handler 与 `statusLine` 键在内容变化后重新合并。新增角色补装；移除角色只清理可确认由本仓库管理且源文件已删除的目标。`statusLine` 不需重启即生效；已打开的会话需要 `/agents reload` 或新会话才能加载角色变化。
 
 ## 验证
 
@@ -29,6 +32,12 @@ skills 按 [`skills/INSTALL.md`](../skills/INSTALL.md) 安装为 `~/.agents/skil
 * `~/.qoder/hooks/session-identity.py` 链接目标是本目录的 `hooks/session-identity.py`。
 * `~/.qoder/settings.json` 可被 JSON 解析，保留全部无关配置，且 `hooks.SessionStart` 包含身份 handler。
 * `echo '{"hook_event_name":"SessionStart","session_id":"probe"}' | python3 ~/.qoder/hooks/session-identity.py` 输出的 JSON 含 `additionalContext` 且包含 `probe`；stdin 非法 JSON 或缺失 `session_id` 时非零退出且无输出。
+* `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的软链接目标分别是本目录的对应文件，且本目录两个脚本可执行。
+* `~/.qoder/settings.json` 的 `statusLine` 等于本目录 `settings-statusline.json`。
+* `~/.qoder` 顶层没有文件名匹配 `statusline*.sh`、且不属于本目录当前收录名称的普通文件或软链接。
+* `echo '{"model":{"display_name":"Qwen3.8-Max"},"context_window":{"context_window_size":400000,"used_percentage":25}}' | bash ~/.qoder/statusline.sh` 标准输出非空，且首段包含 `Qwen3.8-Max`。
+* 给定含 `transcript_path` 的 payload，status line 显示的 effort 与 context window 等于该 transcript 中最后一条 `runtime-config` 记录的 `reasoningEffort` 与 `contextWindow`，而非 `~/.qoder/settings.json` 的 `.model.preferences`；该记录 `generation.reasoning.enabled` 为 `false`、记录不存在或 `transcript_path` 缺失时不显示 effort。
+* `bash ~/.qoder/statusline-fmt-check.sh` 输出包含 `ALL MATCH`。
 * `python3 <dev-kit-root>/scripts/host_agents.py check --host qoder` 返回 `disk_ready=true`。
 * `qoder agents list` 发现四个原生角色且未标记 shadowed；`qoder skills list` 中共享技能的 Location 位于 `~/.agents/skills`。
 * 新会话中四个角色实际可派发、身份注入生效。磁盘与列表检查不等同于真实派发或运行型号证据。
