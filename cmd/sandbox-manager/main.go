@@ -200,7 +200,7 @@ func main() {
 			" or the corresponding key of the Secret named by --secret-config) and the HMAC key-hash pepper (env "+
 			E2BKeyHashPepperSecretKey+" or the corresponding key of that Secret) are required; secret mode does not use either.")
 	pflag.BoolVar(&e2bKeyStorageDisableAutoMigrate, "e2b-key-storage-disable-schema-auto-update", false,
-		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team bootstrap still runs")
+		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team bootstrap still runs, and a configured admin key is still created or rotated")
 	pflag.StringVar(&quotaRedisAddr, "quota-redis-addr", "", "Redis address for sandbox-manager quota enforcement. Empty disables enforcement and fails open.")
 	pflag.IntVar(&quotaRedisDB, "quota-redis-db", 0, "Redis DB for sandbox-manager quota enforcement.")
 	pflag.DurationVar(&quotaRedisOperationTimeout, "quota-redis-operation-timeout", consts.DefaultQuotaRedisOperationTimeout, "Per-operation timeout for Redis quota commands.")

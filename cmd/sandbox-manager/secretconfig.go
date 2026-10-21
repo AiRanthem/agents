@@ -30,7 +30,10 @@ import (
 
 // secretConfig holds the five secret values loaded from --secret-config.
 // It does not validate them against auth or key-storage mode; the caller overlays
-// these onto the corresponding process settings.
+// these onto the corresponding process settings. Emptiness of the MySQL DSN and
+// HMAC pepper against key-storage mode is checked later by keys.Config.validate
+// when key storage is constructed. An empty admin key is allowed and skips
+// creating and rotating the canonical admin key.
 type secretConfig struct {
 	AdminKey      string
 	KeyStorageDSN string
