@@ -14,7 +14,7 @@ documents:
 design:
   file: spec.md
   version: 5
-  state: draft
+  state: review-pending
   author_session: 3387366e-d695-4926-9dea-fc31e52a5491
 repository: agents
 cleanup: pending
