@@ -1,7 +1,7 @@
 owner:
-  session: ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e
-  token: 13da6c45fbf9e7cb54969d6fddc3f8e219d6dce7123c95b111b75e83e847af75
   machine: Sophon-1A.local
+  session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
+  token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
 development:
   repository: agents
   worktree: worktrees/1-e2b-compatibility
@@ -891,6 +891,21 @@ workflow:
       authorization: null
     basis_review: 96344c83b286eb313d760a9349ea99a4
     basis_sha256: 85825846bc83b54cb7e387a6cfb98acc1b3bc5da169771e2bef3e32b6d9f22d8
+  autonomy: {}
+  control_transfers:
+    f0e3c2779776e81ffb7a287218624212:
+      id: f0e3c2779776e81ffb7a287218624212
+      source: 会话 e933eec0-f2b0-46e5-8b79-c2eef79d1b20：用户要求同步设计文档并按已确认的修复计划继续实施本项
+      from:
+        session: ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e
+        token: 13da6c45fbf9e7cb54969d6fddc3f8e219d6dce7123c95b111b75e83e847af75
+        machine: Sophon-1A.local
+      to:
+        machine: Sophon-1A.local
+        session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
+        token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
+      coordinator: null
+      created_at: '2026-10-21T08:42:51.606000+00:00'
 design:
   approval:
     requirement_sha256: 3123f4c399576e7c3a6744af42127014c329541e1c4c32e44c63cd7e1506d656
