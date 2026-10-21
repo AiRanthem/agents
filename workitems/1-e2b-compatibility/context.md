@@ -6,7 +6,7 @@
 
 用户要求解决 #1083、#1084、#1085，并在必要性讨论后确认三项均需修复。此后用户逐项确认了扩展范围：Pause 禁止显式 memory；Snapshot 的 memory 映射与持久化内容头优先；本版本支持命名快照、同名替换与按 name 过滤。2026-10-21，用户要求同步设计文档并按计划实施，把替换语义定为“先建、成功后按最新者收敛”。
 
-2026-10-22，独立实现评审（multi-agent，会话 `3387366e-d695-4926-9dea-fc31e52a5491`）判定实现与 v4 文本冲突：别名收敛按 owner 作用域执行，而 v4 要求 team 作用域。用户裁决采用 **owner 作用域并修订契约**；同时确认 `template` 筛选以中性 Infra 的 `GetTemplate()` 为准、不在 API 层叠加池名匹配，SandboxSet `spec.templateRef` 造成的模板身份不一致判定为 SandboxSet 侧缺陷并另提上游 Issue，由快照恢复的 Sandbox 的模板身份记录为已接受限制。
+2026-10-22，独立实现评审（multi-agent，会话 `3387366e-d695-4926-9dea-fc31e52a5491`）判定实现与 v4 文本冲突：别名收敛按 owner 作用域执行，而 v4 要求 team 作用域。用户裁决采用 **owner 作用域并修订契约**；同时确认 `template` 筛选以中性 Infra 的 `GetTemplate()` 为准、不在 API 层叠加池名匹配，SandboxSet `spec.templateRef` 造成的模板身份不一致判定为 SandboxSet 侧缺陷并已提上游 Issue #1102，由快照恢复的 Sandbox 的模板身份记录为已接受限制。
 
 当前合同为 `spec.md` v5（sha256 `773c6bb3c5a55db6415cdcecab7f7ca65a3f77aeb470ca1fdab5c69bc3d430bf`）与 `requirement.md`（sha256 `675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0`），批准来源会话 `3387366e-d695-4926-9dea-fc31e52a5491`，程序记录 `approval: current`。v4 及更早的批准与独立评审报告保留在 `records/`，其合同绑定已被 v5 取代。
 
@@ -29,7 +29,7 @@
 - `design-review` 当前 eligible（approval 已 current），需要未实质编写 v5 的独立会话执行。
 - `development-start` 仍被“独立设计评审”门禁阻塞。
 - 未提交、未推送、未创建 PR、未关闭 Issue；项目文档发布不授权上述外部动作。
-- 用户已另行授权向上游 `openkruise/agents` 提交 SandboxSet `spec.templateRef` 模板身份与 E2B TemplateID 不一致的 Issue；该授权不覆盖源码提交、PR 或关闭既有 Issue。
+- 已按用户授权向上游 `openkruise/agents` 提交 SandboxSet `spec.templateRef` 模板身份与 E2B TemplateID 不一致的 Issue：https://github.com/openkruise/agents/issues/1102（bug 标签，核对基线 `master@fd2bea719`）；该授权仅覆盖创建该 Issue，不覆盖源码提交、PR 或关闭既有 Issue。
 - 已知残余：同一 owner 的并发同名创建在多副本或 informer 滞后下可能残留重复对象，由后续同名创建清理；跨 owner 同名共存是契约预期；较早返回的 `snapshotID` 可能被较新请求删除。`CheckpointInfo.CreationTimestamp` 为固定宽度 UTC 纳秒串，存量对象缺失 annotation 时降级为秒级精度。
 
 ## 主要来源
