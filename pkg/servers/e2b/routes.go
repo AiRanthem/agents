@@ -147,10 +147,10 @@ func (sc *Controller) CheckApiKey(ctx context.Context, r *http.Request) (context
 	if sc.keys == nil {
 		user = AnonymousUser
 	} else {
-		// There's no such an existing key that can be decoded in the world,
-		// so it's unnecessary to fallback to the original api-key. Check raw api-key only.
 		rawAPIKey := keys.ToStoredRawAPIKey(apiKey)
-		user, ok = sc.keys.LoadByKey(ctx, rawAPIKey)
+		if rawAPIKey != "" {
+			user, ok = sc.keys.LoadByKey(ctx, rawAPIKey)
+		}
 		if !ok {
 			middleWareLog.V(utils.DebugLogLevel).Info("failed to load key by API-KEY")
 			return ctx, &web.ApiError{

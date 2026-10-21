@@ -17,6 +17,9 @@ explicitly says otherwise.
   closed when safe invalidation cannot be determined.
 - Never delete the well-known admin key. Team cleanup must never remove the
   admin team. The well-known admin key belongs to the admin team.
+- An empty configured admin key skips bootstrap and rotation and preserves
+  existing entries. Writers must never create or rotate an admin key to empty
+  material.
 - The well-known admin key has no quota; do not persist one.
 - Storage backends use the API layer's canonical team identity. Team-scoped
   listing must not regress to creator-scoped behavior.

@@ -30,8 +30,7 @@ import (
 
 // secretConfig holds the five secret values loaded from --secret-config.
 // It does not validate them against auth or key-storage mode; the caller overlays
-// these onto the corresponding process settings. Emptiness against auth and
-// key-storage mode is checked later by keys.Config.validate when key storage is constructed.
+// these onto the corresponding process settings.
 type secretConfig struct {
 	AdminKey      string
 	KeyStorageDSN string

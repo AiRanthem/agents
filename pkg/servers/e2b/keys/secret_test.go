@@ -123,11 +123,16 @@ func newTestScheme(t *testing.T) *runtime.Scheme {
 
 func newSecretStorageForTest(t *testing.T, data map[string][]byte) (*secretKeyStorage, client.Client) {
 	t.Helper()
+	return newSecretStorageForTestWithKey(t, "admin-key", data)
+}
+
+func newSecretStorageForTestWithKey(t *testing.T, adminKey string, data map[string][]byte) (*secretKeyStorage, client.Client) {
+	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: KeySecretName, Namespace: "default"},
 		Data:       data,
 	}).Build()
-	return NewSecretKeyStorage(c, c, nil, "default", "admin-key").(*secretKeyStorage), c
+	return NewSecretKeyStorage(c, c, nil, "default", adminKey).(*secretKeyStorage), c
 }
 
 func getSecretForTest(t *testing.T, c client.Client) *corev1.Secret {
@@ -243,6 +248,14 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 			expectError: "not found",
 		},
 		{
+			name: "empty configured admin key still requires the key store secret",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				c := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
+				return NewSecretKeyStorage(c, c, nil, "default", "").(*secretKeyStorage), c
+			},
+			expectError: "not found",
+		},
+		{
 			name: "configured admin key is rotated",
 			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
 				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "old-admin-key", Name: "admin"}
@@ -341,6 +354,77 @@ func TestSecretKeyStorage_Init(t *testing.T) {
 				var admin models.CreatedTeamAPIKey
 				require.NoError(t, json.Unmarshal(bytes, &admin))
 				require.Equal(t, models.AdminTeam(), admin.Team)
+			},
+		},
+		{
+			name: "empty configured admin key leaves existing entry bytes unchanged",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "old-admin-key", Name: "admin", Team: models.AdminTeam()}
+				raw, err := json.Marshal(admin)
+				require.NoError(t, err)
+				return newSecretStorageForTestWithKey(t, "", map[string][]byte{
+					AdminKeyID.String(): raw,
+				})
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "old-admin-key", Name: "admin", Team: models.AdminTeam()}
+				expected, err := json.Marshal(admin)
+				require.NoError(t, err)
+				secret := getSecretForTest(t, c)
+				require.Equal(t, expected, secret.Data[AdminKeyID.String()])
+				loaded, found := storage.LoadByKey(context.Background(), "old-admin-key")
+				require.True(t, found)
+				require.Equal(t, "old-admin-key", loaded.Key)
+				_, foundEmpty := storage.LoadByKey(context.Background(), "")
+				assert.False(t, foundEmpty)
+			},
+		},
+		{
+			name: "empty configured admin key does not create one and keeps other keys",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				otherID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+				other := &models.CreatedTeamAPIKey{ID: otherID, Key: "tenant-key", Name: "tenant", Team: models.AdminTeam()}
+				raw, err := json.Marshal(other)
+				require.NoError(t, err)
+				return newSecretStorageForTestWithKey(t, "", map[string][]byte{
+					otherID.String(): raw,
+				})
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				otherID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+				other := &models.CreatedTeamAPIKey{ID: otherID, Key: "tenant-key", Name: "tenant", Team: models.AdminTeam()}
+				expected, err := json.Marshal(other)
+				require.NoError(t, err)
+				secret := getSecretForTest(t, c)
+				_, hasAdmin := secret.Data[AdminKeyID.String()]
+				assert.False(t, hasAdmin)
+				require.Equal(t, expected, secret.Data[otherID.String()])
+				loaded, found := storage.LoadByKey(context.Background(), "tenant-key")
+				require.True(t, found)
+				require.Equal(t, otherID, loaded.ID)
+				_, foundEmpty := storage.LoadByKey(context.Background(), "")
+				assert.False(t, foundEmpty)
+			},
+		},
+		{
+			name: "empty configured admin key keeps an already empty stored admin key",
+			prepare: func(t *testing.T) (*secretKeyStorage, client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "", Name: "admin", Team: models.AdminTeam()}
+				raw, err := json.Marshal(admin)
+				require.NoError(t, err)
+				return newSecretStorageForTestWithKey(t, "", map[string][]byte{
+					AdminKeyID.String(): raw,
+				})
+			},
+			assertion: func(t *testing.T, storage *secretKeyStorage, c client.Client) {
+				admin := &models.CreatedTeamAPIKey{ID: AdminKeyID, Key: "", Name: "admin", Team: models.AdminTeam()}
+				expected, err := json.Marshal(admin)
+				require.NoError(t, err)
+				secret := getSecretForTest(t, c)
+				require.Equal(t, expected, secret.Data[AdminKeyID.String()])
+				loaded, found := storage.LoadByKey(context.Background(), "")
+				require.True(t, found)
+				require.Equal(t, AdminKeyID, loaded.ID)
 			},
 		},
 		{
