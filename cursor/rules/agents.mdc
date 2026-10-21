@@ -5,7 +5,9 @@ alwaysApply: true
 
 # Delegation trigger
 
-For ordinary main-agent work, an investigation or bounded checkable task starts with a `composer` dispatch. Omit the Task `model` parameter. Investigating behavior, tracing callers, comparing evidence, and checking consistency across components match this trigger. Read a file or symbol directly only when the user already named that exact path or symbol. Do not search first to decide whether the assignment matches.
+For ordinary main-agent work, follow the session Task tool's own instructions for whether to dispatch and which subagent type to use. A narrow or specific question, a named file or symbol, a search inside a few files, a specific definition, or a single- or few-step check stays on the main agent and uses Read, Glob, or Grep. Dispatch for a complex multi-step investigation, broad codebase exploration, or parallel independent searches. Use `explore` for broad search and structure questions, and include the thoroughness level Task requests. Use `generalPurpose` for complex research and multi-step execution. Do not hand the entire user query to a subagent and return its answer unchanged.
+
+On a new dispatch, set the Task `model` parameter to `composer-2.5`. When the user names another model from that session's allowed list for the dispatch, use that slug. On resume, omit `model`.
 
 # Response
 
@@ -31,13 +33,11 @@ For ordinary main-agent work, an investigation or bounded checkable task starts 
 
 # Subagent Delegation
 
-The delegation trigger above names when to dispatch `composer`. Select that subagent type and omit the Task `model` parameter. Send independent matching assignments together in one turn. A file or symbol the user already named, and evidence already in context, stays on the main agent. Code writing, material ambiguity, design tradeoffs, and consequential correctness or security judgments stay on the main agent. Give one `composer` assignment the whole related investigation. Continue a suitable existing executor before starting another for the same investigation.
+Send the independent dispatches Task says can run together in one turn. Continue the same investigation with `resume` before starting another executor. When dispatching or reassigning, report the task, subagent type, and the model parameter sent. Do not inspect or verify the subagent's runtime settings.
 
-When dispatching or reassigning a subagent, report its task and subagent type. Do not inspect or verify the subagent's runtime settings.
+The main agent retains the user's goal, overall direction, conflict resolution, integration, and final synthesis. An explicit user choice of role or model applies to that dispatch. User-designated roles and required independent reviews still apply.
 
-When acting as the main agent, retain ownership of the user's goal, overall direction, consequential decisions, conflict resolution, integration, and final synthesis. Subagents stay within their assignment and delegate further only when explicitly authorized. An explicit user choice of role or model applies to that dispatch. User-designated roles and required independent reviews still apply.
-
-Give each subagent the intended result, scope and target version, constraints, acceptance criteria, evidence locations and remaining gaps. Use a fresh context where supported; do not copy the whole session or routing policy. Load only applicable role/mode instructions. Inputs already read in the current context need no reread while unchanged; preserve mandatory instruction reloads, complete contracts and necessary primary-source inspection. Summaries index original inputs rather than replace them. A missing fact, permission, or tool stays with the main agent. If the result is insufficient, preserve the valid part and finish the remainder directly. If the `composer` subagent is unavailable, report that and keep the work on the main agent.
+Give each subagent the intended result, scope and target version, constraints, acceptance criteria, evidence locations and remaining gaps. Use a fresh context where supported; do not copy this routing rule or the whole session into the subagent. The subagent follows its own Task instructions, including any further delegation those instructions allow. Load only applicable role/mode instructions. Inputs already read in the current context need no reread while unchanged; preserve mandatory instruction reloads, complete contracts and necessary primary-source inspection. Summaries index original inputs rather than replace them. A missing fact, permission, or tool stays with the main agent. If the result is insufficient, preserve the valid part and finish the remainder directly. If the selected type is absent from the session's subagent types, or `composer-2.5` is required and absent from the session's allowed model slugs, report that and keep the affected work on the main agent. Do not substitute another type or slug.
 
 Give each concrete check one execution owner in the task tree. Share its target, command/cwd, relevant environment, status (`running`, `passed`, `failed`, `stale`) and accessible raw output. Wait for a running owner's result by default. Reuse completed results after checking scope, inputs, exit status and logs; add checks for an uncovered risk, invalidated result or inaccessible evidence, not merely to make verification independent. After a fix, invalidate affected scope/inputs and recheck narrowly; a whole-tree fingerprint change alone does not invalidate every result.
 
