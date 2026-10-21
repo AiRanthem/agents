@@ -4,24 +4,24 @@
 
 ## 当前合同与批准
 
-用户要求解决 #1083、#1084、#1085，并在必要性讨论后确认三项均需修复。此后用户逐项确认了扩展范围：Pause 禁止显式 memory；Snapshot 的 memory 映射与持久化内容头优先；本版本支持命名快照、同名替换与按 name 过滤。2026-10-21，用户要求同步设计文档并按计划实施，计划包含“同名快照改为创建成功后再删除旧快照”和“Pause 拒绝尾随内容”。
+用户要求解决 #1083、#1084、#1085，并在必要性讨论后确认三项均需修复。此后用户逐项确认了扩展范围：Pause 禁止显式 memory；Snapshot 的 memory 映射与持久化内容头优先；本版本支持命名快照、同名替换与按 name 过滤。2026-10-21，用户要求同步设计文档并按计划实施，计划包含“同名快照改为创建成功后再删除旧快照”和“Pause 拒绝尾随内容”；随后指出“先查后建”在并发同名创建下仍会泄漏，要求改为创建成功后再列举并排除刚创建的对象，据此把替换语义定为“先建、成功后按最新者收敛”。
 
-当前合同为 `spec.md` v3 与同步后的 `requirement.md`，批准来源会话 `e933eec0-f2b0-46e5-8b79-c2eef79d1b20`，程序记录 `approval: current`。原 v1/v2 批准与独立评审报告保留在 `records/`，但其合同绑定已被 v3 取代。
+当前合同为 `spec.md` v4 与同步后的 `requirement.md`，批准来源会话 `e933eec0-f2b0-46e5-8b79-c2eef79d1b20`，程序记录 `approval: current`。原 v1/v2/v3 批准与独立评审报告保留在 `records/`，但其合同绑定已被 v4 取代。
 
 ## 当前实现状态
 
 源码仓库 `openkruise/agents`，工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`，基线 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
 
-工作树内已暂存 20 个文件的改动，覆盖：列表保留参数与方向感知分页；Pause 可选 body 与 memory 拒绝；Snapshot memory 映射、别名 label、同名替换、name 过滤与数组型 `names`；以及本轮的两项修复——替换顺序改为“先查、再建、成功后才删”，Pause 请求体拒绝首个 JSON 对象之后的尾随内容。
+工作树内共 20 个文件的改动（本轮修复后需重新暂存），覆盖：列表保留参数与方向感知分页；Pause 可选 body 与 memory 拒绝；Snapshot memory 映射、别名 label、同名替换、name 过滤与数组型 `names`；以及本轮修复——替换改为“先建、成功后按最新者收敛”（最新者删除其余对象，被取代者删除自身并返回最新者 ID），Infra 的 `CreationTimestamp` 改为固定宽度 UTC 纳秒串，Pause 请求体拒绝首个 JSON 对象之后的尾随内容。
 
-本轮验证：`gofmt` 无差异；`go vet ./pkg/servers/e2b/` 通过；`go test ./pkg/servers/e2b/... -count=1` 全部通过，包含新增的“创建失败保留旧快照”“创建期间旧快照仍存在”“尾随内容被拒绝”等用例。未运行 E2E。
+本轮验证：`gofmt` 无差异；`go vet ./pkg/servers/e2b/ ./pkg/sandbox-manager/infra/sandboxcr/` 通过；`go test ./pkg/servers/e2b/... ./pkg/sandbox-manager/infra/sandboxcr/ -count=1` 全部通过，包含新增的“创建失败保留旧快照”“创建期间旧快照仍存在”“多个旧别名持有者被清理”“被更新者让位并返回最新 ID”“尾随内容被拒绝”等用例。未运行 E2E。
 
 ## 门禁与后续
 
-- `design-review` 当前 eligible；需要未实质编写 v3 的独立会话执行。
-- `development-start` 仍被“当前用户批准与独立设计评审”门禁阻塞，因为 v3 是实质合同变更，原 v2 独立评审覆盖不能直接复用。
+- `design-review` 当前 eligible；需要未实质编写 v4 的独立会话执行。
+- `development-start` 仍被“当前用户批准与独立设计评审”门禁阻塞，因为 v4 是实质合同变更，原 v2 独立评审覆盖不能直接复用。
 - 未提交、未推送、未创建 PR、未关闭 Issue。项目文档发布不授权上述外部动作。
-- 已知残余：替换窗口内同别名可能短暂重复；`CheckpointInfo.CreationTimestamp` 为秒精度，同秒内新旧对象次序由名称决定，窗口结束后只剩新对象。
+- 已知残余：收敛完成前同别名可能短暂重复；并发同名创建中较早请求已返回的 `snapshotID` 可能被较新请求删除；列举或删除失败只记录日志，残留由后续替换清理。`CheckpointInfo.CreationTimestamp` 已改为固定宽度 UTC 纳秒串，排序不再受秒精度限制。
 
 ## 主要来源
 
