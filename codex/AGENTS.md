@@ -19,3 +19,8 @@
 * Add compatibility logic only for an established need. Cite the approved contract or relevant history, release, schema, or runtime evidence; distinguish code history from observed production data.
 * Preserve correctness, trust-boundary validation, security, data protection, accessibility, real-hardware calibration, and explicit requirements. Verify non-trivial logic with the smallest meaningful runnable check; trivial reversible edits need no new tests.
 * Document a deliberate shortcut's known ceiling and upgrade path in a nearby `known-limit:` comment.
+
+# Review context reuse
+
+* When an independent review starts from shared original material and a neutral review plan, prefer native full-context forks (`fork_turns: "all"`) for eligible same-model/same-effort reviewers. Dispatch the initial review tasks before forming or importing review findings, and append each reviewer's scope without recopying inherited originals.
+* Preserve user model and role choices, permissions and review independence. Use clean dispatch when inherited history contains the target's authorship or prior judgments, or full-context reuse is unavailable. Record any fallback and claim cache savings only from actual usage evidence.

@@ -7,9 +7,11 @@ description: Independently assess an implementation against its approved contrac
 
 Assess complete, correct and maintainable behavior against the confirmed design and original requirements. Code and tests are evidence; an unsafe design does not excuse unsafe implementation.
 
-## Resolve review mode first
+## Prepare, review, then synthesize
 
-Apply the [shared mode contract](references/review-standard.md#resolve-review-mode-first) before selecting context, collecting review evidence or dispatching reviewers: `advance-project` fixes `single-agent` on every host; direct user invocation honors an existing choice or asks once whether to use `multi-agent`. Pass the resolved mode to delegated reviewers and retain it for re-review. Then read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and the complete [review standard](references/review-standard.md).
+Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and the complete [review standard](references/review-standard.md). First gather the shared original context and prepare a review plan covering the relevant dimensions without forming code findings or a verdict. Then apply the [mode contract](references/review-standard.md#resolve-review-mode): honor the user's choice, default to in-place `single-agent` when unspecified, and use `single-agent` for `advance-project`.
+
+In `multi-agent`, dispatch multiple read-only reviewers by the plan from eligible shared original context before assessing code yourself or sharing reviewer conclusions. After the assigned reviews finish, personally inspect critical changed behavior and surrounding code, assess test oracles and omissions, validate candidates and synthesize the report, even when reviewers return no findings. In `single-agent`, perform the planned assessment in place and report. Preserve the resolved mode for re-review.
 
 ## Select the operating context
 
