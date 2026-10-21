@@ -16,7 +16,7 @@
 
 ## 自主项目推进
 
-[advance-project](advance-project/SKILL.md) 是共享主控入口，安装时同其他 skill 一样补齐独立用户级软链接。阶段技能保留各自质量要求并按实际模式加载 references。仅安装技能链接不代表宿主已具备固定角色配置或委派能力；自主入口支持 [Codex](../codex/AUTONOMY.md)、[Cursor](../cursor/AUTONOMY.md) 和 [Qoder](../qoder/AUTONOMY.md)，按当前宿主适配安装并检查真实固定角色配置，不得静默选择其他模型继续。Qoder 在用户级直接发现 `~/.agents/skills` 的共享技能链接，无需重复安装。
+[advance-project](advance-project/SKILL.md) 是共享主控入口，安装时同其他 skill 一样补齐独立用户级软链接。阶段技能保留各自质量要求并按实际模式加载 references。仅安装技能链接不代表宿主已具备固定角色配置或委派能力；自主入口支持 [Codex](../codex/AUTONOMY.md) 和 [Qoder](../qoder/AUTONOMY.md)，按当前宿主适配安装并检查真实固定角色配置，不得静默选择其他模型继续。Qoder 在用户级直接发现 `~/.agents/skills` 的共享技能链接，无需重复安装。
 
 ## 第三方技能接管
 

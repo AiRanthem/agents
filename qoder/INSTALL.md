@@ -16,9 +16,9 @@
 6. 读取 `~/.qoder/settings.json`，在 `hooks.SessionStart` 数组合并一个 handler：`{"hooks": [{"type": "command", "command": "python3 ~/.qoder/hooks/session-identity.py", "timeout": 10}]}`。以 command 包含 `session-identity.py` 识别本仓库 handler：已存在则原位更新，不存在则追加到 `SessionStart` 数组末尾。保留其他顶层键、其他事件、同组无关 handler 及其顺序。写入前用 JSON 解析器验证完整结果。
 7. 将 `statusline.sh` 与 `statusline-fmt-check.sh` 安装为 `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的绝对软链接，保留 `~/.qoder` 中的无关文件。目标已正确链接时不修改；目标是内容已由本目录完整收录的普通文件时替换为软链接；目标包含仓库尚未收录的内容时，先展示准确差异并取得用户决定。确认本目录两个脚本可执行。
 8. 读取 `~/.qoder/settings.json` 与本目录的 `settings-statusline.json`，将后者作为 `statusLine` 键写入目标并覆盖同名键。以 `statusLine.command` 引用 `~/.qoder/statusline.sh` 识别本仓库的 status line：不存在时写入 `statusLine`，存在时更新为 `settings-statusline.json` 的完整内容。保留目标中仓库未列出的其他键。写入前用 JSON 解析器验证完整结果。
-9. 读取 `~/.qoder/settings.json` 的 `agents.overrides`。收录角色的 `model`、`effort` 与 `maxTurns` 以角色 frontmatter 为唯一事实来源；override 优先级高于 frontmatter，因此本步只核对不写入。对每个收录角色，其 override 的 `modelConfig.model` 或 `runConfig.maxTurns` 与 frontmatter 声明不一致时，展示准确差异并取得用户决定，不静默改写。保留 `enabled`、其他 override 字段，以及仓库未收录角色（如个人 agents）的整个条目。
+9. 读取 `~/.qoder/settings.json` 的 `agents.overrides`。收录角色的 `model`、`effort` 与现有显式 `maxTurns` 以角色 frontmatter 为唯一事实来源；override 优先级更高，因此本步只核对不写入。运行 `python3 <dev-kit-root>/qoder/host.py check` 核对其报告中的身份 handler 和 override 缺口；`modelConfig.model`（与模板相同的裸模型 ID 也匹配）、`runConfig.maxTurns` 或其他已支持的模型配置覆盖与模板冲突时，展示准确差异并取得用户决定，不静默改写。`enabled: false` 或实际工具限制使所需角色不可用时报告能力缺口，保留这些设置；不因 override 列出 Agent 就额外拒绝配置。保留其他字段和未收录角色的整个条目。当前项目、local 与 `--settings` 可能覆盖用户设置，按实际运行来源另行核对；磁盘 helper 的覆盖范围以其报告为准。
 10. 清理 `~/.qoder` 顶层：删除解析目标位于本目录、但文件名不属于本目录当前收录 status line 文件的软链接；删除文件名匹配 `statusline*.sh`、不属于本目录当前收录名称、且内容已由本目录 `statusline.sh` 或 `statusline-fmt-check.sh` 完整收录的普通文件。无法确认内容归属时展示差异并取得用户决定。保留其余无关文件和软链接。
-11. 运行 `qoder --list-models`，确认 `Qwen3.8-Max` 与 `DeepSeek-Flash` 当前仍可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)确认二者仍分别支持 `xhigh` 与 `max` effort。不支持时报告具体缺口，不换用其他模型或档位。
+11. 运行 `qoder --list-models`，确认固定模型 ID `qmodel_38max`（Qwen3.8-Max）与 `dfmodel`（DeepSeek-Flash）当前可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)和当前参数面板确认二者分别支持 `xhigh` 与 `max` effort。显示名变化不构成自行换型授权；不支持时报告具体缺口，不换用其他模型或档位。
 
 ## 更新
 
@@ -32,43 +32,68 @@
 * `~/.qoder/agents` 中没有指向本仓库 `qoder/agents/` 的遗留软链接；无关条目未被改动。
 * `~/.qoder/hooks/session-identity.py` 链接目标是本目录的 `hooks/session-identity.py`。
 * `~/.qoder/settings.json` 可被 JSON 解析，保留全部无关配置，且 `hooks.SessionStart` 包含身份 handler。
-* `echo '{"hook_event_name":"SessionStart","session_id":"probe"}' | python3 ~/.qoder/hooks/session-identity.py` 输出的 JSON 含 `additionalContext` 且包含 `probe`；stdin 非法 JSON 或缺失 `session_id` 时非零退出且无输出。
+* `echo '{"hook_event_name":"SessionStart","session_id":"probe"}' | python3 ~/.qoder/hooks/session-identity.py` 输出的 JSON 中 `hookSpecificOutput.hookEventName` 为 `SessionStart`，`additionalContext` 指明 `PROJECT_SESSION_ID` 与 `probe`；stdin 非法 JSON、非对象或缺失有效 `session_id` 时非零退出且无输出。
 * `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的软链接目标分别是本目录的对应文件，且本目录两个脚本可执行。
 * `~/.qoder/settings.json` 的 `statusLine` 等于本目录 `settings-statusline.json`。
-* `~/.qoder/settings.json` 的 `agents.overrides` 中，本目录收录角色的 `modelConfig.model` 与 `runConfig.maxTurns` 等于该角色 frontmatter 声明；未收录角色的条目未被改动。
+* 本目录收录角色的有效 override 不与 frontmatter 的固定模型、effort 或 `maxTurns` 冲突，所需角色未被禁用；核对结果保留来源与具体差异，未收录角色和无关字段未被改动。
 * `~/.qoder` 顶层没有文件名匹配 `statusline*.sh`、且不属于本目录当前收录名称的普通文件或软链接。
 * `echo '{"model":{"display_name":"Qwen3.8-Max"},"context_window":{"context_window_size":400000,"used_percentage":25}}' | bash ~/.qoder/statusline.sh` 标准输出非空，且首段包含 `Qwen3.8-Max`。
 * 给定含 `transcript_path` 的 payload，status line 显示的 effort 与 context window 等于该 transcript 中最后一条 `runtime-config` 记录的 `reasoningEffort` 与 `contextWindow`，而非 `~/.qoder/settings.json` 的 `.model.preferences`；该记录 `generation.reasoning.enabled` 为 `false`、记录不存在或 `transcript_path` 缺失时不显示 effort。
 * `bash ~/.qoder/statusline-fmt-check.sh` 输出包含 `ALL MATCH`。
-* `python3 <dev-kit-root>/scripts/host_agents.py check --host qoder` 返回 `disk_ready=true`。
-* `qoder agents list` 发现四个原生角色且未标记 shadowed；`qoder skills list` 中共享技能的 Location 位于 `~/.agents/skills`。
-* 新会话中四个角色实际可派发、身份注入生效。磁盘与列表检查不等同于真实派发或运行型号证据。
+* `python3 <dev-kit-root>/qoder/host.py check` 返回 `disk_ready=true`；共享入口 `scripts/host_agents.py check --host qoder` 保持可用。仅据报告确认磁盘模板、技能入口、身份 handler 和 override 校验，不宣称真实派发通过。
+* `qoder agents list` 发现四个原生角色且未标记 shadowed；`qoder skills list` 中共享技能的 Location 位于 `~/.agents/skills`。阶段会话未列出 skill 时，仍可用文件工具完整读取其已授权物理安装入口；实际禁用或拒绝不能绕过。
+* 新主控会话收到 SessionStart 注入的准确 `PROJECT_SESSION_ID`，每条项目命令在同一命令导出它并显式传入 `--host qoder`；恢复/压缩后仍使用该会话身份。Qoder 不读继承的 `CODEX_THREAD_ID`，Codex 保留原身份优先级；该值不是执行者标签或型号证据。
+* 新会话中四个角色实际按表中各阶段派发，使用干净隔离上下文；报告真实工具能力、贡献标签、指定报告和执行结果。当前子代理未暴露 Agent/follow-up 时直接完成阶段，单代理审查无需 quality 后代。真实回执未暴露型号则标记未验证；模板、列表、磁盘或身份检查均不能证明运行型号。
 
 ## 自主推进阶段角色
 
-宿主配置 helper `scripts/host_agents.py` 需要 Python 3.11 或更高版本（使用标准库 `tomllib`）；按当前工作区规定选择满足此要求的解释器。
+Qoder 专用 helper 为 `qoder/host.py`，共享 dispatcher 保留
+`scripts/host_agents.py <command> --host qoder`；需要 Python 3.11 或更高版本，按工作区
+规定选择解释器。Qoder 身份 hook / override 校验仅作用于 Qoder，不改变 Codex 原有行为。
 
 所有 Qoder 使用形态共用 `agents/*.md` 和[自主推进适配](AUTONOMY.md)。原生文件遵循
 [官方 Subagent 格式](https://docs.qoder.com/cli/subagent.md)：Markdown + YAML
-frontmatter，必填 `name`、`description`；四个自主阶段角色同时固定 `model`（`"[显示名](模型 ID)"`
-形式）、`effort` 和 `maxTurns`。`maxTurns` 是正整数，取值大到不构成单次派发的实际轮次上限；
-frontmatter 不接受 `unlimited`。模板不写 `permissionMode`、`isolation`、`tools` 或后代委派规则。
+frontmatter，必填 `name`、`description`；四个角色固定 `model`（`"[显示名](模型 ID)"`
+形式）、`effort`，并保留现有显式高值 `maxTurns`：实现角色为 `9999999`，其余为 `999999`。
+这些仍是有限正整数，frontmatter 不接受 `unlimited`；不另设统一新上限。模板不写
+`permissionMode`、`isolation`、`tools`，继承实际权限，不要求后台运行。
 
-本轮经用户确认，两类审查固定 Qwen3.8-Max / xhigh，实现与修复固定 DeepSeek-Flash / max；
-2026-10-19 按本机 `qoder --list-models`、`/model` 持久化和既有角色文件解析模型 ID 为
-`qmodel_38max` 与 `dfmodel`。官方确认 `effort` 支持 `xhigh` 与 `max` 档位；各模型可用
-档位以官方模型文档为准。若当前环境不支持指定模型或档位，报告具体能力缺失，不降档。
+两类审查固定 Qwen3.8-Max / xhigh，实现与修复固定 DeepSeek-Flash / max；2026-10-19
+按本机模型选择持久化、既有角色与参数面板解析模型 ID 为 `qmodel_38max` 与 `dfmodel`。
+官方 Subagent 文档确认字段格式与 effort 档位；各型号当前可用档位仍须核对模型文档与
+参数面板。不支持固定配置时报告具体缺口，不自行换型或降档。
+
+角色按 AUTONOMY 的映射加载完整已授权 skill：design-review 用 `review-design`，
+design-revision 用 `explore-design`；implementation / baseline / rebase 用 `implement-design`，
+后两者还读取完整 `advance-project/references/predevelopment.md`，只执行绑定的隔离转换。
+未列出 skill 或未暴露 Skill 工具不等于被禁用，可通过文件工具解析物理安装路径并
+读取完整 `SKILL.md` 与适用阶段引用；实际拒绝、禁用与原生 Plan 仍然约束执行。
+
+当前观察到的子代理工具集不含 Agent 或 follow-up 输入工具；一级阶段用干净隔离
+上下文直接完成，不 fork 作者/主控历史，不模拟续接或后代。官方仅在 Agent 实际可用时
+承诺后代派发，不据本次观察宣称所有 Qoder 运行时都禁止它。推进 code-review 选择
+`review-implementation` 的 single-agent 模式，由一名合格独立审查者承担正确性、
+可维护性、安全、验证和风险边界判断；没有强制 quality 后代。关键边界资格或必要
+证据缺口仍阻止 Pass，其他场景遵循共享 skill 的模式边界。
 
 安装后运行：
 
 ```sh
-python3 <dev-kit-root>/scripts/host_agents.py check --host qoder
-python3 <dev-kit-root>/scripts/host_agents.py role --host qoder --name project-implementer
+python3 <dev-kit-root>/qoder/host.py check
+python3 <dev-kit-root>/qoder/host.py role --name project-implementer
 ```
 
-第一条应返回 `disk_ready=true`；第二条返回原生角色完整配置与正文，供 Headless / SDK
-的 `--agents` 注入等显式派发使用。该检查只验证文件与技能入口，不能代替真实发现和
-工具调用。新会话确认四原生角色已加载、无同名遮蔽，并核对执行者保留 Agent 工具，
-使 `review-implementation` 必需的 quality 子代理可以真实运行；无法启动时报告阻塞。
-配置文件不是实际型号证据；只比较真实工具回执或任务卡直接提供的信息，未暴露则标记
-未验证，发现不匹配不得静默接受。
+`check` 应返回 `disk_ready=true`，并保留具体检查来源；`role` 返回可直接交给 Headless /
+SDK `--agents` 的完整注入 JSON，以角色名为键，保留模板的 `description`、`effort`、
+`maxTurns`；将 Markdown `model` 转为裸 ID（`qmodel_38max` / `dfmodel`），并将
+`developer_instructions` 正文映射为官方字段 `prompt`。JSON 注入不解析 Markdown 模型链接。
+项目命令使用 `project.py --host qoder --root <project> COMMAND`；身份来自 SessionStart
+hook 并在同一命令导出 `PROJECT_SESSION_ID`，不能用其他宿主变量代替。返回的项目恢复
+命令保留宿主参数，不改变已有项目 schema 或历史身份，也不能证明执行者或模型身份。
+
+主控提供的 contributor-session 标签必须对应真实贡献执行，记录累积作者和独立
+审查者，不用于存活锁定；宿主未暴露 worker ID 时无需补取。新标签不能洗掉先前
+实质作者归属。新会话仍须验证实际发现、派发、报告与身份注入；配置不是运行型号
+证据，仅比较工具直接暴露的型号，未暴露则标记未验证，已暴露不匹配时不静默接受。
+本次模板维护不自动更新 `~/.qoder/agents` 或 settings；按上方更新流程复制角色，
+核对 hook / override，并 `/agents reload` 或重开会话后才能验证实际加载。

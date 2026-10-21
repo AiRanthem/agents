@@ -81,7 +81,7 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控直接调度所有就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
 
-自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex、Cursor 和 Qoder，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md)、[Cursor 适配](cursor/AUTONOMY.md) 和 [Qoder 适配](qoder/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
+自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex 和 Qoder，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md) 和 [Qoder 适配](qoder/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 

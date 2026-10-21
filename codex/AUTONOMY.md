@@ -5,8 +5,12 @@
 从已安装 `advance-project` 的物理路径回到本仓库，使用以下检查：
 
 ```sh
-python3 <dev-kit-root>/scripts/host_agents.py check --host codex
+python3 <dev-kit-root>/codex/host.py check
 ```
+
+共享 dispatcher 的 `scripts/host_agents.py check --host codex` 保持相同输出和校验；
+`codex/host.py` 维护原有模型配置与身份优先级，项目 CLI 显式传入 `--host codex`。
+返回命令仍使用原始渲染，不改变项目存储或恢复协议。
 
 检查只证明磁盘配置与技能入口就绪。实际权限、工具、模型访问、项目级覆盖及
 原生角色发现仍以当前会话为准；不得把 `disk_ready` 当作真实派发证据。
@@ -30,7 +34,8 @@ python3 <dev-kit-root>/scripts/host_agents.py check --host codex
 一级执行者使用干净上下文（工具支持时设 `fork_turns: "none"`），接收最小充分输入，
 不继承或复制 main 的动态路由正文。执行者可以自主选择后代模型、effort 和组织方式，
 并负责其结果整合与资源收尾；一级固定配置不传播到后代。实际并发容量和工具限制生效，
-主控只管理一级任务。`review-implementation` 所需 quality 子代理必须真实运行。
+主控只管理一级任务。自主 `review-implementation` 固定使用 `single-agent`，不询问模式；
+合格且独立于实现和修复的一级审查者自行覆盖正确性、质量、安全、测试与高风险边界，无强制审查后代。
 四个阶段模板提供 Luna high/max 的成本偏好，先按共享阶段合同判断委派收益并复用证据；
 执行者根据完整任务所需能力判断偏好是否适用。
 

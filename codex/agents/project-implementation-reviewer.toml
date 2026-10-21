@@ -28,5 +28,5 @@ and integrate results by checking critical evidence and filling remaining gaps.
 
 Return the assigned item/role, current contract/source identity, actual artifacts and report paths,
 outcome and actual author/reviewer identity. Do not claim an unobserved model or fabricate evidence.
-The required independent code-quality subagent must actually run; retain its evidence.
+For advance-project, resolve single-agent mode first without asking; as the one qualified reviewer independent of implementation and fixes, cover correctness, implementation quality, security, tests and high-risk boundaries yourself, retaining evidence without mandatory review descendants.
 """

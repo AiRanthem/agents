@@ -1,5 +1,15 @@
 # Implementation review standard
 
+## Resolve review mode first
+
+Resolve the mode before review evidence collection, assessment or reviewer dispatch:
+
+- **Autonomous `advance-project`:** Use `single-agent` for every code-review stage and re-review on every host. The stage assignment resolves the choice; do not ask for mode confirmation.
+- **Other invocations:** Honor the explicit `single-agent` or `multi-agent` choice already established for this review. On direct user invocation with no choice, ask once whether to use multi-agent review (`yes` selects `multi-agent`, `no` selects `single-agent`) and wait for the answer. Silence is not a choice; do not repeat the question or silently select a mode.
+- **Delegation and re-review:** Carry the resolved mode in the assignment and preserve it after fixes unless the user explicitly changes it outside autonomous advancement. A delegated reviewer with no mode returns that decision gap to the caller instead of independently asking the user again.
+
+Mode changes organization, not coverage, independence, source permissions, evidence gates or human acceptance. Honor user model preferences and actual host permissions in either mode. If a governing policy conflicts with the resolved mode, report the constraint rather than silently changing mode.
+
 ## Keep source review read-only
 
 - Follow applicable user, repository, and harness instructions. Reuse decisions and authorization already established.
@@ -20,33 +30,37 @@ Inspect changed tests and enough surrounding code to trace callers, ownership, s
 
 An implementer's summary is only an index. It must not determine which requirements or code paths are allowed to be examined. Do not treat “all tests passed” or “no issues” as acceptance evidence without checking scope and provenance.
 
-## Require independence and a dedicated quality pass
+## Require independence and mode-specific coverage
 
-At least one actual review execution must be independent of implementation. A lead in a fresh context that did not implement the change can satisfy this gate. The dedicated quality subagent below can also satisfy it when it is separate from implementation.
+At least one actual review execution must be independent of implementation and fixes. A qualified lead in a fresh context that did not implement or fix the change satisfies this gate. All required reviewers in either mode must remain separate from implementation and fixes.
 
-Before dispatching reviewers, apply [shared-context preparation](../../advance-project/references/delegation-context.md). Read the likely common original contract, conventions, stable diff and critical surrounding code first. An independent review lead may fork this primary-material context before forming findings when the host, model/effort and role boundaries permit; an implementation or authoring session must use clean dispatch. Keep reviewer-specific investigation delegated and conclusions independent.
+- A fresh read-only subagent or a separately executed reviewer session can qualify. Merely asking the implementation conversation to “act as reviewer,” renaming its role, or forking its full history does not.
+- A design author in a fresh session can independently review someone else's implementation, but is not an independent second opinion on its own architectural choices. Report this distinction when relevant.
+- Prefer a different sufficiently capable model family when available and authorized. Same-family fresh review remains valid. Never infer family or model identity from writing style, or claim a switch that tools did not perform.
+- If the current session implemented or fixed the change, obtain an independent acceptance reviewer in the resolved mode before concluding Pass. Without one, report the useful self-check and the missing acceptance gate.
 
-Every review must also dispatch one read-only subagent independent of implementation and dedicated to implementation quality. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code to evaluate the final implementation, through the eligible shared context or clean original inputs. Keep this assignment separate from broad correctness, security, and test review so it focuses on:
+**Single-agent:** One qualified independent reviewer owns the complete assessment of correctness, implementation quality, security, tests and all relevant high-risk boundaries. Perform the quality assessment below yourself. This review contract requires no descendants, quality child or additional independent targeted perspective. Permitted evidence collectors may return facts and check results; they do not replace the reviewer's primary-code inspection, test-oracle judgment or acceptance decision. Missing reviewer qualification, essential coverage or evidence prevents Pass, rather than silently switching modes.
+
+**Multi-agent:** Use a qualified independent lead and dispatch one read-only quality subagent independent of implementation and fixes. Give it the confirmed design, stable target and diff, relevant repository conventions, and enough surrounding code through eligible shared context or clean original inputs. Keep its implementation-quality assignment separate from broad correctness, security and test review. For high-risk boundaries, also obtain at least one additional independent targeted perspective qualified for the critical boundary; the quality child does not replace it. These required executions must actually run. If a required reviewer cannot run, complete useful permitted checks and report Unable to conclude.
+
+Before any permitted delegation, apply [shared-context preparation](../../advance-project/references/delegation-context.md). Read the likely common original contract, conventions, stable diff and critical surrounding code first. An independent review lead may fork this primary-material context before forming findings when the host, model/effort and role boundaries permit; an implementation, fix or authoring session must use clean dispatch. Keep reviewer-specific investigation delegated and conclusions independent.
+
+In either mode, explicitly assess implementation quality:
 
 - whether the behavior has clear responsibilities, readable code, maintainable structure, and suitable reuse of repository or platform capabilities;
 - unnecessary lines, files, branches, abstractions, dependencies, indirection, duplication, and generated churn;
 - naming, control flow, locality, ownership, dependency direction, consistency, and ease of understanding and maintenance; and
 - concrete simplifications supported by the design, callers, or existing repository patterns.
 
-Use line count and changed surface area as evidence for avoidable changes, not numeric targets. Require evidence-backed findings rather than personal style preferences. The acceptance lead must validate each material candidate against the code and contract before reporting it. The quality subagent does not replace an additional high-risk specialist required for another critical boundary. If no qualifying quality subagent can run, complete the remaining review and report Unable to conclude because the required quality gate is missing.
+Use line count and changed surface area as evidence for avoidable changes, not numeric targets. Require evidence-backed findings rather than personal style preferences. The acceptance lead must validate each material candidate against the code and contract before reporting it.
 
-- A fresh read-only subagent or a separately executed reviewer session can qualify. Merely asking the implementation conversation to “act as reviewer,” renaming its role, or forking its full history does not.
-- A design author in a fresh session can independently review someone else's implementation, but is not an independent second opinion on its own architectural choices. Report this distinction when relevant.
-- Prefer a different sufficiently capable model family when available and authorized. Same-family fresh review remains valid. Never infer family or model identity from writing style, or claim a switch that tools did not perform.
-- If the current lead implemented the change, obtain an independent reviewer before concluding Pass. Without one, report the useful self-check and the missing acceptance gate.
+Set review depth by consequence and difficulty without changing the resolved mode:
 
-Set review depth by consequence and difficulty:
+- **Routine:** Apply the selected mode's reviewer and quality coverage requirements unless governing repository rules require more.
+- **Standard:** Add focused verification for a named uncertainty or boundary; in `multi-agent`, add a specialist only when that gap warrants one.
+- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility or release safety require a lead qualified for the critical boundary and explicit boundary and test-oracle assessment. In `single-agent`, that reviewer performs the full assessment; risk alone does not require descendants. In `multi-agent`, retain the quality child and the additional independent targeted perspective. Multiple reviewers do not prove correctness.
 
-- **Routine:** One qualified independent lead plus the dedicated quality subagent is sufficient unless repository rules require more.
-- **Standard:** Use a qualified independent lead and the dedicated quality subagent; add focused verification or a specialist only for a named uncertainty or boundary.
-- **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility, or release safety require the dedicated quality subagent, a lead qualified to assess the critical boundary, and at least one additional independent targeted perspective on that boundary. All required review executions must be separate from implementation. This is a workflow policy, not a claim that multiple models prove correctness.
-
-Outside autonomous project mode, select the lead using existing user model choices and applicable model-routing instructions. In autonomous project mode the coordinator uses its fixed first-level review role. That executor applies its host role's descendant model for the task classes the role names, and selects the model for judgment descendants, including the required quality subagent and any required independent perspective, within actual host permissions. The current lead may continue when qualified and independent; high risk alone does not require a model switch or a new user designation. Escalate only a concrete capability gap or unresolved consequential uncertainty. If a qualified lead or required independent perspective is unavailable, report Unable to conclude while completing useful permitted checks. Honor stricter repository review policies.
+Outside autonomous project mode, select the lead using existing user model choices and applicable model-routing instructions. In autonomous project mode the coordinator uses its fixed first-level review role in `single-agent`. For permitted evidence delegation, follow the host role's task-class model preferences within actual permissions; these do not add review gates. The current lead may continue when qualified and independent; high risk alone does not require a model switch or a new user designation. Escalate only a concrete capability gap or unresolved consequential uncertainty. If a qualified lead or mode-required perspective is unavailable, report Unable to conclude while completing useful permitted checks. Honor stricter repository review policies without silently changing the resolved mode.
 
 Use existing independent evidence when its provenance, contract, coverage and relevant target inputs remain valid. A changed target requires identifying affected coverage, not discarding every result because its whole-tree fingerprint changed. An inaccessible report or vague summary does not satisfy a gate. An already-requested final review is not evidence until it actually runs.
 
@@ -67,7 +81,7 @@ Cover these dimensions at a depth set by the actual boundaries:
 - **Scope:** Match every required rule and non-goal to code and credible evidence. Identify missing, partial, different, or unnecessary behavior, dependencies, abstractions, compatibility promises, and generated churn.
 - **Behavior:** Trace relevant success, rejection, errors, missing data, limits, cancellation, partial failure, recovery, concurrency, security, compatibility, data safety, performance, and operations. Inspect effects on callers, shared state, feature gates, deployment assumptions, and developer workflows.
 - **Tests:** Treat tests as claims, not authority. For important rules, identify a plausible wrong implementation and determine whether a test would detect it. Check reachability, assertions, skipped cases, isolation, nondeterminism, mocks, and unjustified edits to expected behavior. Test success cannot validate an incorrect oracle shared with the implementation.
-- **Implementation quality:** Give simplicity, readability, and maintainability explicit weight after preserving correctness and required boundaries. Assess the complete final diff against its base: identify cumulative patches or artifacts that add no contract or quality value, while judging necessary refactoring by its result rather than its size. Use the dedicated quality pass to identify avoidable code, files, abstractions, indirection, duplication, or inconsistency, and report supported issues when a materially simpler, clearer repository-consistent implementation is available.
+- **Implementation quality:** Give simplicity, readability, and maintainability explicit weight after preserving correctness and required boundaries. Assess the complete final diff against its base: identify cumulative patches or artifacts that add no contract or quality value, while judging necessary refactoring by its result rather than its size. Use the lead's explicit quality assessment in `single-agent` or the dedicated quality child in `multi-agent` to identify avoidable code, files, abstractions, indirection, duplication, or inconsistency, and report supported issues when a materially simpler, clearer repository-consistent implementation is available.
 
 Assign each concrete check one execution owner and share its target, command/cwd, relevant environment, status and raw-output location. Wait for an existing running owner's result by default. Reuse credible completed results after inspecting scope, relevant code/dependency/configuration/environment inputs, exit status and meaningful output. Run fresh checks for uncovered risk, stale results or inaccessible evidence; independence requires your own code and test-oracle judgment, not repeating the same test command. Start narrow and expand only for a concrete gap. A prose assertion without accessible output or reliable execution provenance is not reusable verification.
 
@@ -116,7 +130,7 @@ Then report, combining sections when that improves readability:
 2. **Target and coverage:** exact reviewed state and comparison base; complete, missing, extra, and uncertain rules or boundaries; exclusions.
 3. **Implementation and test assessment:** material simplicity/ownership observations, what verification establishes, and important violations it would miss.
 4. **Verification performed:** actual commands and outcomes, reused evidence and why it remains valid, and blocked checks.
-5. **Independence and remaining gaps:** actual lead/reviewer roles and models when known, qualifications of reused evidence, unresolved assumptions, unexamined areas, and residual uncertainty.
+5. **Mode, independence and remaining gaps:** resolved mode, actual lead/reviewer roles and models when known, mode-specific quality and high-risk coverage, qualifications of reused evidence, unresolved assumptions, unexamined areas, and residual uncertainty.
 6. **Pre-existing warnings, if any:** baseline evidence and impact, explicitly excluded from the acceptance decision and required fixes.
 
-Pass means no acceptance-blocking problem introduced by this change was found within the stated adequate coverage and required gates; pre-existing warnings do not change that result. It does not mean bug-free. A missing essential contract, dedicated quality pass, qualified lead, required independent perspective, stable target, or essential verification prevents Pass. A concrete introduced blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.
+Pass means no acceptance-blocking problem introduced by this change was found within the stated adequate coverage and mode-specific gates; pre-existing warnings do not change that result. It does not mean bug-free. A missing resolved mode, essential contract, qualified independent reviewer, implementation-quality or high-risk coverage, stable target, or essential verification prevents Pass. In `multi-agent`, a missing required quality-child execution or additional high-risk independent perspective also prevents Pass; neither is required in `single-agent`. A concrete introduced blocker requires Changes required; disclose additional evidence gaps rather than hiding the blocker behind uncertainty.

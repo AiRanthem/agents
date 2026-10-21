@@ -3,9 +3,9 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("host_agents", Path(__file__).with_name("host_agents.py"))
 host_agents = importlib.util.module_from_spec(spec)
@@ -18,17 +18,22 @@ def install_fixture(home, host):
     for name in host_agents.ROLES:
         source, _, _ = host_agents.role_config(host, name)
         target = agents / source.name
-        if host in ("codex", "qoder"):
-            target.write_bytes(source.read_bytes())
-        elif not target.is_symlink() or target.resolve() != source.resolve():
-            target.symlink_to(source)
-    skill_root = home / (".cursor" if host == "cursor" else ".agents") / "skills"
+        target.write_bytes(source.read_bytes())
+    skill_root = home / ".agents" / "skills"
     skill_root.mkdir(parents=True, exist_ok=True)
     for name in host_agents.SKILLS:
         link = skill_root / name
         expected = host_agents.ROOT / "skills" / name
         if not link.is_symlink() or link.resolve() != expected.resolve():
             link.symlink_to(expected)
+    if host == "qoder":
+        hooks = home / ".qoder" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        target = hooks / "session-identity.py"
+        if not target.exists():
+            target.symlink_to(host_agents.ROOT / "qoder" / "hooks" / target.name)
+        (home / ".qoder" / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [
+            {"hooks": [{"type": "command", "command": "python3 ~/.qoder/hooks/session-identity.py", "timeout": 10}]}]}}))
     return agents, skill_root
 
 
@@ -37,17 +42,17 @@ class HostAgentTests(unittest.TestCase):
 
     def test_missing_installation_reports_roles_and_skill_entries(self):
         with tempfile.TemporaryDirectory() as temp:
-            for host in ("codex", "cursor", "qoder"):
+            for host in ("codex", "qoder"):
                 result = host_agents.check(host, Path(temp))
                 self.assertFalse(result["disk_ready"])
                 self.assertFalse(result["runtime_verified"])
-                self.assertEqual(len(result["missing"]), 4 + len(host_agents.SKILLS))
+                self.assertEqual(len(result["missing"]), 4 + len(host_agents.SKILLS) + (2 if host == "qoder" else 0))
                 self.assertFalse(list(Path(temp).iterdir()))
 
     def test_installed_agents_are_ready_and_local_modification_is_reported(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            for host in ("codex", "cursor", "qoder"):
+            for host in ("codex", "qoder"):
                 agents, _ = install_fixture(home, host)
                 self.assertTrue(host_agents.check(host, home)["disk_ready"])
                 target = next(agents.iterdir())
@@ -57,11 +62,11 @@ class HostAgentTests(unittest.TestCase):
                 result = host_agents.check(host, home)
                 self.assertFalse(result["disk_ready"])
                 self.assertEqual(len(result["missing"]), 1)
-                self.assertIn("differs" if host in ("codex", "qoder") else "must link to repository", result["missing"][0])
+                self.assertIn("differs", result["missing"][0])
                 self.assertEqual(target.read_text(), content + "\nLocal custom instruction\n")
 
     def test_wrong_skill_link_and_regular_copy_are_rejected(self):
-        for host in ("codex", "cursor", "qoder"):
+        for host in ("codex", "qoder"):
             for kind in ("wrong-link", "regular-copy"):
                 with self.subTest(host=host, kind=kind), tempfile.TemporaryDirectory() as temp:
                     home = Path(temp)
@@ -99,128 +104,86 @@ class HostAgentTests(unittest.TestCase):
                 self.assertEqual(len(result["missing"]), 1)
                 self.assertIn("regular", result["missing"][0])
 
-    def test_cursor_requires_the_repository_symlink_even_for_identical_content(self):
-        for kind in ("copy", "wrong-link"):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
-                home = Path(temp)
-                agents, _ = install_fixture(home, "cursor")
-                target = agents / "project-implementer.md"
-                content = target.read_bytes()
-                target.unlink()
-                if kind == "copy":
-                    target.write_bytes(content)
-                else:
-                    other = home / "same-content.md"
-                    other.write_bytes(content)
-                    target.symlink_to(other)
-                result = host_agents.check("cursor", home)
-                self.assertFalse(result["disk_ready"])
-                self.assertEqual(len(result["missing"]), 1)
-                self.assertIn("must link to repository", result["missing"][0])
-
     def test_role_output_preserves_complete_instructions_and_fixed_profiles(self):
         for name in host_agents.ROLES:
             reviewer = "reviewer" in name
-            for host in ("codex", "cursor", "qoder"):
+            for host in ("codex", "qoder"):
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
                     result = host_agents.main(["role", "--host", host, "--name", name])
                 self.assertEqual(result, 0)
                 role = json.loads(output.getvalue())
-                self.assertEqual(role["name"], name)
+                if host == "qoder":
+                    self.assertEqual(list(role), [name])
+                    role = role[name]
+                    self.assertNotIn("developer_instructions", role)
+                    self.assertIsInstance(role["maxTurns"], int)
+                else:
+                    self.assertEqual(role["name"], name)
                 if host == "codex":
                     self.assertEqual(role["model"], "gpt-6.1-sol")
                     self.assertEqual(role["model_reasoning_effort"], "xhigh" if reviewer else "medium")
-                elif host == "cursor":
-                    self.assertEqual(role["model"], f"grok-4.7[effort={'xhigh' if reviewer else 'high'},fast=false]")
                 else:
-                    self.assertEqual(role["model"],
-                                     "[Qwen3.8-Max](qmodel_38max)" if reviewer else "[DeepSeek-Flash](dfmodel)")
+                    self.assertEqual(role["model"], "qmodel_38max" if reviewer else "dfmodel")
                     self.assertEqual(role["effort"], "xhigh" if reviewer else "max")
-                body = role["developer_instructions"]
+                body = role["prompt"] if host == "qoder" else role["developer_instructions"]
                 self.assertIn("references/stage-executor.md", body)
-                self.assertIn("direct stage assignment", body)
                 if host == "qoder":
+                    self.assertIn("advance-project", body)
                     self.assertNotIn("freely delegate", body)
                 else:
+                    self.assertIn("direct stage assignment", body)
                     self.assertIn("freely delegate", body)
-                if host == "cursor":
-                    self.assertIn("subagent type `composer`", body)
-                    self.assertNotIn("composer-2.5-fast", body)
-                    self.assertNotIn("composer-2.5[fast=false]", body)
-                else:
-                    self.assertNotIn("composer-2.5", body)
+                self.assertNotIn("composer-2.5", body)
                 if name == "project-implementation-reviewer":
-                    self.assertIn("independent code-quality subagent must actually run", body)
+                    self.assertIn("single-agent", body)
+                    self.assertNotIn("independent code-quality subagent must actually run", body)
 
-    def test_cursor_composer_subagent_pins_the_standard_variant(self):
-        _, content, config = host_agents.role_config("cursor", "composer")
-        self.assertEqual(config["name"], "composer")
-        self.assertEqual(config["model"], "composer-2.5[fast=false]")
-        self.assertIn("Use proactively", config["description"])
-        self.assertIn("Always use for investigating", config["description"])
-        self.assertNotIn("composer-2.5-fast", content)
-        self.assertNotIn("fast=true", content)
-
-    def test_cursor_project_roles_use_the_explicit_source_and_reject_stale_content(self):
+    def test_qoder_settings_and_identity_hook_checks_are_read_only_and_host_scoped(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
-            user_agents, _ = install_fixture(home, "cursor")
-            project_agents = home / "project" / ".cursor" / "agents"
-            shutil.copytree(user_agents, project_agents)
-            target = project_agents / "project-implementer.md"
-            # The effective project definition must be checked even with a valid
-            # user installation present; discovery is verified by the real host.
-            target.write_text(target.read_text().replace("grok-4.7[effort=high,fast=false]", "inherit"))
-            result = host_agents.check("cursor", home, agents_dir=project_agents)
-            self.assertFalse(result["disk_ready"])
-            self.assertEqual(len(result["missing"]), 1)
-            self.assertIn("differs", result["missing"][0])
-            self.assertEqual(result["roles"]["project-implementer"]["installed"], str(target))
-            source, content, _ = host_agents.role_config("cursor", "project-implementer")
-            target.write_text(content)
-            self.assertTrue(host_agents.check("cursor", home, agents_dir=project_agents)["disk_ready"])
-            for path in user_agents.iterdir():
-                path.unlink()
-            self.assertTrue(host_agents.check("cursor", home, agents_dir=project_agents)["disk_ready"])
-            target.unlink()
-            result = host_agents.check("cursor", home, agents_dir=project_agents)
-            self.assertFalse(result["disk_ready"])
-            self.assertIn("missing native agent", result["missing"][0])
+            install_fixture(home, "codex")
+            install_fixture(home, "qoder")
+            path = home / ".qoder" / "settings.json"
+            settings = json.loads(path.read_text())
+            for override in ({"enabled": False}, {"modelConfig": {"model": "inherit"}},
+                             {"runConfig": {"maxTurns": 4}}):
+                with self.subTest(override=override):
+                    settings["agents"] = {"overrides": {"project-implementer": override}}
+                    path.write_text(json.dumps(settings))
+                    before = path.read_bytes()
+                    result = host_agents.check("qoder", home)
+                    self.assertFalse(result["disk_ready"])
+                    self.assertEqual(len(result["missing"]), 1)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertTrue(host_agents.check("codex", home)["disk_ready"])
+            settings["agents"] = {"overrides": {"project-implementer": {"modelConfig": {"model": "dfmodel"}}}}
+            path.write_text(json.dumps(settings))
+            self.assertTrue(host_agents.check("qoder", home)["disk_ready"])
+            settings.pop("agents")
+            settings["hooks"]["SessionStart"][0]["hooks"][0]["statusMessage"] = "Identity"
+            path.write_text(json.dumps(settings))
+            self.assertTrue(host_agents.check("qoder", home)["disk_ready"])
+            (home / ".qoder" / "hooks" / "session-identity.py").unlink()
+            self.assertIn("identity hook", host_agents.check("qoder", home)["missing"][0])
+            path.write_text("[]")
+            self.assertIn("unreadable Qoder settings", host_agents.check("qoder", home)["missing"][-1])
 
-    def test_cursor_injected_roles_and_cloud_skill_copies(self):
-        with tempfile.TemporaryDirectory() as temp:
-            home = Path(temp)
-            skills = home / "cloud-skills"
-            for name in host_agents.SKILLS:
-                shutil.copytree(host_agents.ROOT / "skills" / name, skills / name,
-                                ignore=shutil.ignore_patterns("__pycache__"))
-            manifest = home / "loaded-roles.json"
-            roles = {name: {**host_agents.role_config("cursor", name)[2], "source": "native-sdk:" + name}
-                     for name in host_agents.ROLES}
-            manifest.write_text(json.dumps(roles))
-            options = {"roles_file": manifest, "skills_dir": skills}
-            result = host_agents.check("cursor", home, **options)
-            self.assertTrue(result["disk_ready"], result)
-            self.assertFalse(result["runtime_verified"])
-            self.assertEqual(result["roles"]["project-fixer"]["installed"], "native-sdk:project-fixer")
-            for change in ({"model": "inherit"}, {"source": ""}, {"developer_instructions": "incomplete"}):
-                changed = {**roles, "project-fixer": {**roles["project-fixer"], **change}}
-                manifest.write_text(json.dumps(changed))
-                result = host_agents.check("cursor", home, **options)
-                self.assertFalse(result["disk_ready"], result)
-                self.assertEqual(len(result["missing"]), 1)
-            manifest.write_text(json.dumps(roles))
-            (skills / "advance-project" / "references" / "coordinator.md").write_text("stale copy\n")
-            result = host_agents.check("cursor", home, **options)
-            self.assertFalse(result["disk_ready"])
-            self.assertIn("copied skill differs", result["missing"][0])
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                status = host_agents.main(["check", "--host", "cursor", "--home", str(home),
-                                           "--roles-file", str(manifest), "--skills-dir", str(skills)])
-            self.assertEqual(status, 1)
-            self.assertFalse(json.loads(output.getvalue())["disk_ready"])
+    def test_qoder_invalid_source_model_is_reported_before_injection(self):
+        adapter = host_agents.adapter("qoder")
+        config = adapter.role_config("project-design-reviewer")[2]
+        with mock.patch.object(adapter.common, "markdown_config", return_value={**config, "model": "inherit"}):
+            with self.assertRaisesRegex(ValueError, "expected model format"):
+                adapter.injected_role("project-design-reviewer")
+
+    def test_host_session_sources_do_not_cross_hosts(self):
+        with mock.patch.dict("os.environ", {"CODEX_THREAD_ID": "codex-session", "PROJECT_SESSION_ID": "qoder-session"}, clear=True):
+            self.assertEqual(host_agents.adapter("codex").session(), "codex-session")
+            self.assertEqual(host_agents.adapter("qoder").session(), "qoder-session")
+        with mock.patch.dict("os.environ", {"CODEX_THREAD_ID": "codex-session"}, clear=True):
+            self.assertIsNone(host_agents.adapter("qoder").session())
+        with mock.patch.dict("os.environ", {"PROJECT_SESSION_ID": "fallback"}, clear=True):
+            self.assertEqual(host_agents.adapter("codex").session(), "fallback")
 
 
 if __name__ == "__main__":

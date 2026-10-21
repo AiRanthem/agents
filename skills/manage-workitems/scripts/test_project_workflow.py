@@ -1,6 +1,9 @@
 """Fixed workflow behavior in isolated Git workspaces with local bare remotes."""
 
+import contextlib
 import copy
+import io
+import json
 import os
 from pathlib import Path
 import shlex
@@ -83,6 +86,29 @@ class WorkflowTest(unittest.TestCase):
         result = workflow.begin(self.a, operation, selector, options=options, publish=self.publisher)
         self.assertEqual(result["status"], "ready", result)
         return result
+
+    def test_qoder_begin_finish_uses_hook_identity_and_retains_host_without_schema_changes(self):
+        import project
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "inherited-codex", "PROJECT_SESSION_ID": "qoder-controller"}), \
+                mock.patch.object(project, "publish_changes", side_effect=self.publisher):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(project.main(["--host", "qoder", "--root", str(self.a), "begin", "requirement-update", "A"]), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["status"], "ready", result)
+            _, manifest = workflow._load(self.a, result["ticket"])
+            self.assertEqual(manifest["identity"]["session"], "qoder-controller")
+            self.assertNotIn("host", manifest["options"])
+            self.edit(result, "Qoder requirement\n")
+            command = shlex.split(result["finish_command"])
+            self.assertEqual(command[2:4], ["--host", "qoder"])
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(project.main(command[2:]), 0)
+            finished = json.loads(output.getvalue())
+            self.assertEqual(finished["status"], "published", finished)
+            self.assertEqual((self.a / "workitems/A/requirement.md").read_text(), "Qoder requirement\n")
+            self.assertEqual(workflow._session(), "inherited-codex")
 
     def finish(self, result):
         return workflow.finish(self.a, result["ticket"], publish=self.publisher)

@@ -1,6 +1,6 @@
 # Project command contract
 
-Run `<PYTHON> <installed-manage-workitems>/scripts/project.py --root <project> COMMAND`. `<PYTHON>` is the current workspace's prescribed Python 3 executable/environment; use that environment for every command and its returned continuation. Resolve the installed skill's physical path once. Git and [the declared Python dependencies](../scripts/requirements.txt) are required; enabled Aone also requires authenticated `a1`.
+Run `<PYTHON> <installed-manage-workitems>/scripts/project.py --root <project> COMMAND`. In Codex and Qoder, explicitly add `--host codex` or `--host qoder` before `COMMAND`, matching the actual current host; do not infer it from inherited environment variables or select another host to bypass a blocker. Cursor retains its existing command without `--host`. Host selection delegates to the corresponding dev-kit `codex/host.py` or `qoder/host.py`; the project workflow and stored schema remain shared. Execute returned continuation commands unchanged: Qoder commands retain `--host qoder`, while Codex retains its original command rendering and identity precedence. `<PYTHON>` is the current workspace's prescribed Python 3 executable/environment; use that environment for every command and its returned continuation. Resolve the installed skill's physical path once. Git and [the declared Python dependencies](../scripts/requirements.txt) are required; enabled Aone also requires authenticated `a1`.
 
 ## Progress report
 

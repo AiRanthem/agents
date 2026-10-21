@@ -17,10 +17,11 @@ try:
     import project_operations as operations
     import project_runtime as runtime
     import project_store as store
+    import project_host
     from project_aone import AoneAdapter
     from project_init import ProjectInitError, init_project
 except ImportError:  # package entrypoint
-    from . import project_context as context, project_operations as operations, project_runtime as runtime, project_store as store
+    from . import project_context as context, project_operations as operations, project_runtime as runtime, project_store as store, project_host
     from .project_aone import AoneAdapter
     from .project_init import ProjectInitError, init_project
 
@@ -502,7 +503,7 @@ def _query(args):
         files = runtime._working_files(root)
         if store.is_v2(files):
             result["workflow_gates"] = _module("project_workflow").gates(
-                files, result["metadata"], os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID"))
+                files, result["metadata"], project_host.current_session())
         result["readiness_scope"] = "dependency_delivery_and_open_fixes"
         result["metadata"] = _item_summary(result["metadata"])
     return _redact(result)
@@ -605,7 +606,7 @@ def _module(name):
 
 
 def _begin_options(args):
-    excluded = {"command", "root", "operation", "selector"}
+    excluded = {"command", "root", "host", "operation", "selector"}
     options = {key: value for key, value in vars(args).items()
                if key not in excluded and value is not None}
     if args.operation == "fix" and args.selector:
@@ -669,6 +670,7 @@ def _init_config(args):
 def parser():
     p = _Parser(description=__doc__)
     p.add_argument("--root", default=".")
+    p.add_argument("--host", choices=("codex", "qoder"))
     sub = p.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list")
     listing.add_argument("--status", action="append")
@@ -866,7 +868,7 @@ def _status(root, summarize=_item_summary):
         result["code"] = "publication_journal_ambiguous"
         return result
     session, token = next(iter(identities))
-    current = os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID")
+    current = project_host.current_session()
     if not session or not token or (session != current and session != "project-migration"):
         result["code"] = "recovery_owned_by_another_session"
         return result
@@ -923,8 +925,10 @@ def _public_result(result, args):
 
 
 def main(argv=None):
+    host_token = None
     try:
         args = parser().parse_args(argv)
+        host_token = project_host.select(args.host)
         if args.command == "autonomy":
             autonomy = _module("project_autonomy")
             action = args.autonomy_action
@@ -1025,7 +1029,11 @@ def main(argv=None):
         result = exc.result
     except (ProjectError, context.ContextError, OSError, ValueError) as exc:
         result = {"status": "failed", **_error_details(exc)}
+    finally:
+        if host_token is not None:
+            project_host.reset(host_token)
     result = _public_result(result, args if "args" in locals() else argparse.Namespace(root="."))
+    result = project_host.bind_commands(result, getattr(args, "host", None) if "args" in locals() else None)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
     return 1 if result.get("status") in {"partial", "blocked"} else 0
 

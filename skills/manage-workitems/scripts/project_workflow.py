@@ -22,9 +22,10 @@ try:
     import project_runtime as runtime
     import project_store as store
     import project_retention as retention
+    import project_host
     from workitem_ids import allocate_ids
 except ImportError:  # package entrypoint
-    from . import project_runtime as runtime, project_store as store, project_retention as retention
+    from . import project_runtime as runtime, project_store as store, project_retention as retention, project_host
     from .workitem_ids import allocate_ids
 
 ProjectError = runtime.ProjectError
@@ -137,9 +138,9 @@ def _load_manifest(root, directory):
 
 
 def _session():
-    session = os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID")
+    session = project_host.current_session()
     if not session:
-        raise ProjectError("CODEX_THREAD_ID or PROJECT_SESSION_ID is required for workflow identity")
+        raise ProjectError(project_host.session_error())
     return session
 
 

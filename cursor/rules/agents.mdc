@@ -31,19 +31,6 @@ For ordinary main-agent work, an investigation or bounded checkable task starts 
 
 # Subagent Delegation
 
-The routing rules in this section apply only to ordinary main-agent work. During
-an explicitly started `advance-project` run, the coordinator uses the installed
-shared skill and `cursor/AUTONOMY.md` and dispatches the configured native stage
-roles at their fixed first-level models. Stage executors delegate within their
-assignments. Investigating behavior, tracing callers, comparing evidence, and checking
-consistency across components use the `composer` subagent required by those
-Cursor roles. That dispatch is the first action on the stage role, and it omits
-the Task `model` parameter. Other descendant models stay with the stage
-executor, within actual host limits. After the run, ordinary main-agent work
-uses the following rules.
-
-## Ordinary main-agent work
-
 The delegation trigger above names when to dispatch `composer`. Select that subagent type and omit the Task `model` parameter. Send independent matching assignments together in one turn. A file or symbol the user already named, and evidence already in context, stays on the main agent. Code writing, material ambiguity, design tradeoffs, and consequential correctness or security judgments stay on the main agent. Give one `composer` assignment the whole related investigation. Continue a suitable existing executor before starting another for the same investigation.
 
 When dispatching or reassigning a subagent, report its task and subagent type. Do not inspect or verify the subagent's runtime settings.

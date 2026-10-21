@@ -1,16 +1,20 @@
 ---
 name: review-implementation
-description: Independently assess an implementation against its approved contract and final code evidence. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and require an independent quality pass.
+description: Independently assess an implementation against its approved contract and final code evidence in single-agent or multi-agent mode. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and cover correctness, quality, security and tests.
 ---
 
 # Review Implementation
 
-Assess complete, correct and maintainable behavior against the confirmed design and original requirements. Code and tests are evidence; an unsafe design does not excuse unsafe implementation. Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and the [review standard](references/review-standard.md), including its mandatory quality subagent and high-risk independent perspective.
+Assess complete, correct and maintainable behavior against the confirmed design and original requirements. Code and tests are evidence; an unsafe design does not excuse unsafe implementation.
+
+## Resolve review mode first
+
+Apply the [shared mode contract](references/review-standard.md#resolve-review-mode-first) before selecting context, collecting review evidence or dispatching reviewers: `advance-project` fixes `single-agent` on every host; direct user invocation honors an existing choice or asks once whether to use `multi-agent`. Pass the resolved mode to delegated reviewers and retain it for re-review. Then read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and the complete [review standard](references/review-standard.md).
 
 ## Select the operating context
 
-- **Autonomous stage executor:** Read [stage-executor](../advance-project/references/stage-executor.md) and [project review](references/project-mode.md). Review one stable target; return the actual report and identity. You may and must dispatch the required quality subagent, and any required high-risk specialist, using your own descendant strategy. Missing capability prevents Pass.
-- **Project controller or ordinary project review:** Read [project review](references/project-mode.md). The controller persists evidence; a delegated reviewer performs the assessment. An authorized project workflow is sufficient to invoke this skill.
-- **Outside a managed project:** Apply the review standard and report in conversation. Native Plan remains read-only, including delegated work; no source, status, draft or report writes through delegation.
+- **Autonomous stage executor:** Read [stage-executor](../advance-project/references/stage-executor.md) and [project review](references/project-mode.md). Use `single-agent` without a mode question. As the qualified independent reviewer, cover correctness, implementation quality, security, tests and high-risk boundaries yourself; no review descendants are required. Review one stable target and return the actual report and identity. Missing essential capability prevents Pass.
+- **Project controller or ordinary project review:** Read [project review](references/project-mode.md). The controller passes the resolved mode and persists evidence; a delegated reviewer performs the assessment. An authorized project workflow is sufficient to invoke this skill.
+- **Outside a managed project:** Apply the resolved mode and review standard and report in conversation. Native Plan remains read-only, including delegated work; no source, status, draft or report writes through delegation.
 
-A fresh independent reviewer must assess the actual final dirty contents. An implementer cannot independently accept its own work. Preserve valid unaffected evidence after fixes; repeat only invalidated review. Pass means the stated coverage and required gates found no blocking introduced defect; it is not human acceptance or delivery.
+A fresh reviewer independent of implementation and fixes must assess the actual final dirty contents. An implementer or fixer cannot independently accept its own work. Preserve valid unaffected evidence after fixes; repeat only invalidated review. Pass means the stated coverage and mode-specific gates found no blocking introduced defect; it is not human acceptance or delivery.
