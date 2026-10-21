@@ -83,22 +83,22 @@ body `memory` 与有效扩展头同时出现时，扩展头优先：只要头解
 
 - `name` 为 `null` 或空串视为未命名；非空时作为别名写入 Checkpoint label `agents.openkruise.io/checkpoint-alias`（Infra 的中性 `Alias` 概念，不进入 Checkpoint CRD spec）。
 - 别名格式属于存储限制：`sandboxcr.CreateCheckpoint` 入口按 Kubernetes label value 规则校验，非法时返回领域错误 `ErrorBadRequest`，API 层映射为 400，消息包含 `invalid checkpoint alias`。API 层不做格式校验，未来其他 Infra 后端可放宽。
-- 别名的命名空间作用域是 team（Sandbox 所在 namespace）。同一别名在任一时刻至多有一个 Succeeded checkpoint，替换窗口内允许短暂重复（见下）。
+- 别名的命名空间作用域是 team（Sandbox 所在 namespace）。顺序替换完成后同一别名只保留一个 Succeeded checkpoint；并发创建的短暂重复由下述收敛规则消除。
 
-同名替换（E2B：新的 build 分配到已有 template）由 API 层编排，顺序固定为“先查、再建、成功后才删”：
+同名替换（E2B：新的 build 分配到已有 template）由 API 层编排，顺序固定为“先建、成功后再收敛别名”：
 
-1. 创建前按别名列出同 namespace 下已有的 Succeeded checkpoint（只读）。
-2. 调用 `CreateCheckpoint` 创建新 checkpoint；失败（含别名非法、后端失败、等待超时）时旧快照保持原样，不产生删除副作用。
-3. 创建成功后，删除第 1 步列出的旧 checkpoint；删除失败只记录日志，不影响本次 201 响应，也不把已成功的创建标记为失败。下一次同名创建会继续清理残留。
+1. 直接调用 `CreateCheckpoint` 创建新 checkpoint，不在创建前读取或删除旧对象；失败（含别名非法、后端失败、等待超时）时不产生任何删除副作用，旧快照保持原样。
+2. 创建成功后，按别名列出同 namespace 下当前 Succeeded 的 checkpoint（team 作用域，不做 user 过滤），并按 Checkpoint 创建时间（固定宽度 UTC 纳秒串）与对象名组成确定的全序，选出最新者。
+3. 若本次新建的是最新者，删除其余所有同别名 Succeeded checkpoint；若本次新建的不是最新者（并发中已被更新的请求取代），删除本次新建的 checkpoint，并在 201 响应中返回当前最新者的 `snapshotID`。删除失败只记录日志，不影响 201，也不把已成功的创建标记为失败；后续同名创建会继续清理残留。
 
-该顺序保证替换过程中任何一步失败都不会丢失既有快照。代价是替换窗口内可能出现新旧两条同别名 Succeeded 对象，列表可能短暂同时看到它们；并发同名创建不加锁，可能留下多余对象，直到后续替换清理。删除使用与请求上下文解耦的有限超时，客户端断开不影响清理。
+该顺序保证创建失败不会丢失既有快照，并让并发同名创建收敛到同一个最新对象，而不是留下多条同别名记录。收敛依赖 Checkpoint 的真实创建时间；`AsCheckpointInfo` 输出固定宽度 UTC 纳秒时间戳，字典序等于时间序，避免同一秒内的并发创建退化为按随机名称决定胜者。仍存在的竞态：较早的请求先返回 201 后，较新的请求仍可能删除它，因此并发同名创建中已经返回的 `snapshotID` 可能随后失效，这是“不保留旧 build”语义的固有取舍。删除使用与请求上下文解耦的有限超时，客户端断开不影响清理。
 
 `GET /snapshots` 的 `name` 查询参数按别名精确过滤：
 
 - 空值按未提供处理；重复值沿用既有快照列表解析（取第一个）。
 - 查询保持 user 级 owner 过滤，不因 name 过滤绕过资源归属。
 - 命中多条时返回创建时间最新的一条（分页器按创建时间升序排序后取末元素）；带 name 时忽略 `limit`/`nextToken`，结果恒为 0 或 1 条且不返回 nextToken。
-- 创建进行中、新对象尚未 Succeeded 时，查询返回旧快照而不是空结果；创建成功且旧对象尚未删除时返回新快照。创建时间只有秒精度，同一秒内的新旧对象次序由名称决定，替换窗口结束后只剩新对象。
+- 创建进行中、新对象尚未 Succeeded 时，查询返回旧快照而不是空结果；创建成功且收敛完成前可能短暂看到新旧两条，收敛后只剩一条。快照排序键为固定宽度 UTC 纳秒时间戳，同一时刻的对象由名称决定次序。
 
 ### 响应
 
@@ -113,13 +113,13 @@ body `memory` 与有效扩展头同时出现时，扩展头优先：只要头解
 5. Pause 的 `memory:true` 与 `memory:false` 都返回 400，且调用前后的 Sandbox 暂停状态、timeout、annotation 和持久化策略均不变化；省略 memory、`{}`、空 body 保持原流程。
 6. Pause 请求体为 `{}garbage` 或 `{} {"memory":false}` 时返回 400 且不暂停；尾随空白仍被接受。
 7. `memory:false` 创建快照时该 checkpoint 仅保存文件系统，源策略不变；`memory:true` 保存 memory+filesystem；有效内容头优先于 body。
-8. 带合法 `name` 创建返回 `names:[name]`，同名旧 Succeeded 快照在新快照成功后被删除；创建失败时旧快照保留，且 `GET /snapshots?name=` 在替换窗口内仍能解析到可用快照。
+8. 带合法 `name` 创建返回 `names:[name]`，同名旧 Succeeded 快照在新快照成功后按“最新者胜出”被删除；创建失败时旧快照保留。两个并发同名创建结束后至多保留一个 Succeeded checkpoint；被更新请求取代的一方删除自己的 checkpoint，并以最新者的 `snapshotID` 返回。`GET /snapshots?name=` 在收敛完成前仍能解析到可用快照。
 9. 非法 `name` 由后端存储规则拒绝并映射为 400，且不创建 Checkpoint、不删除旧快照；`name:null` 与 `name:""` 创建未命名快照。
 10. 不带 `name` 的创建与列表响应在 JSON 上都是数组类型的 `names`，空数组不会变成 `null`；带 `name` 的列表只返回该 user 可见的最新一条。
 
 ## 非目标与取舍
 
-不增加内存快照能力承诺、单次 filesystem-only 暂停、tag/build 版本历史、按 name 的独立 get/delete 端点、connect 的模式选择、全局分页新协议、Checkpoint CRD 字段、存储后端、监控指标或与三个 Issue 无关的 metadata 修复。命名快照复用 Checkpoint label 与既有 Succeeded 列表能力，不新增别名注册中心。替换不保留旧 build，旧对象删除后其 SandboxTemplate 按既有 ownerRef GC 清理。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。
+不增加内存快照能力承诺、单次 filesystem-only 暂停、tag/build 版本历史、按 name 的独立 get/delete 端点、connect 的模式选择、全局分页新协议、Checkpoint CRD 字段、存储后端、监控指标或与三个 Issue 无关的 metadata 修复。命名快照复用 Checkpoint label 与既有 Succeeded 列表能力，不新增别名注册中心或分布式锁，并发收敛依赖 Checkpoint 创建时间排序。替换不保留旧 build，旧对象删除后其 SandboxTemplate 按既有 ownerRef GC 清理。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。
 
 本设计不承诺运行环境已经验证，也不将设计完成等同于独立评审、实现、人工验收或上游 Issue 关闭。
 
@@ -130,7 +130,7 @@ body `memory` 与有效扩展头同时出现时，扩展头优先：只要头解
 - `pkg/servers/e2b/sandbox.go`：模板身份与启动时间来源；`pkg/servers/e2b/templates.go`：模板 ID/别名。
 - `pkg/servers/e2b/pause_resume.go`：暂停流程与可选请求体解析；`pkg/sandbox-manager/infra/interface.go`：现有 PauseOptions 不含单次持久化内容。
 - `pkg/servers/e2b/snapshot.go`、`pkg/servers/e2b/models/sandbox.go`、`pkg/servers/e2b/models/extensions.go`：快照请求模型、扩展头与别名替换编排。
-- `pkg/sandbox-manager/infra/sandboxcr/clone.go`：checkpoint 创建、别名校验与 label 写入；`pkg/sandbox-manager/infra/sandboxcr/infra.go`：按别名选择 Succeeded checkpoint。
+- `pkg/sandbox-manager/infra/sandboxcr/clone.go`：checkpoint 创建、别名校验与 label 写入、固定宽度创建时间戳；`pkg/sandbox-manager/infra/sandboxcr/infra.go`：按别名选择 Succeeded checkpoint。
 - `api/v1alpha1/labels.go`：`CheckpointLabelAlias`；`api/v1alpha1/checkpoint_types.go`：KeepRunning 默认行为。
 - https://github.com/e2b-dev/E2B/blob/b52cd30c14bf7038ba5bfbd15456b1dabe567082/spec/openapi.yml ：`SandboxPauseRequest`、`SandboxSnapshotRequest`、`GET /v2/sandboxes` 与 `/snapshots`。
 - https://github.com/openkruise/agents/issues/1083
