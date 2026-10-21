@@ -13,8 +13,8 @@ documents:
   logs: logs.md
 design:
   file: spec.md
-  version: 2
-  state: implementable
-  author_session: bfa1920e-2676-4e3a-a8d9-70c449134a7b
+  version: 3
+  state: draft
+  author_session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
 repository: agents
 cleanup: pending
