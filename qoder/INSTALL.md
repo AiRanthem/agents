@@ -40,16 +40,15 @@
 * `echo '{"model":{"display_name":"Qwen3.8-Max"},"context_window":{"context_window_size":400000,"used_percentage":25}}' | bash ~/.qoder/statusline.sh` 标准输出非空，且首段包含 `Qwen3.8-Max`。
 * 给定含 `transcript_path` 的 payload，status line 显示的 effort 与 context window 等于该 transcript 中最后一条 `runtime-config` 记录的 `reasoningEffort` 与 `contextWindow`，而非 `~/.qoder/settings.json` 的 `.model.preferences`；该记录 `generation.reasoning.enabled` 为 `false`、记录不存在或 `transcript_path` 缺失时不显示 effort。
 * `bash ~/.qoder/statusline-fmt-check.sh` 输出包含 `ALL MATCH`。
-* `python3 <dev-kit-root>/qoder/host.py check` 返回 `disk_ready=true`；共享入口 `scripts/host_agents.py check --host qoder` 保持可用。仅据报告确认磁盘模板、技能入口、身份 handler 和 override 校验，不宣称真实派发通过。
+* `python3 <dev-kit-root>/qoder/host.py check` 返回 `disk_ready=true`。仅据报告确认磁盘模板、技能入口、身份 handler 和 override 校验，不宣称真实派发通过。
 * `qoder agents list` 发现四个原生角色且未标记 shadowed；`qoder skills list` 中共享技能的 Location 位于 `~/.agents/skills`。阶段会话未列出 skill 时，仍可用文件工具完整读取其已授权物理安装入口；实际禁用或拒绝不能绕过。
-* 新主控会话收到 SessionStart 注入的准确 `PROJECT_SESSION_ID`，每条项目命令在同一命令导出它并显式传入 `--host qoder`；恢复/压缩后仍使用该会话身份。Qoder 不读继承的 `CODEX_THREAD_ID`，Codex 保留原身份优先级；该值不是执行者标签或型号证据。
+* 新主控会话收到 SessionStart 注入的准确 `PROJECT_SESSION_ID`，每条项目命令在同一命令导出它并使用本目录 `project.py` 入口；恢复/压缩后仍使用该会话身份。身份仅从本宿主 hook 提供的变量读取；该值不是执行者标签或型号证据。
 * 新会话中四个角色实际按表中各阶段派发，使用干净隔离上下文；报告真实工具能力、贡献标签、指定报告和执行结果。当前子代理未暴露 Agent/follow-up 时直接完成阶段，单代理审查无需 quality 后代。真实回执未暴露型号则标记未验证；模板、列表、磁盘或身份检查均不能证明运行型号。
 
 ## 自主推进阶段角色
 
-Qoder 专用 helper 为 `qoder/host.py`，共享 dispatcher 保留
-`scripts/host_agents.py <command> --host qoder`；需要 Python 3.11 或更高版本，按工作区
-规定选择解释器。Qoder 身份 hook / override 校验仅作用于 Qoder，不改变 Codex 原有行为。
+Qoder 专用 helper 为 `qoder/host.py`；按工作区规定选择 Python 3.11 或更高版本。
+身份 hook 与 override 校验由本目录维护。
 
 所有 Qoder 使用形态共用 `agents/*.md` 和[自主推进适配](AUTONOMY.md)。原生文件遵循
 [官方 Subagent 格式](https://docs.qoder.com/cli/subagent.md)：Markdown + YAML
@@ -87,9 +86,9 @@ python3 <dev-kit-root>/qoder/host.py role --name project-implementer
 SDK `--agents` 的完整注入 JSON，以角色名为键，保留模板的 `description`、`effort`、
 `maxTurns`；将 Markdown `model` 转为裸 ID（`qmodel_38max` / `dfmodel`），并将
 `developer_instructions` 正文映射为官方字段 `prompt`。JSON 注入不解析 Markdown 模型链接。
-项目命令使用 `project.py --host qoder --root <project> COMMAND`；身份来自 SessionStart
+项目命令使用 `<dev-kit-root>/qoder/project.py --root <project> COMMAND`；身份来自 SessionStart
 hook 并在同一命令导出 `PROJECT_SESSION_ID`，不能用其他宿主变量代替。返回的项目恢复
-命令保留宿主参数，不改变已有项目 schema 或历史身份，也不能证明执行者或模型身份。
+命令保留本目录入口，不改变已有项目 schema 或历史身份，也不能证明执行者或模型身份。
 
 主控提供的 contributor-session 标签必须对应真实贡献执行，记录累积作者和独立
 审查者，不用于存活锁定；宿主未暴露 worker ID 时无需补取。新标签不能洗掉先前

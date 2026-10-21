@@ -138,11 +138,11 @@ class OwnershipTest(unittest.TestCase):
         old = self.f.record()
         old_identity = workflow._identity(self.root, item="A")
         state = old["workflow"]["autonomy"]
-        state.update(current="0" * 32, executions={"0" * 32: {"worker_id": "unreachable-qoder-worker", "spawn": {"host": "qoder"}}}, blocker="executor_blocked", next_role="implementation", code_authors=["prior-author"])
+        state.update(current="0" * 32, executions={"0" * 32: {"worker_id": "unreachable-worker", "spawn": {"host": "previous-runtime"}}}, blocker="executor_blocked", next_role="implementation", code_authors=["prior-author"])
         state["authorization"].pop("claim_token")
         self.f.install(old)
         self.a.snapshot.update(tree="d" * 40, dirty_digest="d" * 64)
-        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "new-codex-controller"}):
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "new-controller"}):
             response = self.takeover()
             self.assertEqual(response["next_action"], "recompute_readiness")
             saved = self.f.record()

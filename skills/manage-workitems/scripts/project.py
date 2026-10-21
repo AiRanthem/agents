@@ -17,11 +17,11 @@ try:
     import project_operations as operations
     import project_runtime as runtime
     import project_store as store
-    import project_host
+    import project_identity
     from project_aone import AoneAdapter
     from project_init import ProjectInitError, init_project
 except ImportError:  # package entrypoint
-    from . import project_context as context, project_operations as operations, project_runtime as runtime, project_store as store, project_host
+    from . import project_context as context, project_operations as operations, project_runtime as runtime, project_store as store, project_identity
     from .project_aone import AoneAdapter
     from .project_init import ProjectInitError, init_project
 
@@ -343,9 +343,9 @@ def apply(root, request, *, dry_run=False, adapter_factory=AoneAdapter):
     if not isinstance(request, dict):
         raise ProjectError("request must be an object")
     request = copy.deepcopy(request)
-    request["session"] = request.get("session") or os.environ.get("CODEX_THREAD_ID")
+    request["session"] = request.get("session") or project_identity.current_session()
     if not runtime._nonempty(request["session"]):
-        raise ProjectError("request.session is required when CODEX_THREAD_ID is unavailable")
+        raise ProjectError("request.session is required when the execution session is unavailable")
     if request.get("token") is None:
         request["token"] = uuid.uuid4().hex
     request["machine"] = request.get("machine") or socket.gethostname()
@@ -503,7 +503,7 @@ def _query(args):
         files = runtime._working_files(root)
         if store.is_v2(files):
             result["workflow_gates"] = _module("project_workflow").gates(
-                files, result["metadata"], project_host.current_session())
+                files, result["metadata"], project_identity.current_session())
         result["readiness_scope"] = "dependency_delivery_and_open_fixes"
         result["metadata"] = _item_summary(result["metadata"])
     return _redact(result)
@@ -670,7 +670,6 @@ def _init_config(args):
 def parser():
     p = _Parser(description=__doc__)
     p.add_argument("--root", default=".")
-    p.add_argument("--host", choices=("codex", "qoder"))
     sub = p.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list")
     listing.add_argument("--status", action="append")
@@ -868,7 +867,7 @@ def _status(root, summarize=_item_summary):
         result["code"] = "publication_journal_ambiguous"
         return result
     session, token = next(iter(identities))
-    current = project_host.current_session()
+    current = project_identity.current_session()
     if not session or not token or (session != current and session != "project-migration"):
         result["code"] = "recovery_owned_by_another_session"
         return result
@@ -924,11 +923,10 @@ def _public_result(result, args):
     return result
 
 
-def main(argv=None):
-    host_token = None
+def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
+    session_token = project_identity.select(session)
     try:
         args = parser().parse_args(argv)
-        host_token = project_host.select(args.host)
         if args.command == "autonomy":
             autonomy = _module("project_autonomy")
             action = args.autonomy_action
@@ -1030,10 +1028,9 @@ def main(argv=None):
     except (ProjectError, context.ContextError, OSError, ValueError) as exc:
         result = {"status": "failed", **_error_details(exc)}
     finally:
-        if host_token is not None:
-            project_host.reset(host_token)
+        project_identity.reset(session_token)
     result = _public_result(result, args if "args" in locals() else argparse.Namespace(root="."))
-    result = project_host.bind_commands(result, getattr(args, "host", None) if "args" in locals() else None)
+    result = project_identity.bind_commands(result, command_prefix)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
     return 1 if result.get("status") in {"partial", "blocked"} else 0
 

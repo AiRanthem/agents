@@ -1,6 +1,6 @@
 # Discussion and authorization
 
-Apply these rules in ordinary development, native Plan and managed-project work. Explicit user instructions take priority over skill guidance. Reuse the approved scope, requirements, paths, tradeoffs and execution authorization from the conversation; do not ask the user to repeat them. Actual harness, security and filesystem permissions still apply.
+Apply these rules in ordinary development, read-only planning and managed-project work. Explicit user instructions take priority over skill guidance. Reuse the approved scope, requirements, paths, tradeoffs and execution authorization from the conversation; do not ask the user to repeat them. Actual harness, security and filesystem permissions still apply.
 
 When the sandbox prevents an already authorized command from starting, use the host's permitted approval or escalation mechanism for that same command. Continue only after actual approval. Distinguish this execution-permission request from a structured project-workflow blocker; a denied request remains blocked and must not be bypassed.
 

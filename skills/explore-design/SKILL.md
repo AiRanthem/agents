@@ -1,6 +1,6 @@
 ---
 name: explore-design
-description: Establish or refine an approved Why/What contract from original requirements and repository evidence. Use when explicitly invoked, for requested collaborative pre-implementation design, or for a design correction delegated within an authorized advance-project stage. Route native Plan, ordinary Agent, project controller and stage executor work to their applicable references; do not implement code or approve your own design review.
+description: Establish or refine an approved Why/What contract from original requirements and repository evidence. Use when explicitly invoked, for requested collaborative pre-implementation design, or for a design correction delegated within an authorized advance-project stage. Route read-only planning, ordinary execution, project controller and stage executor work to their applicable references; do not implement code or approve your own design review.
 ---
 
 # Explore Design
@@ -13,9 +13,9 @@ Read [discussion and authorization](../advance-project/references/discussion-and
 
 - **Delegated project stage:** Read [stage executor](../advance-project/references/stage-executor.md). Work only on the assigned candidate design or report; do not load controller write instructions below. Read the original requirements, approved contract, applicable original instructions and primary evidence, rather than relying on a controller summary. Return candidate changes and actual evidence to the controller.
 - **Project controller or ordinary project design session:** Read [project mode](references/project-mode.md).
-- **Outside a project stage:** Read [host modes and handoff](references/host-modes.md) for native Plan and ordinary Agent behavior.
+- **Outside a project stage:** Read [host modes and handoff](references/execution-modes.md) for read-only planning and ordinary execution behavior.
 
-Native Plan remains read-only in every organization mode: no design-file or temporary-draft writes, including through delegation. A project role never enlarges host permissions.
+Read-only planning remains read-only in every organization mode: no design-file or temporary-draft writes, including through delegation. A project role never enlarges host permissions.
 
 ## Establish the contract from evidence
 

@@ -13,9 +13,7 @@
 - `skills/`：安装到用户级目录、可在不同仓库复用的 skills。
 - `.agents/skills/install/`：仅用于安装、更新、修复或验证本 dev-kit 的仓库级 skill。
 - `.agents/skills/absorb-skill/`：评估第三方 skill 的独有价值，选择不吸收、合并或重写，并验证整合结果的仓库级 skill。
-- `codex/`：Codex 全局指令、固定自主阶段角色，以及按模型组装的主代理与 Astra 子代理委派 hooks。
-- `cursor/`：Cursor 用户级规则、`~/.cursor/skills` 入口、CLI status line 和 CLI 偏好。
-- `qoder/`：Qoder 固定自主阶段角色、会话身份 hook、CLI status line 和自主推进适配。
+- 各宿主同名顶层目录：该宿主的配置、入口、安装说明与验证。公共层不依赖这些目录。
 - `AGENTS.md`：维护本仓库时必须遵守的规则。
 
 ## 安装与更新
@@ -29,13 +27,13 @@ $install 安装或更新这个 dev-kit
 `$install` 会执行以下范围内的工作：
 
 1. 按照 [`skills/INSTALL.md`](skills/INSTALL.md) 将所有共享 skills 安装为 `~/.agents/skills/<name>` 的独立绝对软链接。
-2. 识别当前 Agent，只选择对应的顶层配置进行安装。例如，Codex 使用 [`codex/INSTALL.md`](codex/INSTALL.md)，Cursor 使用 [`cursor/INSTALL.md`](cursor/INSTALL.md)，Qoder 使用 [`qoder/INSTALL.md`](qoder/INSTALL.md)。
+2. 执行调用方已提供且获授权的安装合同；公共安装入口仅维护共享 skills。
 3. 保留目标机器上的无关配置；目标存在仓库未收录的内容时，先展示差异并等待用户决定。
 4. 完成对应安装文档要求的验证，并报告仍需重启、信任或人工确认的步骤。
 
-更新仓库后再次调用 `$install`。共享 skill 的新增和删除会同步到用户级软链接；需要合并的 Agent 配置也会按对应 `INSTALL.md` 重新处理。
+更新仓库后再次调用 `$install`，同步共享 skill 的新增、删除和用户级软链接。
 
-如果当前 Agent 没有发现 `$install`，让它完整读取 [`.agents/skills/install/SKILL.md`](.agents/skills/install/SKILL.md)，并以该文件选出的 `INSTALL.md` 为安装契约。
+如果当前 Agent 没有发现 `$install`，让它完整读取 [`.agents/skills/install/SKILL.md`](.agents/skills/install/SKILL.md)，并以共享安装文档为安装契约。
 
 ## 使用 skills
 
@@ -54,9 +52,9 @@ $install 安装或更新这个 dev-kit
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$cleanup-worktree` | 核验非忽略文件已提交并推送、工作树干净且可从远程恢复，按授权清理本地 worktree 和分支，保留远程恢复引用。 |
 | `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
-| `$explore-design` | 探索或细化 Why/What；Plan mode 直接衔接实施规划，Agent mode 将设计文档标记为 `review-pending`。 |
+| `$explore-design` | 探索或细化 Why/What；只读规划衔接实施计划，普通执行 将设计文档标记为 `review-pending`。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |
-| `$implement-design` | 将已确认设计落实实现，按实际 Plan/Agent 与项目职责加载指令，保留验证和独立审查边界。 |
+| `$implement-design` | 将已确认设计落实实现，按实际规划/执行 与项目职责加载指令，保留验证和独立审查边界。 |
 | `$implement-poc` | 将已确认设计裁剪到明确验收场景，实现并验证可排障的 POC。 |
 | `$optimize-tests` | 在充分覆盖行为的前提下，主动清理、合并和精简指定范围内的测试代码，经确认后执行。 |
 | `$review-implementation` | 根据已确认设计独立验收完成的实现。 |
@@ -71,7 +69,7 @@ $install 安装或更新这个 dev-kit
 $review-design 评审 docs/proposal.md
 ```
 
-Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill。`review-design`、`review-implementation`、`systematic-debugging` 和 `receiving-code-review` 保留仅显式调用策略。已授权的项目阶段由主控显式委派相应技能，不需要用户逐阶段重复调用。
+已授权的项目阶段由主控显式委派相应技能，不需要用户逐阶段重复调用。
 
 项目使用时始终从项目根目录启动 agent。项目的 `worktrees/` 通过空占位文件保留，源码内容被忽略，Git 状态由各代码仓库自行管理。也可关联 OKAWorkspace 这类业务主工作区，将源码工作树放在主工作区 `worktrees/<项目标识>/` 下；项目保存必要约束、业务上下文和技能的入口，本机绝对路径单独绑定。创建时可选择主工作区的远程仓库，用独立空分支存储项目，主工作区原检出保持原分支。详见 [主工作区关联](skills/manage-workitems/references/main-workspace.md)。
 
@@ -81,11 +79,11 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控直接调度所有就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
 
-自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。原生 Plan 保持只读，不能委派写入绕过。当前自主推进入口支持 Codex 和 Qoder，详见 [主控入口](skills/advance-project/SKILL.md)、[Codex 适配](codex/AUTONOMY.md) 和 [Qoder 适配](qoder/AUTONOMY.md)；配置检查不等于实际宿主委派与模型已获验证。
+自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。只读规划模式保留权限限制，不能委派写入绕过。详见 [主控入口](skills/advance-project/SKILL.md)；实际执行能力由调用方提供并验证，配置检查不等于真实委派成功。
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 
-统一入口是 `skills/manage-workitems/scripts/project.py`。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束当前操作并继续已授权的交接，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
+项目命令优先使用调用方提供的入口，未提供时使用共享 `skills/manage-workitems/scripts/project.py`；入口解析见命令契约。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束当前操作并继续已授权的交接，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
 
 设计负责会话完成完整批准交接：呈现当前合同与版本，复用已有覆盖批准，或汇总实质变化请求用户决定；收到实际批准后核对版本并登记，再进入已授权的独立审查。自然语言“审查某项设计”可触发审查技能；`show.workflow_gates` 分别说明批准、审查和实施条件，查询成功的 `ready` 不代表可以实施。
 
@@ -105,7 +103,5 @@ Codex 也可以在任务与 skill 的 `description` 匹配时隐式选择 skill�
 
 相关官方文档（代际刷新时以此为准）：
 
-- [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
-- [Build skills](https://learn.chatgpt.com/docs/build-skills)
 - [Prompt engineering](https://developers.openai.com/api/docs/guides/prompt-engineering)
 - [Model guidance（最新模型 prompting 最佳实践）](https://developers.openai.com/api/docs/guides/latest-model)

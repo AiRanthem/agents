@@ -20,7 +20,7 @@
 4. 比较 `~/.codex/AGENTS.md` 与本目录的 `AGENTS.md`。当目标是普通文件且内容已由仓库完整收录时，将目标替换为指向本目录 `AGENTS.md` 的绝对软链接；当目标是软链接时，将链接更新为本目录的绝对路径；当目标包含仓库尚未收录的内容时，先展示差异并取得用户决定。
 5. 确保 `~/.codex/hooks/` 存在，将 `session-start.py` 和 `subagent-start.py` 分别安装为本目录对应入口的绝对软链接。保留目录中的无关文件；目标已正确链接时不修改，其他目标先比较并保留未收录内容。共享模块和正文通过脚本真实路径读取，无需另装链接。
 6. 读取 `~/.codex/hooks.json` 和本目录的 `hooks.json`，按事件合并 `hooks` 数组。以 `(event, matcher, statusMessage)` 识别仓库 handler：两个 `SessionStart` handler 为 `compact` / `Reloading Agent instructions` 和 `^(startup|resume|clear|fork|compact)$` / `Loading main-agent delegation`；`SubagentStart` 为 `.*` / `Loading Astra subagent delegation`。原位更新已存在的 handler；不存在时追加到相同 matcher 的组，无此组则在事件数组末尾追加。保留其他顶层字段、事件、matcher 和同组无关 handler，不重排原有条目，以保留其索引对应的信任状态。验证完整候选 JSON 后再替换目标文件。
-7. 将本目录 `skills/` 中的各个 skill 以独立绝对软链接安装到 `~/.codex/skills/<name>`，保留 `.system` 和其他无关 skills。目标已正确链接时不做修改；目标是其他链接或普通文件、目录时，先检查差异，保留未收录内容并取得用户决定后再替换。
+7. 按下文“专属技能元数据与重复发现”安装本目录 `skills/` 的独立绝对软链接和发现配置，保留 `.system` 与其他无关 skills。已正确链接的目标不改；指向本仓库公共同名 skill 的链接改为原生入口。其他链接、普通文件或目录先比较，含未收录内容时取得用户决定后替换。
 8. 使用 JSON 解析器验证合并后的 `~/.codex/hooks.json`，验证各个专用 skill 的 frontmatter，以及安装链接、事件匹配和脚本输出。检查 hook 输出是否完整进入已配置的 `additionalContextLimit`；若被截断，报告配置缺口，保留提示词源文件内容。运行 `codex --strict-config doctor --summary --no-color`，区分存量告警与本次新增问题。
 9. 在 Codex 中打开 `/hooks`，审核并信任新增或发生变化的 hook 定义，再开启新会话加载配置。未信任的 hook 会被跳过；JSON 或 doctor 检查成功不代表 hook 已获信任。参见 [官方审核与信任说明](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
 
@@ -53,7 +53,7 @@ max_concurrent_threads_per_session = 20
 
 ## 原生角色安装
 
-宿主配置 helper `scripts/host_agents.py` 需要 Python 3.11 或更高版本（使用标准库 `tomllib`）；按当前工作区规定选择满足此要求的解释器。
+宿主配置 helper `codex/host.py` 需要 Python 3.11 或更高版本（使用标准库 `tomllib`）；按当前工作区规定选择满足此要求的解释器。
 
 原生文件遵循
 [OpenAI Subagents 的独立 TOML 格式](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents)：
@@ -65,14 +65,14 @@ max_concurrent_threads_per_session = 20
 普通文件不改。已有目标不同且包含仓库未收录内容时，先展示准确差异并取得用户决定。
 清理时只移除可确认由本仓库管理且源文件已删除的目标；无法确认归属的普通文件保留并报告。
 
-`host_agents.py check` 检查四个自主阶段角色，要求普通 TOML 文件并校验完整内容；
+`host.py check` 检查四个自主阶段角色，要求普通 TOML 文件并校验完整内容；
 `astra-delegate.toml` 也须按上述流程安装并单独核对内容。共享 skill 使用独立软链接。
 
 与共享 skills 安装配合，确认 `advance-project` 和四阶段所需共享技能均可读。运行：
 
 ```sh
-python3 <dev-kit-root>/scripts/host_agents.py check --host codex
-python3 <dev-kit-root>/scripts/host_agents.py role --host codex --name project-implementer
+python3 <dev-kit-root>/codex/host.py check
+python3 <dev-kit-root>/codex/host.py role --name project-implementer
 ```
 
 第一条应返回 `disk_ready=true`；第二条返回的原生角色完整配置与正文应与源文件一致。
@@ -81,3 +81,34 @@ python3 <dev-kit-root>/scripts/host_agents.py role --host codex --name project-i
 `codex debug prompt-input`，确认无新增配置错误；`prompt-input` 不输出完整工具或原生角色定义。
 正式安装后开启新会话核对原生角色发现和真实工具选择能力。磁盘和临时目录检查只证明
 安装内容与配置加载就绪，实际派发尚未执行时应单独标为未验证。
+
+## 共享入口与官方依据
+
+执行本目录安装后，再执行 [共享技能安装](../skills/INSTALL.md)。项目命令使用
+`python3 <dev-kit-root>/codex/project.py --root <project> COMMAND`；返回续接命令含准确身份的环境参数，原样执行，不依赖上一条 shell 的环境。
+自主推进先加载 [AUTONOMY.md](AUTONOMY.md)，再进入共享技能。
+
+- [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
+- [Build skills](https://learn.chatgpt.com/docs/build-skills)
+- [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+
+## 专属技能元数据与重复发现
+
+`skills/<name>/SKILL.md` 是轻量原生入口，完整读取公共 skill；`agents/openai.yaml`
+只在本目录中提供界面和调用策略。保持四个显式技能的 `allow_implicit_invocation: false`
+及其他既有策略，不把公共来源作为第二个可隐式调用的同名技能。
+
+运行 `python3 <dev-kit-root>/codex/skill_entries.py` 取得精确安装清单：将 `source`
+按前述保留数据规则链接到 `target`，并把每项 `config` 按 `path` 合并进用户
+`~/.codex/config.toml` 的 `[[skills.config]]`，保留无关条目。原生入口的路径不得禁用；
+公共物理路径和用户级链接路径均禁用发现，但仍允许原生入口完整读取公共文件。
+不要删除公共 `~/.agents/skills` 链接，其他宿主仍使用它。
+运行 `python3 <dev-kit-root>/codex/skill_entries.py --check` 核对原生入口链接与重复来源
+禁用配置；该检查只报告事实，不修改配置，`runtime_verified=false` 不代表真实调用通过。
+
+官方 [Build skills](https://learn.chatgpt.com/docs/build-skills) 说明同名技能不会合并，
+`agents/openai.yaml` 控制界面与调用策略，`[[skills.config]]` 可禁用特定来源。
+用临时 `CODEX_HOME` 安装候选链接及配置并运行 `codex debug prompt-input`，确认
+每个允许隐式调用的同名技能只出现一次且来源在本目录，四个显式技能不进入自动
+发现候选，元数据和调用策略与源文件一致；再执行正式合并。
+新会话才加载目录与调用策略变更，配置解析通过不等于真实技能或阶段已执行。

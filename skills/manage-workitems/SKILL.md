@@ -5,7 +5,7 @@ description: Create, find, update or archive work items through the fixed projec
 
 # Manage Work Items
 
-Use installed [project.py](scripts/project.py) and the [command contract](references/commands.md). The program owns YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
+Resolve the project command entrypoint through the [command contract](references/commands.md), honoring the caller's supplied binding before the shared [fallback](scripts/project.py). The program owns YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
 
 ## Progress report
 
@@ -27,4 +27,4 @@ Keep each development item independently usable in one code repository. Hierarch
 
 Design and implementation use [develop-workitem](../develop-workitem/SKILL.md); actual delivery uses [complete-workitem](../complete-workitem/SKILL.md). The controller is the registrar, not the author or independent reviewer of every delegated result. A checkpoint cannot invent user approval, actual executor identity, independent review, human acceptance or delivery evidence. Project metadata publication does not authorize code commits or code pushes.
 
-Report the full ID and title, substantive outcome and returned persistence status, for example `123-quota-lock（统一配额锁）`. Use [project context](references/project-context.md) for routing, [schema](references/schema.md) for record ownership and [recovery](references/recovery.md) for restoration scope. Native Plan mode remains read-only.
+Report the full ID and title, substantive outcome and returned persistence status, for example `123-quota-lock（统一配额锁）`. Use [project context](references/project-context.md) for routing, [schema](references/schema.md) for record ownership and [recovery](references/recovery.md) for restoration scope. Read-only planning mode remains read-only.

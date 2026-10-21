@@ -1,6 +1,6 @@
 # Autonomous project controller
 
-Work from the schema-v2 management root. Read its original `AGENTS.md`, the [command contract](../../manage-workitems/references/commands.md), [project context](../../manage-workitems/references/project-context.md) and the active host adapter: [Codex](../../../codex/AUTONOMY.md) or [Qoder](../../../qoder/AUTONOMY.md). Autonomous advancement runs on those hosts. When the current host has neither adapter, report that boundary and do not dispatch stage roles. Resolve the installed physical `project.py` and required Python environment. The controller owns project commands, formal documents and Git/Aone persistence. Stage executors own their assigned investigation, source and assessment.
+Work from the schema-v2 management root. Read its original `AGENTS.md`, the [command contract](../../manage-workitems/references/commands.md) and [project context](../../manage-workitems/references/project-context.md). The caller supplies the project command entrypoint, stable execution identity and available stage-role bindings, including configuration-check evidence and permission limits. Missing required bindings block the affected stage; the shared controller does not discover or import platform implementations. The controller owns project commands, formal documents and Git/Aone persistence. Stage executors own their assigned investigation, source and assessment.
 
 ## Scope and control
 
@@ -12,15 +12,15 @@ When continuation in this conversation is authorized and an item reports `contro
 
 ## Stages and evidence
 
-Run the active adapter's real configuration check. Disk readiness is not evidence of successful native dispatch, runtime model identity or tool access. Use these fixed first-level roles; each executor manages its descendants, models and cleanup within actual host limits. Do not add work-item managers or propagate controller routing into descendants.
+Verify the caller-supplied configuration evidence and actual dispatch capabilities. Disk readiness is not evidence of successful dispatch, runtime model identity or tool access. Bind these first-level responsibilities to the supplied executors; each executor manages its descendants and cleanup within actual limits. Do not add work-item managers or propagate controller routing into descendants.
 
-| Ready role | Native role | Explicit skill |
-| --- | --- | --- |
-| `design-review` | `project-design-reviewer` | `review-design` |
-| `design-revision` | `project-design-reviewer` | `explore-design` |
-| `implementation`, `baseline`, `rebase` | `project-implementer` | `implement-design` |
-| `code-review` | `project-implementation-reviewer` | `review-implementation` (`single-agent`) |
-| `fix` | `project-fixer` | `receiving-code-review` |
+| Ready role | Explicit skill |
+| --- | --- |
+| `design-review` | `review-design` |
+| `design-revision` | `explore-design` |
+| `implementation`, `baseline`, `rebase` | `implement-design` |
+| `code-review` | `review-implementation` (`single-agent`) |
+| `fix` | `receiving-code-review` |
 
 Resolve code-review mode as `single-agent` before dispatch on every host, including re-review and cross-host continuation. Pass that explicit mode to the executor; do not pause advancement to ask about multi-agent review. One qualified reviewer independent of implementation and fixes covers correctness, implementation quality, security, tests and high-risk boundaries under the [shared review contract](../../review-implementation/references/review-standard.md). No review descendants are required.
 

@@ -22,10 +22,10 @@ try:
     import project_runtime as runtime
     import project_store as store
     import project_retention as retention
-    import project_host
+    import project_identity
     from workitem_ids import allocate_ids
 except ImportError:  # package entrypoint
-    from . import project_runtime as runtime, project_store as store, project_retention as retention, project_host
+    from . import project_runtime as runtime, project_store as store, project_retention as retention, project_identity
     from .workitem_ids import allocate_ids
 
 ProjectError = runtime.ProjectError
@@ -138,9 +138,9 @@ def _load_manifest(root, directory):
 
 
 def _session():
-    session = project_host.current_session()
+    session = project_identity.current_session()
     if not session:
-        raise ProjectError(project_host.session_error())
+        raise ProjectError(project_identity.session_error())
     return session
 
 

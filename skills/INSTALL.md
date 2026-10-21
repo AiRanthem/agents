@@ -4,7 +4,7 @@
 
 ## 安装
 
-1. 读取仓库根目录的 `AGENTS.md`，并读取维护当日与 Codex skills 结构和发现路径相关的官方 OpenAI 文档。
+1. 读取仓库根目录的 `AGENTS.md`，核对共享技能与安装目标。
 2. 使用 `find skills -mindepth 2 -maxdepth 2 -name SKILL.md` 发现并验证仓库中的每个 skill，确保 `~/.agents/skills` 存在。skill 名为含 `SKILL.md` 的目录名，且须与 frontmatter `name` 一致。
 3. 对每个 skill，将 `~/.agents/skills/<name>` 创建或更新为指向仓库 `skills/<name>` 绝对路径的软链接。目标若是普通文件或目录，先展示它与仓库的差异并取得用户决定。已有软链接更新为仓库目录的绝对路径。
 4. 检查 `~/.agents/skills` 中解析目标位于当前仓库 `skills/` 目录内的条目。名称属于当前 skill 集合的保留并校正；名称不属于当前集合的删除。保留其他文件、目录和软链接。
@@ -16,33 +16,11 @@
 
 ## 自主项目推进
 
-[advance-project](advance-project/SKILL.md) 是共享主控入口，安装时同其他 skill 一样补齐独立用户级软链接。阶段技能保留各自质量要求并按实际模式加载 references。仅安装技能链接不代表宿主已具备固定角色配置或委派能力；自主入口支持 [Codex](../codex/AUTONOMY.md) 和 [Qoder](../qoder/AUTONOMY.md)，按当前宿主适配安装并检查真实固定角色配置，不得静默选择其他模型继续。Qoder 在用户级直接发现 `~/.agents/skills` 的共享技能链接，无需重复安装。
+[advance-project](advance-project/SKILL.md) 是共享主控入口，安装时同其他 skill 一样补齐独立用户级软链接。阶段技能保留各自质量要求并按实际模式加载 references。安装技能链接只证明内容可读；实际执行能力、身份和权限由调用方提供并验证，缺失必要能力时不得冒充执行成功。
 
 ## 第三方技能接管
 
 先让仓库内替代技能可审阅并通过验证，再检查原目录、调用策略与来源元数据。第三方普通目录不属于第 4 步的仓库软链接清理范围；取得迁移授权后，将指定原目录完整备份到技能发现路径之外，再验证旧版不再被发现。低价值技能可以不吸收；停用其现存安装仍须在授权范围内。
-
-2026-09-10：已安装 `systematic-debugging`、`receiving-code-review`、`diff-reading-order` 的独立用户级软链接，分别指向本仓库同名目录。前两者保留原安装的 `allow_implicit_invocation: false`。本地 `absorb-skill` 位于 `.agents/skills/`，不创建用户级链接。经用户授权，四个旧目录已完整移至 `~/.agents/skill-backups/20260910-150354-devkit-absorption/`，保留原相对目录结构及文件 SHA-256 清单 `manifest.json`，移动前后文件哈希一致。Codex 发现检查中旧条目已消失，`diff-reading-order` 仅保留新版；两个显式技能的实际调用仍未由该发现检查验证。
-
-2026-09-10：新增 `rebase-worktree` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/rebase-worktree`，指向本仓库 `skills/rebase-worktree`。
-
-2026-09-10：新增 `optimize-tests` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/optimize-tests`，指向本仓库 `skills/optimize-tests`。
-
-2026-09-11：更新 `optimize-tests` 的行为目标及入口提示词；验证现有用户级软链接仍指向本仓库且可读取更新后的正文，无需调整链接或机器配置。格式与链接检查不等同于新会话中的实际调用验证。
-
-2026-09-11：更新 `review-implementation` 的主审选择、问题归属与存量警告规则，并同步 `implement-design` 的高风险主审选择规则；验证现有用户级软链接可读取更新后的正文，无需调整机器配置。`codex debug prompt-input` 成功，但未注入显式技能正文，未验证新会话中的实际调用。
-
-2026-09-14：更新 `create-worktree`，使新建本地分支按仓库既有命名映射创建对应远程分支并设置 upstream；验证现有用户级软链接可读取更新后的正文，无需调整链接或机器配置。
-
-2026-09-15：更新 `create-worktree` 的界面标题及远程分支、追踪配置的完成标准；通过现有用户级软链接读取更新，无需调整链接或机器配置。
-
-2026-09-16：将 `translate-design` 重构并重命名为 `explain-design`，同步用户级软链接 `~/.agents/skills/explain-design`，指向本仓库 `skills/explain-design`；移除原来指向本仓库的 `~/.agents/skills/translate-design` 链接。已进一步完善面向陌生读者的信息取舍与语义核对，并在交付前加入独立 subagent 内容审查、修订和复核；现有链接继续读取更新后的技能。
-
-2026-09-18：新增 `implement-poc` 共享 skill，并安装独立用户级软链接 `~/.agents/skills/implement-poc`，指向本仓库 `skills/implement-poc`。
-
-2026-09-20：新增 `cleanup-worktree` 共享 skill；安装独立用户级软链接 `~/.agents/skills/cleanup-worktree`，指向本仓库 `skills/cleanup-worktree`。
-
-`cleanup-worktree` 按非忽略文件已提交并推送、工作树干净和远程可恢复判断清理资格；保留远程引用。现有用户级软链接直接读取仓库中的技能，无需调整链接或机器配置。
 
 ## 验证
 

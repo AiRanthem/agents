@@ -544,59 +544,64 @@ class ProjectV2PublishTest(unittest.TestCase):
 
 
 class ProjectOutputTest(unittest.TestCase):
-    def test_explicit_identity_resume_keeps_business_token_separate_from_host_context(self):
-        with mock.patch.dict(project.os.environ, {'CODEX_THREAD_ID': 'codex', 'PROJECT_SESSION_ID': 'qoder'}, clear=True):
-            for host in (None, 'codex', 'qoder'):
-                for journal in (None, '/tmp/journal.json'):
-                    with self.subTest(host=host, journal=journal):
-                        sessions = []
-                        def resume(*args, **kwargs):
-                            sessions.append(project.project_host.current_session())
-                            return {'status': 'published'}
-                        arguments = (['--host', host] if host else []) + ['resume', '--identity-file', '/tmp/identity.json']
-                        if journal:
-                            arguments += ['--journal', journal]
-                        output = io.StringIO()
-                        with mock.patch.object(project, '_json_input', return_value={'session': 'bound-session', 'token': 'business-token'}), \
-                                mock.patch.object(project, 'resume', side_effect=resume) as old_resume, \
-                                mock.patch.object(runtime, 'resume_publication', side_effect=resume) as publication, \
-                                contextlib.redirect_stdout(output):
-                            self.assertEqual(project.main(arguments), 0)
-                        self.assertEqual(json.loads(output.getvalue()), {'status': 'published'})
-                        self.assertEqual(sessions, ['qoder' if host == 'qoder' else 'codex'])
-                        if journal:
-                            publication.assert_called_once_with('.', session='bound-session', token='business-token', journal=journal)
-                        else:
-                            old_resume.assert_called_once_with('.', 'bound-session', 'business-token', None)
-                        self.assertEqual(project.project_host.current_session(), 'codex')
+    def test_explicit_identity_resume_keeps_business_token_separate_from_execution_context(self):
+        with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'outer-session'}, clear=True):
+            for journal in (None, '/tmp/journal.json'):
+                sessions = []
+                def resume(*args, **kwargs):
+                    sessions.append(project.project_identity.current_session())
+                    return {'status': 'published'}
+                arguments = ['resume', '--identity-file', '/tmp/identity.json']
+                if journal:
+                    arguments += ['--journal', journal]
+                output = io.StringIO()
+                with mock.patch.object(project, '_json_input', return_value={'session': 'bound-session', 'token': 'business-token'}), \
+                        mock.patch.object(project, 'resume', side_effect=resume) as old_resume, \
+                        mock.patch.object(runtime, 'resume_publication', side_effect=resume) as publication, \
+                        contextlib.redirect_stdout(output):
+                    self.assertEqual(project.main(arguments, session='caller-session'), 0)
+                self.assertEqual(json.loads(output.getvalue()), {'status': 'published'})
+                self.assertEqual(sessions, ['caller-session'])
+                if journal:
+                    publication.assert_called_once_with('.', session='bound-session', token='business-token', journal=journal)
+                else:
+                    old_resume.assert_called_once_with('.', 'bound-session', 'business-token', None)
+                self.assertEqual(project.project_identity.current_session(), 'outer-session')
 
-    def test_host_selection_preserves_codex_output_and_binds_qoder_continuations(self):
+    def test_caller_entrypoint_binds_nested_continuations_and_restores_context(self):
         entry = str(Path(project.__file__).resolve())
         command = shlex.join([sys.executable, entry, '--root', '/tmp/project with spaces', 'resume', '--ticket', 'ticket'])
         expected = {'status': 'ready', 'finish_command': command,
                     'recovery': {'continuation_command': command}, 'checks': [{'update_command': command}],
                     'external_command': 'git status'}
-        with mock.patch.dict(project.os.environ, {'CODEX_THREAD_ID': 'codex', 'PROJECT_SESSION_ID': 'qoder'}, clear=True):
-            for host in (None, 'codex', 'qoder'):
-                with self.subTest(host=host):
-                    output = io.StringIO()
-                    sessions = []
-                    def query(args):
-                        sessions.append(project.project_host.current_session())
-                        return copy.deepcopy(expected)
-                    args = (['--host', host] if host else []) + ['show', 'A']
-                    with mock.patch.object(project, '_query', side_effect=query), contextlib.redirect_stdout(output):
-                        self.assertEqual(project.main(args), 0)
-                    result = json.loads(output.getvalue())
-                    self.assertEqual(sessions, ['qoder' if host == 'qoder' else 'codex'])
-                    if host != 'qoder':
-                        self.assertEqual(result, expected)
-                    else:
-                        for value in (result['finish_command'], result['recovery']['continuation_command'], result['checks'][0]['update_command']):
-                            self.assertEqual(shlex.split(value)[2:4], ['--host', 'qoder'])
-                            self.assertEqual(shlex.split(value)[4:], shlex.split(command)[2:])
-                        self.assertEqual(result['external_command'], 'git status')
-                    self.assertEqual(project.project_host.current_session(), 'codex')
+        with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'outer-session'}, clear=True):
+            for command_prefix in (None, [sys.executable, '/tmp/caller with spaces/entry.py'], ['env', 'EXECUTION_SESSION=quoted session', sys.executable, '/tmp/entry.py']):
+                output = io.StringIO()
+                sessions = []
+                def query(args):
+                    sessions.append(project.project_identity.current_session())
+                    return copy.deepcopy(expected)
+                with mock.patch.object(project, '_query', side_effect=query), contextlib.redirect_stdout(output):
+                    self.assertEqual(project.main(['show', 'A'], session='caller-session', command_prefix=command_prefix), 0)
+                result = json.loads(output.getvalue())
+                self.assertEqual(sessions, ['caller-session'])
+                if command_prefix is None:
+                    self.assertEqual(result, expected)
+                else:
+                    for value in (result['finish_command'], result['recovery']['continuation_command'], result['checks'][0]['update_command']):
+                        self.assertEqual(shlex.split(value)[:len(command_prefix)], command_prefix)
+                        self.assertEqual(shlex.split(value)[len(command_prefix):], shlex.split(command)[2:])
+                    self.assertEqual(result['external_command'], 'git status')
+                self.assertEqual(project.project_identity.current_session(), 'outer-session')
+
+    def test_explicit_missing_identity_cannot_fall_back_and_failed_call_restores_context(self):
+        with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'outer-session'}, clear=True):
+            def query(args):
+                self.assertIsNone(project.project_identity.current_session())
+                raise runtime.ProjectError('caller failed')
+            with mock.patch.object(project, '_query', side_effect=query), contextlib.redirect_stdout(io.StringIO()):
+                project.main(['show', 'A'], session=None)
+            self.assertEqual(project.project_identity.current_session(), 'outer-session')
 
     def test_migration_partial_is_compact_and_resumes_original_identity(self):
         prepared = {'status': 'partial', 'writes': {'workitems/1-demo/requirement.md': 'long prose' * 1000},

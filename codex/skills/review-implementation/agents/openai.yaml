@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Implementation"
+  short_description: "Review an implementation in single-agent or multi-agent mode"
+  default_prompt: "Use $review-implementation: gather original context and prepare a review plan without findings, honor my established review mode or ask once whether to use multi-agent before assessment, and synthesize the report after personally assessing critical behavior, test oracles and omissions."
+policy:
+  allow_implicit_invocation: false

@@ -7,9 +7,11 @@ description: Autonomously advance an explicitly requested managed-project scope 
 
 Coordinate from the management project root and manage each item’s stage task tree directly. Project state tracks current artifacts and control claims; native executors and their liveness belong to the advancing agent. Advance every ready development item within the requested scope, subject to actual host capacity. Keep project records and lifecycle operations with the controller; keep code, investigation and review with stage executors. Do not introduce work-item managers.
 
-Read [discussion and authorization](references/discussion-and-authorization.md). In Agent mode, read [coordinator](references/coordinator.md) and the selected host adapter before dispatch. A delegated stage executor instead reads [stage-executor](references/stage-executor.md) and its stage skill; it does not become a project controller.
+Read [discussion and authorization](references/discussion-and-authorization.md). In execution mode, read [coordinator](references/coordinator.md) and confirm the caller-supplied execution bindings before dispatch. A delegated stage executor instead reads [stage-executor](references/stage-executor.md) and its stage skill; it does not become a project controller.
 
-Native Plan is a read-only host mode, not an autonomous execution mode. Inspect existing scope, contracts, readiness and capabilities without authorizing, spawning writers, preparing worktrees or publishing records. A user request for autonomous work does not lift Plan or harness permissions.
+For code review and re-review, the coordinator selects `single-agent` and explicitly passes that mode to `review-implementation`. The executor follows the assigned mode without asking for mode confirmation.
+
+Read-only planning is a read-only host mode, not an autonomous execution mode. Inspect existing scope, contracts, readiness and capabilities without authorizing, spawning writers, preparing worktrees or publishing records. A user request for autonomous work does not lift planning-mode or harness permissions.
 
 When explicitly enabled or resuming an existing generation, also read [predevelopment](references/predevelopment.md). It defines frozen prerequisite snapshots and mandatory formal convergence; default advancement retains ordinary prerequisite gates.
 

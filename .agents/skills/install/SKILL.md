@@ -1,21 +1,17 @@
 ---
 name: install
-description: Install, update, repair, or verify this repository's shared skills and the active Agent's configuration on the current machine.
+description: Install, update, repair, or verify this repository's shared skills on the current machine.
 ---
 
 # Install
 
-Make the repository's checked-in configuration for the active Agent and its shared global skills active on the current machine while preserving unrelated local configuration.
+Make the repository's shared global skills active on the current machine while preserving unrelated local configuration. A caller may supply an additional authorized installation contract; this shared skill does not discover or select platform implementations.
 
 ## Source and selection
 
 Resolve the physical path of this `SKILL.md`. Derive the dev-kit repository root from the `.agents/skills/install/SKILL.md` layout, and keep every discovery and installation action scoped to that root.
 
-Read the dev-kit repository `AGENTS.md`, then discover installation documents with `rg --files --hidden -g 'INSTALL.md' <dev-kit-root>`.
-
-Always select `skills/INSTALL.md` to install the shared skills globally. Identify the active Agent from the runtime identity, then select only the top-level directory whose name matches that Agent and contains an `INSTALL.md`; for example, Codex selects `codex/INSTALL.md`. Read the selected documents completely before changing their targets.
-
-When the active Agent cannot be identified reliably or has no matching installation document, stop the Agent-specific installation and report the missing match. Continue with the shared skills only when the user's request permits a partial installation.
+Read the dev-kit repository `AGENTS.md` and `skills/INSTALL.md` completely before changing installation targets. Use the shared installation contract and any additional contract already supplied by the caller; do not infer another contract from runtime identity.
 
 Use the selected installation documents as the contract for destination paths, merge behavior, validation, and restart or trust steps. Treat an explicit install or update request as authorization for the local configuration writes described by those documents.
 
@@ -27,4 +23,4 @@ Merge structured configuration at the documented key or array boundary. Preserve
 
 ## Completion
 
-Run every verification required by the selected installation documents. Report the active Agent, selected installation documents, installed links, merged configuration entries, validation results, and any remaining interactive trust or restart step.
+Run every verification required by the selected installation documents. Report the supplied installation contracts, installed links, merged configuration entries, validation results, and any remaining interactive trust or restart step.

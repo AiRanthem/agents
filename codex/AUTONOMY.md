@@ -2,15 +2,19 @@
 
 适用于同一 Codex harness 的所有使用形态。业务流程读取共享
 `advance-project` 及其 coordinator / stage-executor 引用；本文件只定义宿主边界。
-从已安装 `advance-project` 的物理路径回到本仓库，使用以下检查：
+解析本文件物理路径以定位本仓库，使用以下检查：
 
 ```sh
 python3 <dev-kit-root>/codex/host.py check
+python3 <dev-kit-root>/codex/skill_entries.py --check
 ```
 
-共享 dispatcher 的 `scripts/host_agents.py check --host codex` 保持相同输出和校验；
-`codex/host.py` 维护原有模型配置与身份优先级，项目 CLI 显式传入 `--host codex`。
-返回命令仍使用原始渲染，不改变项目存储或恢复协议。
+`codex/host.py` 维护本宿主模型配置；项目命令使用
+`python3 <dev-kit-root>/codex/project.py --root <project> COMMAND`。该入口读取
+`CODEX_THREAD_ID`，缺失时读取 `PROJECT_SESSION_ID`，并将身份传给共享项目逻辑；
+返回命令继续使用本入口并绑定准确身份的环境参数，不依赖上一条 shell 的环境；
+项目存储及恢复身份协议保持不变。主控在进入共享 coordinator 前
+提供以上命令入口、角色映射、配置检查证据和当前权限；共享层不负责加载本适配。
 
 检查只证明磁盘配置与技能入口就绪。实际权限、工具、模型访问、项目级覆盖及
 原生角色发现仍以当前会话为准；不得把 `disk_ready` 当作真实派发证据。
@@ -24,7 +28,7 @@ python3 <dev-kit-root>/codex/host.py check
 
 主控直接选择安装在 `~/.codex/agents/` 的原生角色。使用当前工具 schema 实际提供的
 角色选择参数；`task_name` 是任务名称，不能替代角色选择。若当前工具没有原生类型选择，
-先运行 `host_agents.py role --host codex --name <角色>`，把输出的 `model`、
+先运行 `codex/host.py role --name <角色>`，把输出的 `model`、
 `model_reasoning_effort` 分别传给实际 spawn 工具的 model / reasoning_effort 参数，
 设 `fork_turns: "none"`，并把完整 `developer_instructions` 加入阶段任务。这样完成同一
 固定角色的显式派发；记录实际方式与参数，不伪称原生模板选择。只有两种路径均不能

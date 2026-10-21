@@ -1,8 +1,8 @@
-# Agent-mode design document
+# Design document during execution
 
-Read this reference only for ordinary Agent-mode document writing after identifying the active host mode. Native Plan discussion and delegated project stage executors do not use this write workflow. Executors follow their assigned candidate paths and return them to the controller without official-document writes.
+Read this reference only for ordinary execution-mode document writing after identifying the active host mode. Read-only planning discussion and delegated project stage executors do not use this write workflow. Executors follow their assigned candidate paths and return them to the controller without official-document writes.
 
-In a schema-v2 project, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, keep machine status out of its frontmatter, and record approval/review state through the project command workflow. Direct split-workitem exploration can end with an authorized handoff without writing a spec. Do not create a second standalone design document. Plan mode remains read-only.
+In a schema-v2 project, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, keep machine status out of its frontmatter, and record approval/review state through the project command workflow. Direct split-workitem exploration can end with an authorized handoff without writing a spec. Do not create a second standalone design document. read-only planning mode remains read-only.
 
 ## Confirm the path
 

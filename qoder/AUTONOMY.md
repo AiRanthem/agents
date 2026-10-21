@@ -10,10 +10,10 @@
 python3 <dev-kit-root>/qoder/host.py check
 ```
 
-Qoder 专用入口为 `qoder/host.py`（`check`、`role --name`）；共享 dispatcher
-仍为 `scripts/host_agents.py <command> --host qoder`。`disk_ready` 只证明报告中列明的
-磁盘模板、技能入口、身份 hook 和配置核对通过，不证明当前会话工具、模型访问、
-身份注入或权限可用。Qoder 身份与 override 校验留在本宿主，不改变 Codex 的身份行为。
+Qoder 专用入口为 `qoder/host.py`（`check`、`role --name`）。`disk_ready` 只证明报告
+列明的磁盘模板、技能入口、身份 hook 和配置核对通过，不证明当前会话工具、模型访问、
+身份注入或权限可用。主控在进入共享 coordinator 前提供本文件的角色绑定、检查证据、
+项目命令入口和权限边界；共享层不负责加载本适配。
 
 四个原生角色固定具体型号：两类审查 Qwen3.8-Max / xhigh，实现和修复 DeepSeek-Flash / max。
 原生 `model` 字段使用 `"[显示名](模型 ID)"` 形式；ID 于 2026-10-19 按本机 `/model`
@@ -73,8 +73,9 @@ follow-up 工具时，复审用新的干净派发交付当前原始输入与可�
 
 主控使用 SessionStart 身份 hook（`qoder/hooks/session-identity.py`）注入的
 `additionalContext`，在每条 project.py 命令的同一命令内导出其准确的
-`PROJECT_SESSION_ID=<session_id>`，并在项目子命令前显式传入 `--host qoder`。
-该入口只读取 `PROJECT_SESSION_ID`，不使用继承的 `CODEX_THREAD_ID`；Codex 入口保留原有优先级。
+`PROJECT_SESSION_ID=<session_id>`，调用
+`python3 <dev-kit-root>/qoder/project.py --root <project> COMMAND`。
+该入口只读取 `PROJECT_SESSION_ID`，返回续接命令保留本入口与准确身份的环境参数，原样执行，不依赖上一条 shell 的环境。
 身份来自当前 Qoder hook，不能用逐轮值、worker ID、其他宿主变量或随机值替代。
 hook 未安装、未生效或当前主控身份未暴露时，报告缺口并阻塞项目状态写入。
 
@@ -96,3 +97,7 @@ hook 未安装、未生效或当前主控身份未暴露时，报告缺口并阻
 共享 skill、原生角色和适配须在实际环境可读。Qoder 用户级通过 `~/.agents/skills`
 发现共享 skills，无需 `~/.qoder/skills` 重复链接。角色是安装副本，仓库修改后须按
 [安装与更新](INSTALL.md)重新复制并 reload；磁盘更新与当前会话加载是不同证据。
+
+共享技能的只读规划合同对应本宿主明确启用的 Plan；普通执行合同对应 Agent 并保留
+实际权限。仅提到计划、探索姿态或工具拒绝不能切换模式。授权安装时由本宿主入口
+提供 [INSTALL.md](INSTALL.md)，公共安装技能只执行已提供的安装合同。

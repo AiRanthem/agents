@@ -14,8 +14,8 @@ In a schema-v2 project, preserve the generic POC acceptance and trimmed-scope au
 ## Respect authority and host mode
 
 - Follow user, harness, and higher-priority instructions, including permissions, security and data-protection boundaries, and safeguards for destructive or external actions. A POC does not expand authorization.
-- **Plan mode** applies only when active host instructions explicitly establish native Plan mode. It is read-only: settle the acceptance contract and trimmed implementation or repair design, then return that design as the host's single final plan.
-- **Agent mode** is normal operation outside native Plan restrictions. After the user confirms the acceptance contract and trimmed design, implement it directly without another planning phase.
+- **read-only planning mode** applies only when active host instructions explicitly establish read-only planning mode. It is read-only: settle the acceptance contract and trimmed implementation or repair design, then return that design as the host's single final plan.
+- **execution mode** is normal operation outside read-only planning restrictions. After the user confirms the acceptance contract and trimmed design, implement it directly without another planning phase.
 - Preserve unrelated and pre-existing work. Do not create or modify design documents, ADRs, OpenSpec artifacts, task files, or review reports.
 
 ## Require an explicit acceptance contract
@@ -33,7 +33,7 @@ When criteria are missing or ambiguous, inspect the design and relevant current 
 
 ## Trim the design with the user
 
-Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. In Agent mode, when starting a POC without a current `implementable` status, explain the missing review assurance and obtain the user's explicit agreement before implementation; combine this with the acceptance and trimmed-design confirmation when useful. An approved Plan-mode final plan and its execution need no document status. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
+Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. In execution mode, when starting a POC without a current `implementable` status, explain the missing review assurance and obtain the user's explicit agreement before implementation; combine this with the acceptance and trimmed-design confirmation when useful. An approved read-only planning final plan and its execution need no document status. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
 
 Present the user with three explicit groups and obtain confirmation before planning or implementation:
 
@@ -47,8 +47,8 @@ Keep the trimmed design only in the conversation or host-managed plan. Never wri
 
 ## Produce the mode-specific result
 
-- **Plan mode:** Put the confirmed acceptance contract and trimmed implementation or repair design directly in the final plan. For a failed POC, include the log-supported failure point and code change. Include ordered implementation actions, the minimal happy-path integration check, required diagnostic logging, and the final diagnostic subagent audit. Tell the executor to load `$implement-poc` and execute this confirmed plan in Agent mode. Then stop without repository writes or implementation claims.
-- **Agent mode:** Implement the confirmed trimmed design immediately. If resuming a plan, load `$implement-poc`, verify that the acceptance environment and relevant code assumptions still hold, and proceed. Return to the user only when new evidence changes the acceptance contract or trimmed design.
+- **read-only planning mode:** Put the confirmed acceptance contract and trimmed implementation or repair design directly in the final plan. For a failed POC, include the log-supported failure point and code change. Include ordered implementation actions, the minimal happy-path integration check, required diagnostic logging, and the final diagnostic subagent audit. Tell the executor to load `$implement-poc` and execute this confirmed plan in execution mode. Then stop without repository writes or implementation claims.
+- **execution mode:** Implement the confirmed trimmed design immediately. If resuming a plan, load `$implement-poc`, verify that the acceptance environment and relevant code assumptions still hold, and proceed. Return to the user only when new evidence changes the acceptance contract or trimmed design.
 
 ## Optimize only for time to acceptance
 

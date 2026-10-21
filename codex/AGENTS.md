@@ -24,3 +24,13 @@
 
 * When an independent review starts from shared original material and a neutral review plan, prefer native full-context forks (`fork_turns: "all"`) for eligible same-model/same-effort reviewers. Dispatch the initial review tasks before forming or importing review findings, and append each reviewer's scope without recopying inherited originals.
 * Preserve user model and role choices, permissions and review independence. Use clean dispatch when inherited history contains the target's authorship or prior judgments, or full-context reuse is unavailable. Record any fallback and claim cache savings only from actual usage evidence.
+
+# Native entry bindings
+
+* Resolve this instruction file's physical repository directory and use its `project.py` for project commands; it supplies the stable identity from `CODEX_THREAD_ID` or `PROJECT_SESSION_ID` and preserves that entrypoint in returned continuations. Do not generate a new identity or substitute a worker ID.
+* Before starting `advance-project`, load this directory's `AUTONOMY.md` and supply its role bindings, configuration evidence, project command entrypoint and permission limits to the shared controller. Other shared skills remain platform-neutral.
+* For an authorized installation request, load this directory's `INSTALL.md` and supply it alongside the shared installation contract. Native skill entries own invocation policy and UI metadata; their shared sources remain the business contract.
+
+# Execution mode binding
+
+* Map active native Plan to the shared read-only planning contract, and Agent to ordinary execution subject to actual permissions. A request mentioning a plan or a permission failure does not switch modes. Use a `proposed_plan` block only for the sole settled implementation plan; questions and approval requests remain conversational.

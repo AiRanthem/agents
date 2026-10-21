@@ -5,7 +5,7 @@ description: Deterministically migrate a selected managed project to the current
 
 # Upgrade Project
 
-Use the selected management root and installed `manage-workitems/scripts/project.py --root PROJECT migrate`. Only when the user requests a preview, use `migrate --dry-run`. The program performs schema migration and generated entrypoint reconciliation; do not hand-edit generated entrypoints or YAML, choose input documents outside returned `read_sources`, construct JSON mutations or manually publish Git/Aone state.
+Use the selected management root and the project entrypoint resolved by the [command contract](../manage-workitems/references/commands.md) for `--root PROJECT migrate`. Only when the user requests a preview, use `migrate --dry-run`. The program performs schema migration and generated entrypoint reconciliation; do not hand-edit generated entrypoints or YAML, choose input documents outside returned `read_sources`, construct JSON mutations or manually publish Git/Aone state.
 
 The program preserves work-item IDs, dependencies, ownership and current pointer-bound evidence. It generates the current root/item entrypoints and routes current business constraints through `.project/project-instructions.md`, current context and required original main-workspace instructions. Project documents contain current effective content only; Git history records prior versions. Knowledge metadata moves from JSON to YAML with its fields and Markdown body preserved, while the body remains opaque. A project-specific permission, business or delivery boundary cannot be discarded because a generic template omits it.
 

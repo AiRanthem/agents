@@ -1,6 +1,6 @@
 ---
 name: implement-design
-description: Implement approved requirements and design decisions from documents or conversation, or produce the executable implementation plan in native Plan mode. Use for a confirmed design, an approved explore-design handoff, or an assigned autonomous implementation stage. Exclude unconfirmed design exploration and review-only work.
+description: Implement approved requirements and design decisions from documents or conversation, or produce the executable implementation plan in read-only planning mode. Use for a confirmed design, an approved explore-design handoff, or an assigned autonomous implementation stage. Exclude unconfirmed design exploration and review-only work.
 ---
 
 # Implement Design
@@ -13,9 +13,9 @@ Always read [discussion and authorization](../advance-project/references/discuss
 
 - **Autonomous stage executor:** Read [stage executor](../advance-project/references/stage-executor.md) and [implementation stage](references/autonomous-stage.md). Follow the assigned single-stage scope; ordinary project commands and model-routing guidance do not apply.
 - **Ordinary managed-project development:** Read [project workflow](references/project-workflow.md) and [ordinary modes](references/ordinary-modes.md).
-- **Other implementation or native Plan work:** Read [ordinary modes](references/ordinary-modes.md).
+- **Other implementation or read-only planning work:** Read [ordinary modes](references/ordinary-modes.md).
 
-Native Plan remains read-only in every organization mode, including delegation. Actual host permissions always apply. Keep implementation TODOs in host task tracking or conversational working state; do not create generic task files or unrelated documentation. Preserve unrelated work and leave source submission to the user's instructions.
+Read-only planning remains read-only in every organization mode, including delegation. Actual host permissions always apply. Keep implementation TODOs in host task tracking or conversational working state; do not create generic task files or unrelated documentation. Preserve unrelated work and leave source submission to the user's instructions.
 
 ## Establish the implementation contract
 
