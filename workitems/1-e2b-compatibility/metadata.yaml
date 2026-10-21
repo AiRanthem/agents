@@ -13,8 +13,8 @@ documents:
   logs: logs.md
 design:
   file: spec.md
-  version: 4
-  state: review-pending
-  author_session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
+  version: 5
+  state: draft
+  author_session: 3387366e-d695-4926-9dea-fc31e52a5491
 repository: agents
 cleanup: pending
