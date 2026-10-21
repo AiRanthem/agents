@@ -907,3 +907,14 @@ workflow:
         token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
       coordinator: null
       created_at: '2026-10-21T08:42:51.606000+00:00'
+design:
+  approval:
+    requirement_sha256: 675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0
+    spec_sha256: b4d86dfebbb84d2ade1b91fefb883e0cd3fa19d09e1157e0edccd7db358f9ebb
+    version: 3
+    kind: user
+    source: 会话 e933eec0-f2b0-46e5-8b79-c2eef79d1b20（2026-10-21）：用户要求先同步设计文档，再按已确认的修复计划实施；计划包含同名快照改为创建成功后再删除旧快照、Pause
+      拒绝尾随内容。此前用户已在各自会话中确认 Pause 禁止显式 memory、Snapshot memory 映射与 header 优先、name 支持与同名替换、列表
+      name 过滤。
+    session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
+    recorded_by: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
