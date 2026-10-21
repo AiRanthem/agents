@@ -17,18 +17,21 @@ limitations under the License.
 package link
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openkruise/agents/pkg/agent-runtime/mountpath"
 )
 
 // TestCreateSymlinkBranches enumerates every reachable control-flow branch
 // of CreateSymlink using table-driven cases. Each case prepares a unique
 // scratch sub-directory and reports the expected outcome (success or a
-// substring of the error message). Covers: empty link, target-missing,
-// target-not-directory, MkdirAll failure (parent is a file), trailing
-// slash trim, idempotent existing-symlink, wrong-target replacement,
+// substring of the error message). Covers: empty link, relative ".." link,
+// target-missing, target-not-directory, parent-is-file validation rejection,
+// trailing slash trim, idempotent existing-symlink, wrong-target replacement,
 // link-is-regular-file rejection, link-is-empty-dir replacement,
 // link-is-non-empty-dir rejection.
 func TestCreateSymlinkBranches(t *testing.T) {
@@ -38,10 +41,11 @@ func TestCreateSymlinkBranches(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
+		name string
 		// setup returns (target, link). If empty, the field is taken as-is.
 		setup       func(t *testing.T, dir string) (target, link string)
 		expectError string
+		expectErrIs error
 		assert      assertion
 	}{
 		{
@@ -54,7 +58,20 @@ func TestCreateSymlinkBranches(t *testing.T) {
 				// trailing slash will be trimmed to empty string.
 				return tgt, "/"
 			},
-			expectError: "invalid link path: path must not be empty",
+			expectError: "path must not be empty",
+			expectErrIs: mountpath.ErrUnsafeMountPath,
+		},
+		{
+			name: "relative link path with parent segment is unsafe",
+			setup: func(t *testing.T, dir string) (string, string) {
+				tgt := filepath.Join(dir, "tgt")
+				if err := os.Mkdir(tgt, 0o755); err != nil {
+					t.Fatalf("mkdir tgt: %v", err)
+				}
+				return tgt, "../link"
+			},
+			expectError: "path must not contain '..' segments",
+			expectErrIs: mountpath.ErrUnsafeMountPath,
 		},
 		{
 			name: "target does not exist returns error",
@@ -75,21 +92,34 @@ func TestCreateSymlinkBranches(t *testing.T) {
 			expectError: "target is not a directory:",
 		},
 		{
-			name: "MkdirAll fails because link parent is a regular file",
+			name: "executable search directory is rejected",
 			setup: func(t *testing.T, dir string) (string, string) {
 				tgt := filepath.Join(dir, "tgt")
 				if err := os.Mkdir(tgt, 0o755); err != nil {
 					t.Fatalf("mkdir tgt: %v", err)
 				}
-				// Make a *file* and ask CreateSymlink to put the link
-				// inside it. MkdirAll on "<file>/sub" must fail.
+				return tgt, "/usr/local/sbin"
+			},
+			expectError: "unsafe mount path",
+		},
+		{
+			name: "link parent is a regular file is rejected during validation",
+			setup: func(t *testing.T, dir string) (string, string) {
+				tgt := filepath.Join(dir, "tgt")
+				if err := os.Mkdir(tgt, 0o755); err != nil {
+					t.Fatalf("mkdir tgt: %v", err)
+				}
+				// Make a *file* and ask CreateSymlink to put the link inside
+				// it. mountpath.Validate rejects the non-directory path
+				// component before MkdirAll is reached.
 				parentFile := filepath.Join(dir, "not-a-dir")
 				if err := os.WriteFile(parentFile, []byte("x"), 0o644); err != nil {
 					t.Fatalf("write parentFile: %v", err)
 				}
 				return tgt, filepath.Join(parentFile, "sub", "link")
 			},
-			expectError: "failed to create parent directory",
+			expectError: "failed to resolve mount path",
+			expectErrIs: mountpath.ErrUnsafeMountPath,
 		},
 		{
 			name: "link path with trailing slash succeeds (trimmed)",
@@ -207,6 +237,9 @@ func TestCreateSymlinkBranches(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.expectError) {
 				t.Errorf("want error containing %q, got %q", tt.expectError, err.Error())
+			}
+			if tt.expectErrIs != nil && !errors.Is(err, tt.expectErrIs) {
+				t.Errorf("want error matching %v, got %v", tt.expectErrIs, err)
 			}
 		})
 	}
