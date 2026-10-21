@@ -907,3 +907,13 @@ workflow:
         token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
       coordinator: null
       created_at: '2026-10-21T08:42:51.606000+00:00'
+design:
+  approval:
+    requirement_sha256: 675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0
+    spec_sha256: 999ed6df8c313d81f88d43352b2b4c2f779ae4a8544e7adfd17e3195f01916b5
+    version: 4
+    kind: user
+    source: 会话 e933eec0-f2b0-46e5-8b79-c2eef79d1b20（2026-10-21）：用户指出先查 Succeeded 再创建仍会让并发同名创建泄漏，要求改为创建成功后再
+      list 并排除刚创建的对象；批准按“先建、成功后收敛别名”的实现验收该修复。
+    session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
+    recorded_by: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
