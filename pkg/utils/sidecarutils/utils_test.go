@@ -18,6 +18,9 @@ package sidecarutils
 
 import (
 	"context"
+	"errors"
+	"maps"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/identity"
@@ -35,19 +39,22 @@ import (
 
 func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 	tests := []struct {
-		name                   string
-		sandbox                *agentsv1alpha1.Sandbox
-		pod                    *corev1.Pod
-		injectionConfigData    map[string]string
-		expectInjection        bool
-		expectRuntimeContainer bool
-		expectCSIContainer     bool
-		expectRuntimeEnvCount  int
-		expectCSIVolumeMounts  int
-		expectEgressContainer  bool
-		expectInitContainers   int // expected InitContainer count after injection
-		expectContainers       int // expected Container count after injection
-		initialContainerCount  int // base Container count before injection (default 1)
+		name                    string
+		sandbox                 *agentsv1alpha1.Sandbox
+		pod                     *corev1.Pod
+		injectionConfigData     map[string]string
+		userInjectionConfigData map[string]string
+		expectError             bool
+		errorContains           string
+		expectInjection         bool
+		expectRuntimeContainer  bool
+		expectCSIContainer      bool
+		expectRuntimeEnvCount   int
+		expectCSIVolumeMounts   int
+		expectEgressContainer   bool
+		expectInitContainers    int // expected InitContainer count after injection
+		expectContainers        int // expected Container count after injection
+		initialContainerCount   int // base Container count before injection (default 1)
 	}{
 		{
 			name: "no injection needed",
@@ -70,6 +77,36 @@ func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 				},
 			},
 			expectInjection: false,
+		},
+		{
+			name: "empty user override does not fall back to the default template",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime}},
+				},
+			},
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "nginx"}}},
+			},
+			injectionConfigData: map[string]string{
+				KEY_RUNTIME_INJECTION_CONFIG: `{"mainContainer":{},"csiSidecar":[{"name":"runtime-sidecar","image":"runtime:v1"}],"volume":[]}`,
+			},
+			userInjectionConfigData: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: ""},
+			expectError:             true,
+			errorContains:           "injection template agent-runtime not found",
+		},
+		{
+			name: "missing configmaps still report a missing declared template",
+			sandbox: &agentsv1alpha1.Sandbox{
+				Spec: agentsv1alpha1.SandboxSpec{
+					Runtimes: []agentsv1alpha1.RuntimeConfig{{Name: agentsv1alpha1.RuntimeConfigForInjectAgentRuntime}},
+				},
+			},
+			pod: &corev1.Pod{
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "nginx"}}},
+			},
+			expectError:   true,
+			errorContains: "injection template agent-runtime not found",
 		},
 		{
 			name: "inject runtime sidecar only",
@@ -404,10 +441,33 @@ func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 				}
 				objs = append(objs, cm)
 			}
+			if tt.userInjectionConfigData != nil {
+				objs = append(objs, &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      SandboxInjectionUserConfigName,
+						Namespace: utils.DefaultSandboxDeployNamespace,
+					},
+					Data: tt.userInjectionConfigData,
+				})
+			}
 			fakeClient := fake.NewClientBuilder().WithObjects(objs...).Build()
 			ctx := context.Background()
+			originalPod := tt.pod.DeepCopy()
 
 			err := InjectSandboxRuntimes(ctx, tt.sandbox, tt.pod, fakeClient)
+			if tt.expectError {
+				if err == nil || !strings.Contains(err.Error(), tt.errorContains) {
+					t.Fatalf("expected error containing %q, got %v", tt.errorContains, err)
+				}
+				if len(tt.pod.Spec.InitContainers) != 0 {
+					t.Fatal("unexpected runtime injection after configuration error")
+				}
+				if !reflect.DeepEqual(tt.pod.Spec.Containers, originalPod.Spec.Containers) {
+					t.Fatalf("unexpected container changes after configuration error: got %+v, want %+v",
+						tt.pod.Spec.Containers, originalPod.Spec.Containers)
+				}
+				return
+			}
 			// Verify results
 			if !tt.expectInjection {
 				// Should return early without error
@@ -507,11 +567,13 @@ func TestInjectPodTemplateCSIAndRuntimeSidecar(t *testing.T) {
 
 func TestFetchInjectionConfiguration(t *testing.T) {
 	ctx := context.Background()
+	readErr := errors.New("config lookup failed")
 	tests := []struct {
 		name          string
 		configMap     *corev1.ConfigMap
 		userConfigMap *corev1.ConfigMap
 		getError      error
+		errorOnName   string
 		expectedData  map[string]string
 		expectError   bool
 		errorContains string
@@ -598,6 +660,90 @@ func TestFetchInjectionConfiguration(t *testing.T) {
 			expectError:  false,
 		},
 		{
+			name: "nil data still records a present configmap",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+			},
+			expectedData: map[string]string{},
+		},
+		{
+			name: "both configmaps present without data",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+			},
+			userConfigMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionUserConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{},
+			},
+			expectedData: map[string]string{},
+		},
+		{
+			name: "empty user value overrides a non-empty default",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: "default-runtime"},
+			},
+			userConfigMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionUserConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: ""},
+			},
+			expectedData: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: ""},
+		},
+		{
+			name: "equal user and default values still retain both sources",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: "same-runtime"},
+			},
+			userConfigMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionUserConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: "same-runtime"},
+			},
+			expectedData: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: "same-runtime"},
+		},
+		{
+			name:          "default lookup error is propagated",
+			getError:      readErr,
+			errorOnName:   SandboxInjectionConfigName,
+			expectError:   true,
+			errorContains: "config lookup failed",
+		},
+		{
+			name: "user lookup error discards partial default config",
+			configMap: &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SandboxInjectionConfigName,
+					Namespace: getTestNamespace(),
+				},
+				Data: map[string]string{KEY_RUNTIME_INJECTION_CONFIG: "default-runtime"},
+			},
+			getError:      readErr,
+			errorOnName:   SandboxInjectionUserConfigName,
+			expectError:   true,
+			errorContains: "config lookup failed",
+		},
+		{
 			name: "configmap with partial data",
 			configMap: &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
@@ -624,11 +770,42 @@ func TestFetchInjectionConfiguration(t *testing.T) {
 			if tt.userConfigMap != nil {
 				initObjs = append(initObjs, tt.userConfigMap)
 			}
+			var lookups []string
 			fakeClient := fake.NewClientBuilder().
 				WithObjects(initObjs...).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						lookups = append(lookups, key.Name)
+						if key.Namespace != getTestNamespace() {
+							t.Errorf("unexpected configuration namespace %q", key.Namespace)
+						}
+						if tt.getError != nil && key.Name == tt.errorOnName {
+							return tt.getError
+						}
+						if err := c.Get(ctx, key, obj, opts...); err != nil {
+							return err
+						}
+						// Simulate a client returning shared map data, so the test
+						// can detect a loader that fails to copy its source.
+						cm := obj.(*corev1.ConfigMap)
+						if key.Name == SandboxInjectionConfigName {
+							cm.Data = tt.configMap.Data
+						} else {
+							cm.Data = tt.userConfigMap.Data
+						}
+						return nil
+					},
+				}).
 				Build()
 			// Call the function
-			data, err := fetchInjectionConfiguration(ctx, fakeClient)
+			configs, err := fetchInjectionConfiguration(ctx, fakeClient)
+			expectedLookups := []string{SandboxInjectionConfigName, SandboxInjectionUserConfigName}
+			if tt.getError != nil && tt.errorOnName == SandboxInjectionConfigName {
+				expectedLookups = expectedLookups[:1]
+			}
+			if strings.Join(lookups, ",") != strings.Join(expectedLookups, ",") {
+				t.Errorf("configuration lookups = %v, want %v", lookups, expectedLookups)
+			}
 			// Verify results
 			if tt.expectError {
 				if err == nil {
@@ -636,12 +813,19 @@ func TestFetchInjectionConfiguration(t *testing.T) {
 				} else if tt.errorContains != "" && !strings.Contains(err.Error(), tt.errorContains) {
 					t.Errorf("expected error to contain %q, got %q", tt.errorContains, err.Error())
 				}
-				if data != nil {
-					t.Error("expected nil data on error, got non-nil")
+				if !errors.Is(err, tt.getError) {
+					t.Errorf("expected original lookup error %v, got %v", tt.getError, err)
+				}
+				if configs.Default != nil || configs.User != nil {
+					t.Error("expected zero-value sources on error, got partial data")
 				}
 			} else {
 				if err != nil {
-					t.Errorf("unexpected error: %v", err)
+					t.Fatalf("unexpected error: %v", err)
+				}
+				data := configs.Merged()
+				if data == nil {
+					t.Fatal("expected non-nil merged map")
 				}
 				// Compare map lengths first for better error messages
 				if len(data) != len(tt.expectedData) {
@@ -653,6 +837,38 @@ func TestFetchInjectionConfiguration(t *testing.T) {
 						t.Errorf("expected key %q to exist in data", key)
 					} else if actualValue != expectedValue {
 						t.Errorf("for key %q: expected value %q, got %q", key, expectedValue, actualValue)
+					}
+				}
+
+				// Each merge is independent of both sources and earlier results.
+				data["test-only"] = "merged mutation"
+				if !maps.Equal(configs.Merged(), tt.expectedData) {
+					t.Error("merged result shares map data with its sources")
+				}
+				for _, source := range []struct {
+					name   string
+					config *corev1.ConfigMap
+					data   map[string]string
+				}{
+					{"default", tt.configMap, configs.Default},
+					{"user", tt.userConfigMap, configs.User},
+				} {
+					if source.config == nil {
+						if source.data != nil {
+							t.Errorf("%s source should be nil when ConfigMap is absent", source.name)
+						}
+						continue
+					}
+					if source.data == nil {
+						t.Fatalf("%s source should be non-nil for a present ConfigMap", source.name)
+					}
+					if !maps.Equal(source.data, source.config.Data) {
+						t.Errorf("%s source = %v, want %v", source.name, source.data, source.config.Data)
+					}
+					original := maps.Clone(source.config.Data)
+					source.data["test-only"] = "source mutation"
+					if !maps.Equal(source.config.Data, original) {
+						t.Errorf("mutating %s source changed the client's ConfigMap", source.name)
 					}
 				}
 			}

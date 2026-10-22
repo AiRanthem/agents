@@ -46,7 +46,7 @@ func InjectSandboxRuntimes(ctx context.Context, sandbox *agentsv1alpha1.Sandbox,
 		return err
 	}
 
-	return doSidecarInjection(ctx, sandbox, pod, config)
+	return doSidecarInjection(ctx, sandbox, pod, config.Merged())
 }
 
 // fixedOrderRuntimes defines the injection order for built-in runtimes.

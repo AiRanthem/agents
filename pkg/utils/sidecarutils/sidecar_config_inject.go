@@ -43,11 +43,10 @@ func IsRuntimeEnabled(sandbox *agentsv1alpha1.Sandbox, runtimeName string) bool 
 	return false
 }
 
-func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (map[string]string, error) {
+func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (injectionConfigs, error) {
 	logger := logf.FromContext(ctx)
-	mergedConfig := make(map[string]string)
-	configMapNames := []string{SandboxInjectionConfigName, SandboxInjectionUserConfigName}
-	for _, configMapName := range configMapNames {
+	configs := injectionConfigs{}
+	for _, configMapName := range []string{SandboxInjectionConfigName, SandboxInjectionUserConfigName} {
 		config := &corev1.ConfigMap{}
 		err := cli.Get(ctx, types.NamespacedName{
 			Namespace: webhookutils.GetNamespace(), // Todo considering the security concern and rbac issue
@@ -58,19 +57,27 @@ func fetchInjectionConfiguration(ctx context.Context, cli client.Client) (map[st
 				logger.V(utils.DebugLogLevel).Info("injection configuration not found", "configMap", configMapName)
 				continue
 			}
-			return nil, err
+			return injectionConfigs{}, err
 		}
 
-		// Apply the user ConfigMap second so that each user-provided runtime key
-		// overrides only the matching default template. Other keys keep their
-		// default configuration.
-		maps.Copy(mergedConfig, config.Data)
+		// Keep the source independently of the merged value, including explicit
+		// empty overrides. A found ConfigMap with nil Data is still present.
+		data := maps.Clone(config.Data)
+		if data == nil {
+			data = make(map[string]string)
+		}
+		switch configMapName {
+		case SandboxInjectionConfigName:
+			configs.Default = data
+		case SandboxInjectionUserConfigName:
+			configs.User = data
+		}
 	}
 
-	if len(mergedConfig) == 0 {
+	if len(configs.Default) == 0 && len(configs.User) == 0 {
 		logger.V(utils.DebugLogLevel).Info("injection configuration not found, skip injection")
 	}
-	return mergedConfig, nil
+	return configs, nil
 }
 
 func parseInjectConfig(ctx context.Context, configKey string, configRaw map[string]string) (SidecarInjectConfig, error) {

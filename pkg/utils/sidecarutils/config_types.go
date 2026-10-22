@@ -17,6 +17,8 @@ limitations under the License.
 package sidecarutils
 
 import (
+	"maps"
+
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -31,6 +33,25 @@ const (
 	// keys not present here continue to use SandboxInjectionConfigName.
 	SandboxInjectionUserConfigName = "sandbox-injection-config-user"
 )
+
+// injectionConfigs preserves the two sources of sidecar injection templates.
+// A nil source means its ConfigMap was not found; an empty, non-nil source
+// means its ConfigMap was found but contained no data. Loaded maps are copied
+// from the ConfigMaps, so callers do not share the client's cached data.
+type injectionConfigs struct {
+	Default map[string]string
+	User    map[string]string
+}
+
+// Merged returns a new map in which user-provided keys override only matching
+// defaults. An explicitly empty user value still overrides the default value.
+// The result is always non-nil and does not alias either source map.
+func (c injectionConfigs) Merged() map[string]string {
+	merged := make(map[string]string, len(c.Default)+len(c.User))
+	maps.Copy(merged, c.Default)
+	maps.Copy(merged, c.User)
+	return merged
+}
 
 type SidecarInjectConfig struct {
 	// Configuration injection for the main container (by convention, one container is designated as the main container)
