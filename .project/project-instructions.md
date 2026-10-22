@@ -4,6 +4,7 @@ The program includes these current project sources in the operation's read paylo
 
 - `.project/context.md`
 - `.project/main-workspace.md`
+- `.project/business-instructions.md`
 
 Keep only current effective requirements, design, decisions, knowledge and business instructions in project documents. Replace superseded content; Git retains earlier versions. Keep current approval, delivery and unresolved recovery records. The generated entrypoints and installed skills define the shared protocol.
 

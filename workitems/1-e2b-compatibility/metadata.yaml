@@ -11,6 +11,7 @@ documents:
   context: context.md
   decision: decision.md
   logs: logs.md
+  spec: spec.md
 design:
   file: spec.md
   version: 5
