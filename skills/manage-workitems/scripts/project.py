@@ -541,6 +541,13 @@ def _progress_item(record):
     review = development.get("review") if isinstance(development, dict) else None
     if isinstance(review, dict) and review.get("result"):
         result.setdefault("development", {})["review_result"] = review["result"]
+        if review.get("approval_kind") == "human_acceptance":
+            result["development"]["review_approval_kind"] = "human_acceptance"
+            result["development"]["review_source"] = review.get("source")
+    waivers = ((record.get("workflow") or {}).get("validation_waivers") or {})
+    if waivers:
+        result["verification_waivers"] = {gate: {key: waiver.get(key) for key in ("result", "source", "id")}
+                                          for gate, waiver in waivers.items()}
     autonomy = ((record.get("workflow") or {}).get("autonomy") or {})
     acceptance = autonomy.get("acceptance") or {}
     if acceptance.get("status"):
@@ -789,7 +796,7 @@ def parser():
     begin.add_argument("selector", nargs="?")
     for name in ("title", "slug", "parent", "repository", "approval-source", "result", "provenance",
                  "reviewer-session", "review-file", "branch", "author-session",
-                 "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode"):
+                 "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode", "gate"):
         begin.add_argument("--" + name)
     begin.add_argument("--skip-design-review", action="store_true", default=None)
     begin.add_argument("--contract-unchanged", action="store_true", default=None)

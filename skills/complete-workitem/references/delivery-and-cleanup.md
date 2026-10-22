@@ -1,5 +1,7 @@
 # Actual delivery and cleanup
 
+Apply explicit [user verification decisions](../../manage-workitems/references/commands.md#user-verification-decisions) before the default gates below. Actual human acceptance may replace independent implementation review with an attributed pass. Any verification checkpoint may be explicitly skipped for the specified scope; preserve its user source and report the skipped verification rather than inventing evidence. Source publication, cleanup actions, ownership and transaction safety retain their separate authorization.
+
 Use the project entrypoint resolved by the [fixed command contract](../../manage-workitems/references/commands.md), preserving the caller's binding. Record actual obligation coverage through `begin delivery-record ID --kind KIND --reference SOURCE --provenance SOURCE`, repeating paired kinds/references as needed. Read the complete returned payload and required original external instructions, write only the returned Markdown report and execute `finish_command` unchanged.
 
 The program checks current contract/review bindings, prerequisite delivery, open upstream fixes and supported Git inclusion evidence. Do not inspect Git/Aone to reconstruct its gate or set `done` by hand. Supply truthful external evidence for the declared obligations: actual remote-trunk inclusion is distinct from source-branch publication, build, release, deployment and end-to-end behavior. A report must name what was observed and what remains unverified.

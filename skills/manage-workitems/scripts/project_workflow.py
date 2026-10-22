@@ -34,6 +34,7 @@ OPERATIONS = {
     "fix": {"title", "slug", "fixes", "parent", "repository", "delivery_required"},
     "requirement-update": set(), "design-update": {"author_session", "contract_unchanged"},
     "decision-record": {"approval_source"},
+    "validation-waiver": {"gate", "approval_source"},
     "design-review": {"reviewer_session", "review_file"},
     "design-reuse": set(),
     "development-start": {"author_session", "base_ref", "branch", "worktree", "skip_design_review", "approval_source"},
@@ -44,7 +45,7 @@ OPERATIONS = {
     "kind-update": {"kind", "repository"},
     "rename": {"title"}, "dependency-update": {"depends_on"}, "archive": {"archived"},
 }
-METADATA_OPERATIONS = {"requirement-update", "decision-record", "context-update", "log-record",
+METADATA_OPERATIONS = {"requirement-update", "decision-record", "validation-waiver", "context-update", "log-record",
                        "rename", "dependency-update", "archive", "cleanup-record", "kind-update"}
 CODE_PREPARATION_OPERATIONS = {"design-update", "design-review", "development-start"}
 TICKET = re.compile(r"[0-9a-f]{32}\Z")
@@ -243,12 +244,12 @@ def _open_fixes(items, identifier):
                   and item.get("delivery", {}).get("status") != "delivered")
 
 
-def _blocked(items, identifier, *, speculative=False):
+def _blocked(items, identifier, *, speculative=False, files=None):
     item = items[identifier]
     if ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
         raise ProjectError("checkpoint blocked: replacement generation must be prepared")
     predevelopment = _autonomy_module()._predevelopment()
-    if not speculative and (predevelopment.state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"}:
+    if not speculative and (predevelopment.state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not (files and _validation_waived(files, item, "formal-convergence")):
         raise ProjectError("checkpoint blocked: predevelopment requires formal convergence")
     pinned = predevelopment.pins(item) if speculative else {}
     pending = [key for key in item.get("depends_on", [])
@@ -257,7 +258,7 @@ def _blocked(items, identifier, *, speculative=False):
     if (items[identifier].get("workflow") or {}).get("autonomy"):
         pending.extend(key for key in item.get("depends_on", [])
                        if key not in pinned and ((items[key].get("workflow") or {}).get("autonomy", {}).get("acceptance") or {}).get("status") != "accepted" and key not in pending)
-    if pending or fixes:
+    if (pending or fixes) and not (files and _validation_waived(files, item, "dependencies")):
         raise ProjectError("checkpoint blocked: undelivered dependencies=" + ",".join(pending) +
                            "; open upstream fixes=" + ",".join(fixes))
 
@@ -307,7 +308,7 @@ def gates(files, item, actor=None):
     """
     result = {}
     predicates = {"design-review": lambda: _review_ready(files, item, actor),
-                  "development-start": lambda: (_blocked(store.items(files), item["id"]), _approved(files, item))}
+                  "development-start": lambda: (_blocked(store.items(files), item["id"], files=files), _approved(files, item))}
     for operation, predicate in predicates.items():
         reasons = []
         try:
@@ -341,7 +342,27 @@ def _design_reuse():
     return project_design_reuse
 
 
+def _validation_waived(files, item, gate, *, missing_root=None):
+    """User decisions waive named business checks, never transaction guards."""
+    waiver = ((item.get("workflow") or {}).get("validation_waivers") or {}).get(gate) or {}
+    valid = (waiver.get("kind") == "validation-waiver" and waiver.get("item") == item["id"] and
+            waiver.get("gate") == gate and bool(waiver.get("source")) and
+            all(waiver.get(key) == value for key, value in _binding(files, item, _base(item)).items()) and
+            _autonomy_module().review_inputs_current(files, item, waiver, missing_root=missing_root))
+    if not valid or gate in {"design-review", "dependencies", "formal-convergence"} or not item.get("development"):
+        return valid
+    try:
+        root = Path(waiver["project_root"])
+        current = (item["development"].get("reviewed_snapshot") if missing_root is not None else
+                   _code_snapshot(root, item, store.project(files)))
+        return waiver.get("code_snapshot") == current
+    except (KeyError, OSError, ProjectError):
+        return False
+
+
 def _approved(files, item, *, missing_root=None):
+    if _validation_waived(files, item, "design-review", missing_root=missing_root):
+        return
     if _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation is required before implementation")
     actual_base = (item.get("development") or {}).get("base_commit")
@@ -372,16 +393,19 @@ def _implementation_approved(files, item, *, missing_root=None):
     if item.get("kind") == "aggregate":
         return
     if (item.get("design", {}).get("review", {}).get("result") == "fail" or
-            (item.get("workflow") or {}).get("design_review_failure")):
+            (item.get("workflow") or {}).get("design_review_failure")) and not _validation_waived(files, item, "design-review", missing_root=missing_root):
         raise ProjectError("unresolved independent design findings block implementation acceptance")
     if _autonomous(item):
         _approved(files, item, missing_root=missing_root)
+    if _validation_waived(files, item, "implementation-review", missing_root=missing_root):
+        return
+    human = review.get("approval_kind") == "human_acceptance" and bool(review.get("source"))
     if (review.get("result") != "pass" or not review.get("provenance") or
-            not review.get("session") or review.get("session") in _code_authors(item) or
+            not review.get("session") or (not human and review.get("session") in _code_authors(item)) or
             review.get("code_snapshot") != development.get("reviewed_snapshot") or
             not _autonomy_module().review_inputs_current(files, item, review, missing_root=missing_root) or
             any(review.get(key) != value for key, value in _binding(files, item, development.get("base_commit")).items())):
-        raise ProjectError("delivery requires a current independent implementation review")
+        raise ProjectError("delivery requires a current implementation pass or explicit review waiver")
 
 
 def _base(item):
@@ -393,9 +417,9 @@ def _read_payload(root, files, item, operation):
     selected = {"AGENTS.md", ".project/project-instructions.md", ".project/main-workspace.md", ".project/business-instructions.md", ".project/context.md",
                 documents["requirement"], documents["context"]}
     if operation in {"requirement-update", "design-update", "decision-record", "design-review", "design-reuse",
-                     "development-start", "development-finish", "delivery-record"}:
+                     "development-start", "development-finish", "delivery-record", "validation-waiver"}:
         selected.add(_spec(item))
-    if operation in {"design-update", "decision-record", "design-review", "design-reuse", "development-start", "development-finish"}:
+    if operation in {"design-update", "decision-record", "design-review", "design-reuse", "development-start", "development-finish", "validation-waiver"}:
         selected.add(documents["decision"])
     result = [{"path": str(Path(root) / path), "content": files[path].decode("utf-8")}
               for path in sorted(selected) if path in files]
@@ -444,7 +468,7 @@ def _drafts(operation, item, files):
     if operation in {"decision-record", "log-record"}:
         target = documents["decision" if operation == "decision-record" else "logs"]
         return {Path(target).name: (target, files.get(target, b"").decode("utf-8"))}
-    if operation in {"design-review", "design-reuse", "development-finish", "delivery-record"}:
+    if operation in {"design-review", "design-reuse", "development-finish", "delivery-record", "validation-waiver"}:
         drafts = {"report.md": (None, "# " + operation + "\n\n")}
         if operation == "design-review":
             drafts["spec.md"] = (_spec(item), files[_spec(item)].decode("utf-8"))
@@ -472,6 +496,13 @@ def _options(operation, options):
         raise ProjectError("contract_unchanged must be an explicit boolean")
     if operation == "decision-record" and "approval_source" in options:
         _text(options["approval_source"], "actual user approval source")
+    if operation == "validation-waiver":
+        _text(options.get("approval_source"), "explicit user validation waiver source")
+        _text(options.get("gate"), "validation checkpoint")
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", options.get("gate", "")):
+            raise ProjectError("gate must name one validation checkpoint")
+        if options["gate"] in {"ownership", "takeover", "permissions", "publication", "integrity"}:
+            raise ProjectError("validation waivers cannot bypass ownership, permissions or transaction integrity")
     if operation == "delivery-record":
         _text(options.get("provenance"), "delivery provenance")
         for key in ("kind", "reference"):
@@ -632,7 +663,7 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record")
+        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record", files=files)
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -723,10 +754,19 @@ def _prepare_context(root, directory, manifest, files, publish):
         development = dict(item.get("development") or {})
         development.update(_development_module().prepare(root, item, store.project(files), options=options, publish_branch=not _autonomous(item)))
         if development != item.get("development"):
+            first_basis = not item.get("development")
+            waived_design = first_basis and _validation_waived(files, item, "design-review")
             item["development"] = development
             item.setdefault("workflow", {}).pop("development_discard_record", None)
             item["cleanup"] = "pending"
             writes = store.write_item(files, item)
+            if waived_design:
+                # The same requirement-only skip now acquires its first concrete
+                # code base; later base changes still invalidate this decision.
+                waiver = item["workflow"]["validation_waivers"]["design-review"]
+                waiver["base_commit"] = development["base_commit"]
+                writes.update(store.write_item(files, item))
+                writes["workitems/" + identifier + "/records/" + waiver["id"] + ".yaml"] = store.dump_yaml(waiver)
             writes.update(retention.prune_records(store.apply_writes(files, writes), [identifier]))
             checks = _checks(files, item, operation)
             manifest.update(state="context-publication-pending", context_writes=writes,
@@ -743,7 +783,7 @@ def _prepare_context(root, directory, manifest, files, publish):
             manifest.pop("context_writes", None)
             manifest.pop("context_message", None)
         manifest["base_commit"] = _base(item)
-    if operation in {"development-finish", "design-reuse"} and item.get("development"):
+    if operation in {"development-finish", "design-reuse", "validation-waiver"} and item.get("development"):
         manifest["code_snapshot"] = _code_snapshot(root, item, store.project(files))
     return _open_edit(root, directory, manifest, files)
 
@@ -766,7 +806,7 @@ def _open_edit(root, directory, manifest, files):
     read = _read_payload(root, files, item, operation)
     manifest["read"] = read
     manifest["read_hashes"] = (_autonomy_module()._read_hashes(root, files, item, "design-review", read=read)
-                               if operation in {"design-review", "design-reuse", "development-start", "development-finish"} else
+                               if operation in {"design-review", "design-reuse", "development-start", "development-finish", "validation-waiver"} else
                                {entry["path"]: _hash(Path(entry["path"]).read_bytes()) for entry in read})
     if operation == "design-reuse":
         _design_reuse().ready(item, manifest["identity"])
@@ -924,7 +964,7 @@ def _prepare_finish(root, manifest, files, drafts):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record")
+        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record", files=files)
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -1084,6 +1124,24 @@ def _prepare_finish(root, manifest, files, drafts):
         else:
             item.setdefault("workflow", {}).pop("design_basis", None)
             item["workflow"].pop("design_reuse", None)
+    elif operation == "validation-waiver":
+        gate = options["gate"]
+        current = _code_snapshot(root, item, store.project(files)) if item.get("development") else None
+        if current != manifest.get("code_snapshot"):
+            raise ProjectError("code snapshot changed while recording validation waiver")
+        record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
+        _text(drafts["report.md"], "user validation waiver report")
+        record.update(gate=gate, result="skipped", source=options["approval_source"], project_root=str(root),
+                      provenance=options["approval_source"], read_hashes=copy.deepcopy(manifest["read_hashes"]))
+        if current is not None:
+            record["code_snapshot"] = current
+        item.setdefault("workflow", {}).setdefault("validation_waivers", {})[gate] = record
+        if gate == "implementation-review":
+            if not item.get("development"):
+                raise ProjectError("implementation-review waiver requires recorded development")
+            item["development"]["reviewed_snapshot"] = current
+            item["status"] = "awaiting_delivery"
+        writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
     elif operation == "development-start":
         if options.get("skip_design_review"):
             waiver = {"id": manifest["ticket"], "kind": "user_design_review_waiver", "item": identifier,
@@ -1140,22 +1198,26 @@ def _prepare_finish(root, manifest, files, drafts):
             raise ProjectError("delivery requires current explicit user acceptance")
         _implementation_approved(files, item)
         if item["kind"] == "development":
-            review = (item.get("development") or {}).get("review") or {}
-            if review.get("result") != "pass" or review.get("session") == item["development"].get("author_session"):
-                raise ProjectError("delivery requires a current independent implementation review")
-            verification = _development_module().verify_merged(root, item, store.project(files), evidence={"commit": options.get("commit"), "references": options["reference"]})
-            if verification.get("verified") is not True:
-                raise ProjectError("delivery merge ancestry could not be verified")
             evidence = [{"kind": kind, "reference": reference} for kind, reference
                         in zip(options["kind"], options["reference"])]
-            evidence.append({"kind": verification["kind"], "reference": verification["reference"]})
+            if not _validation_waived(files, item, "merge-verification"):
+                verification = _development_module().verify_merged(root, item, store.project(files), evidence={"commit": options.get("commit"), "references": options["reference"]})
+                if verification.get("verified") is not True:
+                    raise ProjectError("delivery merge ancestry could not be verified")
+                evidence.append({"kind": verification["kind"], "reference": verification["reference"]})
         else:
             evidence = [{"kind": kind, "reference": reference} for kind, reference
                         in zip(options["kind"], options["reference"])]
-        if not set(item["delivery"]["required"]).issubset({record["kind"] for record in evidence}):
+        if not set(item["delivery"]["required"]).issubset({record["kind"] for record in evidence}) and not _validation_waived(files, item, "delivery-evidence"):
             raise ProjectError("delivery is missing required evidence kinds")
         record = _report(root, manifest, item, files, writes, operation, drafts["report.md"])
         record["evidence"] = evidence
+        waived = {gate: copy.deepcopy(waiver) for gate, waiver in
+                  ((item.get("workflow") or {}).get("validation_waivers") or {}).items()
+                  if _validation_waived(files, item, gate)}
+        if waived:
+            record["verification_waivers"] = waived
+            item["delivery"]["verification_waivers"] = waived
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         item["delivery"].update(status="delivered", evidence=evidence, record=record["id"])
         item["status"], item["owner"] = "done", None
@@ -1356,7 +1418,7 @@ def _finish(root, ticket, *, options=None, publish=None):
         current = _checks(files, manifest["item"], manifest["operation"])
         if manifest["operation"] in {"development-start", "development-finish", "delivery-record"}:
             try:
-                _blocked(store.items(files), manifest["item"]["id"], speculative=_autonomous(store.item(files, manifest["item"]["id"])) and manifest["operation"] != "delivery-record")
+                _blocked(store.items(files), manifest["item"]["id"], speculative=_autonomous(store.item(files, manifest["item"]["id"])) and manifest["operation"] != "delivery-record", files=files)
                 if manifest["operation"] == "delivery-record":
                     _implementation_approved(files, store.item(files, manifest["item"]["id"]))
                 elif (manifest["operation"] != "development-finish" or store.item(files, manifest["item"]["id"]).get("status") != "awaiting_delivery") and not (manifest["operation"] == "development-start" and manifest["options"].get("skip_design_review")):

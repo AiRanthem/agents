@@ -163,9 +163,7 @@ class AutonomyTest(unittest.TestCase):
         self.assertNotEqual(self.f.record()["status"], "done")
         self.snapshot["dirty_digest"] = "f" * 64
         self.snapshot["tree"] = "f" * 40
-        with self.assertRaises(runtime.ProjectError):
-            autonomy.accept(self.root, "A", approval_source="Old acceptance cannot cover changes",
-                            publish=self.f.publisher)
+        self.assertFalse(autonomy._acceptance_valid(self.root, runtime._working_files(self.root), self.f.record()))
         self.authorize()
         self.assertEqual(self.state()["next_role"], "code-review")
         self.finish_execution(self.dispatch("code-review", "updated-code-reviewer"))

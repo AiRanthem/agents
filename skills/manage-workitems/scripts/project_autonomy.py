@@ -258,6 +258,8 @@ def _artifact_binding(root, files, item):
 
 
 def _acceptance_valid(root, files, item):
+    if workflow._validation_waived(files, item, "human-acceptance"):
+        return True
     acceptance = _state(item).get("acceptance") or {}
     if acceptance.get("status") != "accepted" or not acceptance.get("source"):
         return False
@@ -270,6 +272,8 @@ def _acceptance_valid(root, files, item):
 
 
 def _dependency_blocks(root, files, item, *, formal=False):
+    if workflow._validation_waived(files, item, "dependencies"):
+        return []
     records = store.items(files)
     result = []
     for identifier in sorted(workflow._ancestors(records, item["id"]) - {item["id"]}):
@@ -287,6 +291,15 @@ def _dependency_blocks(root, files, item, *, formal=False):
 def _next(root, files, item, session):
     state = _state(item)
     result = {"id": item["id"], "next_role": None, "reasons": []}
+    waivers = ((item.get("workflow") or {}).get("validation_waivers") or {})
+    if waivers:
+        result["verification_waivers"] = {gate: {"source": waiver.get("source"), "result": "skipped",
+                                               "current": workflow._validation_waived(files, item, gate)}
+                                          for gate, waiver in waivers.items()}
+    review = (item.get("development") or {}).get("review") or {}
+    if review.get("approval_kind") == "human_acceptance":
+        result["implementation_approval_kind"] = "human_acceptance"
+        result["implementation_approval_source"] = review.get("source")
     if item.get("status") == "done":
         result["state"] = "completed"
         return result
@@ -305,9 +318,10 @@ def _next(root, files, item, session):
     owner = item.get("owner") or {}
     if owner and owner.get("token") != identity["token"] and "control_claim_required" not in result["reasons"]:
         result["reasons"].append("control_claim_required")
-    assess_reuse = not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
-    pending_confirmation = workflow._design_reuse().pending(files, item)
-    if not assess_reuse and not pending_confirmation and not _approved_contract(files, item):
+    waived_design = workflow._validation_waived(files, item, "design-review")
+    assess_reuse = not waived_design and not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
+    pending_confirmation = not waived_design and workflow._design_reuse().pending(files, item)
+    if not waived_design and not assess_reuse and not pending_confirmation and not _approved_contract(files, item):
         result["reasons"].append("approved_initial_design_required")
     if not assess_reuse and not pending_confirmation and authorization and authorization.get("requirement_sha256") != _contract(files, item)["requirement_sha256"]:
         result["reasons"].append("authorization_contract_changed")
@@ -316,7 +330,7 @@ def _next(root, files, item, session):
     if not result["reasons"] and ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
         result.update(state="ready", next_action="lifecycle_prepare")
         return result
-    if not result["reasons"]:
+    if not result["reasons"] and not workflow._validation_waived(files, item, "formal-convergence"):
         extra = _predevelopment().schedule(root, files, item, session)
         if extra:
             result.update(extra)
@@ -331,14 +345,14 @@ def _next(root, files, item, session):
     binding = _binding(root, files, item)
     development = item.get("development") or {}
     review = development.get("review") or {}
-    reviewed = review.get("result") == "pass" and bool(review.get("code_snapshot")) and review["code_snapshot"].get("tree") == (binding.get("code_snapshot") or {}).get("tree")
+    reviewed = (review.get("result") == "pass" and bool(review.get("code_snapshot")) and review["code_snapshot"].get("tree") == (binding.get("code_snapshot") or {}).get("tree")) or workflow._validation_waived(files, item, "implementation-review")
     if reviewed:
         try:
             workflow._implementation_approved(files, item)
         except ProjectError:
             reviewed = False
     if reviewed:
-        extra = _predevelopment().schedule(root, files, item, session, reviewed=True)
+        extra = None if workflow._validation_waived(files, item, "formal-convergence") else _predevelopment().schedule(root, files, item, session, reviewed=True)
         if extra:
             result.update(extra)
             return result
@@ -352,7 +366,7 @@ def _next(root, files, item, session):
         pass
     formal_review = ((_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"} or
                      ((item.get("workflow") or {}).get("lifecycle") or {}).get("fresh_reviews_required"))
-    if item.get("design", {}).get("review", {}).get("result") == "fail":
+    if item.get("design", {}).get("review", {}).get("result") == "fail" and not waived_design:
         role = "design-revision"
     elif not design_review_current and (formal_review or not authorization.get("skip_design_review") or
             item.get("design", {}).get("approval", {}).get("kind") == "derived_revision"):
@@ -541,6 +555,16 @@ def validate_state(item):
     _predevelopment()._lifecycle().validate(item)
     workflow._design_reuse().validate(item)
     workflow._ownership_module().validate(item)
+    waivers = (item.get("workflow") or {}).get("validation_waivers", {})
+    if not isinstance(waivers, dict):
+        raise ProjectError("validation waivers must be named records")
+    for gate, record in waivers.items():
+        if (not isinstance(record, dict) or record.get("kind") != "validation-waiver" or
+                record.get("gate") != gate or record.get("item") != item["id"] or
+                record.get("result") != "skipped" or not runtime._nonempty(record.get("source")) or
+                not workflow.TICKET.fullmatch(str(record.get("id", ""))) or
+                not isinstance(record.get("read_hashes"), dict) or not record["read_hashes"]):
+            raise ProjectError("validation waiver requires its actual user source, item, gate and input guards")
     guards = (item.get("workflow") or {}).get("review_guards", {})
     if not isinstance(guards, dict):
         raise ProjectError("review content guards must be an object")
@@ -598,17 +622,19 @@ def _cleaned_code_root(root, files, item):
 
 
 def _acceptance_review(root, files, item):
-    if (_predevelopment().state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"}:
+    if (_predevelopment().state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not workflow._validation_waived(files, item, "formal-convergence"):
         raise ProjectError("predevelopment requires formal convergence before human acceptance")
-    if not _approved_contract(files, item):
+    if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
         raise ProjectError("user acceptance requires the current approved contract")
     missing_root = _cleaned_code_root(root, files, item) if item.get("cleanup") == "done" else None
     workflow._implementation_approved(files, item, missing_root=missing_root)
-    review = item["development"]["review"]
+    review = item["development"].get("review") or {}
     current = (item["development"].get("reviewed_snapshot", {}) if missing_root is not None else
                workflow._code_snapshot(root, item, store.project(files)))
-    if review.get("code_snapshot", {}).get("tree") != current.get("tree"):
-        raise ProjectError("user modifications require independent review before acceptance")
+    waived = workflow._validation_waived(files, item, "implementation-review", missing_root=missing_root)
+    snapshot = item["workflow"]["validation_waivers"]["implementation-review"].get("code_snapshot", {}) if waived else review.get("code_snapshot", {})
+    if snapshot.get("tree") != current.get("tree"):
+        raise ProjectError("implementation approval does not cover the current code")
 
 
 def accept(root, selector, *, approval_source, publish=None):
@@ -617,8 +643,34 @@ def accept(root, selector, *, approval_source, publish=None):
     item = store.item(files, workflow._resolve(store.items(files), selector))
     identity = workflow._identity(root, item=item["id"])
     workflow._ownership(item, identity)
+    extra = {}
     if item.get("kind") != "aggregate":
-        _acceptance_review(root, files, item)
+        if not item.get("development"):
+            raise ProjectError("human acceptance requires recorded development")
+        # An actual current human acceptance can replace missing/failed/stale code
+        # review, but does not silently waive another design or convergence gate.
+        try:
+            _acceptance_review(root, files, item)
+        except ProjectError:
+            if (_predevelopment().state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not workflow._validation_waived(files, item, "formal-convergence"):
+                raise ProjectError("predevelopment requires formal convergence before human acceptance")
+            if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
+                raise ProjectError("user acceptance requires the current approved contract")
+            if item.get("design", {}).get("review", {}).get("result") == "fail" and not workflow._validation_waived(files, item, "design-review"):
+                raise ProjectError("unresolved independent design findings block implementation acceptance")
+            manifest = {"ticket": workflow.secrets.token_hex(16), "identity": identity,
+                        "created_at": workflow._now(), "base_commit": workflow._base(item),
+                        "options": {"provenance": approval_source}}
+            record = workflow._report(root, manifest, item, files, extra, "development-finish",
+                                      "# Human acceptance\n\n" + approval_source + "\n")
+            current = workflow._code_snapshot(root, item, store.project(files))
+            record.update(result="pass", approval_kind="human_acceptance", source=approval_source,
+                          recorded_by=identity["session"], code_snapshot=current,
+                          read_hashes=_read_hashes(root, files, item, "code-review"))
+            extra["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)
+            item["development"].update(review=record, reviewed_snapshot=current)
+            item["status"], item["owner"] = "awaiting_delivery", None
+            _acceptance_review(root, files, item)
     _state(item)["acceptance"] = {"status": "accepted", "source": approval_source,
         "recorded_by": identity["session"], "created_at": workflow._now(), "binding": _artifact_binding(root, files, item)}
-    return _publish(root, files, [item], identity, "Record user acceptance " + item["id"], publish)
+    return _publish(root, files, [item], identity, "Record user acceptance " + item["id"], publish, extra=extra)

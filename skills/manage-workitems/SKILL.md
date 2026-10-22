@@ -7,6 +7,10 @@ description: Create, find, update or archive work items through the fixed projec
 
 Resolve the project command entrypoint through the [command contract](references/commands.md), honoring the caller's supplied binding before the shared [fallback](scripts/project.py). The program owns YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
 
+Before working on an existing item, check its owner under [control claims and takeover](references/commands.md#control-claims-and-takeover). If it belongs to another owner, pause affected work and ask the user whether to take over; resume only after explicit approval and successful takeover. A general work/continuation request is not takeover approval. Bounded executors follow the current owner's assignment under that same contract.
+
+Honor explicit user decisions to skip any verification checkpoint through [user verification decisions](references/commands.md#user-verification-decisions). Record a named, current-target `validation-waiver` as skipped. Explicit human acceptance may replace independent implementation review with an attributed pass; preserve the actual source and distinguish it from independent review. Default gates in the references apply unless covered by a current explicit user decision.
+
 ## Progress report
 
 A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items already include the lifecycle summary plus stored predevelopment markers. Scheduling collections during advancement come from `autonomy status` for the current control claim; a progress report uses `progress`.
@@ -16,6 +20,8 @@ Write every item as its full ID and title. Include kind, status, design state an
 Read phases from the JSON as follows. `speculative` means the recorded review passed on a frozen generation; formal acceptance and delivery wait until every pinned predecessor is human-accepted and actually delivered, so report that wait with the pins and the retained worktree. `preparing` means the generation is ready to pin inputs. `baseline` means pinned snapshots are being integrated. `reconciling` means the item is replaying onto the formal base. `formal`, and an item with no `predevelopment` object, use the stored item status, review result, acceptance and delivery. `predevelop: true` with no `predevelopment` object means the item is authorized and has no generation yet.
 
 Also report `changed`, `commit`, pending sync, pending publications, and the number of `rejected_publications`. A `blocked` or `partial` result follows the command contract status table.
+
+When present, report `review_approval_kind: human_acceptance` and its user source as human acceptance, and `verification_waivers` as recorded user skips with their source. Do not describe either as executed independent verification or assume a recorded skip still covers changed inputs.
 
 If this is an autonomous stage assignment, read [stage-executor](../advance-project/references/stage-executor.md), return evidence to the controller and perform no project command or formal project-document write. For autonomous scope coordination, use [advance-project](../advance-project/SKILL.md). For ordinary controller operations, read [discussion and authorization](../advance-project/references/discussion-and-authorization.md).
 

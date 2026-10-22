@@ -429,6 +429,18 @@ def _ignore_errors(files):
     return errors
 
 
+def _recorded_verification_skip(item, gate):
+    """A delivered declaration retains the actual decision used at that time."""
+    delivery = item.get("delivery")
+    if not isinstance(delivery, dict):
+        return False
+    decisions = delivery.get("verification_waivers") or {}
+    waiver = decisions.get(gate) if isinstance(decisions, dict) else None
+    return (isinstance(waiver, dict) and waiver.get("kind") == "validation-waiver" and
+            waiver.get("gate") == gate and waiver.get("item") == item.get("id") and
+            waiver.get("result") == "skipped" and _nonempty(waiver.get("source")))
+
+
 def _validate_legacy_files(root, files, digest_files=None):
     errors = []
 
@@ -592,7 +604,8 @@ def _validate_legacy_files(root, files, digest_files=None):
                 if isinstance(required, list) and isinstance(evidence, list):
                     kinds = {record.get("kind") for record in evidence if isinstance(record, dict)
                              and isinstance(record.get("kind"), str)}
-                    need(all(value in kinds for value in required if isinstance(value, str)),
+                    waived = _recorded_verification_skip(item, "delivery-evidence")
+                    need(waived or all(value in kinds for value in required if isinstance(value, str)),
                          prefix + "delivered requires evidence for every delivery.required kind")
         need(_one_of(item.get("cleanup"), {"pending", "done", "not_applicable"}), prefix + "invalid cleanup")
 
@@ -610,8 +623,9 @@ def _validate_legacy_files(root, files, digest_files=None):
             if item.get("kind") == "aggregate" and item.get("status") == "done" and dependency in items:
                 child = items[dependency]
                 child_delivery = child.get("delivery")
-                need(child.get("status") != "cancelled" and isinstance(child_delivery, dict)
-                     and child_delivery.get("status") == "delivered",
+                waived = _recorded_verification_skip(item, "dependencies")
+                need(waived or (child.get("status") != "cancelled" and isinstance(child_delivery, dict)
+                     and child_delivery.get("status") == "delivered"),
                      f"item {identifier}: done aggregate requires delivered, non-cancelled dependency {dependency}")
         split = item.get("split_from")
         if split is not None and _identifier(split):
