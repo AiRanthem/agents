@@ -4,7 +4,7 @@ Own one work item's one assigned stage, under the controller's current contract 
 
 Confirm the assigned item, role, original inputs, current source workdir, comparison base, permitted writes and designated candidate/report paths before stage work. Missing or conflicting inputs block the affected work; do not fabricate them. The controller manages your native task tree; no project worker registration is required.
 
-Your bounded assignment acts under the controller's current item claim, not a separate ownership grant. If that claim is lost or disputed, pause affected work and return the ownership conflict to the controller so it can ask the user whether to take over. Resume only after the controller confirms explicit takeover approval and successful transfer under [control claims and takeover](../../manage-workitems/references/commands.md#control-claims-and-takeover); do not take over or borrow another owner's identity yourself.
+Your bounded write assignment acts under the controller's current item claim, not a separate ownership grant. If that claim is lost or disputed, stop affected writes and return the ownership conflict to the controller so it can ask the user whether to take over. Resume writes only after the controller confirms explicit takeover approval and successful transfer under [control claims and takeover](../../manage-workitems/references/commands.md#control-claims-and-takeover); do not take over or borrow another owner's identity yourself. Authorized read-only investigation or review may continue without a claim against stable original inputs, writing only its separate temporary report. Changed inputs must be reported rather than treated as the reviewed target.
 
 ## Ownership and stage outcomes
 

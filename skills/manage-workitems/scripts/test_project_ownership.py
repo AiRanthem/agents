@@ -39,6 +39,44 @@ class OwnershipTest(unittest.TestCase):
         self.assertIn(result["status"], {"published", "no_op"}, result)
         return result
 
+    def test_readiness_across_stages_does_not_require_write_control(self):
+        self.a.approved()
+        self.a.authorize()
+        stages = (("design-review", "independent-designer"),
+                  ("implementation", "source-author"),
+                  ("code-review", "independent-code-reviewer"), (None, None))
+        for role, actor in stages:
+            expected = self.a.state()
+            self.assertFalse(expected["takeover_required"])
+            before = runtime._working_files(self.root)
+            calls = len(self.f.calls)
+            with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "read-only-conversation"}):
+                actual = self.a.state()
+                self.assertEqual(actual, {**expected, "takeover_required": True})
+                self.assertIsNone(workflow._identity(self.root, item="A", create=False)["token"])
+            self.assertEqual(runtime._working_files(self.root), before)
+            self.assertEqual(len(self.f.calls), calls)
+            if role:
+                self.assertEqual(expected["next_role"], role)
+                self.a.finish_execution(self.a.dispatch(role, actor))
+            else:
+                self.assertEqual(expected["state"], "awaiting_acceptance")
+
+    def test_readiness_reports_token_bound_handoff_without_an_owner(self):
+        identity = workflow._identity(self.root, item="A")
+        item = self.f.record()
+        item.setdefault("workflow", {})["lifecycle"] = {"handoff": {
+            "from": "previous-writer", "to": identity["session"],
+            "claim_token": identity["token"], "source": "Actual write handoff"}}
+        self.f.install(item)
+        before = runtime._working_files(self.root)
+        self.assertFalse(self.a.state()["takeover_required"])
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "read-only-conversation"}):
+            state = self.a.state()
+            self.assertTrue(state["takeover_required"])
+            self.assertNotIn("control_claim_required", state["reasons"])
+        self.assertEqual(runtime._working_files(self.root), before)
+
     def test_manual_draft_is_retained_and_old_ticket_cannot_finish(self):
         draft = self.f.begin("context-update")
         self.f.edit(draft, "Unpublished useful context.\n")

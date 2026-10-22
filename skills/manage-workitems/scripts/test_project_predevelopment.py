@@ -1,5 +1,6 @@
 """Opt-in snapshots and convergence with real Git and local bare remotes."""
 import copy
+import os
 from pathlib import Path
 import unittest
 from unittest import mock
@@ -126,6 +127,15 @@ class PredevelopmentTest(unittest.TestCase):
         before = (git(source, "rev-parse", "HEAD"), git(source, "status", "--porcelain"),
                   git(source, "diff", "--cached"), git(source, "diff"))
         self.assertEqual(self.state("B")["next_action"], "prepare")
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "read-only-conversation"}):
+            before_files = runtime._working_files(self.root)
+            readiness = self.state("B")
+            self.assertEqual(readiness["next_action"], "prepare")
+            self.assertTrue(readiness["takeover_required"])
+            with self.assertRaisesRegex(runtime.ProjectError, "control claim"):
+                predevelopment.prepare(self.root, "B", publish=self.f.publisher)
+            self.assertEqual(runtime._working_files(self.root), before_files)
+            self.assertIsNone(predevelopment._latest(self.item("A")))
         self.prepare("B")
         captured = predevelopment._latest(self.item("A"))
         self.assertEqual(before, (git(source, "rev-parse", "HEAD"), git(source, "status", "--porcelain"),

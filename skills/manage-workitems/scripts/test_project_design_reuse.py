@@ -234,6 +234,11 @@ class AutonomousDesignReuseTest(unittest.TestCase):
         self.assertEqual(self.f.finish(edit)["status"], "published")
         self.assertEqual(self.a.state()["next_action"], "design_reuse_assessment")
         with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "foreign-session"}):
+            before = runtime._working_files(self.root)
+            readiness = self.a.state()
+            self.assertEqual(readiness["next_action"], "design_reuse_assessment")
+            self.assertTrue(readiness["takeover_required"])
+            self.assertEqual(runtime._working_files(self.root), before)
             self.assertEqual(workflow.begin(self.root, "design-reuse", "A", publish=self.f.publisher)["status"], "blocked")
         edit = self.f.begin("design-reuse")
         self.f.edit(edit, "Original user contract and assumptions are unchanged.\n")

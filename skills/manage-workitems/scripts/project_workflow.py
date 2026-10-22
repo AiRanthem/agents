@@ -574,9 +574,7 @@ def _new_item(items, options, operation):
 
 
 def _ownership(item, identity):
-    claim = _ownership_module().claim_token(item)
-    if ((claim is not None and claim != identity["token"]) or
-            not _ownership_module().authorized(item, identity)):
+    if _ownership_module().requires_takeover(item, identity):
         raise ProjectError("work item has another control claim; use explicit takeover")
 
 

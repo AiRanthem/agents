@@ -310,14 +310,11 @@ def _next(root, files, item, session):
         result.update(state="accepted_awaiting_delivery" if _acceptance_valid(root, files, item) else "blocked", reasons=[] if _acceptance_valid(root, files, item) else ["aggregate_manual_acceptance"])
         return result
     authorization = state.get("authorization") or {}
-    identity = workflow._identity(root, item=item["id"], create=False) if authorization or item.get("owner") else {"session": session, "token": None}
+    lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
+    identity = workflow._identity(root, item=item["id"], create=False) if authorization or item.get("owner") or lifecycle.get("handoff") else {"session": session, "token": None}
+    result["takeover_required"] = workflow._ownership_module().requires_takeover(item, identity)
     if not authorization:
         result["reasons"].append("not_authorized")
-    elif not workflow._ownership_module().authorized(item, identity):
-        result["reasons"].append("control_claim_required")
-    owner = item.get("owner") or {}
-    if owner and owner.get("token") != identity["token"] and "control_claim_required" not in result["reasons"]:
-        result["reasons"].append("control_claim_required")
     waived_design = workflow._validation_waived(files, item, "design-review")
     assess_reuse = not waived_design and not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
     pending_confirmation = not waived_design and workflow._design_reuse().pending(files, item)
@@ -327,7 +324,7 @@ def _next(root, files, item, session):
         result["reasons"].append("authorization_contract_changed")
     if not assess_reuse and not pending_confirmation and authorization and authorization.get("decision_sha256") != workflow._hash(files.get(workflow._documents(item)["decision"])):
         result["reasons"].append("authorization_decision_changed")
-    if not result["reasons"] and ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
+    if not result["reasons"] and lifecycle.get("replacement_pending"):
         result.update(state="ready", next_action="lifecycle_prepare")
         return result
     if not result["reasons"] and not workflow._validation_waived(files, item, "formal-convergence"):

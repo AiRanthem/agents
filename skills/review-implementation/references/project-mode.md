@@ -1,5 +1,7 @@
 # Project implementation review
 
+Authorized read-only reviews use the [read-only project route](../../manage-workitems/references/commands.md#reading-and-setup) without takeover, retaining a separate temporary report. Opening a checkpoint or registering results uses the current write claim; reviewed source remains read-only.
+
 Prepare the shared original context and review plan without findings, then follow the [mode contract](review-standard.md#resolve-review-mode) before assessment or reviewer dispatch. The calling workflow owns mode selection: the owner/controller passes the already-resolved choice to the fresh reviewer; direct invocation asks once only when undecided. A delegated review lead returns a missing mode to the caller rather than selecting a default or asking the user again.
 
 Read the current complete requirement and spec, applicable original instructions, comparison baseline and the actual stable source snapshot supplied by the controller. Do not seek historical review conclusions before your own assessment. Include staged, unstaged and relevant untracked contents; HEAD alone is insufficient.

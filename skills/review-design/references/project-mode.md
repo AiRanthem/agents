@@ -1,5 +1,7 @@
 # Project design-review ownership
 
+Authorized read-only reviews use the [read-only project route](../../manage-workitems/references/commands.md#reading-and-setup) without takeover, retaining a separate temporary report. Opening a checkpoint, modifying its shared candidate or registering results uses the current write claim; an owner may delegate bounded candidate corrections under its claim.
+
 Read [shared project context](../../manage-workitems/references/project-context.md) and the [fixed command workflow](../../manage-workitems/references/commands.md). These write instructions apply to the controller or an ordinary expressly authorized project review session, including a fresh subagent assigned that entire ordinary review workflow. An autonomous stage executor returns actual artifacts to its controller, which operates the ordinary checkpoints.
 
 Ordinary project review requires an explicit user request and an independent reviewer. In authorized `$advance-project`, the controller schedules the review under existing scoped authorization; no separate user session or renewed stage permission is required. Actual independence from authorship of the reviewed version remains mandatory. In autonomous advancement the controller only registers the real executor result through the applicable project workflow; it does not conduct a missing review, complete findings itself or substitute its own session for the reviewer identity. The ordinary independent review session performs its own assessment.

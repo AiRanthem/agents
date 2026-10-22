@@ -87,7 +87,7 @@ def _candidate(root, files, item, coordinator):
         return captured if (captured["binding"]["project_sha256"] == workflow._hash(files[store.project_path(files)]) and
                             all(captured["binding"].get(key) == value for key, value in current.items())) else None
     authorization = (item.get("workflow") or {}).get("autonomy", {}).get("authorization", {})
-    if (not workflow._ownership_module().authorized(item, workflow._identity(root, item=item["id"], create=False)) or not authorization.get("predevelop") or
+    if (not authorization.get("predevelop") or
             item.get("kind") != "development" or item.get("status") != "awaiting_delivery"):
         return None
     try:

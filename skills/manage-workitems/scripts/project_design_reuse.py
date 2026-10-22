@@ -41,7 +41,7 @@ def capture(root, files, item, *, reviewed=False, read=None, read_hashes=None):
 
 
 def ready(item, identity=None):
-    """Require independent coverage and the current control claim."""
+    """Require independent coverage and, for writes, the current control claim."""
     state = item.get("workflow") or {}
     basis = state.get("design_basis") or {}
     review = basis.get("review") or {}
@@ -147,12 +147,12 @@ def pending(files, item):
 
 def needed(root, files, item, session):
     try:
-        ready(item, workflow._identity(root, item=item["id"], create=False))
+        ready(item)
         workflow._approved(files, item)
         return False
     except workflow.ProjectError:
         try:
-            ready(item, workflow._identity(root, item=item["id"], create=False))
+            ready(item)
         except workflow.ProjectError:
             return False
     previous = (item.get("workflow") or {}).get("design_reuse") or {}

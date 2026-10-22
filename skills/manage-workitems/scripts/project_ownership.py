@@ -44,6 +44,12 @@ def handoff_authorized(handoff, identity):
             handoff["to"] == identity.get("session"))
 
 
+def requires_takeover(item, identity):
+    """Report write access without restricting reads or artifact readiness."""
+    claim = claim_token(item)
+    return (claim is not None and claim != identity.get("token")) or not authorized(item, identity)
+
+
 def _event(event):
     required = {"id", "source", "from", "to", "coordinator", "created_at"}
     if not isinstance(event, dict) or not required <= set(event) or set(event) - required - {"attempt", "writers_stopped_source"} or not workflow.TICKET.fullmatch(str(event.get("id", ""))):
