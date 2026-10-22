@@ -838,7 +838,23 @@ func checkCandidateResize(sbx *v1alpha1.Sandbox, requests, limits corev1.Resourc
 	return nil
 }
 
+func claimMethodForLock(lockType infra.LockType) (string, error) {
+	switch lockType {
+	case infra.LockTypeCreate:
+		return v1alpha1.ClaimMethodColdStart, nil
+	case infra.LockTypeUpdate, infra.LockTypeSpeculate:
+		// Speculation takes a pooled sandbox that is still creating.
+		return v1alpha1.ClaimMethodHotStart, nil
+	default:
+		return "", fmt.Errorf("unsupported lock type %q", lockType)
+	}
+}
+
 func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions) error {
+	claimMethod, err := claimMethodForLock(lockType)
+	if err != nil {
+		return err
+	}
 	if lockType != infra.LockTypeCreate {
 		sbx.Sandbox = sbx.Sandbox.DeepCopy()
 	}
@@ -866,6 +882,7 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 		labels = make(map[string]string, 1)
 	}
 	labels[v1alpha1.LabelSandboxIsClaimed] = v1alpha1.True
+	labels[v1alpha1.LabelSandboxClaimMethod] = claimMethod
 	sbx.SetLabels(labels)
 
 	annotations := sbx.GetAnnotations()
