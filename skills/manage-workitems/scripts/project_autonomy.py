@@ -198,7 +198,9 @@ def _contract(files, item):
 
 def _approved_contract(files, item):
     approval = item.get("design", {}).get("approval") or {}
-    return bool(approval.get("kind") != "derived_reuse_pending" and approval.get("source") and all(approval.get(k) == v for k, v in _contract(files, item).items()))
+    return bool(approval.get("kind") != "derived_reuse_pending" and
+                files.get(workflow._spec(item), b"").strip() and
+                item.get("design", {}).get("version", 0) >= 1)
 
 
 def scope(files, *, all_items=False, tree=None, items=None):
@@ -315,11 +317,12 @@ def _next(root, files, item, session):
     result["takeover_required"] = workflow._ownership_module().requires_takeover(item, identity)
     if not authorization:
         result["reasons"].append("not_authorized")
+    splitting = item.get("design", {}).get("next_action") == "split"
     waived_design = workflow._validation_waived(files, item, "design-review")
     assess_reuse = not waived_design and not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
     pending_confirmation = not waived_design and workflow._design_reuse().pending(files, item)
     if not waived_design and not assess_reuse and not pending_confirmation and not _approved_contract(files, item):
-        result["reasons"].append("approved_initial_design_required")
+        result["reasons"].append("published_initial_design_required")
     if not assess_reuse and not pending_confirmation and authorization and authorization.get("requirement_sha256") != _contract(files, item)["requirement_sha256"]:
         result["reasons"].append("authorization_contract_changed")
     if not assess_reuse and not pending_confirmation and authorization and authorization.get("decision_sha256") != workflow._hash(files.get(workflow._documents(item)["decision"])):
@@ -327,7 +330,7 @@ def _next(root, files, item, session):
     if not result["reasons"] and lifecycle.get("replacement_pending"):
         result.update(state="ready", next_action="lifecycle_prepare")
         return result
-    if not result["reasons"] and not workflow._validation_waived(files, item, "formal-convergence"):
+    if not result["reasons"] and not splitting and not workflow._validation_waived(files, item, "formal-convergence"):
         extra = _predevelopment().schedule(root, files, item, session)
         if extra:
             result.update(extra)
@@ -338,6 +341,15 @@ def _next(root, files, item, session):
         return result
     if assess_reuse:
         result.update(state="ready", next_action="design_reuse_assessment")
+        return result
+    if splitting:
+        try:
+            workflow._split_ready(files, item)
+        except ProjectError:
+            role = "design-revision" if item.get("design", {}).get("review", {}).get("result") == "fail" else "design-review"
+            result.update(state="ready", next_role=role)
+        else:
+            result.update(state="ready", next_action="split")
         return result
     binding = _binding(root, files, item)
     development = item.get("development") or {}
@@ -442,6 +454,8 @@ def _authorize_group(root, files, identifiers, selected, identity, approval_sour
             blocked.append({"id": identifier, "reason": "control_claim_required"})
             continue
         workflow._ownership(item, identity)
+        if _approved_contract(files, item) and (item.get("design", {}).get("approval") or {}).get("kind") in {None, "user"}:
+            item["design"]["approval"] = workflow._published_approval(files, item, identity["session"])
         approval = item.get("design", {}).get("approval") or {}
         confirmed_contract = approval.get("kind") == "user"
         if approval.get("kind") in {"derived_reuse", "derived_mechanical", "derived_confirmation", "derived_revision"}:

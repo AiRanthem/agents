@@ -741,6 +741,8 @@ def _validate_files(root, files):
                     type(design.get("version")) is int and design["version"] >= 0 and
                     design.get("state") in {"draft", "review-pending", "implementable"}):
                 errors.append(prefix + "design requires file spec.md, nonnegative integer version and draft/review-pending/implementable state")
+            if isinstance(design, dict) and design.get("next_action", "implement") not in ("implement", "split"):
+                errors.append(prefix + "design next_action must be implement or split")
             try:
                 try:
                     from project_autonomy import validate_state

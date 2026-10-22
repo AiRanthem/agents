@@ -85,6 +85,21 @@ class AutonomyTest(unittest.TestCase):
             self.finish_execution(self.dispatch(role, author))
 
 
+    def test_published_split_parent_reviews_then_decomposes_without_predevelopment_stages(self):
+        draft = self.f.begin("design-update", next_action="split")
+        self.f.edit(draft, "# Complete design\n\nUsable stages, shared contracts and dependency DAG.\n")
+        self.assertEqual(self.f.finish(draft)["status"], "published")
+        item = self.f.record()
+        item["design"].pop("approval")  # Separate registration is optional.
+        self.f.install(item)
+        self.authorize(predevelop=True)
+        self.assertEqual(self.state()["next_role"], "design-review")
+        self.finish_execution(self.dispatch("design-review", "parent-reviewer"))
+        state = self.state()
+        self.assertEqual(state["next_action"], "split")
+        self.assertIsNone(state["next_role"])
+        self.assertNotIn("predevelopment", self.f.record().get("workflow", {}))
+
     def test_status_does_not_create_a_coordinator_identity(self):
         with mock.patch.object(workflow, "_identity", side_effect=AssertionError("status created an identity")):
             result = autonomy.status(self.root, items=["A"])

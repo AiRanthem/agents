@@ -140,10 +140,20 @@ class DesignReuseTest(unittest.TestCase):
         with self.assertRaises(runtime.ProjectError):
             workflow._approved(files, changed)
 
+    def test_new_approved_spec_after_failed_reuse_needs_only_its_independent_review(self):
+        self.f.designed()
+        self.update()
+        _, result = self.assess("fail")
+        self.assertEqual(result["status"], "published", result)
+        self.assertEqual(self.f.record()["design"]["approval"]["kind"], "user")
+        self.assertFalse(workflow._design_reuse().pending(runtime._working_files(self.root), self.f.record()))
+        self.assertEqual(self.f.review_design()["status"], "published")
+        workflow._approved(runtime._working_files(self.root), self.f.record())
+
     def test_pending_comparison_requires_actual_independent_contract_confirmation(self):
         self.f.designed()
         original = self.f.record()["design"]["approval"]
-        self.update()
+        self.update("requirement-update", "Equivalent requirement A wording\n")
         _, result = self.assess("fail")
         self.assertEqual(result["status"], "published", result)
         self.assertEqual(self.f.record()["design"]["approval"]["kind"], "derived_reuse_pending")

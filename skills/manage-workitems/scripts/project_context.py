@@ -223,6 +223,8 @@ def _validate_item_metadata(item: dict[str, Any], path: Path) -> None:
     if design is not None and (not isinstance(design, dict) or
                                not _document_relative(design.get("file"))):
         raise ContextError(f"work item design.file must be a safe item-relative Markdown path: {path}")
+    if design is not None and design.get("next_action", "implement") not in ("implement", "split"):
+        raise ContextError(f"work item design.next_action must be implement or split: {path}")
 
 
 def _document_relative(value: Any) -> bool:

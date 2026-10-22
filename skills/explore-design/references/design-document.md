@@ -2,7 +2,7 @@
 
 Read this reference only for ordinary execution-mode document writing after identifying the active host mode. Read-only planning discussion and delegated project stage executors do not use this write workflow. Executors follow their assigned candidate paths and return them to the controller without official-document writes.
 
-In a schema-v2 project, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, keep machine status out of its frontmatter, and record approval/review state through the project command workflow. Direct split-workitem exploration can end with an authorized handoff without writing a spec. Do not create a second standalone design document. read-only planning mode remains read-only.
+In a schema-v2 project, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, keep machine status out of its frontmatter, and record approval/review state through the project command workflow. An oversized item needs a complete parent spec with delivery stages and DAG, followed by independent Pass before decomposition. Child specs inherit the approved contract; additional design exploration is conditional on actual blocking gaps. Do not create a second standalone design document. read-only planning mode remains read-only.
 
 ## Confirm the path
 
@@ -26,7 +26,7 @@ Add Alternatives or Risks only for material content. An explicitly requested dra
 
 Stable facts about the existing system may explain the background. Keep transient snapshots, superseded designs, implementation history, and migration narratives out of the contract. Examples describe runtime outcomes, not test commands.
 
-Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes**, titled in the document's language, only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
+For oversized project items, include usable delivery stages, their acceptance coverage and the dependency DAG as design decisions; future child refinement does not reduce parent completeness. Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes**, titled in the document's language, only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
 
 ## Validate
 

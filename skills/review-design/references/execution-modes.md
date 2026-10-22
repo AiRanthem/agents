@@ -8,9 +8,9 @@ Review read-only and report in conversation. A successful independent challenge 
 
 ## Ordinary execution
 
-Apply permitted mechanical corrections only within the authorized document, record their diff/evidence and unchanged contract, and assess that final exact document. On an independent pass on a fully user-approved documented Why/What, write `design_status: implementable` in that exact document's YAML frontmatter. Add the field if absent while preserving unrelated metadata and the body. Verify the result and report **Implementable** only when writeback succeeded for the reviewed identity.
+Apply permitted mechanical corrections only within the authorized document, record their diff/evidence and unchanged contract, and assess that final exact document. A formally published design attests user approval obtained before writing; do not require a separate approval record or renewed confirmation before review. On an independent pass on that documented Why/What, write `design_status: implementable` in that exact document's YAML frontmatter. Add the field if absent while preserving unrelated metadata and the body. Verify the result and report **Implementable** only when writeback succeeded for the reviewed identity.
 
-If approval, a document or permitted writeback is missing, report **Review passed without document status**. Do not imply the document is `implementable`. A read-only planning pass can support later authorized writeback only while the approved contract and repository assumptions remain unchanged.
+If a document or permitted writeback is missing, report **Review passed without document status**. Do not imply the document is `implementable`. A read-only planning pass can support later authorized writeback only while the approved contract and repository assumptions remain unchanged.
 
 A material design revision resets its status to `review-pending`. A failed review of an already `implementable` document clears that stale status in execution mode when permitted; otherwise report the status invalid. Do not make substantive revisions to the design body. Route substantive Why/What corrections to `$explore-design`, with any user-owned decisions resolved before affected implementation. Synchronize an existing design document in execution mode before affected code edits.
 

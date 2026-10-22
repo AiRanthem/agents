@@ -12,7 +12,7 @@ Authorized read-only investigation may use `show ID` and selected `--documents`;
 | Record requirements, rename, change dependencies or archive | [manage-workitems](../SKILL.md) |
 | Create a separate project repository | [create-project](../../create-project/SKILL.md) |
 | Deterministic project migration and instruction refresh | [upgrade-project](../../upgrade-project/SKILL.md) |
-| Decompose a requirement into usable deliverables | [split-workitem](../../split-workitem/SKILL.md) |
+| Materialize an implementable oversized design into child contracts and a delivery DAG | [split-workitem](../../split-workitem/SKILL.md) |
 | Requested design or implementation | [develop-workitem](../../develop-workitem/SKILL.md) |
 | Explicit scoped autonomous advancement | [advance-project](../../advance-project/SKILL.md), through the [coordinator interface](commands.md#autonomous-advancement) |
 | Verify actual delivery or separately requested cleanup | [complete-workitem](../../complete-workitem/SKILL.md) |

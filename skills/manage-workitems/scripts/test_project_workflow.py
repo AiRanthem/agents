@@ -115,6 +115,100 @@ class WorkflowTest(unittest.TestCase):
             self.edit(result, "Reviewed full requirement and design; no findings.\n")
             self.assertEqual(workflow.finish(self.a, result["ticket"], options={"result": "pass", "provenance": "Independent review session"}, publish=self.publisher)["status"], "published")
 
+    def review_design(self, identifier="A", result="pass"):
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "independent-reviewer"}):
+            review = self.begin("design-review", identifier)
+            self.edit(review, "Independent assessment of this complete contract.\n", "report.md")
+            return workflow.finish(self.a, review["ticket"], options={"result": result,
+                "provenance": "Actual independent design review"}, publish=self.publisher)
+
+    def test_published_spec_review_needs_no_separate_approval_registration(self):
+        missing = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
+        self.assertEqual(missing["status"], "blocked")
+        self.assertIn("published versioned spec", missing["message"])
+        design = self.begin("design-update")
+        self.edit(design, "# Complete approved design\n")
+        finished = self.finish(design)
+        self.assertEqual(finished["workflow_gates"]["handoff"], "independent_review")
+        self.assertEqual(self.record()["design"]["state"], "review-pending")
+        # A published spec with no optional approval record is still reviewable.
+        item = self.record()
+        item["design"].pop("approval")
+        self.install(item)
+        author = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
+        self.assertEqual(author["code"], "independent_review_required")
+        self.assertEqual(self.review_design()["status"], "published")
+        self.assertEqual(self.record()["design"]["state"], "implementable")
+        self.assertEqual(self.finish(self.begin("development-start"))["status"], "published")
+
+    def test_reviewed_parent_splits_to_inherited_reviewable_child_and_never_implements(self):
+        created = self.begin("create", None, title="System", slug="system", repository="code")
+        self.edit(created, "# Whole system requirement\n", "requirement.md")
+        self.assertEqual(self.finish(created)["status"], "published")
+        parent = "1-system"
+        options = {"parent": parent, "title": "Usable stage", "slug": "stage", "repository": "code"}
+        unreviewed = workflow.begin(self.a, "create", options=options, publish=self.publisher)
+        self.assertEqual(unreviewed["status"], "blocked")
+        design = self.begin("design-update", parent, next_action="split")
+        self.edit(design, "# Complete system\n\nShared invariants, failure outcomes, usable stages and DAG.\n")
+        self.assertEqual(self.finish(design)["status"], "published")
+        unreviewed = workflow.begin(self.a, "create", options=options, publish=self.publisher)
+        self.assertEqual(unreviewed["status"], "blocked")
+        self.assertEqual(self.review_design(parent)["workflow_gates"]["handoff"], "split")
+        for waiver in ({}, {"skip_design_review": True, "approval_source": "User waives review"}):
+            blocked = workflow.begin(self.a, "development-start", parent, options=waiver, publish=self.publisher)
+            self.assertEqual(blocked["code"], "checkpoint_blocked")
+        child = self.begin("create", None, **options)
+        self.assertEqual({Path(row["path"]).name for row in child["editable"]},
+                         {"requirement.md", "context.md", "spec.md"})
+        self.assertIn(str(self.a / ("workitems/" + parent + "/spec.md")), {row["path"] for row in child["read"]})
+        self.edit(child, "# Usable child requirement\n", "requirement.md")
+        self.edit(child, "# Child contract\n\nShared invariants and this stage's acceptance.\n", "spec.md")
+        self.assertEqual(self.finish(child)["status"], "published")
+        identifier = "11-stage"
+        self.assertEqual(self.record(identifier)["design"]["state"], "review-pending")
+        inherited = self.record(identifier)["design"]["version"]
+        self.assertEqual(self.review_design(identifier)["status"], "published")
+        self.assertEqual(self.record(identifier)["design"]["version"], inherited)
+        self.assertEqual(self.record(identifier)["design"]["state"], "implementable")
+        revised = self.begin("design-update", parent)
+        self.edit(revised, "# Changed parent shared contract\n")
+        self.assertEqual(self.finish(revised)["status"], "published")
+        stale = workflow.begin(self.a, "development-start", identifier, publish=self.publisher)
+        self.assertEqual(stale["status"], "blocked")
+        self.assertIn("stale", stale["message"])
+
+    def test_route_change_and_parent_change_invalidate_split_evidence(self):
+        created = self.begin("create", None, title="System", slug="system", repository="code")
+        self.edit(created, "# Whole system requirement\n", "requirement.md")
+        self.assertEqual(self.finish(created)["status"], "published")
+        parent = "1-system"
+        self.designed(parent)
+        version = self.record(parent)["design"]["version"]
+        route = self.begin("design-update", parent, next_action="split")
+        self.assertEqual(self.finish(route)["status"], "published")
+        self.assertEqual(self.record(parent)["design"]["version"], version + 1)
+        self.assertNotIn("review", self.record(parent)["design"])
+        self.assertEqual(self.review_design(parent)["status"], "published")
+        child = self.begin("create", None, parent=parent, title="Stage", slug="stage")
+        self.edit(child, "# Stage requirement\n", "requirement.md")
+        changed = self.begin("design-update", parent)
+        self.edit(changed, "# Revised system contract and DAG\n")
+        self.assertEqual(self.finish(changed)["status"], "published")
+        self.assertEqual(self.finish(child)["status"], "blocked")
+        self.assertFalse((self.a / "workitems/11-stage/metadata.yaml").exists())
+
+    def test_cyclic_inherited_design_sources_block_before_publication(self):
+        for identifier, parent in (("A", "B"), ("B", "A")):
+            item = self.record(identifier)
+            item["split_from"] = parent
+            self.install(item)
+        before = len(self.calls)
+        result = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
+        self.assertEqual(result["status"], "blocked")
+        self.assertIn("cyclic split_from", result["message"])
+        self.assertEqual(len(self.calls), before)
+
     def test_create_only_requirement_context_and_repeat_finish_is_noop(self):
         result = self.begin("create", None, title="新需求", slug="new-task", repository="code")
         self.assertEqual({Path(entry["path"]).name for entry in result["editable"]}, {"requirement.md", "context.md"})
@@ -193,7 +287,7 @@ class WorkflowTest(unittest.TestCase):
         result = self.begin("design-update")
         self.edit(result, "# Design\n\n- [x] independent review passed\n")
         self.finish(result)
-        self.assertEqual(self.record()["design"]["state"], "draft")
+        self.assertEqual(self.record()["design"]["state"], "review-pending")
         blocked = workflow.begin(self.a, "design-review", "A", options={}, publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked")
         result = self.begin("decision-record", approval_source="Actual user approval")

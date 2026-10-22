@@ -796,7 +796,7 @@ def parser():
     begin.add_argument("selector", nargs="?")
     for name in ("title", "slug", "parent", "repository", "approval-source", "result", "provenance",
                  "reviewer-session", "review-file", "branch", "author-session",
-                 "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode", "gate"):
+                 "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode", "gate", "next-action"):
         begin.add_argument("--" + name)
     begin.add_argument("--skip-design-review", action="store_true", default=None)
     begin.add_argument("--contract-unchanged", action="store_true", default=None)

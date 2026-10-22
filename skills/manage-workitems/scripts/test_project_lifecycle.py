@@ -27,21 +27,20 @@ class ApprovalHandoffTest(unittest.TestCase):
         self.addCleanup(self.f.doCleanups)
         self.f.setUp()
 
-    def test_missing_approval_is_visible_and_blocker_routes_to_original_review_rules(self):
+    def test_published_design_routes_to_review_without_separate_approval_registration(self):
         draft = self.f.begin('design-update')
-        self.f.edit(draft, '# Complete candidate\n')
+        self.f.edit(draft, '# Complete user-approved design\n')
         finished = self.f.finish(draft)
-        self.assertEqual(finished['workflow_gates']['handoff'], 'author_present_contract_for_user_decision')
+        self.assertEqual(finished['workflow_gates']['handoff'], 'independent_review')
         files = runtime._working_files(self.f.a)
         gates = workflow.gates(files, self.f.record())
-        self.assertFalse(gates['operations']['design-review']['eligible'])
+        self.assertTrue(gates['operations']['design-review']['eligible'])
         blocked = workflow.begin(self.f.a, 'design-review', 'A', publish=self.f.publisher)
-        self.assertEqual(blocked['code'], 'approval_required')
-        self.assertEqual(blocked['next_action'], 'author_present_contract_for_user_decision')
+        self.assertEqual(blocked['code'], 'independent_review_required')
         self.assertNotIn('next_command', blocked)
         for path in blocked['skill_instruction_paths']:
             self.assertTrue(Path(path).is_file(), path)
-        self.assertIsNone(self.f.record()['design'].get('approval'))
+        self.assertEqual(self.f.record()['design']['approval']['kind'], 'user')
 
     def test_approval_registrar_may_review_but_all_design_contributors_remain_excluded(self):
         for author, text in [('author', 'First complete design'), ('reviser', 'Revised complete design')]:

@@ -5,7 +5,7 @@ description: Autonomously advance an explicitly requested managed-project scope 
 
 # Advance Project
 
-Coordinate from the management project root and manage each item’s stage task tree directly. Project state tracks current artifacts and control claims; native executors and their liveness belong to the advancing agent. Advance every ready development item within the requested scope, subject to actual host capacity. Keep project records and lifecycle operations with the controller; keep code, investigation and review with stage executors. Do not introduce work-item managers.
+Coordinate from the management project root and manage each item’s stage task tree directly. Project state tracks current artifacts and control claims; native executors and their liveness belong to the advancing agent. Advance every ready development item within the requested scope, subject to actual host capacity. An oversized parent with `design.next_action: split` goes from full independent design Pass to controller-owned decomposition, not source implementation. Children inherit its complete relevant contract and enter their own review directly; supplement design only for demonstrated blocking gaps. Keep project records and lifecycle operations with the controller; keep code, investigation and review with stage executors. Do not introduce work-item managers.
 
 Read [discussion and authorization](references/discussion-and-authorization.md). In execution mode, read [coordinator](references/coordinator.md) and confirm the caller-supplied execution bindings before dispatch. A delegated stage executor instead reads [stage-executor](references/stage-executor.md) and its stage skill; it does not become a project controller.
 

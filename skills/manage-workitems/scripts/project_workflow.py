@@ -32,7 +32,7 @@ ProjectError = runtime.ProjectError
 OPERATIONS = {
     "create": {"title", "slug", "parent", "repository", "kind", "depends_on", "delivery_required"},
     "fix": {"title", "slug", "fixes", "parent", "repository", "delivery_required"},
-    "requirement-update": set(), "design-update": {"author_session", "contract_unchanged"},
+    "requirement-update": set(), "design-update": {"author_session", "contract_unchanged", "next_action"},
     "decision-record": {"approval_source"},
     "validation-waiver": {"gate", "approval_source"},
     "design-review": {"reviewer_session", "review_file"},
@@ -244,6 +244,18 @@ def _open_fixes(items, identifier):
                   and item.get("delivery", {}).get("status") != "delivered")
 
 
+def _parents(items, item):
+    parents, parent = set(), item.get("split_from")
+    while parent:
+        if parent == item["id"] or parent in parents:
+            raise ProjectError("cyclic split_from lineage")
+        if parent not in items:
+            raise ProjectError("unknown split_from parent: " + parent)
+        parents.add(parent)
+        parent = items[parent].get("split_from")
+    return parents
+
+
 def _blocked(items, identifier, *, speculative=False, files=None):
     item = items[identifier]
     if ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
@@ -264,8 +276,21 @@ def _blocked(items, identifier, *, speculative=False, files=None):
 
 
 def _approval_binding(files, item):
-    return {"requirement_sha256": _hash(files.get(_documents(item)["requirement"])),
-            "spec_sha256": _hash(files.get(_spec(item))), "version": _design(item)["version"]}
+    binding = {"requirement_sha256": _hash(files.get(_documents(item)["requirement"])),
+               "spec_sha256": _hash(files.get(_spec(item))), "version": _design(item)["version"]}
+    if _design(item).get("next_action") == "split":
+        binding["next_action"] = "split"
+    return binding
+
+
+def _published_approval(files, item, actor):
+    """Formal spec publication attests approval; it is not a second user gate."""
+    binding = _approval_binding(files, item)
+    approval = _design(item).get("approval") or {}
+    if approval.get("source") and all(approval.get(key) == value for key, value in binding.items()):
+        return copy.deepcopy(approval)
+    return {**binding, "kind": "user", "source": "Approved design publication: " + _spec(item) +
+            " sha256:" + str(binding["spec_sha256"]), "session": actor, "recorded_by": actor}
 
 
 def _design_authors(item):
@@ -283,12 +308,8 @@ def _code_authors(item):
 
 
 def _review_ready(files, item, actor=None):
-    approval = _design(item).get("approval")
-    allowed = {"draft", "review-pending", "implementable"}
-    if (not isinstance(approval, dict) or not approval.get("source") or
-            _design(item).get("state") not in allowed or
-            any(approval.get(key) != value for key, value in _approval_binding(files, item).items())):
-        raise ProjectError("design review requires recorded current user approval")
+    if not files.get(_spec(item), b"").strip() or _design(item)["version"] < 1:
+        raise ProjectError("design review requires a published versioned spec")
     if actor and actor in _design_authors(item):
         raise ProjectError("independent design reviewer must not have authored or revised the design")
 
@@ -308,7 +329,8 @@ def gates(files, item, actor=None):
     """
     result = {}
     predicates = {"design-review": lambda: _review_ready(files, item, actor),
-                  "development-start": lambda: (_blocked(store.items(files), item["id"], files=files), _approved(files, item))}
+                  "split": lambda: _split_ready(files, item),
+                  "development-start": lambda: (_implementation_target(item), _blocked(store.items(files), item["id"], files=files), _approved(files, item))}
     for operation, predicate in predicates.items():
         reasons = []
         try:
@@ -317,21 +339,35 @@ def gates(files, item, actor=None):
             reasons.append(str(exc))
         result[operation] = {"eligible": not reasons, "blockers": reasons,
                              "requires_begin": True}
-    approval = _design(item).get("approval") or {}
-    approved = bool(approval.get("source") and all(approval.get(k) == v for k, v in _approval_binding(files, item).items()))
-    return {"operations": result, "approval": "current" if approved else "missing_or_stale",
-            "handoff": "independent_review" if approved else "author_present_contract_for_user_decision",
+    published = bool(files.get(_spec(item), b"").strip() and _design(item)["version"] >= 1)
+    handoff = "independent_review" if published else "complete_design"
+    if result["split"]["eligible"]:
+        handoff = "split"
+    elif result["development-start"]["eligible"]:
+        handoff = "implementation"
+    return {"operations": result, "approval": "published_design" if published else "no_design",
+            "handoff": handoff,
             "contract": _approval_binding(files, item),
             "skill_instruction_paths": skill_instructions("design-review")}
 
 
 def _binding(files, item, base):
-    documents = _documents(item)
-    design = _design(item)
-    return {"requirement_sha256": _hash(files.get(documents["requirement"])),
-            "spec_sha256": _hash(files.get(_spec(item))),
-            "version": design["version"], "base_commit": base,
+    return {**_approval_binding(files, item), "base_commit": base,
             "dependency_sha256": _dependency_digest(files, item)}
+
+
+def _implementation_target(item):
+    if item.get("kind") == "aggregate" or _design(item).get("next_action") == "split":
+        raise ProjectError("checkpoint blocked: this item routes to decomposition, not code implementation")
+
+
+def _split_ready(files, item):
+    if item.get("archived") or item.get("status") in {"done", "cancelled"}:
+        raise ProjectError("checkpoint blocked: inactive or delivered items cannot be decomposed")
+    if _design(item).get("next_action") != "split":
+        raise ProjectError("checkpoint blocked: design must select next_action split before decomposition")
+    _review_ready(files, item)
+    _approved(files, item)
 
 
 def _design_reuse():
@@ -425,6 +461,8 @@ def _read_payload(root, files, item, operation):
               for path in sorted(selected) if path in files]
     items = store.items(files)
     extra_items = set(item.get("depends_on", [])) if operation in {"design-update", "design-review", "design-reuse", "development-start", "development-finish"} else set()
+    if operation in {"create", "design-update", "design-review", "design-reuse", "development-start", "development-finish"}:
+        extra_items.update(_parents(items, item))
     pinned = _autonomy_module()._predevelopment().pins(item)
     if extra_items:
         extra_items.update(pinned)
@@ -458,8 +496,12 @@ def _read_payload(root, files, item, operation):
 def _drafts(operation, item, files):
     documents = _documents(item)
     if operation in {"create", "fix"}:
-        return {"requirement.md": (documents["requirement"], "# " + item["title"] + "\n\n## 目标\n\n## 范围\n\n## 验收条件\n\n## 交付结果\n"),
-                "context.md": (documents["context"], "# 当前上下文\n\n")}
+        drafts = {"requirement.md": (documents["requirement"], "# " + item["title"] + "\n\n## 目标\n\n## 范围\n\n## 验收条件\n\n## 交付结果\n"),
+                  "context.md": (documents["context"], "# 当前上下文\n\n")}
+        if operation == "create" and item.get("split_from"):
+            parent = store.item(files, item["split_from"])
+            drafts["spec.md"] = (_spec(item), files[_spec(parent)].decode("utf-8"))
+        return drafts
     if operation in {"requirement-update", "context-update", "design-update"}:
         target = {"requirement-update": documents["requirement"], "context-update": documents["context"],
                   "design-update": _spec(item)}[operation]
@@ -494,6 +536,8 @@ def _options(operation, options):
         _text(options["author_session"], "actual source/design author")
     if "contract_unchanged" in options and type(options["contract_unchanged"]) is not bool:
         raise ProjectError("contract_unchanged must be an explicit boolean")
+    if "next_action" in options and options["next_action"] not in ("implement", "split"):
+        raise ProjectError("next_action must be implement or split")
     if operation == "decision-record" and "approval_source" in options:
         _text(options["approval_source"], "actual user approval source")
     if operation == "validation-waiver":
@@ -605,6 +649,7 @@ def _checks(files, item, operation):
     items.setdefault(item["id"], item)
     upstream = _ancestors(items, item["id"])
     related = upstream | {item["id"]} | {key for key, value in items.items() if value.get("fixes") in upstream}
+    related.update(_parents(items, item))
     selected = {store.project_path(files), ".project/graph.yaml", "AGENTS.md", ".project/context.md",
                 ".project/project-instructions.md", ".project/business-instructions.md", ".project/main-workspace.md"}
     for key in related:
@@ -658,6 +703,10 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if item.get("status") == "done" and operation not in {"context-update", "log-record", "archive", "rename", "cleanup-record"}:
         raise ProjectError("delivered history cannot reopen; create a separate fix work item")
     _ownership(item, identity)
+    if operation == "create" and item.get("split_from"):
+        _split_ready(files, items[item["split_from"]])
+    if operation == "development-start":
+        _implementation_target(item)
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
@@ -959,6 +1008,10 @@ def _prepare_finish(root, manifest, files, drafts):
     if operation in {"create", "fix"} and identifier in items:
         raise ProjectError("allocated work item ID was published by another session; begin again")
     _ownership(item, identity)
+    if operation == "create" and item.get("split_from"):
+        _split_ready(files, items[item["split_from"]])
+    if operation == "development-start":
+        _implementation_target(item)
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
@@ -985,6 +1038,14 @@ def _prepare_finish(root, manifest, files, drafts):
         target = manifest["drafts"][name]["target"]
         if target:
             writes[target] = text
+    if operation == "create" and item.get("split_from"):
+        _text(writes[_spec(item)], "inherited child design")
+        parent = items[item["split_from"]]
+        design = _design(item)
+        design.update(version=1, state="review-pending", author_session=actor)
+        item.setdefault("workflow", {})["design_authors"] = sorted(_design_authors(parent) | {actor})
+        prospective = store.apply_writes(files, writes)
+        design["approval"] = _published_approval(prospective, item, actor)
     if operation == "requirement-update":
         if _hash(writes[documents["requirement"]]) != _hash(files.get(documents["requirement"])):
             _invalidate_implementation(item)
@@ -998,7 +1059,10 @@ def _prepare_finish(root, manifest, files, drafts):
     elif operation == "design-update":
         pending_revision = _design_reuse().pending(files, item)
         design = _design(item)
-        if _hash(writes[_spec(item)]) != _hash(files.get(_spec(item))):
+        _text(writes[_spec(item)], "approved design body")
+        next_action = options.get("next_action", design.get("next_action", "implement"))
+        route_changed = next_action != design.get("next_action", "implement")
+        if _hash(writes[_spec(item)]) != _hash(files.get(_spec(item))) or route_changed:
             _invalidate_implementation(item)
             authors = item.setdefault("workflow", {}).setdefault("design_authors", [])
             for author in (design.get("author_session"), actor):
@@ -1006,7 +1070,11 @@ def _prepare_finish(root, manifest, files, drafts):
                     authors.append(author)
             design["version"] += 1
             design["author_session"] = actor
-            design["state"] = "draft"
+            design["state"] = "review-pending"
+            if next_action == "split":
+                design["next_action"] = "split"
+            else:
+                design.pop("next_action", None)
             design.pop("approval", None)
             design.pop("review", None)
             if options.get("contract_unchanged"):
@@ -1029,6 +1097,9 @@ def _prepare_finish(root, manifest, files, drafts):
                 prospective = store.apply_writes(files, writes)
                 design["approval"] = {**approval, **_approval_binding(prospective, item)}
                 design["state"] = "review-pending"
+            else:
+                prospective = store.apply_writes(files, writes)
+                design["approval"] = _published_approval(prospective, item, actor)
     elif operation == "decision-record":
         _text(writes[documents["decision"]], "decision body")
         if "approval_source" in options:
@@ -1063,7 +1134,8 @@ def _prepare_finish(root, manifest, files, drafts):
         if pending_confirmation and options["result"] == "pass" and options.get("contract_unchanged") is not True:
             raise ProjectError("pending approval requires independent contract_unchanged confirmation")
         design = _design(item)
-        approval = design.get("approval")
+        approval = _published_approval(files, item, actor)
+        design["approval"] = approval
         _review_ready(files, item, actor)
         # The approval baseline is the design's baseline, not the subsequent
         # management commit that recorded approval or claimed this edit.
@@ -1473,7 +1545,7 @@ def _finish(root, ticket, *, options=None, publish=None):
     if manifest["operation"] == "development-start" and status in {"published", "no_op"}:
         intended = store.apply_writes(files, manifest["writes"])
         output["code_context"] = _code_context(root, store.item(intended, manifest["item"]["id"]), store.project(intended))
-    if manifest["operation"] in {"design-update", "decision-record"} and status in {"published", "no_op"}:
+    if manifest["operation"] in {"design-update", "decision-record", "design-review"} and status in {"published", "no_op"}:
         intended = store.apply_writes(files, manifest["writes"])
         output["workflow_gates"] = gates(intended, store.item(intended, manifest["item"]["id"]))
     return output
@@ -1500,9 +1572,6 @@ def begin(root, operation, selector=None, *, options=None, publish=None):
         result = _failure(exc)
         if operation == "design-review":
             result["skill_instruction_paths"] = skill_instructions(operation)
-            if result["action_code"] == "approval_required":
-                result["next_action"] = "author_present_contract_for_user_decision"
-                result["required_fact"] = "actual user approval covering the complete current design"
         return _output(root, result)
 
 

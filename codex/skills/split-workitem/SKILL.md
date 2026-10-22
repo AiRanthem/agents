@@ -1,6 +1,6 @@
 ---
 name: split-workitem
-description: Decompose a managed project requirement into independently usable deliverables and a dependency DAG. Use for requested decomposition before detailed design or after oversized scope is identified; does not authorize implementation or child design.
+description: Materialize an oversized work item's complete independently reviewed design into cohesive child work items and a dependency DAG. Requires an implementable parent spec routed to splitting; children inherit its design and need refinement only for demonstrated blocking gaps.
 ---
 
 # Native entry
