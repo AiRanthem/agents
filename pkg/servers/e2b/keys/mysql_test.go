@@ -261,6 +261,22 @@ func TestMySQL_EnsureAdminTeamAndKey(t *testing.T) {
 		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnError(errors.New("insert fail"))
 		require.Error(t, st.ensureAdminKey(context.Background(), 1))
 	})
+
+	t.Run("empty configured admin key issues no SQL", func(t *testing.T) {
+		st, _, done := newMockStorage(t)
+		defer done()
+		st.cfg.AdminKey = ""
+		require.NoError(t, st.ensureAdminKey(context.Background(), 1))
+	})
+
+	t.Run("whitespace configured admin key is still ensured", func(t *testing.T) {
+		st, mock, done := newMockStorage(t)
+		defer done()
+		st.cfg.AdminKey = " "
+		mock.ExpectQuery("SELECT .*FROM `team_api_keys`.*").WillReturnError(gorm.ErrRecordNotFound)
+		mock.ExpectExec("INSERT INTO `team_api_keys`.*").WillReturnResult(sqlmock.NewResult(1, 1))
+		require.NoError(t, st.ensureAdminKey(context.Background(), 1))
+	})
 }
 
 func TestMySQL_EnsureAdminKeyDuplicateConflict(t *testing.T) {

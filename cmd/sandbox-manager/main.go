@@ -167,7 +167,7 @@ func main() {
 	pflag.IntVar(&port, "port", 8080, "The port the server listens on")
 	pflag.IntVar(&metricsPort, "metrics-port", 0,
 		"Port for /metrics; 0 or the same value as --port reuses the control API listener")
-	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key (required when --e2b-enable-auth is true)")
+	pflag.StringVar(&e2bAdminKey, "e2b-admin-key", "", "E2B admin API key. Empty skips creating and rotating the canonical admin key; --e2b-enable-auth still controls authentication")
 	pflag.BoolVar(&e2bEnableAuth, "e2b-enable-auth", true, "Enable E2B authentication")
 	pflag.StringVar(&domain, "e2b-domain", "",
 		"Static E2B domain. When empty, the domain is resolved per-request from "+
@@ -200,7 +200,7 @@ func main() {
 			" or the corresponding key of the Secret named by --secret-config) and the HMAC key-hash pepper (env "+
 			E2BKeyHashPepperSecretKey+" or the corresponding key of that Secret) are required; secret mode does not use either.")
 	pflag.BoolVar(&e2bKeyStorageDisableAutoMigrate, "e2b-key-storage-disable-schema-auto-update", false,
-		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team/key bootstrap still runs")
+		"Disable schema auto-migration for DB-Based key storage like mysql; when enabled, schema changes are skipped but admin team bootstrap still runs, and a configured admin key is still created or rotated")
 	pflag.StringVar(&quotaRedisAddr, "quota-redis-addr", "", "Redis address for sandbox-manager quota enforcement. Empty disables enforcement and fails open.")
 	pflag.IntVar(&quotaRedisDB, "quota-redis-db", 0, "Redis DB for sandbox-manager quota enforcement.")
 	pflag.DurationVar(&quotaRedisOperationTimeout, "quota-redis-operation-timeout", consts.DefaultQuotaRedisOperationTimeout, "Per-operation timeout for Redis quota commands.")
@@ -369,10 +369,6 @@ func main() {
 	quotaRedisUsername = secretSettings.RedisUsername
 	quotaRedisPassword = secretSettings.RedisPassword
 
-	if e2bEnableAuth && e2bAdminKey == "" {
-		klog.Fatalf("E2B admin key is required when --e2b-enable-auth is true; provide it via --e2b-admin-key or the %q key of the Secret named by --secret-config", E2BAdminKeySecretKey)
-	}
-
 	quotaOpts := config.QuotaOptions{
 		RedisAddr:         quotaRedisAddr,
 		RedisUsername:     quotaRedisUsername,
@@ -427,6 +423,8 @@ func main() {
 
 	var keyCfg *keys.Config
 	if e2bEnableAuth {
+		// Keep key storage enabled even with an empty admin key: a nil keyCfg
+		// would authenticate every request as the anonymous admin.
 		keyCfg = &keys.Config{
 			Mode:               keys.StorageMode(e2bKeyStorage),
 			Namespace:          sysNs,

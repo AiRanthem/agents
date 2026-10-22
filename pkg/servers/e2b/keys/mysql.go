@@ -147,8 +147,9 @@ func newMySQLKeyStorage(cfg mysqlConfig) *mysqlKeyStorage {
 	}
 }
 
-// Init connects to MySQL and ensures admin team and admin API key rows exist.
-// Schema auto-migration is skipped when explicitly disabled by config.
+// Init connects to MySQL and ensures the admin team exists. The admin API key
+// row is created or rotated only when AdminKey is non-empty. Schema
+// auto-migration is skipped when explicitly disabled by config.
 func (k *mysqlKeyStorage) Init(ctx context.Context) error {
 	log := klog.FromContext(ctx)
 	log.Info("initializing mysql key storage")
@@ -194,6 +195,9 @@ func (k *mysqlKeyStorage) ensureAdminTeam(ctx context.Context) (uint, error) {
 }
 
 func (k *mysqlKeyStorage) ensureAdminKey(ctx context.Context, adminTeamID uint) error {
+	if k.cfg.AdminKey == "" {
+		return nil
+	}
 	hash := k.hashKey(k.cfg.AdminKey)
 	key := TeamAPIKeyEntity{
 		UID:     AdminKeyID.String(),

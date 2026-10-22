@@ -169,6 +169,10 @@ func (k *secretKeyStorage) Init(ctx context.Context) error {
 }
 
 func (k *secretKeyStorage) ensureAdminKey(ctx context.Context) error {
+	// Empty configuration leaves existing admin entries untouched.
+	if k.AdminKey == "" {
+		return nil
+	}
 	log := klog.FromContext(ctx)
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		current := &corev1.Secret{}

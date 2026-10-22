@@ -62,10 +62,6 @@ func (cfg Config) validate() error {
 	default:
 		return fmt.Errorf("unknown key storage mode: %q, must be %q or %q", cfg.Mode, StorageModeSecret, StorageModeMySQL)
 	}
-	// An empty admin key would let an empty API-key header authenticate as admin.
-	if cfg.AdminKey == "" {
-		return errors.New("key storage requires a non-empty admin key")
-	}
 	return nil
 }
 

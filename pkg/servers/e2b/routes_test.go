@@ -259,41 +259,56 @@ func TestCheckApiKey_CanonicalizesE2BSDKCompatibleKeys(t *testing.T) {
 		Team: &models.Team{Name: "team-a"},
 	}
 	encodedE2bLikeKey := keys.EncodeForE2BSDK(e2bLikeRawKey)
+	emptyKeyAdmin := &models.CreatedTeamAPIKey{ID: keys.AdminKeyID, Team: models.AdminTeam()}
 
 	tests := []struct {
 		name      string
 		stored    map[string]*models.CreatedTeamAPIKey
-		header    string
+		header    *string
 		wantUser  *models.CreatedTeamAPIKey
 		wantCalls []string
 	}{
 		{
 			name:      "raw key authenticates directly",
 			stored:    map[string]*models.CreatedTeamAPIKey{rawKey: rawUser},
-			header:    rawKey,
+			header:    ptr.To(rawKey),
 			wantUser:  rawUser,
 			wantCalls: []string{rawKey},
 		},
 		{
 			name:      "compatible key authenticates as decoded raw key",
 			stored:    map[string]*models.CreatedTeamAPIKey{rawKey: rawUser},
-			header:    encodedRawKey,
+			header:    ptr.To(encodedRawKey),
 			wantUser:  rawUser,
 			wantCalls: []string{rawKey},
 		},
 		{
 			name:      "E2B-like raw key authenticates directly",
 			stored:    map[string]*models.CreatedTeamAPIKey{e2bLikeRawKey: e2bLikeUser},
-			header:    e2bLikeRawKey,
+			header:    ptr.To(e2bLikeRawKey),
 			wantUser:  e2bLikeUser,
 			wantCalls: []string{e2bLikeRawKey},
 		},
 		{
 			name:      "E2B-like key authenticates as decoded raw key",
 			stored:    map[string]*models.CreatedTeamAPIKey{e2bLikeRawKey: e2bLikeUser},
-			header:    encodedE2bLikeKey,
+			header:    ptr.To(encodedE2bLikeKey),
 			wantUser:  e2bLikeUser,
 			wantCalls: []string{e2bLikeRawKey},
+		},
+		{
+			name:   "missing header rejects stored empty admin key",
+			stored: map[string]*models.CreatedTeamAPIKey{"": emptyKeyAdmin},
+		},
+		{
+			name:   "empty header rejects stored empty admin key",
+			stored: map[string]*models.CreatedTeamAPIKey{"": emptyKeyAdmin},
+			header: ptr.To(""),
+		},
+		{
+			name:   "compatible empty key rejects stored empty admin key",
+			stored: map[string]*models.CreatedTeamAPIKey{"": emptyKeyAdmin},
+			header: ptr.To(keys.EncodeForE2BSDK("")),
 		},
 	}
 
@@ -303,14 +318,23 @@ func TestCheckApiKey_CanonicalizesE2BSDKCompatibleKeys(t *testing.T) {
 			controller := &Controller{keys: storage}
 			req, err := http.NewRequest(http.MethodGet, "http://localhost/test", nil)
 			require.NoError(t, err)
-			req.Header.Set(models.HeaderApiKey, tt.header)
+			if tt.header != nil {
+				req.Header.Set(models.HeaderApiKey, *tt.header)
+			}
 
 			newCtx, apiErr := controller.CheckApiKey(logs.NewContext(), req)
 
-			require.Nil(t, apiErr)
-			user := GetUserFromContext(newCtx)
-			require.NotNil(t, user)
-			assert.Equal(t, tt.wantUser.ID, user.ID)
+			if tt.wantUser == nil {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, http.StatusUnauthorized, apiErr.Code)
+				assert.Equal(t, "Invalid API Key", apiErr.Message)
+				assert.Nil(t, GetUserFromContext(newCtx))
+			} else {
+				require.Nil(t, apiErr)
+				user := GetUserFromContext(newCtx)
+				require.NotNil(t, user)
+				assert.Equal(t, tt.wantUser.ID, user.ID)
+			}
 			assert.Equal(t, tt.wantCalls, storage.calls)
 		})
 	}
