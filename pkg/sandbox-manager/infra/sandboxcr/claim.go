@@ -42,14 +42,13 @@ import (
 	"github.com/openkruise/agents/api/v1alpha1"
 	infracache "github.com/openkruise/agents/pkg/cache"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
-	"github.com/openkruise/agents/pkg/controller/sandboxset"
 	"github.com/openkruise/agents/pkg/identity"
 	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/sandbox-manager/consts"
 	managererrors "github.com/openkruise/agents/pkg/sandbox-manager/errors"
 	"github.com/openkruise/agents/pkg/sandbox-manager/infra"
 	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
-	"github.com/openkruise/agents/pkg/servers/e2b/models"
+	"github.com/openkruise/agents/pkg/sandboxpool"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
@@ -777,7 +776,7 @@ func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOption
 				fmt.Sprintf("sandbox template %s/%s has no pod template", sbs.Namespace, sbs.Spec.TemplateRef.Name))
 		}
 	}
-	sbx := sandboxset.NewSandboxFromSandboxSet(sbs, refTemplate)
+	sbx := sandboxpool.NewSandboxFromSandboxSet(sbs, refTemplate)
 	// sandbox manager creates high-priority sandbox
 	sbx.Annotations[v1alpha1.SandboxAnnotationPriority] = "100"
 	for _, anno := range FilteredAnnotationsOnCreation {
@@ -907,7 +906,7 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 	if opts.CSIMount != nil {
 		if opts.CSIMount.MountOptionListRaw != "" {
 			// record the csi mount config to annotation
-			annotations[models.ExtensionKeyClaimWithCSIMount_MountConfig] = opts.CSIMount.MountOptionListRaw
+			annotations[v1alpha1.AnnotationCSIVolumeConfig] = opts.CSIMount.MountOptionListRaw
 		}
 	}
 
