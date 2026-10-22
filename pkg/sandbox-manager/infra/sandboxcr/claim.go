@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openkruise/agents/api/v1alpha1"
+	"github.com/openkruise/agents/pkg/autopause"
 	infracache "github.com/openkruise/agents/pkg/cache"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
 	"github.com/openkruise/agents/pkg/identity"
@@ -55,8 +57,6 @@ import (
 	"github.com/openkruise/agents/pkg/utils/inplaceupdate"
 	"github.com/openkruise/agents/pkg/utils/runtime"
 	timeoututils "github.com/openkruise/agents/pkg/utils/timeout"
-
-	"go.opentelemetry.io/otel/attribute"
 )
 
 var DefaultCleanupTimeout = 30 * time.Second
@@ -595,6 +595,9 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	template, cnt := opts.Template, opts.CandidateCounts
 	ctx = logs.Extend(ctx, "action", "pickAnAvailableSandbox")
 	log := klog.FromContext(ctx).WithValues("template", template).V(utils.DebugLogLevel)
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	objects, err := cache.ListSandboxesInPool(ctx, infracache.ListSandboxesInPoolOptions{Namespace: opts.Namespace, Pool: template})
 	if err != nil {
 		return nil, "", err
@@ -619,7 +622,16 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 	availableCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	speculatingCandidates := make([]*v1alpha1.Sandbox, 0, cnt)
 	var resizeSkipReason error
+	var probeUpdateSkips probeUpdateSkipTally
+	// The claim-required probes derive from the claim's auto-pause policy minus
+	// the probes the claim itself carries: candidates do not need to pre-declare
+	// those, they are merged onto the picked sandbox at claim time.
+	requiredProbeNames := autopause.RequiredProbeNames(opts.AutoPausePolicy, opts.Probes)
+	missingProbeNames := make(map[string]struct{})
 	for _, obj := range objects {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		if len(availableCandidates) >= cnt {
 			if opts.SpeculateCreatingDuration == 0 || len(speculatingCandidates) >= cnt {
 				break
@@ -636,6 +648,32 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 				resizeSkipReason = checkErr
 			}
 			continue
+		}
+		if missing := missingRequiredProbeNames(obj.Spec.Probes, requiredProbeNames); len(missing) > 0 {
+			for _, name := range missing {
+				missingProbeNames[name] = struct{}{}
+			}
+			log.Info("skip sandbox without claim-required probes", "sandbox", klog.KObj(obj), "missingProbes", missing)
+			continue
+		}
+		// Old candidates may have more probes than the current SandboxSet.
+		// Only merge to count when the combined lengths could exceed the limit.
+		if len(obj.Spec.Probes)+len(opts.Probes) > autopause.MaxSandboxProbes && len(autopause.MergeProbes(obj.Spec.Probes, opts.Probes)) > autopause.MaxSandboxProbes {
+			log.Info("skip sandbox whose merged probes exceed the limit", "sandbox", klog.KObj(obj))
+			continue
+		}
+		if len(opts.Probes) > 0 {
+			if checkErr := checkCandidateProbeUpdates(ctx, obj, opts.ProbeUpdatesEnabled, cache.GetClient()); checkErr != nil {
+				if err := ctx.Err(); err != nil {
+					return nil, "", err
+				}
+				if errors.Is(checkErr, context.Canceled) || errors.Is(checkErr, context.DeadlineExceeded) {
+					return nil, "", checkErr
+				}
+				probeUpdateSkips.add(checkErr)
+				log.Info("skip sandbox that cannot update probes", "sandbox", klog.KObj(obj), "reason", checkErr)
+				continue
+			}
 		}
 		state, _ := utils.GetSandboxState(obj)
 		switch state {
@@ -711,7 +749,138 @@ func pickAnAvailableSandbox(ctx context.Context, opts infra.ClaimSandboxOptions,
 		log.Info("no candidate compatible with inplace resize", "reason", resizeSkipReason)
 		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate compatible with inplace resize: %v", resizeSkipReason))
 	}
+	if len(missingProbeNames) > 0 && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
+		missing := make([]string, 0, len(missingProbeNames))
+		for _, name := range requiredProbeNames {
+			if _, ok := missingProbeNames[name]; ok {
+				missing = append(missing, name)
+			}
+		}
+		return nil, "", NoAvailableError(template, fmt.Sprintf("no candidate declares required probes %v", missing))
+	}
+	if !probeUpdateSkips.empty() && len(availableCandidates) == 0 && len(speculatingCandidates) == 0 {
+		return nil, "", NoAvailableError(template, "no candidate supports probe updates: "+probeUpdateSkips.Error())
+	}
 	return nil, "", NoAvailableError(template, pickErr.Error())
+}
+
+// probeUpdateSkipKind classifies why a pool candidate cannot receive claim probes.
+type probeUpdateSkipKind int
+
+const (
+	probeUpdateSkipUnread probeUpdateSkipKind = iota
+	probeUpdateSkipUnscheduled
+	probeUpdateSkipVirtual
+	probeUpdateSkipDisabled
+)
+
+// probeUpdateSkipError keeps the per-candidate diagnostic and a stable category
+// so mixed skips can be aggregated without matching message text. Unwrap
+// preserves context cancellation from the Node read.
+type probeUpdateSkipError struct {
+	kind  probeUpdateSkipKind
+	msg   string
+	cause error
+}
+
+func (e *probeUpdateSkipError) Error() string {
+	return e.msg
+}
+
+func (e *probeUpdateSkipError) Unwrap() error {
+	return e.cause
+}
+
+// probeUpdateSkipTally counts skip categories across the pool. Deterministic
+// categories are rendered before transient node-read failures, so a cache miss
+// cannot hide a virtual-kubelet, unscheduled, or disabled-gate skip.
+type probeUpdateSkipTally struct {
+	disabled    int
+	virtual     int
+	unscheduled int
+	unread      int
+}
+
+func (t *probeUpdateSkipTally) add(err error) {
+	var skip *probeUpdateSkipError
+	if !errors.As(err, &skip) {
+		t.unread++
+		return
+	}
+	switch skip.kind {
+	case probeUpdateSkipDisabled:
+		t.disabled++
+	case probeUpdateSkipVirtual:
+		t.virtual++
+	case probeUpdateSkipUnscheduled:
+		t.unscheduled++
+	default:
+		t.unread++
+	}
+}
+
+func (t probeUpdateSkipTally) empty() bool {
+	return t.disabled == 0 && t.virtual == 0 && t.unscheduled == 0 && t.unread == 0
+}
+
+func (t probeUpdateSkipTally) Error() string {
+	parts := make([]string, 0, 4)
+	if t.disabled > 0 {
+		parts = append(parts, fmt.Sprintf("probe updates disabled: %d", t.disabled))
+	}
+	if t.virtual > 0 {
+		parts = append(parts, fmt.Sprintf("virtual-kubelet: %d", t.virtual))
+	}
+	if t.unscheduled > 0 {
+		parts = append(parts, fmt.Sprintf("unscheduled: %d", t.unscheduled))
+	}
+	if t.unread > 0 {
+		parts = append(parts, fmt.Sprintf("node read failed: %d", t.unread))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// checkCandidateProbeUpdates rejects pool candidates whose existing Pods cannot
+// receive claim probes. Node reads use the caller's informer-backed client.
+func checkCandidateProbeUpdates(ctx context.Context, sbx *v1alpha1.Sandbox, enabled bool, c client.Client) error {
+	if !enabled {
+		return &probeUpdateSkipError{kind: probeUpdateSkipDisabled, msg: "probe updates are disabled"}
+	}
+	if sbx.Status.NodeName == "" {
+		return &probeUpdateSkipError{kind: probeUpdateSkipUnscheduled, msg: "sandbox has no scheduled node"}
+	}
+	node := &corev1.Node{}
+	if err := c.Get(ctx, client.ObjectKey{Name: sbx.Status.NodeName}, node); err != nil {
+		return &probeUpdateSkipError{
+			kind:  probeUpdateSkipUnread,
+			msg:   fmt.Sprintf("cannot determine probe update support for node %s: %v", sbx.Status.NodeName, err),
+			cause: err,
+		}
+	}
+	if autopause.IsVirtualKubeletNode(node) {
+		return &probeUpdateSkipError{
+			kind: probeUpdateSkipVirtual,
+			msg:  fmt.Sprintf("node %s is a virtual-kubelet node", node.Name),
+		}
+	}
+	return nil
+}
+
+func missingRequiredProbeNames(probes []v1alpha1.Probe, required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	defined := make(map[string]struct{}, len(probes))
+	for i := range probes {
+		defined[probes[i].Name] = struct{}{}
+	}
+	missing := make([]string, 0, len(required))
+	for _, name := range required {
+		if _, ok := defined[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 func pickFromCandidates(ctx context.Context, candidates []*v1alpha1.Sandbox, pickCache *sync.Map) (*v1alpha1.Sandbox, error) {
@@ -777,6 +946,13 @@ func newSandboxFromSandboxSet(ctx context.Context, opts infra.ClaimSandboxOption
 		}
 	}
 	sbx := sandboxpool.NewSandboxFromSandboxSet(sbs, refTemplate)
+	if mergedCount := len(autopause.MergeProbes(sbx.Spec.Probes, opts.Probes)); mergedCount > autopause.MaxSandboxProbes {
+		return nil, "", NoAvailableError(opts.Template,
+			fmt.Sprintf("new sandbox merged probes exceed the Sandbox limit of %d (%d probes)", autopause.MaxSandboxProbes, mergedCount))
+	}
+	if missing := missingRequiredProbeNames(sbx.Spec.Probes, autopause.RequiredProbeNames(opts.AutoPausePolicy, opts.Probes)); len(missing) > 0 {
+		return nil, "", NoAvailableError(opts.Template, fmt.Sprintf("new sandbox does not declare required probes %v", missing))
+	}
 	// sandbox manager creates high-priority sandbox
 	sbx.Annotations[v1alpha1.SandboxAnnotationPriority] = "100"
 	for _, anno := range FilteredAnnotationsOnCreation {
@@ -849,6 +1025,8 @@ func claimMethodForLock(lockType infra.LockType) (string, error) {
 	}
 }
 
+// modifyPickedSandbox applies the claim-time mutations to a sandbox returned by
+// pickAnAvailableSandbox. It must not be called directly.
 func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.ClaimSandboxOptions) error {
 	claimMethod, err := claimMethodForLock(lockType)
 	if err != nil {
@@ -857,13 +1035,24 @@ func modifyPickedSandbox(sbx *Sandbox, lockType infra.LockType, opts infra.Claim
 	if lockType != infra.LockTypeCreate {
 		sbx.Sandbox = sbx.Sandbox.DeepCopy()
 	}
-
+	// Merge the claim probes before the modifier below so every later step
+	// sees the final probe set: a policy rule may reference a probe the claim
+	// itself carries.
+	if len(opts.Probes) > 0 {
+		sbx.Spec.Probes = autopause.MergeProbes(sbx.Spec.Probes, opts.Probes)
+	}
 	if opts.Modifier != nil {
 		if err := opts.Modifier(sbx); err != nil {
 			return terminalMutationError{stage: "modifier", err: err}
 		}
 	}
 	setMemoryPersistence(sbx, opts.MemoryPersistence)
+	// Deep-copy the claim's policy so the sandbox spec never aliases the
+	// SandboxClaim spec. Applied after the modifier on purpose: an explicitly
+	// supplied claim policy replaces any policy the modifier wrote.
+	if opts.AutoPausePolicy != nil {
+		sbx.Spec.AutoPausePolicy = opts.AutoPausePolicy.DeepCopy()
+	}
 	if opts.InplaceUpdate != nil {
 		if opts.InplaceUpdate.Image != "" {
 			sbx.SetImage(opts.InplaceUpdate.Image)
