@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 from pathlib import Path
 import platform
+import re
 import uuid
 
 try:
@@ -144,8 +145,6 @@ def _blockers(files):
                 blocked.append(f'{identifier}: legacy document routes conflict with the fixed v2 layout; explicit reconciliation required')
             if isinstance(record.get('development'), dict) and 'legacy_source_hash' in record['development']:
                 blocked.append(f'{identifier}: legacy development already contains legacy_source_hash; explicit reconciliation required')
-        if record.get('owner') is not None:
-            blocked.append(f'{identifier}: active owner; release through the original protocol first')
         receipt = store.receipt(files, identifier)
         if receipt and receipt.get('state') != 'verified':
             blocked.append(f'{identifier}: unresolved synchronization {receipt.get("state")!r}; reconcile before migration')
@@ -158,6 +157,58 @@ def _instructions_required(sources, *, custom=False):
             'blockers': sorted(set(sources)), 'read_sources': sorted(set(sources)),
             'writes': {}, 'checks': {},
             'action': 'Read these sources and supply their current effective business constraints through instructions_file. Maintain existing authorization boundaries; the migration does not infer Markdown semantics.'}
+
+
+def validate_publication(bundle, current, prospective):
+    """Permit only the exact deterministic migration under unchanged claims."""
+    instructions = prospective.get('.project/business-instructions.md')
+    prepared = prepare_migration(current, instructions=instructions.decode('utf-8') if instructions is not None else None)
+    if prepared['status'] not in {'prepared', 'no_op'}:
+        raise runtime.ProjectError('migration publication requires a valid deterministic candidate')
+    expected = store.apply_writes(current, prepared['writes'])
+    actual = dict(prospective)
+    actor = {key: bundle[key] for key in ('session', 'token')}
+    for identifier, item in store.items(expected).items():
+        name = store.receipt_path(expected, identifier)
+        receipt = store.receipt(actual, identifier)
+        if receipt and receipt.get('migration_sync') == actor and receipt.get('state') == 'pending':
+            planned = copy.deepcopy(store.receipt(current, identifier) or {})
+            planned.update(intent_id=receipt.get('intent_id'), state='pending',
+                           content_sha256=runtime._business_digest(expected, identifier),
+                           external_id=planned.get('external_id'), baseline_fields=planned.get('baseline_fields'),
+                           git_source_commit=None, checked_at=None, release_owner=copy.deepcopy(item.get('owner')),
+                           migration_sync=actor)
+            planned.pop('operation', None)
+            if receipt != planned:
+                raise runtime.ProjectError('migration synchronization must preserve the original owner and content')
+            if name in expected:
+                actual[name] = expected[name]
+            else:
+                actual.pop(name, None)
+        elif receipt and receipt.get('state') == 'verified' and name in expected:
+            planned = dict(store.receipt(expected, identifier),
+                           content_sha256=runtime._business_digest(expected, identifier))
+            if receipt == planned:
+                actual[name] = expected[name]
+    if actual != expected or any(bundle['checks'].get(name, 'missing') != digest
+                                 for name, digest in prepared['checks'].items()):
+        raise runtime.ProjectError('migration publication differs from the guarded deterministic candidate')
+
+
+def sync_publication(bundle, current, prospective, identifier):
+    """A migration sync identity may update its receipt, never the item claim."""
+    receipt = store.receipt(current, identifier)
+    actor = {key: bundle[key] for key in ('session', 'token')}
+    if not receipt or receipt.get('state') not in {'pending', 'unknown'} or receipt.get('migration_sync') != actor:
+        return False
+    updated = store.receipt(prospective, identifier)
+    immutable = ('intent_id', 'content_sha256', 'release_owner', 'migration_sync')
+    if not updated or any(updated.get(key) != receipt.get(key) for key in immutable):
+        return False
+    receipts = {store.receipt_path(current, value) for value in store.items(current)}
+    return ({name: data for name, data in current.items() if name not in receipts} ==
+            {name: data for name, data in prospective.items() if name not in receipts} and
+            receipt.get('content_sha256') == runtime._business_digest(prospective, identifier))
 
 
 def _minimal_provenance(marker, files):
@@ -362,8 +413,121 @@ def prepare_migration(files, *, instructions=None):
             'items': sorted(store.items(interim))}
 
 
+def _intent_path(root, operation):
+    if not isinstance(operation, str) or not re.fullmatch(r'[0-9a-f]{32}', operation):
+        raise runtime.ProjectError('invalid migration operation identifier')
+    path = root / '.project-local' / 'migrations' / (operation + '.json')
+    runtime._no_links(root, path.relative_to(root).as_posix())
+    return path
+
+
+def pending(root):
+    """Expose retained migration intents, including failures before a Git journal."""
+    runtime._no_links(root, '.project-local/migrations')
+    result = []
+    for path in sorted((root / '.project-local/migrations').glob('*.json')):
+        record = _read_intent(root, path.stem)
+        if record.get('state') != 'not_published' and record['result']['status'] != 'published':
+            result.append({'operation': path.stem, 'paths': sorted(record['result']['writes']),
+                           'validated': record['result'].get('validated', False)})
+    return result
+
+
+def _read_intent(root, operation):
+    record = runtime.read_json(_intent_path(root, operation))
+    if not isinstance(record, dict) or not isinstance(record.get('result'), dict) or not isinstance(record.get('identity'), dict):
+        raise runtime.ProjectError('invalid retained migration operation')
+    result, identity = record['result'], record['identity']
+    if (result.get('migration_operation') != operation or result.get('validated') is not True or
+            identity.get('session') != 'project-migration' or identity.get('token') != operation or identity.get('migration') is not True):
+        raise runtime.ProjectError('retained migration identity or validation does not match its operation')
+    runtime._validate_bundle(dict(identity, writes=result.get('writes'), checks=result.get('checks'), message='Resume migration'))
+    return record
+
+
+def _publish_intent(root, record, publish):
+    result = record['result']
+    for key in ('error', 'code', 'permission_path', 'required_access', 'completion', 'recovery_result',
+                'authority', 'outstanding_paths', 'retry_allowed'):
+        result.pop(key, None)
+    try:
+        publication = publish(root, result['writes'], record['identity'],
+                              'Migrate project metadata and generated entrypoints to schema v2', checks=result['checks'])
+    except (runtime.ProjectError, OSError, ValueError) as exc:
+        publication = {'status': 'partial', 'error': str(exc)}
+        if isinstance(exc, runtime.ProjectPermissionError):
+            publication.update(code='host_permission_required', permission_path=exc.path, required_access='write')
+    result.update(publication=publication, status=publication.get('status', 'partial'))
+    if result['status'] == 'no_op' or (result['status'] == 'published' and not publication.get('verified_remote_commit')):
+        result.update(status='partial', completion='unverified')
+    runtime._write_journal(_intent_path(root, result['migration_operation']), record)
+    return result
+
+
+def resume(root, operation, *, publish, recover, inspect):
+    """Recover the retained migration, proving completion against its original writes."""
+    root = runtime.find_project(root)
+    record = _read_intent(root, operation)
+    result, identity = record['result'], record['identity']
+    # Never regenerate the candidate from newer installed sources during recovery.
+    journal = (result.get('publication', {}).get('recovery') or {}).get('journal')
+    try:
+        recovered = (runtime.resume_publication(root, session=identity['session'], token=identity['token'], journal=journal)
+                     if journal else recover(root, identity['session'], identity['token']))
+        if journal and recovered.get('status') in {'published', 'no_op'}:
+            recovered = recover(root, identity['session'], identity['token'])
+        if recovered.get('code') == 'publication_rejected_before_push':
+            authority = inspect(root)
+            if not authority.get('pending_publications') and not authority.get('pending_sync'):
+                record['state'] = 'not_published'
+                result.update(status='blocked', code='migration_not_published', completion='incomplete',
+                              recovery_result=recovered, authority=authority, retry_allowed=True)
+                runtime._write_journal(_intent_path(root, operation), record)
+                return result
+        if recovered.get('status') in {'partial', 'blocked'}:
+            result.update(status=recovered['status'], recovery_result=recovered)
+            runtime._write_journal(_intent_path(root, operation), record)
+            return result
+        authority = inspect(root)
+    except (runtime.ProjectError, OSError, ValueError) as exc:
+        result.update(status='partial', error=str(exc), completion='unverified')
+        if isinstance(exc, runtime.ProjectPermissionError):
+            result.update(code='host_permission_required', permission_path=exc.path, required_access='write')
+        runtime._write_journal(_intent_path(root, operation), record)
+        return result
+    other_migrations = [entry for entry in authority.get('pending_migrations', []) if entry['operation'] != operation]
+    if authority.get('pending_publications') or authority.get('pending_sync') or other_migrations:
+        result.update(status='blocked', code='migration_recovery_pending', authority=authority, completion='incomplete')
+    else:
+        files = runtime._working_files(root)
+        outstanding = [name for name, value in result['writes'].items()
+                       if not name.startswith('.project/sync/') and files.get(name) !=
+                       (value.encode('utf-8') if value is not None else None)]
+        if not outstanding:
+            result.update(status='published', completion='original_changes_verified',
+                          verified_remote_commit=authority['commit'],
+                          publication={'status': 'published', 'verified_remote_commit': authority['commit']})
+            for key in ('error', 'code', 'permission_path', 'required_access', 'authority',
+                        'recovery_result', 'outstanding_paths', 'retry_allowed'):
+                result.pop(key, None)
+        elif recovered.get('status') == 'no_op' and result['status'] != 'published':
+            # No publication or backend transaction remains. Submit the same
+            # saved intent; ordinary byte guards reject any changed assumptions.
+            return _publish_intent(root, record, publish)
+        else:
+            result.update(status='blocked', code='migration_changes_unverified', outstanding_paths=outstanding,
+                          completion='incomplete', authority=authority)
+    runtime._write_journal(_intent_path(root, operation), record)
+    return result
+
+
 def migrate(root, *, dry_run=False, publish=None, instructions_file=None):
     root = runtime.find_project(root)
+    retained = pending(root)
+    if retained and not dry_run:
+        if len(retained) != 1:
+            return {'status': 'blocked', 'code': 'migration_operation_ambiguous', 'pending_migrations': retained}
+        return _read_intent(root, retained[0]['operation'])['result']
     runtime._check_tracked_paths(root)
     files = runtime._working_files(root)
     errors = runtime._validate_files(root, files)
@@ -371,6 +535,7 @@ def migrate(root, *, dry_run=False, publish=None, instructions_file=None):
         raise runtime.ProjectError('invalid migration source:\n' + '\n'.join(errors))
     instructions = Path(instructions_file).read_text(encoding='utf-8') if instructions_file else None
     result = prepare_migration(files, instructions=instructions)
+    result['needs_update'] = bool(result['writes']) if result['status'] != 'blocked' else None
     if result['status'] in {'blocked', 'no_op'}:
         return result
     candidate = store.apply_writes(files, result['writes'])
@@ -403,8 +568,15 @@ def migrate(root, *, dry_run=False, publish=None, instructions_file=None):
         return result
     if publish is None:
         raise runtime.ProjectError('migration requires the guarded publication coordinator; use dry_run to inspect')
-    identity = {'session': 'project-migration', 'token': str(uuid.uuid4()), 'machine': platform.node() or 'localhost'}
-    publication = publish(root, result['writes'], identity, 'Migrate project metadata and generated entrypoints to schema v2', checks=result['checks'])
-    result['publication'] = publication
-    result['status'] = publication.get('status', 'published')
-    return result
+    operation = uuid.uuid4().hex
+    identity = {'session': 'project-migration', 'token': operation, 'machine': platform.node() or 'localhost',
+                'migration': True}
+    result.update(status='partial', migration_operation=operation)
+    record = {'identity': identity, 'result': result}
+    path = _intent_path(root, operation)
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        runtime._write_journal(path, record)
+    except OSError as exc:
+        return dict(result, status='blocked', code='migration_intent_not_saved', error=str(exc), completion='incomplete')
+    return _publish_intent(root, record, publish)

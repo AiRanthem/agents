@@ -1,9 +1,14 @@
 """Conversion, instruction preservation and guarded publication checks."""
 import copy
+import contextlib
+import errno
 import hashlib
+import io
+import json
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
 import tempfile
 import unittest
 from unittest import mock
@@ -277,15 +282,13 @@ class ConversionTest(unittest.TestCase):
         self.assertEqual(blocked['code'], 'unsupported-custom-instructions')
         self.assertEqual(blocked['writes'], {})
 
-    def test_active_owner_and_unresolved_sync_block_all_writes(self):
-        for value in ('owner', 'pending', 'unknown'):
+    def test_unresolved_sync_blocks_all_writes_even_with_active_owner(self):
+        for value in ('pending', 'unknown'):
             files = self.source()
-            if value == 'owner':
-                record = store.item(files, '1-demo')
-                record['owner'] = {'session': 'other', 'machine': 'host', 'token': 'lease'}
-                files['workitems/1-demo/item.json'] = fixtures.text(record).encode()
-            else:
-                files['.project/sync/1-demo.json'] = fixtures.text({'state': value}).encode()
+            record = store.item(files, '1-demo')
+            record['owner'] = {'session': 'other', 'machine': 'host', 'token': 'lease'}
+            files['workitems/1-demo/item.json'] = fixtures.text(record).encode()
+            files['.project/sync/1-demo.json'] = fixtures.text({'state': value}).encode()
             result = migration.prepare_migration(files, instructions='No recycle')
             self.assertEqual(result['status'], 'blocked')
             self.assertEqual(result['writes'], {})
@@ -433,13 +436,24 @@ class PublicationTest(unittest.TestCase):
                 (root / name).write_text((root / name).read_text() + '\n')
                 from project import publish_changes
                 return publish_changes(root, writes, identity, message, checks=checks)
-            with self.assertRaisesRegex(runtime.ProjectError, 'byte check conflict'):
-                migration.migrate(root, instructions_file=instructions, publish=conflict)
+            failed = migration.migrate(root, instructions_file=instructions, publish=conflict)
+            self.assertEqual(failed['status'], 'partial')
+            self.assertIn('byte check conflict', failed['publication']['error'])
             self.assertFalse((root / '.project/project.yaml').exists())
             self.assertTrue((root / '.project/project.json').exists())
 
     def test_conversion_is_one_guarded_publish_and_repeat_is_noop(self):
         root = self.workspace.a
+        owners = {}
+        for identifier in ('A', 'B'):
+            record = store.item(runtime._working_files(root), identifier)
+            owners[identifier] = {'session': identifier + '-owner', 'machine': 'host', 'token': identifier + '-claim'}
+            record['owner'] = owners[identifier]
+            self.workspace.write(root, f'workitems/{identifier}/item.json', fixtures.text(record))
+        fixtures.git(root, 'add', '.')
+        fixtures.git(root, 'commit', '--quiet', '-m', 'Retain active owners')
+        fixtures.git(root, 'push', '--quiet', 'origin', 'main')
+        before = fixtures.git(root, 'rev-parse', 'HEAD')
         with tempfile.TemporaryDirectory() as temp:
             instructions = Path(temp) / 'instructions.md'
             instructions.write_text('Explicit business constraints.\n')
@@ -448,11 +462,137 @@ class PublicationTest(unittest.TestCase):
             self.assertEqual(result['publication']['status'], 'published')
             self.assertEqual(runtime.validate_project(root), [])
             self.assertEqual(fixtures.git(root, 'status', '--porcelain'), '')
-            self.assertEqual(fixtures.git(root, 'rev-list', '--count', self.workspace.base + '..HEAD'), '1')
+            self.assertEqual(fixtures.git(root, 'rev-list', '--count', before + '..HEAD'), '1')
+            for identifier, owner in owners.items():
+                self.assertEqual(store.item(runtime._working_files(root), identifier)['owner'], owner)
             repeat = migration.migrate(root, publish=mock.Mock(side_effect=AssertionError('no-op must not publish')))
             self.assertEqual(repeat['status'], 'no_op')
+            # Refresh changed installed instructions under the same v2 claims.
+            original = migration.item_entry
+            with mock.patch.object(migration, 'item_entry', side_effect=lambda identifier: original(identifier) + '\nUpdated routing.\n'):
+                refreshed = migration.migrate(root, publish=publish_changes)
+            self.assertEqual(refreshed['status'], 'published', refreshed)
+            after = runtime._working_files(root)
+            for identifier, owner in owners.items():
+                self.assertEqual(store.item(after, identifier)['owner'], owner)
+
+    def test_permission_failure_resume_keeps_and_publishes_original_migration(self):
+        import project
+        root = self.workspace.a
+        before = runtime._working_files(root)
+        revision = self.workspace.remote_head()
+        lock = root / '.git/project-publish.lock'
+        original_open = Path.open
+
+        def denied(path, *args, **kwargs):
+            if path == lock:
+                raise PermissionError(errno.EPERM, 'harness denied write', str(path))
+            return original_open(path, *args, **kwargs)
+
+        def invoke(arguments):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                code = project.main(['--root', str(root), *arguments])
+            return code, json.loads(output.getvalue())
+
+        with tempfile.TemporaryDirectory() as temp:
+            instructions = Path(temp) / 'instructions.md'
+            instructions.write_text('Explicit business constraints.\n')
+            with mock.patch.object(Path, 'open', denied):
+                code, initial = invoke(['migrate', '--instructions-file', str(instructions)])
+                self.assertEqual(code, 1)
+                self.assertEqual(initial['status'], 'partial')
+                self.assertTrue(initial['needs_update'])
+                self.assertTrue(initial['validated'])
+                self.assertGreater(initial['changed_files'], 0)
+                self.assertEqual(initial['publication']['code'], 'host_permission_required')
+                self.assertEqual(runtime._working_files(root), before)
+                saved = runtime.read_json(migration._intent_path(root, initial['migration_operation']))
+                arguments = shlex.split(initial['next_command'])[4:]
+                code, still_denied = invoke(arguments)
+                self.assertEqual(code, 1)
+                self.assertEqual(still_denied['status'], 'partial')
+                self.assertEqual(still_denied['migration_operation'], initial['migration_operation'])
+                self.assertEqual(still_denied['paths'], initial['paths'])
+            self.assertEqual(self.workspace.remote_head(), revision)
+            # The returned command resumes the persisted intent after permission
+            # becomes available; it cannot collapse into an empty sync no-op.
+            code, completed = invoke(arguments)
+            self.assertEqual(code, 0, completed)
+            self.assertEqual(completed['status'], 'published', completed)
+            self.assertEqual(completed['migration_operation'], initial['migration_operation'])
+            self.assertEqual(completed['paths'], initial['paths'])
+            after = runtime._working_files(root)
+            for name, value in saved['result']['writes'].items():
+                self.assertEqual(after.get(name), value.encode('utf-8') if value is not None else None)
+            self.assertEqual(self.workspace.remote_head(), completed['publication']['verified_remote_commit'])
+            self.assertNotEqual(self.workspace.remote_head(), revision)
+            code, current = invoke(['migrate'])
+            self.assertEqual(code, 0)
+            self.assertEqual(current['status'], 'no_op')
+            self.assertFalse(current['needs_update'])
+
+    def test_migration_publication_rejects_owner_or_business_changes_and_missing_guards(self):
+        import project
+        source = ConversionTest().source()
+        record = store.item(source, '1-demo')
+        record['owner'] = {'session': 'other', 'machine': 'host', 'token': 'claim'}
+        source['workitems/1-demo/item.json'] = fixtures.text(record).encode()
+        prepared = migration.prepare_migration(source, instructions='Current constraints')
+        identity = {'session': 'migration', 'token': 'migration-token', 'migration': True}
+        bundle = project._bundle(source, prepared['writes'], identity, 'Upgrade', ['1-demo'], prepared['checks'])
+        candidate = store.apply_writes(source, bundle['writes'])
+        runtime._check_owners(bundle, source, candidate)
+        for field, value in (('owner', None), ('title', 'Unauthorized change')):
+            with self.subTest(field=field):
+                item = store.item(candidate, '1-demo')
+                item[field] = value
+                changed = store.apply_writes(candidate, store.write_item(candidate, item))
+                with self.assertRaisesRegex(runtime.ProjectError, 'deterministic candidate'):
+                    runtime._check_owners(bundle, source, changed)
+        missing = copy.deepcopy(bundle)
+        missing['checks'].pop('workitems/1-demo/requirement.md')
+        with self.assertRaisesRegex(runtime.ProjectError, 'guarded deterministic candidate'):
+            runtime._check_owners(missing, source, candidate)
+        ordinary = dict(bundle, migration=False)
+        with self.assertRaisesRegex(runtime.ProjectError, 'owned by another'):
+            runtime._check_owners(ordinary, source, candidate)
+
+    def test_empty_resume_requires_authority_and_can_verify_equivalent_publication(self):
+        import project
+        root = self.workspace.a
+        with tempfile.TemporaryDirectory() as temp:
+            instructions = Path(temp) / 'instructions.md'
+            instructions.write_text('Explicit business constraints.\n')
+            initial = migration.migrate(root, instructions_file=instructions,
+                                        publish=lambda *args, **kwargs: {'status': 'partial', 'error': 'permission denied'})
+        operation = initial['migration_operation']
+        record = runtime.read_json(migration._intent_path(root, operation))
+        no_action = lambda *args: {'status': 'no_op', 'synchronized': []}
+        never_publish = mock.Mock(side_effect=AssertionError('authority must be checked before any new publication'))
+        unresolved = migration.resume(root, operation, publish=never_publish, recover=no_action,
+                                      inspect=lambda root: {'pending_publications': [{'state': 'candidate'}]})
+        self.assertEqual(unresolved['status'], 'blocked')
+        self.assertEqual(unresolved['completion'], 'incomplete')
+        never_publish.assert_not_called()
+        published = project.publish_changes(root, record['result']['writes'], record['identity'], 'Equivalent upgrade',
+                                            checks=record['result']['checks'])
+        self.assertEqual(published['status'], 'published', published)
+        completed = migration.resume(root, operation, publish=never_publish, recover=no_action, inspect=project._status)
+        self.assertEqual(completed['status'], 'published', completed)
+        self.assertEqual(completed['completion'], 'original_changes_verified')
+        self.assertNotIn('authority', completed)
+        self.assertNotIn('code', completed)
+        self.assertEqual(completed['verified_remote_commit'], self.workspace.remote_head())
+        never_publish.assert_not_called()
 
     def test_verified_backend_receipts_get_new_intent_and_readback(self):
+        self.check_backend_migration()
+
+    def test_migration_backend_resume_preserves_active_owners(self):
+        self.check_backend_migration(interrupt=True)
+
+    def check_backend_migration(self, interrupt=False):
         import project
         from test_project_cli import V2Adapter
         workspace = self.workspace
@@ -472,25 +612,64 @@ class PublicationTest(unittest.TestCase):
                        {'op': 'update', 'item': identifier, 'set': {'title': identifier + ' accepted'}}
                        for identifier in ('A', 'B')]}
         project.apply(root, request, adapter_factory=lambda config: backend)
+        owners = {}
+        for identifier in ('A', 'B'):
+            record = store.item(runtime._working_files(root), identifier)
+            owners[identifier] = {'session': identifier + '-owner', 'machine': 'host', 'token': identifier + '-claim'}
+            record['owner'] = owners[identifier]
+            workspace.write(root, f'workitems/{identifier}/item.json', fixtures.text(record))
+        fixtures.git(root, 'add', '.')
+        fixtures.git(root, 'commit', '--quiet', '-m', 'Retain active owners')
+        fixtures.git(root, 'push', '--quiet', 'origin', 'main')
         original = runtime._working_files(root)
         previous = {identifier: store.receipt(original, identifier) for identifier in ('A', 'B')}
+        if interrupt:
+            backend.fail_after_create.add('A')
         with tempfile.TemporaryDirectory() as temp:
             instructions = Path(temp) / 'instructions.md'
             instructions.write_text('Explicit business constraints.\n')
             def publish(*args, **kwargs):
                 return project.publish_changes(*args, **kwargs, adapter_factory=lambda config: backend)
             result = migration.migrate(root, instructions_file=instructions, publish=publish)
-        self.assertEqual(result['publication']['status'], 'published', result)
+        if interrupt:
+            self.assertEqual(result['status'], 'partial', result)
+            pending = runtime._working_files(root)
+            for identifier, owner in owners.items():
+                self.assertEqual(store.item(pending, identifier)['owner'], owner)
+            receipt = store.receipt(pending, 'A')
+            self.assertEqual(receipt['state'], 'unknown')
+            actor = receipt['migration_sync']
+            # Even the migration's sync identity cannot alter business content.
+            altered = dict(pending, **{'workitems/A/requirement.md': b'Unauthorized change\n'})
+            self.assertFalse(migration.sync_publication(actor, pending, altered, 'A'))
+            resumed = migration.resume(root, result['migration_operation'], publish=publish,
+                                       recover=lambda root, session, token: project.resume(
+                                           root, session, token, adapter_factory=lambda config: backend), inspect=project._status)
+            self.assertEqual(resumed['status'], 'published', resumed)
+        else:
+            self.assertEqual(result['publication']['status'], 'published', result)
         self.assertEqual(runtime.validate_project(root), [])
         after = runtime._working_files(root)
         for identifier in ('A', 'B'):
             receipt = store.receipt(after, identifier)
+            self.assertEqual(store.item(after, identifier)['owner'], owners[identifier])
             self.assertEqual(receipt['state'], 'verified')
             self.assertEqual(receipt['external_id'], previous[identifier]['external_id'])
             self.assertNotEqual(receipt['intent_id'], previous[identifier]['intent_id'])
             self.assertEqual(receipt['content_sha256'], runtime._business_digest(after, identifier))
             self.assertNotIn(f'.project/history/sync-{identifier}.md', after)
         self.assertEqual(backend.creates, ['A', 'B'])
+        # Generated routing changes the physical digest without changing the
+        # backend's managed projection. Refresh only the verified receipt.
+        backend_before = copy.deepcopy(backend.items)
+        entry = migration.item_entry
+        with mock.patch.object(migration, 'item_entry', side_effect=lambda identifier: entry(identifier) + '\nCurrent routing.\n'):
+            refreshed = migration.migrate(root, publish=publish)
+        self.assertEqual(refreshed['status'], 'published', refreshed)
+        self.assertEqual(backend.items, backend_before)
+        self.assertEqual(runtime.validate_project(root), [])
+        for identifier, owner in owners.items():
+            self.assertEqual(store.item(runtime._working_files(root), identifier)['owner'], owner)
 
 
 if __name__ == '__main__':

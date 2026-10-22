@@ -113,6 +113,8 @@ def _bundle(files, writes, request, message, identifiers, checks=None):
               "token": request["token"], "message": message}
     if "ownership_transfer" in request:
         result["ownership_transfer"] = request["ownership_transfer"]
+    if request.get("migration") is True:
+        result["migration"] = True
     return result
 
 
@@ -129,6 +131,11 @@ def _record(files, identifier):
 
 def _receipt(files, identifier):
     return store.receipt(files, identifier)
+
+
+def _sync_owner(files, identifier):
+    receipt = _receipt(files, identifier) or {}
+    return receipt.get("migration_sync") or _record(files, identifier).get("owner") or {}
 
 
 def _recovery(request, identifiers, identity_file=None):
@@ -158,7 +165,7 @@ def _sync(root, identifiers, request, adapter, source_commit=None, identity_file
     for identifier in identifiers:
         try:
             item, receipt = _record(files, identifier), _receipt(files, identifier)
-            owner = item.get("owner")
+            owner = _sync_owner(files, identifier)
             if not owner or owner.get("session") != request["session"] or owner.get("token") != request["token"]:
                 raise ProjectError(f"item {identifier} does not have this session/token's sync owner")
             if not receipt or receipt.get("state") not in {"pending", "unknown"}:
@@ -305,7 +312,7 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
                 continue
             item = _record(prospective, identifier)
             owner = item.get("owner")
-            if owner and (owner.get("session"), owner.get("token")) != (identity["session"], identity["token"]):
+            if owner and not identity.get("migration") and (owner.get("session"), owner.get("token")) != (identity["session"], identity["token"]):
                 raise ProjectError(f"item {identifier} is owned by another session/token")
             receipt = copy.deepcopy(old) if old else {}
             receipt.update(intent_id=uuid.uuid4().hex,
@@ -313,7 +320,11 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
                            external_id=receipt.get("external_id"), baseline_fields=receipt.get("baseline_fields"),
                            git_source_commit=None, checked_at=None, release_owner=copy.deepcopy(owner))
             receipt.pop("operation", None)
-            item["owner"] = {key: identity[key] for key in ("machine", "session", "token")}
+            if identity.get("migration"):
+                receipt["migration_sync"] = {key: identity[key] for key in ("session", "token")}
+            else:
+                receipt.pop("migration_sync", None)
+                item["owner"] = {key: identity[key] for key in ("machine", "session", "token")}
             changes.update(store.write_item(prospective, item))
             changes.update(store.write_receipt(prospective, identifier, receipt))
             sync_ids.append(identifier)
@@ -326,7 +337,8 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
         if not sync_ids:
             return {"status": "published", "items": identifiers, "identity_file": str(identity_file), **publication}
         stage = "synchronize"
-        result = _sync(root, sync_ids, identity, adapter, publication["commit"], identity_file, config)
+        sync_identity = {key: value for key, value in identity.items() if key != "migration"}
+        result = _sync(root, sync_ids, sync_identity, adapter, publication["commit"], identity_file, config)
         result.update(items=identifiers, identity_file=str(identity_file))
         return result
     except (ProjectError, OSError, ValueError) as exc:
@@ -408,6 +420,7 @@ def apply(root, request, *, dry_run=False, adapter_factory=AoneAdapter):
                        baseline_fields=receipt.get("baseline_fields"), git_source_commit=None,
                        checked_at=None, release_owner=copy.deepcopy(item.get("owner")))
         receipt.pop("operation", None)
+        receipt.pop("migration_sync", None)
         item["owner"] = {key: request[key] for key in ("machine", "session", "token")}
         bundle["writes"][path] = _text(item)
         bundle["writes"][f".project/sync/{identifier}.json"] = _text(receipt)
@@ -446,11 +459,12 @@ def resume(root, session, token, selectors=None, *, adapter_factory=AoneAdapter)
     if selectors:
         selected = [context._resolve_item(entries, selector) for selector in selectors]
     else:
-        selected = [entry for entry in entries if (entry["metadata"].get("owner") or {}).get("session") == session
-                    and (entry["metadata"].get("owner") or {}).get("token") == token]
+        selected = [entry for entry in entries if _sync_owner(snapshot, entry["id"]).get("session") == session
+                    and _sync_owner(snapshot, entry["id"]).get("token") == token]
     identifiers = []
     for entry in selected:
-        identifier, owner = entry["id"], entry["metadata"].get("owner")
+        identifier = entry["id"]
+        owner = _sync_owner(snapshot, identifier)
         if not owner or owner.get("session") != session or owner.get("token") != token:
             raise ProjectError(f"item {identifier} is owned by another session/token")
         receipt = _receipt(_sync_files(root, [identifier]), identifier)
@@ -804,6 +818,7 @@ def parser():
     recovery.add_argument("--identity-file")
     recovery.add_argument("--journal")
     recovery.add_argument("--ticket")
+    recovery.add_argument("--migration")
     recovery.add_argument("--item", action="append")
     initialize = sub.add_parser("init")
     initialize.add_argument("path")
@@ -834,7 +849,7 @@ def _status(root, summarize=_item_summary):
     for identifier, item in items.items():
         receipt = store.receipt(files, identifier)
         if receipt and receipt.get("state") in {"pending", "unknown"}:
-            owner = item.get("owner") or {}
+            owner = _sync_owner(files, identifier)
             pending.append({"item": identifier, "state": receipt["state"], "session": owner.get("session")})
             identities.add((owner.get("session"), owner.get("token")))
     publications, rejected = [], []
@@ -858,7 +873,12 @@ def _status(root, summarize=_item_summary):
                       "items": [summarize(record) for record in items.values()],
                       "pending_sync": pending, "pending_publications": publications,
                       "rejected_publications": rejected, **refreshed})
+    result["pending_migrations"] = _module("project_migration").pending(root)
     if not identities:
+        if len(result["pending_migrations"]) == 1:
+            result.update(status="partial", migration_operation=result["pending_migrations"][0]["operation"])
+        elif result["pending_migrations"]:
+            result.update(status="blocked", code="migration_operation_ambiguous")
         return result
     result.update(status="blocked", code="recovery_identity_ambiguous", action="blocked")
     if len(identities) != 1:
@@ -906,7 +926,9 @@ def _public_result(result, args):
     if result.get("status") == "partial":
         recovery = result.get("recovery") or (result.get("publication") or {}).get("recovery") or {}
         command = [sys.executable, str(Path(__file__).resolve()), "--root", str(Path(args.root).resolve()), "resume"]
-        if result.get("ticket"):
+        if result.get("migration_operation"):
+            command += ["--migration", result["migration_operation"]]
+        elif result.get("ticket"):
             command += ["--ticket", result["ticket"]]
         elif recovery.get("identity_file"):
             command += ["--identity-file", recovery["identity_file"]]
@@ -995,7 +1017,11 @@ def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
             result = {"status": "blocked", "code": "handwritten_apply_disabled", "action": "blocked",
                       "message": "JSON apply requests are disabled. Use migrate for a legacy project, then begin/finish."}
         elif args.command == "resume":
-            if args.ticket:
+            if args.migration:
+                result = _module("project_migration").resume(args.root, args.migration, publish=publish_changes,
+                                                              recover=resume, inspect=_status)
+                result = _migration_output(args.root, result, None)
+            elif args.ticket:
                 result = _module("project_workflow").resume(args.root, args.ticket, publish=publish_changes)
             elif not any((args.identity_file, args.session, args.token, args.journal, args.item)):
                 workflow = _module("project_workflow")

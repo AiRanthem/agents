@@ -107,6 +107,8 @@ Speculative Pass waits for predecessor delivery. Formal convergence retains orig
 
 `migrate` deterministically migrates schema and refreshes generated project instructions from installed sources. Use `migrate --dry-run` only when the user requests a preview. Repeat execution against identical source hashes returns `no_op`. See [upgrade-project](../../upgrade-project/SKILL.md).
 
+Migration saves its operation, exact writes/checks and validation result before publication, including failures before a publication journal exists. A partial migration returns `resume --migration OPERATION`; execute it unchanged. Recovery preserves that candidate, reconciles authoritative publication/sync state and verifies the original changes or submits the same guarded intent when publication never started. `status` exposes pending migration operations. `resume` returning an empty `no_op` proves no recovery action occurred, not migration completion: reconcile via `status`, follow pending recovery, and only after confirming no pending transaction rerun the still-authorized `migrate`. Report update need, local application, commit/push and remote verification separately.
+
 After the user has selected the destination and exact storage authority, initialize using typed arguments:
 
 ```text

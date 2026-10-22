@@ -977,6 +977,13 @@ def _check_owners(bundle, current, prospective):
         import project_ownership
     except ImportError:
         from . import project_ownership
+    try:
+        import project_migration
+    except ImportError:
+        from . import project_migration
+    migration = bundle.get("migration") is True
+    if migration:
+        project_migration.validate_publication(bundle, current, prospective)
     transfer = None
     if "ownership_transfer" in bundle:
         transfer = project_ownership.validate_transfer(bundle, current, prospective)
@@ -997,6 +1004,8 @@ def _check_owners(bundle, current, prospective):
             raise ProjectError(str(exc)) from exc
         if not new:
             raise ProjectError(f"workitem deletion is forbidden: {identifier}")
+        if migration or project_migration.sync_publication(bundle, current, prospective, identifier):
+            continue
         if store.is_v2(current):
             claim = project_ownership.claim_token(old)
             authorized = project_ownership.authorized(old, {"session": bundle["session"], "token": bundle["token"]})
