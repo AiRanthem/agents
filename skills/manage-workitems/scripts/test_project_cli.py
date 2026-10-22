@@ -617,46 +617,42 @@ class ProjectOutputTest(unittest.TestCase):
         self.assertEqual(result['action'], 'resume')
         self.assertLess(len(json.dumps(result)), 1000)
 
-    def test_complete_and_transform_cli_have_artifact_inputs_and_no_worker_options(self):
+    def test_complete_cli_has_artifact_inputs_and_no_worker_options(self):
         complete = project.parser().parse_args(['autonomy', 'complete', 'A', '--role', 'fix', '--report-file', '/tmp/report.md', '--provenance', 'Actual completed fix'])
         self.assertEqual(complete.role, 'fix')
-        transform = project.parser().parse_args(['autonomy', 'begin-transform', 'A', '--role', 'rebase', '--author-session', 'actual-author'])
-        self.assertEqual(transform.author_session, 'actual-author')
         result = project._public_result({'status': 'partial', 'ticket': 'actual-ticket'}, argparse.Namespace(root='/project', command='finish'))
         self.assertEqual(shlex.split(result['next_command'])[-2:], ['--ticket', 'actual-ticket'])
 
-    def test_progress_item_adds_predevelopment_marker_without_changing_status_summary(self):
+    def test_progress_item_reports_review_acceptance_and_waivers(self):
         record = {
             "id": "12-shared-quota", "title": "共享配额支持多 Infra", "kind": "development",
             "status": "awaiting_delivery", "depends_on": ["11-shared-state"],
             "design": {"state": "implementable", "version": 2},
             "delivery": {"required": ["merged"], "status": "pending"},
-            "development": {"branch": "feature/predev", "worktree": "worktrees/predev",
+            "development": {"branch": "feature/quota", "worktree": "worktrees/quota",
                             "review": {"result": "pass", "session": "reviewer"}},
-            "workflow": {"autonomy": {
-                "authorization": {"predevelop": True, "source": "user:predevelop"},
-                "predevelopment": {
-                    "phase": "speculative", "generation": "abc123", "formal_base": "base",
-                    "baseline": "pin", "inputs": {"11-shared-state": {"id": "snap", "commit": "abc", "binding": {}}},
-                    "retained_developments": [{"worktree": "worktrees/original", "branch": "feature/original"}],
-                },
-                "latest_snapshot": "own",
-                "snapshots": {"own": {"id": "own", "status": "published", "commit": "def",
-                                      "prerequisites": {"11-shared-state": "snap"}, "binding": {}}},
-            }},
+            "workflow": {"autonomy": {"acceptance": {"status": "accepted"}},
+                         "validation_waivers": {"e2e": {"id": "waiver", "result": "skipped", "source": "Actual user skip"}}},
         }
         summary = project._item_summary(record)
-        self.assertNotIn("predevelopment", summary)
         self.assertNotIn("review_result", summary.get("development", {}))
         progress = project._progress_item(record)
         self.assertEqual(progress["development"]["review_result"], "pass")
-        self.assertEqual(progress["predevelop"], True)
-        self.assertEqual(progress["authorization_source"], "user:predevelop")
-        self.assertEqual(progress["predevelopment"]["phase"], "speculative")
-        self.assertEqual(progress["predevelopment"]["pins"]["11-shared-state"], {"id": "snap", "commit": "abc"})
-        self.assertEqual(progress["predevelopment"]["retained"], [{"worktree": "worktrees/original", "branch": "feature/original"}])
-        self.assertEqual(progress["predevelopment"]["snapshot"]["commit"], "def")
-        self.assertNotIn("binding", json.dumps(progress["predevelopment"]["pins"]))
+        self.assertEqual(progress["acceptance"], "accepted")
+        self.assertEqual(progress["verification_waivers"]["e2e"]["result"], "skipped")
+
+
+    def test_removed_autonomy_commands_and_transform_roles_are_rejected(self):
+        commands = [
+            ["autonomy", "authorize", "--item", "A", "--approval-source", "User", "--predevelop"],
+            ["autonomy", "snapshot", "A"], ["autonomy", "prepare", "A"],
+            ["autonomy", "begin-transform", "A", "--role", "baseline", "--author-session", "writer"],
+            ["autonomy", "complete", "A", "--role", "rebase", "--report-file", "/tmp/report.md", "--provenance", "report"],
+            ["lifecycle", "release", "A", "--snapshot", "old", "--reference", "obsolete"],
+        ]
+        for command in commands:
+            with self.subTest(command=command), self.assertRaises(runtime.ProjectError):
+                project.parser().parse_args(command)
 
     def test_partial_removal_is_blocked_without_unrelated_resume(self):
         result = project._public_result({'status': 'partial', 'removed': ['worktree'],

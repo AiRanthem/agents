@@ -8,4 +8,4 @@ Optimize total cost and elapsed time per accepted result without lowering qualit
 - **gpt-6.1-sol / high** — material ambiguity, interacting components, design tradeoffs, or consequential correctness/security judgments.
 - **gpt-6.1-sol / xhigh** — a demonstrated deep reasoning gap or specific evidence that the approach/profile is insufficient.
 
-Escalate only the unresolved part and preserve valid results; use the same criteria for a required independent verifier.
+Escalate only the unresolved part and preserve valid results; use the same criteria for a required verifier.

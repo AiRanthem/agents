@@ -22,7 +22,7 @@ python3 <dev-kit-root>/codex/skill_entries.py --check
 | runtime role | 原生角色 | 一级配置 |
 | --- | --- | --- |
 | design-review / design-revision | project-design-reviewer | gpt-6.1-sol / xhigh |
-| implementation / baseline / rebase | project-implementer | gpt-6.1-sol / medium |
+| implementation | project-implementer | gpt-6.1-sol / medium |
 | code-review | project-implementation-reviewer | gpt-6.1-sol / xhigh |
 | fix | project-fixer | gpt-6.1-sol / medium |
 

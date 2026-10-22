@@ -1,5 +1,7 @@
 # Evidence and independent review
 
+Ordinary evidence registration uses the commands below. [User-authorized manual recovery](recovery.md#user-authorized-manual-recovery) may correct state/files and responsible scripts against genuine evidence; it never creates an unperformed review, acceptance, delivery or check.
+
 Evidence distinguishes observed facts, inferences, search coverage and verification limits. Read primary requirement/spec and raw source pointers from the operation's complete `read` payload. A cached summary or previous review cannot establish the current contract, an absence claim, ownership or delivery.
 
 For actual repository investigation within the user's requested scope, retain source paths/symbols, revisions or relevant content identity, configuration and observed outcomes. A matching HEAD does not identify dirty tracked/untracked source or dependency inputs. Claims such as “all callers” require a bounded search universe; new files or configuration may invalidate that coverage.

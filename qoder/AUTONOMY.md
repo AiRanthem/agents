@@ -26,7 +26,7 @@ Qoder 专用入口为 `qoder/host.py`（`check`、`role --name`）。`disk_ready
 | --- | --- | --- | --- |
 | design-review | project-design-reviewer | review-design | Qwen3.8-Max / xhigh |
 | design-revision | project-design-reviewer | explore-design | Qwen3.8-Max / xhigh |
-| implementation / baseline / rebase | project-implementer | implement-design | DeepSeek-Flash / max |
+| implementation | project-implementer | implement-design | DeepSeek-Flash / max |
 | code-review | project-implementation-reviewer | review-implementation（single-agent） | Qwen3.8-Max / xhigh |
 | fix | project-fixer | receiving-code-review | DeepSeek-Flash / max |
 
@@ -54,8 +54,7 @@ Headless / SDK 可用 `--agents` JSON 等价显式注入。运行 `qoder/host.py
 选中 skill 已列出且 Skill 工具可用时显式调用；未列出或工具未暴露时，通过文件工具
 完整读取已授权安装路径中的 `SKILL.md` 及适用引用并执行该阶段。仅发现列表缺失不
 构成阻塞；真正禁用、拒绝或不可读仍生效，文件读取不能绕过它们。已授权推进阶段
-覆盖该范围内的显式调用要求。`baseline` / `rebase` 还须完整读取
-`advance-project/references/predevelopment.md`，只执行绑定的隔离 Git 转换。
+覆盖该范围内的显式调用要求。
 
 当前观察到的 Qoder 子代理工具集不含 Agent，也没有 follow-up 输入工具；这些阶段
 直接在现有工具能力内完成。官方仅说明 Agent 可用时支持后代派发，不能据此推断本次

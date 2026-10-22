@@ -49,6 +49,8 @@ METADATA_OPERATIONS = {"requirement-update", "decision-record", "validation-waiv
                        "rename", "dependency-update", "archive", "cleanup-record", "kind-update"}
 CODE_PREPARATION_OPERATIONS = {"design-update", "design-review", "development-start"}
 TICKET = re.compile(r"[0-9a-f]{32}\Z")
+# Increment when guarded inputs or required-read rules change.
+GUARD_POLICY_VERSION = 1
 
 
 def _hash(content):
@@ -256,20 +258,16 @@ def _parents(items, item):
     return parents
 
 
-def _blocked(items, identifier, *, speculative=False, files=None):
+def _blocked(items, identifier, *, files=None):
     item = items[identifier]
     if ((item.get("workflow") or {}).get("lifecycle") or {}).get("replacement_pending"):
         raise ProjectError("checkpoint blocked: replacement generation must be prepared")
-    predevelopment = _autonomy_module()._predevelopment()
-    if not speculative and (predevelopment.state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not (files and _validation_waived(files, item, "formal-convergence")):
-        raise ProjectError("checkpoint blocked: predevelopment requires formal convergence")
-    pinned = predevelopment.pins(item) if speculative else {}
     pending = [key for key in item.get("depends_on", [])
-               if key not in pinned and (items[key].get("delivery", {}).get("status") != "delivered" or items[key].get("status") == "cancelled")]
+               if items[key].get("delivery", {}).get("status") != "delivered" or items[key].get("status") == "cancelled"]
     fixes = _open_fixes(items, identifier)
     if (items[identifier].get("workflow") or {}).get("autonomy"):
         pending.extend(key for key in item.get("depends_on", [])
-                       if key not in pinned and ((items[key].get("workflow") or {}).get("autonomy", {}).get("acceptance") or {}).get("status") != "accepted" and key not in pending)
+                       if ((items[key].get("workflow") or {}).get("autonomy", {}).get("acceptance") or {}).get("status") != "accepted" and key not in pending)
     if (pending or fixes) and not (files and _validation_waived(files, item, "dependencies")):
         raise ProjectError("checkpoint blocked: undelivered dependencies=" + ",".join(pending) +
                            "; open upstream fixes=" + ",".join(fixes))
@@ -385,7 +383,7 @@ def _validation_waived(files, item, gate, *, missing_root=None):
             waiver.get("gate") == gate and bool(waiver.get("source")) and
             all(waiver.get(key) == value for key, value in _binding(files, item, _base(item)).items()) and
             _autonomy_module().review_inputs_current(files, item, waiver, missing_root=missing_root))
-    if not valid or gate in {"design-review", "dependencies", "formal-convergence"} or not item.get("development"):
+    if not valid or gate in {"design-review", "dependencies"} or not item.get("development"):
         return valid
     try:
         root = Path(waiver["project_root"])
@@ -463,21 +461,11 @@ def _read_payload(root, files, item, operation):
     extra_items = set(item.get("depends_on", [])) if operation in {"design-update", "design-review", "design-reuse", "development-start", "development-finish"} else set()
     if operation in {"create", "design-update", "design-review", "design-reuse", "development-start", "development-finish"}:
         extra_items.update(_parents(items, item))
-    pinned = _autonomy_module()._predevelopment().pins(item)
-    if extra_items:
-        extra_items.update(pinned)
     if operation == "fix":
         extra_items.add(item["fixes"])
     for identifier in sorted(extra_items):
         upstream = items[identifier]
-        if identifier in pinned:
-            captured = pinned[identifier]
-            path = captured["report"]
-            if path not in files or _hash(files[path]) != captured["artifact_sha256"]:
-                raise ProjectError("frozen prerequisite contract is missing or changed: " + identifier)
-            paths = {path}
-        else:
-            paths = {_documents(upstream)["requirement"], _spec(upstream)}
+        paths = {_documents(upstream)["requirement"], _spec(upstream)}
         if operation == "fix":
             paths.add(_documents(upstream)["context"])
         for path in sorted(paths):
@@ -671,6 +659,12 @@ def _autonomy_module():
     return project_autonomy
 
 
+def _lifecycle_module():
+    try:
+        import project_lifecycle
+    except ImportError:
+        from . import project_lifecycle
+    return project_lifecycle
 
 
 def _actor(item, identity, operation, options):
@@ -710,7 +704,7 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record", files=files)
+        _blocked(items, identifier, files=files)
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -862,6 +856,7 @@ def _open_edit(root, directory, manifest, files):
     manifest["state"] = "editing"
     manifest["checks"] = _checks(files, item, operation)
     manifest["checks"].setdefault(".project/graph.yaml", None)
+    manifest["guard_policy_version"] = GUARD_POLICY_VERSION
     manifest["drafts"] = {}
     editable = []
     for name, (target, template) in _drafts(operation, item, files).items():
@@ -878,9 +873,6 @@ def _open_edit(root, directory, manifest, files):
     approved_contract = ((item.get("workflow") or {}).get("autonomy") or {}).get("approved_contract")
     if approved_contract and operation in {"design-review", "design-update", "development-start", "development-finish"}:
         result["approved_contract"] = copy.deepcopy(approved_contract)
-    prerequisites = _autonomy_module()._predevelopment().pins(item)
-    if prerequisites:
-        result["prerequisites"] = copy.deepcopy(prerequisites)
     lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
     if lifecycle.get("generations"):
         result["retained_sources"] = copy.deepcopy(lifecycle["generations"])
@@ -924,8 +916,30 @@ def _begin_command(root, manifest):
     return shlex.join(args)
 
 
-def _stale(root, manifest, message):
-    result = {"status": "stale", "ticket": manifest["ticket"], "message": message}
+def _input_changes(manifest, files, current):
+    expected = manifest["checks"]
+    checks = {"added": sorted(current.keys() - expected.keys()),
+              "removed": sorted(expected.keys() - current.keys()),
+              "changed": sorted(path for path, digest in expected.items() if _hash(files.get(path)) != digest)}
+    changed_reads = []
+    for name, digest in manifest.get("read_hashes", {}).items():
+        path = Path(name)
+        if any(component.is_symlink() for component in (path, *path.parents)) or (
+                not path.exists() and digest is not None or path.exists() and (not path.is_file() or _hash(path.read_bytes()) != digest)):
+            changed_reads.append(name)
+    policy_version = {"expected": manifest.get("guard_policy_version"), "current": GUARD_POLICY_VERSION}
+    content_changed = bool(checks["changed"] or changed_reads)
+    policy_changed = policy_version["expected"] != policy_version["current"] or current != expected
+    if not content_changed and not policy_changed:
+        return None
+    return {"reason": "input_changed" if content_changed else "guard_policy_changed",
+            "guard_policy_version": policy_version, "check_changes": checks, "changed_read_paths": sorted(changed_reads),
+            "recovery": "Start a new operation and read its complete current inputs. Reuse approval only for an unchanged contract; "
+                        "retain valid review coverage and assess changed or additional inputs before registering a new result."}
+
+
+def _stale(root, manifest, message, **details):
+    result = {"status": "stale", "ticket": manifest["ticket"], "message": message, **details}
     sensitive = {"approval_source", "skip_design_review", "discard_development", "result", "provenance", "review_file", "reviewer_session"}
     if (manifest["operation"] in {"design-review", "design-reuse", "development-finish"} or
             sensitive.intersection(manifest["options"]) or manifest.get("review_source")):
@@ -952,10 +966,6 @@ def _dependency_digest(files, item):
     records = {key: {"status": items[key].get("status"), "delivery": items[key].get("delivery"),
                      "requirement": _hash(files.get(_documents(items[key])["requirement"])),
                      "spec": _hash(files.get(_spec(items[key])))} for key in sorted(upstream)}
-    for key in records:
-        captured = _autonomy_module()._predevelopment().frozen_dependency(item, key)
-        if captured:
-            records[key] = {"snapshot": captured}
     fixes = {key: {"fixes": value["fixes"], "status": value.get("status"), "delivery": value.get("delivery")}
              for key, value in items.items() if value.get("fixes") in upstream and key != item["id"]}
     return _hash(_canonical({"upstream": records, "fixes": fixes}))
@@ -1015,7 +1025,7 @@ def _prepare_finish(root, manifest, files, drafts):
     if operation == "development-start" and options.get("skip_design_review") and _design_reuse().pending(files, item):
         raise ProjectError("independent contract confirmation cannot be waived")
     if operation in {"development-start", "development-finish", "delivery-record"}:
-        _blocked(items, identifier, speculative=_autonomous(item) and operation != "delivery-record", files=files)
+        _blocked(items, identifier, files=files)
         if operation == "development-start" and options.get("skip_design_review"):
             _text(files.get(_documents(item)["requirement"], b"").decode("utf-8"), "requirement contract")
         elif operation == "delivery-record":
@@ -1258,11 +1268,6 @@ def _prepare_finish(root, manifest, files, drafts):
         if options["result"] == "pass":
             item["status"] = "awaiting_delivery"
             item["owner"] = None
-            pre = _autonomy_module()._predevelopment().state(item) or {}
-            if pre.get("phase") == "reconciling":
-                if not pre.get("rebased"):
-                    raise ProjectError("formal code review requires completed convergence")
-                pre["phase"] = "formal"
     elif operation == "delivery-record":
         if ((item.get("workflow") or {}).get("autonomy") or {}).get("authorization") and not _autonomy_module()._acceptance_valid(root, files, item):
             raise ProjectError("delivery requires current explicit user acceptance")
@@ -1380,7 +1385,7 @@ def _prepare_finish(root, manifest, files, drafts):
     writes.update(store.write_item(files, item))
     if operation in {"create", "fix", "dependency-update"}:
         _bump_graph(files, writes)
-    writes.update(_autonomy_module()._predevelopment()._lifecycle().reconcile(files, writes))
+    writes.update(_lifecycle_module().reconcile(files, writes))
     prospective = store.apply_writes(files, writes)
     writes.update(retention.prune_records(prospective, [identifier]))
     prospective = store.apply_writes(files, writes)
@@ -1480,23 +1485,22 @@ def _finish(root, ticket, *, options=None, publish=None):
                 return _stale(root, manifest, "Assessment read inputs changed during publication recovery.")
     recovering = manifest["state"] == "prepared"
     if manifest["state"] == "editing":
-        for name, expected in manifest.get("read_hashes", {}).items():
-            path = Path(name)
-            if any(component.is_symlink() for component in (path, *path.parents)) or (
-                    not path.exists() and expected is not None or path.exists() and (not path.is_file() or _hash(path.read_bytes()) != expected)):
-                return _stale(root, manifest, "A required read source changed; draft is retained.")
-        current = _checks(files, manifest["item"], manifest["operation"])
+        changes = _input_changes(manifest, files, _checks(files, manifest["item"], manifest["operation"]))
+        if changes and changes["changed_read_paths"]:
+            return _stale(root, manifest, "A required read source changed; draft is retained.", **changes)
         if manifest["operation"] in {"development-start", "development-finish", "delivery-record"}:
             try:
-                _blocked(store.items(files), manifest["item"]["id"], speculative=_autonomous(store.item(files, manifest["item"]["id"])) and manifest["operation"] != "delivery-record", files=files)
+                _blocked(store.items(files), manifest["item"]["id"], files=files)
                 if manifest["operation"] == "delivery-record":
                     _implementation_approved(files, store.item(files, manifest["item"]["id"]))
                 elif (manifest["operation"] != "development-finish" or store.item(files, manifest["item"]["id"]).get("status") != "awaiting_delivery") and not (manifest["operation"] == "development-start" and manifest["options"].get("skip_design_review")):
                     _approved(files, store.item(files, manifest["item"]["id"]))
             except ProjectError as exc:
                 return {"status": "blocked", "action_code": "checkpoint_blocked", "ticket": ticket, "message": str(exc)}
-        if current != manifest["checks"]:
-            return _stale(root, manifest, "Project inputs changed; draft is retained.")
+        if changes:
+            message = ("Project inputs changed; draft is retained." if changes["reason"] == "input_changed" else
+                       "Verification rules or guarded input scope changed; draft is retained.")
+            return _stale(root, manifest, message, **changes)
         try:
             writes = _prepare_finish(root, manifest, files, drafts)
         except ProjectError as exc:

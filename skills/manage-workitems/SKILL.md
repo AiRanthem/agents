@@ -1,11 +1,13 @@
 ---
 name: manage-workitems
-description: Create, find, update or archive work items through the fixed project command workflow. A project progress or status report runs the progress command once and includes stored predevelopment markers. Applies inside a schema-v2 managed project; v1 projects support diagnostic reading and explicit migration. Requirement recording does not start design or development.
+description: Create, find, update or archive work items through project commands, and recover blocked scripts or state with explicit user authorization. A project progress or status report runs the progress command once and reports current lifecycle evidence. Applies inside a schema-v2 managed project; v1 projects support diagnostic reading and explicit migration. Requirement recording does not start design or development.
 ---
 
 # Manage Work Items
 
-Resolve the project command entrypoint through the [command contract](references/commands.md), honoring the caller's supplied binding before the shared [fallback](scripts/project.py). The program owns YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
+Use scripts for ordinary operations. When they block or malfunction, apply [user-authorized manual recovery](references/recovery.md#user-authorized-manual-recovery): investigate the actual facts, obtain explicit authorization covering the concrete repair, then correct project files/state and responsible scripts. This exception governs the command-only, returned-path and stop/retry restrictions below.
+
+Resolve the project command entrypoint through the [command contract](references/commands.md), honoring the caller's supplied binding before the shared [fallback](scripts/project.py). The program ordinarily maintains YAML, IDs, document routes, state transitions, ownership, graph gates and Git/Aone publication. The agent supplies the requested business facts and Markdown prose.
 
 Use [control claims and takeover](references/commands.md#control-claims-and-takeover) as a write lock: authorized reads, investigation, discussion and read-only reviews need no takeover. Check ownership when starting a project write operation or shared source modification. A foreign claim pauses those writes until explicit takeover approval and successful transfer; a general work/continuation request is not takeover approval. Bounded writers follow the current owner's assignment under that same contract.
 
@@ -13,11 +15,9 @@ Honor explicit user decisions to skip any verification checkpoint through [user 
 
 ## Progress report
 
-A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items already include the lifecycle summary plus stored predevelopment markers. Scheduling collections during advancement come from `autonomy status`, with artifact readiness and separate write-access facts; a progress report uses `progress`.
+A request to report project progress or current status is complete after one `progress` command and the user report written from its JSON. The command refreshes remote authority with the same Git metadata write access as `status`, including `.git/project-publish.lock`. Its items include the current lifecycle summary and review, acceptance and waiver evidence. Scheduling collections during advancement come from `autonomy status`, with artifact readiness and separate write-access facts; a progress report uses `progress`.
 
-Write every item as its full ID and title. Include kind, status, design state and version, delivery status and required evidence, dependencies, branch, worktree, and implementation review result when the JSON has them. When `predevelop` is true, include the authorization source. When `predevelopment` is present, include phase, generation, formal base, baseline, each pin's snapshot id and commit, the retained original worktree and branch, and the item's own snapshot id, status, commit and prerequisite map.
-
-Read phases from the JSON as follows. `speculative` means the recorded review passed on a frozen generation; formal acceptance and delivery wait until every pinned predecessor is human-accepted and actually delivered, so report that wait with the pins and the retained worktree. `preparing` means the generation is ready to pin inputs. `baseline` means pinned snapshots are being integrated. `reconciling` means the item is replaying onto the formal base. `formal`, and an item with no `predevelopment` object, use the stored item status, review result, acceptance and delivery. `predevelop: true` with no `predevelopment` object means the item is authorized and has no generation yet.
+Write every item as its full ID and title. Include kind, status, design state and version, delivery status and required evidence, dependencies, branch, worktree, and implementation review result when the JSON has them.
 
 Also report `changed`, `commit`, pending sync, pending publications, and the number of `rejected_publications`. A `blocked` or `partial` result follows the command contract status table.
 

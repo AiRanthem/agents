@@ -63,8 +63,7 @@ frontmatter，必填 `name`、`description`；四个角色固定 `model`（`"[�
 参数面板。不支持固定配置时报告具体缺口，不自行换型或降档。
 
 角色按 AUTONOMY 的映射加载完整已授权 skill：design-review 用 `review-design`，
-design-revision 用 `explore-design`；implementation / baseline / rebase 用 `implement-design`，
-后两者还读取完整 `advance-project/references/predevelopment.md`，只执行绑定的隔离转换。
+design-revision 用 `explore-design`；implementation 用 `implement-design`。
 未列出 skill 或未暴露 Skill 工具不等于被禁用，可通过文件工具解析物理安装路径并
 读取完整 `SKILL.md` 与适用阶段引用；实际拒绝、禁用与原生 Plan 仍然约束执行。
 

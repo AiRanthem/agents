@@ -75,15 +75,6 @@ def current(files, item, review, *, missing_root=None):
     binding = expected.get("binding") or {}
     autonomy = workflow._autonomy_module()
     actual = autonomy._binding(None, files, item, code=False)
-    predevelopment = autonomy._predevelopment()
-    convergence = predevelopment.state(item) or {}
-    if convergence.get("phase") == "formal" and convergence.get("rebased") is True:
-        # The state machine enters formal only after formal code review passes.
-        # Its administrative acknowledgement preserves the assessed generation,
-        # inputs and rebase plan; every other input remains exactly bound.
-        before = {**predevelopment.identity(item), "phase": "reconciling"}
-        if binding.get("predevelopment_sha256") == workflow._hash(workflow._canonical(before)):
-            actual["predevelopment_sha256"] = binding["predevelopment_sha256"]
     if binding != actual:
         return False
     # Context, inherited instructions and even formerly absent sources remain
@@ -186,8 +177,6 @@ def finish(root, manifest, files, item, writes, report):
             authorization.update(requirement_sha256=design["approval"]["requirement_sha256"],
                                  decision_sha256=captured["binding"]["decision_sha256"],
                                  design_reuse=record["id"])
-        if (workflow._autonomy_module()._predevelopment().state(item) or {}).get("rebased"):
-            item["status"] = "developing"
     else:
         # A failed assessment cannot hide behind the stale pass or a waiver.
         workflow._invalidate_implementation(item)

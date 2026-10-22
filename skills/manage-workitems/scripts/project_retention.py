@@ -20,7 +20,7 @@ def _component(value, label):
 
 def _root_paths(identifier, root, kind):
     inline = root if isinstance(root, dict) else None
-    if kind in {"design-review", "design-reuse", "development-finish", "validation-waiver", "user_design_review_waiver", "predevelopment-snapshot"}:
+    if kind in {"design-review", "design-reuse", "development-finish", "validation-waiver", "user_design_review_waiver"}:
         if inline is None or inline.get("item") != identifier or inline.get("kind") != kind:
             raise store.StoreError("current " + kind + " root must be a same-item inline record")
     elif not isinstance(root, str):
@@ -79,16 +79,6 @@ def _current_roots(files, identifier):
         current.append((basis["review"], "design-review"))
     if sections["workflow"].get("design_reuse") is not None:
         current.append((sections["workflow"]["design_reuse"], "design-reuse"))
-    for captured in (sections["workflow"].get("autonomy") or {}).get("snapshots", {}).values():
-        lifecycle = sections["workflow"].get("lifecycle") or {}
-        if lifecycle.get("policy"):
-            # Keep exact evidence until physical retirement finishes. Tombstones
-            # remain in state/Git history, without pinning every report forever.
-            resources = [row for row in lifecycle.get("resources", {}).values()
-                         if row.get("snapshot") == captured["id"]]
-            if resources and all(row.get("state") == "deleted" for row in resources):
-                continue
-        current.append((captured, "predevelopment-snapshot"))
     return current
 
 

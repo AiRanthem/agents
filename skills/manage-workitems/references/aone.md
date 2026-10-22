@@ -1,5 +1,7 @@
 # Optional Aone mirror
 
+The command-only and stop/retry rules below describe ordinary synchronization. Script blockers may use [user-authorized manual recovery](recovery.md#user-authorized-manual-recovery) for concrete approved file/state correction and script repair, including direct readback of actual external facts. External writes still need covering authorization; reconcile uncertain creates before retrying.
+
 Aone is enabled only by the selected project configuration. Git stores the complete requirement, spec and evidence; Aone mirrors the configured managed title, status, body and fields. Titles include `【项目名】`. Credentials remain outside project records.
 
 At setup, select the actual existing space, type/category, required fields and status mapping. The adapter requires authenticated `a1`; unsupported mappings or missing identity are reported facts. Configuration alone is not a successful work-item synchronization.

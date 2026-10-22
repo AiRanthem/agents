@@ -13,5 +13,5 @@ Do not substitute a summary for the original policy. If the loader fails or retu
 empty or incomplete output, report the missing capability to the parent before task work.
 After compaction also re-read the active global AGENTS.md and all applicable original
 repository AGENTS.md files before continuing. Preserve the parent's complete contract,
-write boundaries, mandatory skills and independent review gates throughout.
+write boundaries, mandatory skills and review gates throughout.
 '''

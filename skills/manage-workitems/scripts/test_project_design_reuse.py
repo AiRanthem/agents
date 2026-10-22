@@ -110,35 +110,6 @@ class DesignReuseTest(unittest.TestCase):
         self.assertEqual(workflow.resume(self.root, edit["ticket"], publish=self.f.publisher)["status"], "no_op")
         workflow._approved(runtime._working_files(self.root), self.f.record())
 
-    def test_formal_code_review_acknowledgement_retains_exact_design_coverage(self):
-        self.f.designed()
-        self.update()
-        _, result = self.assess()
-        self.assertEqual(result["status"], "published", result)
-        item = self.f.record()
-        files = runtime._working_files(self.root)
-        pre = {"phase": "reconciling", "rebased": True, "generation": "a" * 32,
-               "inputs": {}, "formal_base": "a" * 40,
-               "rebase": {"generation": "b" * 32, "target": "a" * 40}}
-        item["workflow"].setdefault("autonomy", {})["predevelopment"] = pre
-        assessment = item["workflow"]["design_reuse"]
-        assessment["target"]["binding"] = autonomy._binding(self.root, files, item, code=False)
-        captured = copy.deepcopy(assessment)
-        workflow._approved(files, item)
-        pre["phase"] = "formal"
-        workflow._approved(files, item)
-        self.assertEqual(assessment, captured)
-        for field, value in (("generation", "c" * 32), ("inputs", {"other": {"id": "changed"}}),
-                             ("formal_base", "c" * 40), ("rebase", {"target": "c" * 40}),
-                             ("rebased", False), ("phase", "speculative")):
-            changed = copy.deepcopy(item)
-            changed["workflow"]["autonomy"]["predevelopment"][field] = value
-            with self.subTest(field=field), self.assertRaises(runtime.ProjectError):
-                workflow._approved(files, changed)
-        changed = copy.deepcopy(item)
-        changed["development"]["base_commit"] = "c" * 40
-        with self.assertRaises(runtime.ProjectError):
-            workflow._approved(files, changed)
 
     def test_new_approved_spec_after_failed_reuse_needs_only_its_independent_review(self):
         self.f.designed()

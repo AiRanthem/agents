@@ -378,6 +378,92 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("design_waiver", self.record().get("workflow", {}))
         self.assertNotIn("review", self.record("B")["development"])
 
+    def test_parent_guard_scope_upgrade_requires_supplemental_review(self):
+        child = self.record()
+        child["split_from"] = "B"
+        self.install(child)
+        design = self.begin("design-update")
+        self.edit(design, "# Approved child contract\n")
+        self.assertEqual(self.finish(design)["status"], "published")
+        approval = copy.deepcopy(self.record()["design"]["approval"])
+        parent_path = str(self.a / "workitems/B/requirement.md")
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "reviewer"}):
+            with mock.patch.object(workflow, "_parents", return_value=set()):
+                review = self.begin("design-review")
+            self.assertNotIn(parent_path, {row["path"] for row in review["read"]})
+            self.edit(review, "Original child review.\n", "report.md")
+            before = len(self.calls)
+            outcome = workflow.finish(self.a, review["ticket"], options={"result": "pass", "provenance": "Original review"}, publish=self.publisher)
+            self.assertEqual(outcome["code"], "stale_evidence")
+            self.assertEqual(outcome["reason"], "guard_policy_changed")
+            self.assertEqual(outcome["check_changes"], {"added": [".project/state/B.yaml", ".project/sync/B.yaml",
+                "workitems/B/metadata.yaml", "workitems/B/requirement.md", "workitems/B/spec.md"], "removed": [], "changed": []})
+            self.assertEqual(len(self.calls), before)
+            self.assertEqual(self.record()["design"]["approval"], approval)
+            self.assertNotIn("review", self.record()["design"])
+            self.assertNotIn("next_command", outcome)
+            self.assertNotIn("finish_command", outcome)
+            self.assertIn("unchanged", outcome["recovery"])
+            replacement = self.begin("design-review")
+            self.assertIn(parent_path, {row["path"] for row in replacement["read"]})
+            self.edit(replacement, "Child review with the current parent contract assessed.\n", "report.md")
+            published = workflow.finish(self.a, replacement["ticket"], options={"result": "pass",
+                "provenance": "Original review plus parent assessment"}, publish=self.publisher)
+            self.assertEqual(published["status"], "published")
+            self.assertEqual(self.record()["design"]["approval"], approval)
+            self.assertEqual(self.record()["design"]["review"]["id"], replacement["ticket"])
+            self.assertTrue(Path(review["editable"][0]["path"]).exists())
+
+    def test_guard_policy_version_and_legacy_tickets_fail_closed(self):
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                result = self.begin("context-update")
+                self.edit(result, "Retained context draft.\n")
+                directory, manifest = workflow._load(self.a, result["ticket"])
+                self.assertEqual(manifest["guard_policy_version"], workflow.GUARD_POLICY_VERSION)
+                if legacy:
+                    manifest.pop("guard_policy_version")
+                    workflow._save(self.a, directory, manifest)
+                before = len(self.calls)
+                with mock.patch.object(workflow, "GUARD_POLICY_VERSION", workflow.GUARD_POLICY_VERSION + 1):
+                    outcome = self.finish(result)
+                    self.assertEqual(outcome["code"], "stale_ticket")
+                    self.assertEqual(outcome["reason"], "guard_policy_changed")
+                    self.assertEqual(outcome["guard_policy_version"], {
+                        "expected": manifest.get("guard_policy_version"), "current": workflow.GUARD_POLICY_VERSION})
+                    self.assertEqual(outcome["check_changes"], {"added": [], "removed": [], "changed": []})
+                    self.assertEqual(len(self.calls), before)
+                    self.assertEqual(shlex.split(outcome["next_command"])[-3:], ["begin", "context-update", "A"])
+                    self.assertEqual(workflow._load(self.a, result["ticket"])[1], manifest)
+                    replacement = self.begin("context-update")
+                    self.edit(replacement, "Context checked against the new policy.\n")
+                    self.assertEqual(self.finish(replacement)["status"], "published")
+
+    def test_guard_scope_removal_still_checks_all_recorded_inputs(self):
+        self.write(self.a, ".project/graph.yaml", "revision: 0\n")
+        original_checks = workflow._checks
+        for name in (".project/graph.yaml", "workitems/A/requirement.md"):
+            with self.subTest(path=name):
+                result = self.begin("context-update")
+                before = len(self.calls)
+                original = (self.a / name).read_bytes()
+                self.write(self.a, name, "revision: 1\n" if name.endswith(".yaml") else "Changed requirement\n")
+                def reduced_scope(files, item, operation):
+                    checks = original_checks(files, item, operation)
+                    checks.pop(name)
+                    return checks
+                try:
+                    with mock.patch.object(workflow, "_checks", side_effect=reduced_scope), mock.patch.object(
+                            workflow, "GUARD_POLICY_VERSION", workflow.GUARD_POLICY_VERSION + 1):
+                        outcome = self.finish(result)
+                    self.assertEqual(outcome["code"], "stale_ticket")
+                    self.assertEqual(outcome["reason"], "input_changed")
+                    self.assertEqual(outcome["check_changes"], {"added": [], "removed": [name], "changed": [name]})
+                    self.assertEqual(outcome["changed_read_paths"], [str(self.a / name)] if name.endswith(".md") else [])
+                    self.assertEqual(len(self.calls), before)
+                finally:
+                    (self.a / name).write_bytes(original)
+
     def test_manifest_tampering_extra_files_links_and_cross_session_rejected(self):
         result = self.begin("context-update")
         directory = Path(result["editable"][0]["path"]).parent
@@ -412,7 +498,8 @@ class WorkflowTest(unittest.TestCase):
         first = workflow.finish(self.a, result["ticket"], publish=partial)
         self.assertEqual(first["status"], "partial")
         self.assertEqual(self.record()["design"]["version"], 1)
-        retry = workflow.finish(self.a, result["ticket"], publish=partial)
+        with mock.patch.object(workflow, "GUARD_POLICY_VERSION", workflow.GUARD_POLICY_VERSION + 1):
+            retry = workflow.finish(self.a, result["ticket"], publish=partial)
         self.assertEqual(retry["status"], "no_op")
         self.assertEqual(self.record()["design"]["version"], 1)
 

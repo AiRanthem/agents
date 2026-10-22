@@ -43,9 +43,7 @@ class AutonomyTest(unittest.TestCase):
 
     def dispatch(self, role, worker, identifier="A"):
         # Test shorthand for agent-owned orchestration; this creates no project job.
-        if role in {"baseline", "rebase"}:
-            stage = autonomy.begin_transform(self.root, identifier, role=role, author_session=worker, publish=self.f.publisher)
-        elif role == "design-revision":
+        if role == "design-revision":
             stage = workflow.begin(self.root, "design-update", identifier, options={"author_session": worker, "contract_unchanged": True}, publish=self.f.publisher)
         elif role in {"design-review", "code-review"}:
             operation = "design-review" if role == "design-review" else "development-finish"
@@ -54,7 +52,7 @@ class AutonomyTest(unittest.TestCase):
             stage = workflow.begin(self.root, "development-start", identifier, options={"author_session": worker}, publish=self.f.publisher)
             if stage["status"] == "ready":
                 self.assertEqual(self.f.finish(stage)["status"], "published")
-        if stage["status"] != "ready" and role not in {"baseline", "rebase"}:
+        if stage["status"] != "ready":
             raise runtime.ProjectError(stage.get("message", str(stage)))
         return {**stage, "role": role, "item": identifier}
 
@@ -85,20 +83,30 @@ class AutonomyTest(unittest.TestCase):
             self.finish_execution(self.dispatch(role, author))
 
 
-    def test_published_split_parent_reviews_then_decomposes_without_predevelopment_stages(self):
+    def test_published_split_parent_reviews_then_decomposes(self):
         draft = self.f.begin("design-update", next_action="split")
         self.f.edit(draft, "# Complete design\n\nUsable stages, shared contracts and dependency DAG.\n")
         self.assertEqual(self.f.finish(draft)["status"], "published")
         item = self.f.record()
         item["design"].pop("approval")  # Separate registration is optional.
         self.f.install(item)
-        self.authorize(predevelop=True)
+        self.authorize()
         self.assertEqual(self.state()["next_role"], "design-review")
         self.finish_execution(self.dispatch("design-review", "parent-reviewer"))
         state = self.state()
         self.assertEqual(state["next_action"], "split")
         self.assertIsNone(state["next_role"])
-        self.assertNotIn("predevelopment", self.f.record().get("workflow", {}))
+
+    def test_unknown_autonomous_generation_blocks_without_changing_stored_source(self):
+        self.approved()
+        item = self.f.record()
+        item.setdefault("workflow", {})["autonomy"] = {"unknown_generation": {"source": "retained"}}
+        self.f.install(item)
+        before = runtime._working_files(self.root)
+        blocked = workflow.begin(self.root, "development-start", "A", publish=self.f.publisher)
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn("unsupported autonomous state", blocked["message"])
+        self.assertEqual(runtime._working_files(self.root), before)
 
     def test_status_does_not_create_a_coordinator_identity(self):
         with mock.patch.object(workflow, "_identity", side_effect=AssertionError("status created an identity")):

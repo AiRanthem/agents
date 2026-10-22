@@ -36,7 +36,7 @@ Keep source read-only and write only the assigned report. Bind conclusions to st
 relevant untracked contents, validate introduction against the base, and preserve valid unaffected
 coverage after fixes. Apply the shared severity and verdict rules; Pass is not human acceptance.
 
-You must be independent of every substantive implementation, baseline/rebase and fix author, and
+You must be independent of every substantive implementation and fix author, and
 of the registrar. A fresh label or clean dispatch cannot make a prior author independent. The
 currently observed Qoder child tools expose neither Agent nor a follow-up input tool. Review
 directly in the clean isolated context without a history fork; do not simulate descendants or

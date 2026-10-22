@@ -5,6 +5,8 @@ Only explicitly adopted internal resources are disposable; ordinary source refs
 and unique, undisposed work remain protected. No remote-prefix discovery is used.
 """
 import copy
+import json
+import re
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -65,7 +67,7 @@ def _quiescent(root, files, item, identity):
         raise ProjectError('lifecycle has another control claim; use explicit takeover')
     if not workflow._ownership_module().authorized(item, identity):
         raise ProjectError('lifecycle has another control claim; use explicit takeover')
-    # Unsettled metadata publications may still contain old pins or resource state.
+    # Unsettled metadata publications may still contain source or resource state.
     directory = root / '.project-local/publish'
     runtime._no_links(root, '.project-local/publish')
     for path in directory.glob('*/journal.json'):
@@ -130,8 +132,7 @@ def capacity(item, *, retiring=False, snapshot=False):
     if not policy:
         return
     if snapshot:
-        captures = list(((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}).values())
-        captures += list(lifecycle.get('checkpoints', {}).values())
+        captures = list(lifecycle.get('checkpoints', {}).values())
         resident = [value for value in captures if lifecycle.get('resources', {}).get(
             _id(item['id'], 'remote-ref', [value['url'], value['ref']]), {}).get('state') != 'deleted']
         if len(resident) >= policy.get('max_snapshots', 20):
@@ -158,87 +159,16 @@ def _resource(item, kind, identity, **values):
     return key, {'id': key, 'item': item['id'], 'kind': kind, **values}
 
 
-def snapshot_available(item, captured):
-    key = _id(item['id'], 'remote-ref', [captured['url'], captured['ref']])
-    record = ((item.get('workflow') or {}).get('lifecycle') or {}).get('resources', {}).get(key, {})
-    return record.get('state', 'live') not in {'deleting', 'deleted'}
-
-
-def snapshot_offered(item, captured):
-    released = ((item.get('workflow') or {}).get('lifecycle') or {}).get('released_offers', {})
-    return captured['id'] not in released and snapshot_available(item, captured)
-
-
-def _all_snapshots(files):
-    result = {}
-    for item in store.items(files).values():
-        for value in ((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}).values():
-            result[(item['id'], value['id'])] = value
-    return result
-
-
 def _capture(item, identifier):
-    captured = ((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}).get(identifier)
-    captured = captured or state(item).get('checkpoints', {}).get(identifier)
+    captured = state(item).get('checkpoints', {}).get(identifier)
     if not captured:
         raise ProjectError('resource has no registered snapshot identity')
     return captured
 
 
-def snapshot_roots(files):
-    """Trace actual frozen closures, including old generations outside today's DAG."""
-    snapshots, roots = _all_snapshots(files), {}
-    def add(key, reason):
-        if key not in snapshots:
-            raise ProjectError('referenced frozen snapshot is missing: ' + str(key))
-        roots.setdefault(key, set()).add(reason)
-    for item in store.items(files).values():
-        auth = (item.get('workflow') or {}).get('autonomy') or {}
-        latest = auth.get('latest_snapshot')
-        if latest:
-            value = snapshots[(item['id'], latest)]
-            # A changed contract stops advertising the old snapshot for new work.
-            binding = workflow._approval_binding(files, item)
-            if (all(value['binding'].get(key) == expected for key, expected in binding.items()) and
-                    value['binding'].get('project_sha256') == workflow._hash(files[store.project_path(files)]) and item.get('status') != 'done'):
-                if snapshot_offered(item, value):
-                    add((item['id'], latest), 'current-offer:' + item['id'])
-        for value in auth.get('snapshots', {}).values():
-            if value['status'] != 'published':
-                add((item['id'], value['id']), 'pending-publication:' + item['id'])
-        pre = auth.get('predevelopment') or {}
-        if pre.get('phase') != 'formal':
-            for dependency, value in pre.get('inputs', {}).items():
-                add((dependency, value['id']), 'generation:' + item['id'] + ':' + pre['generation'])
-        if (pre.get('rebase') and pre['rebase']['source']['id'] not in state(item).get('released_recoveries', {})):
-            add((item['id'], pre['rebase']['source']['id']), 'formal-convergence:' + item['id'])
-        for generation, value in state(item).get('generations', {}).items():
-            if not value.get('disposition'):
-                for dependency, captured in (value.get('predevelopment') or {}).get('inputs', {}).items():
-                    add((dependency, captured['id']), 'retained-generation:' + item['id'] + ':' + generation)
-    queue = list(roots)
-    visited = set()
-    while queue:
-        key = queue.pop()
-        if key in visited:
-            continue
-        visited.add(key)
-        for dependency, snapshot in snapshots[key].get('prerequisites', {}).items():
-            child = (dependency, snapshot)
-            add(child, 'snapshot:' + key[0] + ':' + key[1])
-            queue.append(child)
-    return roots
-
-
 def _descriptors(item):
     result = {}
     lifecycle = state(item)
-    pre = ((item.get('workflow') or {}).get('autonomy') or {}).get('predevelopment') or {}
-    retained = list(pre.get('retained_developments', []))
-    for value in lifecycle.get('generations', {}).values():
-        retained.extend((value.get('predevelopment') or {}).get('retained_developments', []))
-    for descriptor in retained:
-        result.setdefault(descriptor['worktree'], (descriptor, ['legacy-retained-source']))
     for key, value in lifecycle.get('generations', {}).items():
         descriptor = value.get('development')
         if descriptor:
@@ -250,49 +180,32 @@ def _descriptors(item):
 
 
 def inventory(files, selector=None):
-    roots = snapshot_roots(files)
     rows = []
-    local_users = {}
-    for consumer in store.items(files).values():
-        auth = (consumer.get('workflow') or {}).get('autonomy') or {}
-        pre = auth.get('predevelopment') or {}
-        if pre.get('phase') in {'preparing', 'baseline'}:
-            for dependency, captured in pre.get('inputs', {}).items():
-                local_users.setdefault((dependency, captured['id']), []).append('active-local-use:' + consumer['id'])
-        if pre.get('phase') == 'reconciling' and pre.get('rebase'):
-            captured = pre['rebase']['source']
-            local_users.setdefault((consumer['id'], captured['id']), []).append('active-local-rebase:' + consumer['id'])
     for item in store.items(files).values():
         if selector and item['id'] != selector:
             continue
         saved = state(item).get('resources', {})
-        captures = list(((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}).values())
-        captures += list(state(item).get('checkpoints', {}).values())
+        captures = list(state(item).get('checkpoints', {}).values())
         for value in captures:
-            reasons = sorted(roots.get((item['id'], value['id']), set()))
-            if value.get('kind') == 'preservation-checkpoint':
-                reasons = ['pending-archive'] if value['status'] != 'published' else []
-                reasons += ['unique-source:' + key for key, generation in state(item).get('generations', {}).items()
-                            if value['id'] in [generation.get('checkpoint'), *generation.get('superseded_checkpoints', [])] and not generation.get('disposition')]
-                # Physical cleanup still needs recovery after semantic migration.
-                # Release that last recovery ref only after worktree removal is recorded.
-                for generation in state(item).get('generations', {}).values():
-                    if generation.get('checkpoint') == value['id']:
-                        path = generation['development']['worktree']
-                        resource = saved.get(_local_id(item, 'worktree', path, generation['development'].get('host')), {})
-                        if resource.get('state') != 'deleted':
-                            reasons.append('physical-recovery:' + path)
+            reasons = ['pending-archive'] if value['status'] != 'published' else []
+            reasons += ['unique-source:' + key for key, generation in state(item).get('generations', {}).items()
+                        if value['id'] in [generation.get('checkpoint'), *generation.get('superseded_checkpoints', [])] and not generation.get('disposition')]
+            # Physical cleanup still needs recovery after semantic migration.
+            # Release that last recovery ref only after worktree removal is recorded.
+            for generation in state(item).get('generations', {}).values():
+                if generation.get('checkpoint') == value['id']:
+                    path = generation['development']['worktree']
+                    resource = saved.get(_local_id(item, 'worktree', path, generation['development'].get('host')), {})
+                    if resource.get('state') != 'deleted':
+                        reasons.append('physical-recovery:' + path)
             identities = [('remote-ref', [value['url'], value['ref']], value['ref']),
                           ('local-ref', value['branch'], 'refs/heads/' + value['branch'])]
-            if value.get('kind') != 'preservation-checkpoint':
-                identities.append(('local-ref', 'refs/project-snapshots/' + value['id'], 'refs/project-snapshots/' + value['id']))
             for kind, identity, ref in identities:
                 key, row = _resource(item, kind, identity, repository=value['repository'], ref=ref,
                                      url=value['url'], oid=value.get('commit'), snapshot=value['id'])
-                # Reconstructible local copies are not required by a remote pin.
+                # Published preservation branches remain subject to checked-out-worktree protection.
                 row['retained_by'] = reasons if kind == 'remote-ref' else (
-                    ['pending-publication'] if value['status'] != 'published' else
-                    local_users.get((item['id'], value['id']), []) if ref.startswith('refs/project-snapshots/') else [])
+                    ['pending-publication'] if value['status'] != 'published' else [])
                 row = {**saved.get(key, {}), **row}
                 rows.append(row)
         for descriptor, reasons in _descriptors(item).values():
@@ -339,16 +252,7 @@ def reconcile(files, writes):
         value = copy.deepcopy(row)
         if prior.get('state') in {'deleting', 'deleted'}:
             if row.get('retained_by'):
-                if (prior['state'] == 'deleted' and row['kind'] == 'local-ref' and
-                        row.get('ref', '').startswith('refs/project-snapshots/')):
-                    # An evicted cache can be fetched again from its still-pinned
-                    # immutable remote. This does not resurrect a deleted artifact.
-                    value['state'] = 'live'
-                    value['residency'] = prior.get('residency', 0) + 1
-                    value.pop('deleted_at', None)
-                    value.pop('released_at', None)
-                else:
-                    raise ProjectError('a retiring resource cannot acquire a new reference')
+                raise ProjectError('a retiring resource cannot acquire a new reference')
         elif row.get('retained_by'):
             value['state'] = 'live'
             value.pop('released_at', None)
@@ -463,7 +367,6 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
     if any(row.get('state') == 'deleting' for row in inventory(files, item['id'])):
         raise ProjectError('resource deletion must settle before replacing this generation')
     auth = autonomy._state(item)
-    pre = auth.get('predevelopment')
     if item.get('development'):
         state(item).setdefault('transition', {}).update(requested_mode=mode, coordinator_session=coordinator_session, source=approval_source)
         result, checkpoint = _checkpoint(root, files, item, identity, approval_source, publish)
@@ -472,10 +375,9 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
         # Reread after write-ahead checkpoints; never rebuild an uncertain operation.
         root, files, item, identity = _item(root, item['id'])
         auth, lifecycle = autonomy._state(item), state(item)
-        pre = auth.get('predevelopment')
-        key = (pre or {}).get('generation') or checkpoint['id']
+        key = checkpoint['id']
         lifecycle.setdefault('generations', {})[key] = {'id': key, 'development': copy.deepcopy(item['development']),
-            'predevelopment': copy.deepcopy(pre), 'checkpoint': checkpoint['id'],
+            'checkpoint': checkpoint['id'],
             'retired_at': workflow._now(), 'source': approval_source}
     else:
         lifecycle = state(item)
@@ -483,8 +385,6 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
     previous = auth.pop('authorization', None)
     if previous:
         lifecycle.setdefault('authorizations', []).append(previous)
-    auth.pop('predevelopment', None)
-    auth.pop('latest_snapshot', None)
     auth.pop('next_role', None)
     auth.pop('blocker', None)
     lifecycle['mode'] = mode
@@ -556,6 +456,85 @@ def replacement_item(item):
     return item
 
 
+def _matches(pattern, value):
+    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+
+def _switch_reservation(root, item, project, desired):
+    """Only adopt the exact old/current reservation during this recorded generation."""
+    path = development._reservation_path(root, development._identity(project, item))
+    wanted = {"identity": development._identity(project, item), "branch": desired["branch"],
+              "worktree": desired["worktree"], "configuration": {key: desired[key] for key in
+              ("base_remote", "base_ref", "base_url", "publish_remote", "publish_url")}}
+    previous = path.read_bytes() if path.exists() else None
+    if previous is not None:
+        actual = store.load_yaml(previous, str(path))
+        if actual == wanted:
+            return
+        old = item.get("development")
+        expected = dict(wanted, branch=old["branch"], worktree=old["worktree"]) if old else None
+        if actual != expected:
+            raise ProjectError("development reservation differs from the retained generation")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(store.dump_yaml(wanted))
+    try:
+        if (path.read_bytes() if path.exists() else None) != previous:
+            raise ProjectError("development reservation changed concurrently")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _new_worktree(root, files, item, generation, start, label):
+    project = store.project(files)
+    repo = development._repository(item, project)
+    checkout = development._checkout(root, replacement_item(item), project, repo, {})
+    configuration = development._configuration(checkout, repo)
+    _, container = runtime._layout(root, project)
+    branch = repo.get("branch_pattern", "feature/{project}/{item}-{session}").format(
+        project=project["id"], item=item["id"], session=label + "-" + generation[:12])
+    development._ref(checkout, "refs/heads/" + branch)
+    relative = container / (item["id"] + "-" + label + "-" + generation[:12])
+    base, _ = runtime._layout(root, project)
+    location = runtime._resolve_worktree(root, project, base, relative)
+    ref = development._published_ref(checkout, configuration["publish_remote"], branch, repo)
+    if development._remote_head(checkout, configuration["publish_url"], ref):
+        raise ProjectError("new development generation must use an unpublished branch")
+    values = {"project-identity": development._identity(project, item), "project-base-commit": start,
+              "project-configuration": json.dumps(configuration, sort_keys=True),
+              "remote": configuration["publish_remote"], "merge": ref}
+    local = development._git(checkout, "show-ref", "--verify", "refs/heads/" + branch, check=False).returncode == 0
+    if local and development._config(checkout, "branch." + branch + ".project-identity") != values["project-identity"]:
+        raise ProjectError("existing generation branch has no matching project identity")
+    for key, value in values.items():
+        old = development._config(checkout, "branch." + branch + "." + key)
+        if old is not None and old != value:
+            raise ProjectError("generation branch configuration differs from its intent")
+        development._git(checkout, "config", "branch." + branch + "." + key, value)
+    if not local:
+        if location.exists():
+            raise ProjectError("generation worktree path is already occupied")
+        location.parent.mkdir(parents=True, exist_ok=True)
+        development._git(checkout, "worktree", "add", "-b", branch, str(location), start)
+    elif not location.exists():
+        if development._text(checkout, "rev-parse", branch) != start:
+            raise ProjectError("retained generation branch moved before worktree creation")
+        location.parent.mkdir(parents=True, exist_ok=True)
+        development._git(checkout, "worktree", "add", str(location), branch)
+    if (not location.is_dir() or development._text(location, "symbolic-ref", "--short", "HEAD") != branch or
+            development._text(location, "rev-parse", "HEAD") != start):
+        raise ProjectError("generation worktree differs from its initial intent")
+    if development._text(location, "rev-parse", "--path-format=absolute", "--git-common-dir") != development._text(checkout, "rev-parse", "--path-format=absolute", "--git-common-dir"):
+        raise ProjectError("generation worktree belongs to another Git repository")
+    descriptor = {"repository": item["repository"], "branch": branch, "worktree": relative.as_posix(),
+                  "base_commit": start, "publish_ref": ref, "branch_published": False, **configuration}
+    descriptor["host"] = socket.gethostname()
+    _switch_reservation(root, item, project, descriptor)
+    return descriptor
+
+
 def prepare(root, selector, *, publish=None):
     root, files, item, identity = _item(root, selector)
     _quiescent(root, files, item, identity)
@@ -572,38 +551,33 @@ def prepare(root, selector, *, publish=None):
                        if value.get('source_worktree') == item['development']['worktree'] and value['status'] == 'published']
         if not any(development._remote_head(checkout, value['url'], value['ref']) == value['commit'] for value in checkpoints):
             raise ProjectError('cross-host replacement requires its verified preserved source')
-    blocks = autonomy._dependency_blocks(root, files, item, formal=True)
+    blocks = autonomy._dependency_blocks(root, files, item)
     if blocks:
-        if lifecycle['mode'] == 'manual':
-            raise ProjectError('manual replacement requires actual accepted prerequisite delivery: ' + ','.join(blocks))
-        result = autonomy._predevelopment().prepare(root, item['id'], publish=publish)
+        raise ProjectError('replacement requires actual accepted prerequisite delivery: ' + ','.join(blocks))
+    plan = lifecycle.get('replacement')
+    if not plan:
+        repo = development._repository(item, store.project(files))
+        checkout = development._checkout(root, source_item, store.project(files), repo, {})
+        configuration = development._configuration(checkout, repo)
+        base = development._base(checkout, configuration, development._identity(store.project(files), item))
+        plan = {'generation': secrets.token_hex(16), 'base': base,
+                'project_sha256': workflow._hash(files[store.project_path(files)])}
+        lifecycle['replacement'] = plan
+        result = _save(root, files, item, identity, 'Plan replacement formal baseline ' + item['id'], publish)
         if not _settled(result):
             return result
         root, files, item, identity = _item(root, item['id'])
-        lifecycle = state(item)
-    else:
-        plan = lifecycle.get('replacement')
-        if not plan:
-            repo = development._repository(item, store.project(files))
-            checkout = development._checkout(root, source_item, store.project(files), repo, {})
-            configuration = development._configuration(checkout, repo)
-            base = development._base(checkout, configuration, development._identity(store.project(files), item))
-            plan = {'generation': secrets.token_hex(16), 'base': base,
-                    'project_sha256': workflow._hash(files[store.project_path(files)])}
-            lifecycle['replacement'] = plan
-            result = _save(root, files, item, identity, 'Plan replacement formal baseline ' + item['id'], publish)
-            if not _settled(result):
-                return result
-            root, files, item, identity = _item(root, item['id'])
-            lifecycle, plan = state(item), state(item)['replacement']
-        if plan['project_sha256'] != workflow._hash(files[store.project_path(files)]):
-            raise ProjectError('replacement project configuration changed; preserve its original intent')
-        item['development'] = autonomy._predevelopment()._new_worktree(
-            root, files, item, plan['generation'], plan['base'], 'formal')
-        workflow._invalidate_implementation(item)
-        item['design'].pop('review', None)
-        item['status'], item['owner'] = 'in_progress', None
+        lifecycle, plan = state(item), state(item)['replacement']
+    if plan['project_sha256'] != workflow._hash(files[store.project_path(files)]):
+        raise ProjectError('replacement project configuration changed; preserve its original intent')
+    item['development'] = _new_worktree(
+        root, files, item, plan['generation'], plan['base'], 'formal')
+    workflow._invalidate_implementation(item)
+    item['design'].pop('review', None)
+    item['status'], item['owner'] = 'in_progress', None
     lifecycle['replacement_pending'] = False
+    # A completed intent must not select the same generation on a later replan.
+    lifecycle.pop('replacement', None)
     return _save(root, files, item, identity, 'Bind replacement generation ' + item['id'], publish)
 
 
@@ -639,26 +613,6 @@ def adopt(root, selector, *, worktree, publish=None):
     lifecycle.pop('transition', None)
     result = _save(root, files, item, identity, 'Adopt retained source ' + item['id'], publish)
     return {**result, 'generation': key}
-
-
-def release(root, selector, *, snapshot, reference, publish=None):
-    root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
-    _policy(item)
-    workflow._text(reference, 'snapshot offer release evidence')
-    auth = autonomy._state(item)
-    if snapshot not in auth.get('snapshots', {}):
-        raise ProjectError('unknown frozen snapshot')
-    if auth.get('latest_snapshot') == snapshot:
-        auth.pop('latest_snapshot')
-    pre = auth.get('predevelopment') or {}
-    if (pre.get('rebase') or {}).get('source', {}).get('id') == snapshot and pre.get('phase') == 'formal':
-        workflow._implementation_approved(files, item)
-        if workflow._code_snapshot(root, item, store.project(files)) != item['development']['reviewed_snapshot']:
-            raise ProjectError('formal recovery release requires the unchanged independently reviewed result')
-        state(item).setdefault('released_recoveries', {})[snapshot] = {'reference': reference, 'at': workflow._now()}
-    state(item).setdefault('released_offers', {})[snapshot] = {'reference': reference, 'at': workflow._now()}
-    return _save(root, files, item, identity, 'Release frozen offer ' + item['id'], publish)
 
 
 def _checkout(root, files, item, row):
@@ -816,7 +770,7 @@ def collect(root, selector, *, intent, confirm, publish=None):
         raise ProjectError('collection requires the exact program-generated intent and digest')
     if pending['state'] == 'completed':
         return {'status': 'no_op', 'intent': intent}
-    # Check every candidate even when the project currently has no frozen pins.
+    # Recheck every candidate against current source-retention requirements.
     live = {row['id'] for row in inventory(files, item['id']) if row.get('retained_by')}
     if any(row['id'] in live for row in pending['resources']):
         raise ProjectError('collection candidate acquired a live reference')
@@ -918,12 +872,16 @@ def validate(item):
         for key, value in values.items():
             if not isinstance(key, str) or not workflow.TICKET.fullmatch(key) or not isinstance(value, dict) or value.get('id') != key:
                 raise ProjectError('invalid lifecycle resource identity')
+            # Ordinary retained generations have historically included null optional metadata.
+            active_fields = {field for field, content in value.items() if content not in (None, {}, [], '')}
+            if name == 'generations' and active_fields - {
+                    'id', 'development', 'checkpoint', 'retired_at', 'source', 'disposition', 'superseded_checkpoints'}:
+                raise ProjectError('unsupported retained generation fields; preserve source before recovery')
             if name == 'resources' and (value.get('kind') not in {'worktree', 'local-ref', 'remote-ref', 'runtime-cache'} or
                     value.get('state') not in {'live', 'released', 'deleting', 'deleted'}):
                 raise ProjectError('invalid resource lifecycle state')
 
-    captures = {**((item.get('workflow') or {}).get('autonomy') or {}).get('snapshots', {}),
-                **lifecycle.get('checkpoints', {})}
+    captures = lifecycle.get('checkpoints', {})
     for key, value in lifecycle.get('checkpoints', {}).items():
         if (value.get('kind') != 'preservation-checkpoint' or value.get('item') != item['id'] or
                 value.get('status') not in {'planned', 'committed', 'published'} or
@@ -932,11 +890,11 @@ def validate(item):
                 not value.get('branch', '').startswith('preservation/') or not value['branch'].endswith('/' + key)):
             raise ProjectError('invalid preservation checkpoint evidence')
         for field in ('head', 'tree', 'index_tree') + (('commit',) if value['status'] != 'planned' else ()):
-            if not autonomy._predevelopment()._matches(r'[0-9a-f]{40}|[0-9a-f]{64}', value.get(field)):
+            if not _matches(r'[0-9a-f]{40}|[0-9a-f]{64}', value.get(field)):
                 raise ProjectError('invalid preservation Git identity')
         source = value.get('source') or {}
         if (source.get('head') != value['head'] or source.get('tree') != value['tree'] or
-                not autonomy._predevelopment()._matches(r'[0-9a-f]{64}', source.get('dirty_digest')) or
+                not _matches(r'[0-9a-f]{64}', source.get('dirty_digest')) or
                 type(source.get('clean')) is not bool):
             raise ProjectError('invalid preservation source binding')
     for key, value in lifecycle.get('resources', {}).items():
@@ -945,7 +903,7 @@ def validate(item):
         if value['kind'] == 'runtime-cache':
             attempt = value.get('attempt')
             relative = '.project-local/autonomy-results/' + str(attempt)
-            if not autonomy._predevelopment()._matches(workflow.TICKET.pattern, attempt) or value.get('relative_path') != relative:
+            if not _matches(workflow.TICKET.pattern, attempt) or value.get('relative_path') != relative:
                 raise ProjectError('historical runtime cache must name its exact registered path')
             expected = _local_id(item, 'runtime-cache', relative, value.get('host'))
         elif value['kind'] in {'remote-ref', 'local-ref'}:
@@ -954,7 +912,7 @@ def validate(item):
                     value.get('repository') != captured['repository']):
                 raise ProjectError('resource must name its exact registered snapshot')
             permitted = {captured['ref']} if value['kind'] == 'remote-ref' else {
-                'refs/heads/' + captured['branch'], 'refs/project-snapshots/' + captured['id']}
+                'refs/heads/' + captured['branch']}
             if value.get('ref') not in permitted:
                 raise ProjectError('resource ref differs from its registered snapshot')
             if value['kind'] == 'remote-ref':

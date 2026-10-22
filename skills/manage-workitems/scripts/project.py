@@ -535,7 +535,7 @@ def _item_summary(record):
 
 
 def _progress_item(record):
-    """Compact progress facts, including predevelopment markers omitted from status summaries."""
+    """Compact current progress facts for the selected work item."""
     result = _item_summary(record)
     development = record.get("development") or {}
     review = development.get("review") if isinstance(development, dict) else None
@@ -552,29 +552,6 @@ def _progress_item(record):
     acceptance = autonomy.get("acceptance") or {}
     if acceptance.get("status"):
         result["acceptance"] = acceptance["status"]
-    authorization = autonomy.get("authorization") or {}
-    if authorization.get("predevelop"):
-        result["predevelop"] = True
-        if authorization.get("source"):
-            result["authorization_source"] = authorization["source"]
-    pre = autonomy.get("predevelopment")
-    latest = (autonomy.get("snapshots") or {}).get(autonomy.get("latest_snapshot"))
-    if isinstance(pre, dict) or isinstance(latest, dict):
-        marker = {}
-        if isinstance(pre, dict):
-            marker.update({key: pre[key] for key in ("phase", "generation", "formal_base", "baseline") if pre.get(key) is not None})
-            pins = {name: {"id": value.get("id"), "commit": value.get("commit")}
-                    for name, value in (pre.get("inputs") or {}).items() if isinstance(value, dict)}
-            retained = [{"worktree": row.get("worktree"), "branch": row.get("branch")}
-                        for row in pre.get("retained_developments") or [] if isinstance(row, dict)]
-            if pins:
-                marker["pins"] = pins
-            if retained:
-                marker["retained"] = retained
-        if isinstance(latest, dict):
-            marker["snapshot"] = {"id": latest.get("id"), "status": latest.get("status"),
-                                  "commit": latest.get("commit"), "prerequisites": latest.get("prerequisites") or {}}
-        result["predevelopment"] = marker
     return result
 
 
@@ -739,17 +716,14 @@ def parser():
         if action == "authorize":
             command.add_argument("--approval-source", required=True)
             command.add_argument("--skip-design-review", action="store_true")
-            command.add_argument("--predevelop", action="store_true")
-    for action in ("complete", "begin-transform", "accept", "snapshot", "prepare"):
+    for action in ("complete", "accept"):
         command = advancing.add_parser(action)
         command.add_argument("item")
-        if action in {"complete", "begin-transform"}:
-            command.add_argument("--role", choices=("baseline", "rebase") if action == "begin-transform" else ("implementation", "fix", "baseline", "rebase"), required=True)
+        if action == "complete":
+            command.add_argument("--role", choices=("implementation", "fix"), required=True)
         if action == "complete":
             command.add_argument("--report-file", required=True)
             command.add_argument("--provenance", required=True)
-        if action == "begin-transform":
-            command.add_argument("--author-session", required=True)
         if action == "accept":
             command.add_argument("--approval-source", required=True)
     takeover = sub.add_parser("takeover")
@@ -759,7 +733,7 @@ def parser():
     lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
     lifecycle_status = lifecycle_actions.add_parser("status")
     lifecycle_status.add_argument("item", nargs="?")
-    for action in ("policy", "handoff", "replan", "prepare", "adopt", "dispose", "release", "plan", "collect"):
+    for action in ("policy", "handoff", "replan", "prepare", "adopt", "dispose", "plan", "collect"):
         command = lifecycle_actions.add_parser(action)
         command.add_argument("item")
         if action in {"policy", "handoff", "replan"}:
@@ -777,10 +751,8 @@ def parser():
             command.add_argument("--generation", required=True)
             command.add_argument("--disposition", choices=("migrated", "discarded"), required=True)
             command.add_argument("--approval-source")
-        if action in {"dispose", "release"}:
+        if action == "dispose":
             command.add_argument("--reference", required=True)
-        if action == "release":
-            command.add_argument("--snapshot", required=True)
         if action == "collect":
             command.add_argument("--intent", required=True)
             command.add_argument("--confirm", required=True)
@@ -962,16 +934,12 @@ def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
             if action in {"status", "authorize"}:
                 options = {key: getattr(args, key) for key in ("all_items", "tree", "items")}
                 if action == "authorize":
-                    options.update(approval_source=args.approval_source, skip_design_review=args.skip_design_review, predevelop=args.predevelop, publish=publish_changes)
+                    options.update(approval_source=args.approval_source, skip_design_review=args.skip_design_review, publish=publish_changes)
                 result = getattr(autonomy, action)(args.root, **options)
-            elif action == "begin-transform":
-                result = autonomy.begin_transform(args.root, args.item, role=args.role, author_session=args.author_session, publish=publish_changes)
             elif action == "complete":
                 result = autonomy.complete(args.root, args.item, role=args.role, report_file=args.report_file, provenance=args.provenance, publish=publish_changes)
             elif action == "accept":
                 result = autonomy.accept(args.root, args.item, approval_source=args.approval_source, publish=publish_changes)
-            elif action in {"snapshot", "prepare"}:
-                result = getattr(_module("project_predevelopment"), action)(args.root, args.item, publish=publish_changes)
         elif args.command == "takeover":
             result = _module("project_ownership").takeover(args.root, args.item,
                 approval_source=args.approval_source, publish=publish_changes)
@@ -983,7 +951,7 @@ def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
                       "handoff": ("approval_source", "mode", "coordinator_session"),
                       "dispose": ("generation", "disposition", "reference", "approval_source"),
                       "adopt": ("worktree",),
-                      "release": ("snapshot", "reference"), "collect": ("intent", "confirm")}
+                      "collect": ("intent", "confirm")}
             options = {key: getattr(args, key) for key in fields.get(action, ())}
             if action != "status":
                 options["publish"] = publish_changes

@@ -80,14 +80,6 @@ def _legacy_product(entry):
             "review_sha256": workflow._hash(workflow._canonical(None))}
 
 
-def _predevelopment():
-    try:
-        import project_predevelopment
-    except ImportError:
-        from . import project_predevelopment
-    return project_predevelopment
-
-
 def _files(root):
     root = runtime.find_project(root)
     return root, workflow._snapshot(root)
@@ -100,8 +92,6 @@ def _binding(root, files, item, *, code=True):
     sources = ((item.get("workflow") or {}).get("lifecycle") or {}).get("generations")
     if sources:
         result["retained_sources_sha256"] = workflow._hash(workflow._canonical(sources))
-    if _predevelopment().state(item):
-        result["predevelopment_sha256"] = workflow._hash(workflow._canonical(_predevelopment().identity(item)))
     if code and item.get("development"):
         result["code_snapshot"] = workflow._code_snapshot(root, item, store.project(files))
     return result
@@ -132,12 +122,6 @@ def _read_hashes(root, files, item, role, *, read=None):
         if path.is_symlink():
             raise ProjectError("required read source cannot use a symlink: " + str(path))
         hashes.setdefault(str(path), workflow._hash(path.read_bytes()) if path.is_file() else None)
-    if role in _predevelopment().WRITERS and item.get("development"):
-        location = workflow._development_module().worktree_location(root, item, store.project(files))
-        # These explicit Git transformation stages replace inherited source
-        # instructions. Their immutable target/pin OIDs remain input-bound;
-        # ancestor/project instructions stay guarded and final reviews reload them.
-        hashes = {name: value for name, value in hashes.items() if not Path(name).is_relative_to(location)}
     return hashes
 
 
@@ -162,7 +146,7 @@ def _validate_reads(entry, *, revised_spec=None, missing_root=None, defer_instru
 
 def _implementation_current(root, files, item):
     state = _state(item)
-    completion = state.get("implementation") or state.get("transformations", {}).get("rebase") or {}
+    completion = state.get("implementation") or {}
     if not completion:
         products = [product for entry in state.get("executions", {}).values() if (product := _legacy_product(entry))]
         completion = max(products, key=lambda value: value["created_at"]) if products else {}
@@ -226,11 +210,10 @@ def _publish(root, files, records, identity, message, publish, *, extra=None):
         release_execution_state(item)
         writes.update(store.write_item(files, item))
         checks.update(workflow._checks(files, item, "context-update"))
-    writes.update(_predevelopment()._lifecycle().reconcile(files, writes))
+    writes.update(workflow._lifecycle_module().reconcile(files, writes))
     for name in writes:
         checks.setdefault(name, workflow._hash(files.get(name)))
-    # Pin creation and lifecycle deletion marking serialize on the same state.
-    # Include all items: a frozen transitive input need not remain in today's DAG.
+    # Resource deletion and source replacement share guarded project state.
     for name, content in files.items():
         if name.startswith(".project/state/") or name.endswith("/metadata.yaml"):
             checks.setdefault(name, workflow._hash(content))
@@ -273,15 +256,13 @@ def _acceptance_valid(root, files, item):
         return False
 
 
-def _dependency_blocks(root, files, item, *, formal=False):
+def _dependency_blocks(root, files, item):
     if workflow._validation_waived(files, item, "dependencies"):
         return []
     records = store.items(files)
     result = []
     for identifier in sorted(workflow._ancestors(records, item["id"]) - {item["id"]}):
         dependency = records[identifier]
-        if not formal and identifier in _predevelopment().pins(item):
-            continue
         if dependency.get("delivery", {}).get("status") != "delivered" or dependency.get("status") == "cancelled":
             result.append("undelivered:" + identifier)
         if not _acceptance_valid(root, files, dependency):
@@ -330,11 +311,6 @@ def _next(root, files, item, session):
     if not result["reasons"] and lifecycle.get("replacement_pending"):
         result.update(state="ready", next_action="lifecycle_prepare")
         return result
-    if not result["reasons"] and not splitting and not workflow._validation_waived(files, item, "formal-convergence"):
-        extra = _predevelopment().schedule(root, files, item, session)
-        if extra:
-            result.update(extra)
-            return result
     result["reasons"].extend(_dependency_blocks(root, files, item))
     if result["reasons"]:
         result["state"] = "blocked"
@@ -361,10 +337,6 @@ def _next(root, files, item, session):
         except ProjectError:
             reviewed = False
     if reviewed:
-        extra = None if workflow._validation_waived(files, item, "formal-convergence") else _predevelopment().schedule(root, files, item, session, reviewed=True)
-        if extra:
-            result.update(extra)
-            return result
         result["state"] = "accepted_awaiting_delivery" if _acceptance_valid(root, files, item) else "awaiting_acceptance"
         return result
     design_review_current = False
@@ -373,8 +345,7 @@ def _next(root, files, item, session):
         design_review_current = True
     except ProjectError:
         pass
-    formal_review = ((_predevelopment().state(item) or {}).get("phase") in {"reconciling", "formal"} or
-                     ((item.get("workflow") or {}).get("lifecycle") or {}).get("fresh_reviews_required"))
+    formal_review = ((item.get("workflow") or {}).get("lifecycle") or {}).get("fresh_reviews_required")
     if item.get("design", {}).get("review", {}).get("result") == "fail" and not waived_design:
         role = "design-revision"
     elif not design_review_current and (formal_review or not authorization.get("skip_design_review") or
@@ -407,13 +378,13 @@ def status(root, *, all_items=False, tree=None, items=None):
                      "reasons": ["input_unavailable"], "error": str(error)}
         entries.append(entry)
     result = {"status": "ready", "items": entries}
-    for state in ("ready", "blocked", "awaiting_acceptance", "awaiting_predecessor_delivery", "accepted_awaiting_delivery", "completed"):
+    for state in ("ready", "blocked", "awaiting_acceptance", "accepted_awaiting_delivery", "completed"):
         result[state] = [entry["id"] for entry in entries if entry["state"] == state]
     result["round_finished"] = not result["ready"]
     return result
 
 
-def authorize(root, *, approval_source, all_items=False, tree=None, items=None, skip_design_review=False, predevelop=False, publish=None):
+def authorize(root, *, approval_source, all_items=False, tree=None, items=None, skip_design_review=False, publish=None):
     workflow._text(approval_source, "explicit user advancement authorization source")
     root, files = _files(root)
     selected = scope(files, all_items=all_items, tree=tree, items=items)
@@ -426,7 +397,7 @@ def authorize(root, *, approval_source, all_items=False, tree=None, items=None, 
         if publications:
             root, files = _files(root)
         response = _authorize_group(root, files, group["items"], selected, group["identity"],
-            approval_source, skip_design_review, predevelop, publish)
+            approval_source, skip_design_review, publish)
         authorized.extend(response["authorized"])
         blocked.extend(response["blocked_items"])
         publications.append(response)
@@ -439,7 +410,7 @@ def authorize(root, *, approval_source, all_items=False, tree=None, items=None, 
             "authorized": authorized, "blocked_items": blocked, "publications": publications}
 
 
-def _authorize_group(root, files, identifiers, selected, identity, approval_source, skip_design_review, predevelop, publish):
+def _authorize_group(root, files, identifiers, selected, identity, approval_source, skip_design_review, publish):
     """Keep each publication within one claim while retaining the requested scope."""
     records, blocked = [], []
     for identifier in identifiers:
@@ -480,7 +451,6 @@ def _authorize_group(root, files, identifiers, selected, identity, approval_sour
                                   "requirement_sha256": _contract(files, item)["requirement_sha256"],
                                   "decision_sha256": workflow._hash(files.get(workflow._documents(item)["decision"])),
                                   "skip_design_review": bool(skip_design_review)}
-        state["authorization"]["predevelop"] = bool(predevelop)
         state.pop("blocker", None)
         records.append(item)
     publication = _publish(root, files, records, identity, "Authorize project advancement", publish) if records else {"status": "no_op"}
@@ -498,35 +468,9 @@ def _read_report(path):
     return content
 
 
-def begin_transform(root, selector, *, role, author_session, publish=None):
-    if role not in {"baseline", "rebase"}:
-        raise ProjectError("only baseline/rebase prepare a Git transformation")
-    workflow._text(author_session, "actual source author")
-    root, files = _files(root)
-    item = store.item(files, workflow._resolve(store.items(files), selector))
-    identity = workflow._identity(root, item=item["id"])
-    _owned(item, identity)
-    readiness = _next(root, files, item, identity["session"])
-    if readiness.get("next_role") != role:
-        raise ProjectError("Git transformation is not ready: " + str(readiness))
-    _predevelopment().prepare_writer(root, files, item, role, author_session=author_session)
-    item["owner"] = identity
-    _state(item)["transformation_basis"] = {"role": role, "binding": _binding(root, files, item, code=False),
-        "read_hashes": _read_hashes(root, files, item, role)}
-    result = _publish(root, files, [item], identity, "Prepare Git transformation " + item["id"], publish)
-    if result["status"] not in {"published", "no_op"}:
-        return result
-    return {**result, "item": item["id"], "role": role,
-            "read": _payload(root, files, item, role),
-            "approved_contract": copy.deepcopy(_state(item).get("approved_contract")),
-            "code_context": workflow._code_context(root, item, store.project(files)),
-            "git_operation": _predevelopment().writer_context(item, role),
-            "prerequisites": copy.deepcopy(_predevelopment().pins(item))}
-
-
 def complete(root, selector, *, role, report_file, provenance, publish=None):
     """Record a verified work product, without registering a worker or its lifetime."""
-    if role not in {"implementation", "fix", "baseline", "rebase"}:
+    if role not in {"implementation", "fix"}:
         raise ProjectError("unsupported work product role")
     workflow._text(provenance, "actual work product provenance")
     report = _read_report(report_file)
@@ -534,36 +478,24 @@ def complete(root, selector, *, role, report_file, provenance, publish=None):
     item = store.item(files, workflow._resolve(store.items(files), selector))
     identity = workflow._identity(root, item=item["id"])
     _owned(item, identity)
-    if role in {"baseline", "rebase"}:
-        basis = _state(item).get("transformation_basis") or {}
-        if basis.get("role") != role or basis.get("binding") != _binding(root, files, item, code=False):
-            raise ProjectError("Git transformation inputs changed; prepare the current transformation")
-        _validate_reads(basis)
-        _predevelopment().complete_writer(root, files, item, role)
-        target = _state(item).setdefault("transformations", {})
-        key = role
-        changes = {}
-    else:
-        basis = _state(item).get("implementation_basis") or {}
-        if item.get("status") != "developing" or basis.get("binding") != _binding(root, files, item, code=False):
-            raise ProjectError("implementation contract changed; begin a current development-start checkpoint")
-        changes = _validate_reads(basis, defer_instructions=True)
-        target, key = _state(item), "implementation"
-        development = item.get("development") or {}
-        development.pop("reviewed_snapshot", None)
+    basis = _state(item).get("implementation_basis") or {}
+    if item.get("status") != "developing" or basis.get("binding") != _binding(root, files, item, code=False):
+        raise ProjectError("implementation contract changed; begin a current development-start checkpoint")
+    changes = _validate_reads(basis, defer_instructions=True)
+    development = item.get("development") or {}
+    development.pop("reviewed_snapshot", None)
     binding = _binding(root, files, item)
     product = {"binding": binding, "report": {"body": report, "sha256": workflow._hash(report)},
                "provenance": provenance, "created_at": workflow._now(), "instruction_changes": changes}
-    if role in {"implementation", "fix", "rebase"}:
-        product["review_sha256"] = workflow._hash(workflow._canonical((item.get("development") or {}).get("review")))
-    target[key] = product
+    product["review_sha256"] = workflow._hash(workflow._canonical((item.get("development") or {}).get("review")))
+    _state(item)["implementation"] = product
     if _binding(root, files, item) != binding:
         raise ProjectError("work product source changed while recording completion")
     return _publish(root, files, [item], identity, "Record work product " + item["id"], publish)
 
 
 def validate_state(item):
-    _predevelopment()._lifecycle().validate(item)
+    workflow._lifecycle_module().validate(item)
     workflow._design_reuse().validate(item)
     workflow._ownership_module().validate(item)
     waivers = (item.get("workflow") or {}).get("validation_waivers", {})
@@ -588,6 +520,12 @@ def validate_state(item):
                     for path, value in guard["read_hashes"].items())):
             raise ProjectError("review content guards require exact content and input hashes")
     state = (item.get("workflow") or {}).get("autonomy") or {}
+    supported = {"authorization", "approved_contract", "implementation_basis", "implementation", "acceptance",
+                 "current", "executions", "next_role", "blocker", "code_authors", "design_authors"}
+    unsupported = {key for key in set(state) - supported if state[key] not in (None, {}, [], "")}
+    if unsupported:
+        raise ProjectError("unsupported autonomous state fields; preserve source and resolve the stored workflow before writing: " +
+                           ", ".join(sorted(unsupported)))
     authorization = state.get("authorization")
     if authorization is not None:
         if not isinstance(authorization, dict):
@@ -598,7 +536,7 @@ def validate_state(item):
             workflow._text(authorization["claim_token"], "autonomy control claim token")
         if not isinstance(authorization.get("scope"), list) or item["id"] not in authorization["scope"]:
             raise ProjectError("autonomy authorization must include its item")
-    for value in [state.get("implementation"), *state.get("transformations", {}).values()]:
+    for value in [state.get("implementation")]:
         if value is not None and (not isinstance(value, dict) or not isinstance(value.get("binding"), dict) or
                 not runtime._nonempty(value.get("provenance")) or not isinstance(value.get("report"), dict) or
                 not runtime._nonempty(value["report"].get("body")) or
@@ -633,8 +571,6 @@ def _cleaned_code_root(root, files, item):
 
 
 def _acceptance_review(root, files, item):
-    if (_predevelopment().state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not workflow._validation_waived(files, item, "formal-convergence"):
-        raise ProjectError("predevelopment requires formal convergence before human acceptance")
     if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
         raise ProjectError("user acceptance requires the current approved contract")
     missing_root = _cleaned_code_root(root, files, item) if item.get("cleanup") == "done" else None
@@ -659,12 +595,10 @@ def accept(root, selector, *, approval_source, publish=None):
         if not item.get("development"):
             raise ProjectError("human acceptance requires recorded development")
         # An actual current human acceptance can replace missing/failed/stale code
-        # review, but does not silently waive another design or convergence gate.
+        # review, but does not silently waive another design gate.
         try:
             _acceptance_review(root, files, item)
         except ProjectError:
-            if (_predevelopment().state(item) or {}).get("phase") in {"preparing", "baseline", "speculative", "reconciling"} and not workflow._validation_waived(files, item, "formal-convergence"):
-                raise ProjectError("predevelopment requires formal convergence before human acceptance")
             if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
                 raise ProjectError("user acceptance requires the current approved contract")
             if item.get("design", {}).get("review", {}).get("result") == "fail" and not workflow._validation_waived(files, item, "design-review"):
