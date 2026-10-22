@@ -391,10 +391,9 @@ class AdapterTests(unittest.TestCase):
         receipt = self.created()
         receipt["operation"]["release_owner"] = True
         plan = self.adapter.prepare_sync(self.item, self.files, receipt)
-        self.assertTrue(plan["release_owner"])
         self.assertNotIn("operation", plan["receipt"])
         self.assertEqual(plan["action"], "noop")
-        self.assertTrue(self.adapter.execute(plan)["release_owner"])
+        self.assertEqual(self.adapter.execute(plan)["state"], "verified")
 
     def test_business_digest_guard_and_reserved_marker(self):
         invalid = copy.deepcopy(self.receipt)

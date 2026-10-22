@@ -43,5 +43,5 @@ Native Plan and inherited harness permissions remain binding.
 
 Return the item/role, current contract/source identity, candidate/report paths, outcome, actual
 contribution and author/reviewer attribution, checks and resource state. Use the controller-assigned
-contributor-session label for this genuine execution; it is not a worker-liveness claim. Include
+contributor-session label for this genuine execution. Include
 host/tool IDs only when exposed, mark an unexposed runtime model unverified, and never fabricate evidence.

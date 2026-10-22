@@ -76,7 +76,7 @@ class WorkflowTest(unittest.TestCase):
                     path.write_text(text, encoding="utf-8")
             return {"status": "published"}
         bundle = {"writes": writes, "checks": checks, "message": message,
-                  "session": identity["session"], "token": identity["token"]}
+                  "session": identity["session"]}
         path = self.directory / "bundle.json"
         path.write_text(fixtures.text(bundle), encoding="utf-8")
         result = runtime.publish(root, path)
@@ -296,7 +296,7 @@ class WorkflowTest(unittest.TestCase):
         blocked = workflow.begin(self.a, "design-review", "A", options={}, publish=self.publisher)
         self.assertEqual(blocked["action_code"], "independent_review_required")
 
-    def test_developing_design_review_keeps_owner_and_registers_independent_report(self):
+    def test_developing_design_review_preserves_source_and_independent_report(self):
         self.designed()
         report = self.directory / "independent-design-review.md"
         body = "Independent assessment of the revised requirement, design and source.\n"
@@ -314,7 +314,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.finish(approval)["status"], "published")
         with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "fresh-reviewer"}):
             blocked = workflow.begin(self.a, "design-review", "A", publish=self.publisher)
-            self.assertEqual(blocked["status"], "blocked")  # No takeover of source ownership.
+            self.assertEqual(blocked["status"], "ready")
         for inputs in ({"review_file": str(report)},
                        {"reviewer_session": "author", "review_file": str(report)}):
             with self.subTest(inputs=inputs):
@@ -330,7 +330,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(workflow.finish(self.a, review["ticket"], options={"result": "pass", "provenance": "Actual external reviewer"},
                                          publish=self.publisher)["status"], "published")
         item = self.record()
-        self.assertEqual(item["owner"], original["owner"])
+        self.assertNotIn("owner", item)
         self.assertEqual(item["development"], original["development"])
         self.assertEqual(item["design"]["review"]["session"], "fresh-reviewer")
         self.assertEqual(item["design"]["review"]["recorded_by"], "author")
@@ -464,11 +464,9 @@ class WorkflowTest(unittest.TestCase):
                 finally:
                     (self.a / name).write_bytes(original)
 
-    def test_manifest_tampering_extra_files_links_and_cross_session_rejected(self):
+    def test_manifest_tampering_extra_files_and_links_rejected(self):
         result = self.begin("context-update")
         directory = Path(result["editable"][0]["path"]).parent
-        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "stranger"}):
-            self.assertEqual(self.finish(result)["action_code"], "session_conflict")
         (directory / "extra.yaml").write_text("status: done\n")
         self.assertEqual(self.finish(result)["status"], "blocked")
         (directory / "extra.yaml").unlink()
@@ -524,7 +522,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("1-bug-fix", blocked["message"])
         self.assertEqual(self.record("A")["status"], "done")
 
-    def test_active_checkpoint_detects_new_fix_and_preserves_owner_and_draft(self):
+    def test_active_checkpoint_detects_new_fix_and_preserves_draft(self):
         original = self.record("A")
         original["status"] = "done"
         original["delivery"].update(status="delivered", evidence=[{"kind": "merged", "reference": "sha"}])
@@ -539,9 +537,9 @@ class WorkflowTest(unittest.TestCase):
         outcome = self.finish(result)
         self.assertEqual(outcome["status"], "blocked")
         self.assertEqual(outcome["action_code"], "checkpoint_blocked")
-        self.assertIsNotNone(self.record("B")["owner"])
+        self.assertNotIn("owner", self.record('B'))
 
-    def test_downstream_review_dependency_digest_does_not_write_another_owner(self):
+    def test_downstream_review_dependency_digest_keeps_other_item_unchanged(self):
         downstream = self.record("B")
         downstream["depends_on"] = ["A"]
         self.install(downstream)
@@ -744,20 +742,16 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn(str(self.a / "workitems/B/spec.md"), paths)
         self.assertNotIn(str(self.a / "workitems/B/logs.md"), paths)
 
-    def test_claim_partial_and_prepare_failure_resume_same_ticket_with_real_base(self):
-        result = workflow.begin(self.a, "design-update", "A", publish=lambda *args, **kwargs: {"status": "partial"})
-        self.assertEqual(result["status"], "partial")
+    def test_prepare_failure_resumes_same_ticket_with_real_base(self):
         original = self.fake_development.prepare
         self.fake_development.prepare = mock.Mock(side_effect=runtime.ProjectError("temporary fetch failure"))
-        blocked = workflow.resume(self.a, result["ticket"], publish=self.publisher)
+        blocked = workflow.begin(self.a, "design-update", "A", publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked")
-        self.assertEqual(blocked["ticket"], result["ticket"])
         self.assertIn("resume", blocked["next_command"])
-        self.assertIsNotNone(self.record()["owner"])
         self.fake_development.prepare = original
-        resumed = workflow.resume(self.a, result["ticket"], publish=self.publisher)
+        resumed = workflow.resume(self.a, blocked["ticket"], publish=self.publisher)
         self.assertEqual(resumed["status"], "ready", resumed)
-        self.assertEqual(resumed["ticket"], result["ticket"])
+        self.assertEqual(resumed["ticket"], blocked["ticket"])
         self.assertEqual(resumed["code_context"]["base_commit"], "a" * 40)
         self.edit(resumed, "# Resumed design\n")
         self.assertEqual(self.finish(resumed)["status"], "published")
@@ -833,14 +827,14 @@ class WorkflowTest(unittest.TestCase):
         blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked", blocked)
         self.assertNotIn("next_command", blocked)
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         self.assertEqual(self.calls, [])
         item["cleanup"] = "done"
         self.install(item)
         result = self.begin("context-update")
         self.edit(result, "Removed implementation; retained requirement and design.\n")
         self.assertEqual(self.finish(result)["status"], "published")
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         self.assertEqual(self.record()["development"], item["development"])
         self.assertFalse((self.a / "worktrees/removed").exists())
         self.fake_development.prepare.assert_not_called()
@@ -855,7 +849,7 @@ class WorkflowTest(unittest.TestCase):
         calls = len(self.calls)
         blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked", blocked)
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         self.assertEqual(len(self.calls), calls)
 
     def test_metadata_changed_after_preflight_retains_ticket_without_auto_resume(self):
@@ -870,13 +864,13 @@ class WorkflowTest(unittest.TestCase):
         blocked = workflow.begin(self.a, "context-update", "A", publish=self.publisher)
         self.assertEqual(blocked["status"], "blocked", blocked)
         self.assertNotIn("next_command", blocked)
-        self.assertIsNotNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         self.fake_development.instruction_files = original
         resumed = workflow.resume(self.a, blocked["ticket"], publish=self.publisher)
         self.assertEqual(resumed["status"], "ready", resumed)
         self.edit(resumed, "Recovered context.\n")
         self.assertEqual(self.finish(resumed)["status"], "published")
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
 
     def test_cleanup_discard_preserves_contract_and_clears_old_credentials(self):
         self.designed()
@@ -903,7 +897,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn("review", after["design"])
         self.assertNotIn("design_waiver", after["workflow"])
         self.assertIsNone(after["development"])
-        self.assertIsNone(after["owner"])
+        self.assertNotIn("owner", after)
         self.assertEqual(after["status"], "in_progress")
         for path, text in docs.items():
             self.assertEqual((self.a / path).read_bytes(), text, path)
@@ -920,7 +914,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(blocked["status"], "blocked", blocked)
         self.assertIn("independent design review", blocked["message"])
 
-    def test_cleanup_discard_rejects_invalid_options_owner_and_recreated_tree(self):
+    def test_cleanup_discard_rejects_invalid_options_and_recreated_tree(self):
         import project as command
         parsed = command.parser().parse_args(["begin", "cleanup-record", "A", "--cleanup-status", "done", "--reference", "Removed", "--discard-development", "--approval-source", "Explicit discard"])
         valid = command._begin_options(parsed)
@@ -934,21 +928,17 @@ class WorkflowTest(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 blocked = workflow.begin(self.a, "cleanup-record", "A", options={**valid, **invalid}, publish=self.publisher)
                 self.assertEqual(blocked["status"], "blocked", blocked)
-                self.assertIsNone(self.record()["owner"])
+                self.assertNotIn("owner", self.record())
         location = self.directory / "fake-code"
         location.mkdir()
         self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["status"], "blocked")
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         location.rmdir()
-        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "foreign"}):
-            item["owner"] = workflow._identity(self.a)
-        self.install(item)
-        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["code"], "control_claim_required")
-        item["owner"] = None
+        self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["status"], "ready")
         item.update(status="done", delivery={"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "sha"}]})
         self.install(item)
         self.assertEqual(workflow.begin(self.a, "cleanup-record", "A", options=valid, publish=self.publisher)["status"], "blocked")
-        self.assertIsNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         item.update(status="in_progress", delivery={"required": ["merged"], "status": "pending", "evidence": []})
         self.install(item)
         ready = self.begin("cleanup-record", **valid)
@@ -996,7 +986,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(fresh_review["status"], "blocked", fresh_review)
         self.assertEqual(fresh_review["code"], "approval_required")
         self.assertEqual(self.record()["status"], "developing")
-        self.assertIsNotNone(self.record()["owner"])
+        self.assertNotIn("owner", self.record())
         self.assertNotIn("review", self.record()["development"])
 
     def test_changed_awaiting_delivery_contract_requires_design_gate_again(self):

@@ -1,6 +1,6 @@
 # Autonomous implementation or correction
 
-The controller assigns one work item and one implementation or correction stage with approved inputs, source worktree, permitted output paths and result identity. Loading this skill for a fix retains that fix stage. Verify those inputs and the current dirty state before editing. Missing or stale inputs go back to the controller; do not acquire ownership or manufacture approval evidence yourself.
+The controller assigns one work item and one implementation or correction stage with approved inputs, source worktree, permitted output paths and result identity. Loading this skill for a fix retains that fix stage. Verify those inputs and the current dirty state before editing. Missing or stale inputs go back to the controller; report the missing facts and preserve actual approval evidence.
 
 Implement and verify the approved contract using this skill's quality core, then return the actual result, primary evidence and unresolved decisions. Keep source uncommitted. Do not call project CLI, update formal project documents or metadata, register review evidence, or publish project Git/Aone changes. Write only designated source or candidate/report artifacts. Supply approved contract corrections as candidate content for controller registration rather than overwriting formal designs.
 

@@ -133,7 +133,7 @@ def project(files):
     return _object(files, project_path(files))
 
 
-def item(files, identifier):
+def _item_snapshot(files, identifier):
     _authority(files)
     record = _object(files, item_path(files, identifier))
     if not is_v2(files):
@@ -172,6 +172,42 @@ def item(files, identifier):
     return record
 
 
+def _current_item(record):
+    """Normalize retired control fields at their exact current-state locations.
+
+    Review bases, saved applicability targets and transaction checkpoints retain
+    their original payloads; their hashes bind those immutable historical inputs.
+    """
+    record = copy.deepcopy(record)
+    record.pop("owner", None)
+    workflow = record.get("workflow")
+    if not isinstance(workflow, dict):
+        return record
+    workflow.pop("control_transfers", None)
+    autonomy = workflow.get("autonomy")
+    authorization = autonomy.get("authorization") if isinstance(autonomy, dict) else None
+    if isinstance(authorization, dict):
+        authorization.pop("claim_token", None)
+    lifecycle = workflow.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return record
+    handoff = lifecycle.get("handoff")
+    if isinstance(handoff, dict):
+        handoff.pop("claim_token", None)
+        handoff.pop("to", None)
+        recorder = handoff.pop("from", None)
+        if recorder is not None:
+            handoff.setdefault("recorded_by", recorder)
+    transition = lifecycle.get("transition")
+    if isinstance(transition, dict):
+        transition.pop("coordinator_session", None)
+    return record
+
+
+def item(files, identifier):
+    return _current_item(_item_snapshot(files, identifier))
+
+
 def items(files):
     suffix = "metadata.yaml" if is_v2(files) else "item.json"
     _authority(files)
@@ -182,7 +218,21 @@ def items(files):
 def receipt(files, identifier):
     _authority(files)
     name = receipt_path(files, identifier)
-    return _object(files, name) if name in files else None
+    return _current_receipt(_object(files, name)) if name in files else None
+
+
+def _current_receipt(record):
+    record = copy.deepcopy(record)
+    # Pending/unknown outcomes are retained transaction intents, not current item
+    # control state. Keep their exact payload until real readback settles them.
+    if record.get("state") == "verified":
+        record.pop("release_owner", None)
+        record.pop("migration_sync", None)
+        operation = record.get("operation")
+        if isinstance(operation, dict):
+            operation.pop("release_owner", None)
+            operation.pop("migration_sync", None)
+    return record
 
 
 def _write(files, name, record):
@@ -195,11 +245,11 @@ def write_project(files, record):
 
 
 def write_item(files, record):
-    record = copy.deepcopy(record)
+    record = _current_item(record)
     identifier = record["id"]
     if not is_v2(files):
         return _write(files, item_path(files, identifier), record)
-    state = {key: record.pop(key) for key in ("owner", "development", "workflow") if key in record}
+    state = {key: record.pop(key) for key in ("development", "workflow") if key in record}
     if isinstance(record.get("design"), dict):
         credentials = {key: record["design"].pop(key) for key in ("approval", "review") if key in record["design"]}
         if credentials:
@@ -227,7 +277,7 @@ def write_item(files, record):
 
 
 def write_receipt(files, identifier, record):
-    return _write(files, receipt_path(files, identifier), record)
+    return _write(files, receipt_path(files, identifier), _current_receipt(record))
 
 
 def apply_writes(files, writes):

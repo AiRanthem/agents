@@ -1,8 +1,8 @@
 # Ordinary managed-project implementation
 
-For script blockers or defects, [user-authorized manual recovery](../../manage-workitems/references/recovery.md#user-authorized-manual-recovery) permits concrete approved state/file correction and script repair as an exception to the ordinary command-only and stop/retry rules below. Preserve actual evidence, permissions and source recovery.
+For script blockers or defects, [user-authorized manual recovery](../../manage-workitems/references/recovery.md#user-authorized-manual-recovery) defines the approved state/file correction and script repair path. Preserve actual evidence, permissions and source recovery.
 
-Use only for ordinary managed-project development, not an autonomous stage executor. Read [project context](../../manage-workitems/references/project-context.md) and the fixed [command workflow](../../manage-workitems/references/commands.md). The program owns YAML, document routes, baseline/review/dependency/fix gates, worktree preparation, ownership and Git/Aone publication.
+Use only for ordinary managed-project development, not an autonomous stage executor. Read [project context](../../manage-workitems/references/project-context.md) and the fixed [command workflow](../../manage-workitems/references/commands.md). The program owns YAML, document routes, baseline/review/dependency/fix gates, worktree preparation and Git/Aone publication.
 
 In execution mode, start requested implementation through `begin development-start ID` and execute its returned finish command before code edits. Read-only planning reads the project context and returns its implementation plan without state mutations. Read the complete payload and required original instructions. A current independent design review normally gates implementation. Only the user's explicit scoped `--skip-design-review --approval-source SOURCE` may bind the unchanged requirement/spec/base/dependencies instead; do not invent a review pass or `implementable` status.
 

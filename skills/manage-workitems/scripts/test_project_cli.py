@@ -116,13 +116,17 @@ class V2Adapter:
 
 class ProjectCliTest(unittest.TestCase):
     # Reuse fixture helpers without inheriting and rerunning runtime tests.
-    setUp = fixtures.WorkspaceTest.setUp
+    def setUp(self):
+        fixtures.WorkspaceTest.setUp(self)
+        session = mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'actual-recovery-session'})
+        session.start()
+        self.addCleanup(session.stop)
     configure = fixtures.WorkspaceTest.configure
     write = fixtures.WorkspaceTest.write
     remote_head = fixtures.WorkspaceTest.remote_head
 
     def request(self, *identifiers):
-        return {'session': 'session-one', 'token': 'claim-one', 'machine': 'machine-one',
+        return {'session': 'session-one', 'machine': 'machine-one',
                 'message': 'Align requirements', 'operations': [
                     {'op': 'update', 'item': identifier, 'set': {'title': identifier + ' changed'}}
                     for identifier in identifiers]}
@@ -176,22 +180,22 @@ class ProjectCliTest(unittest.TestCase):
             receipt = runtime.read_json(self.a / f'.project/sync/{identifier}.json')
             self.assertEqual(receipt['state'], 'verified')
             self.assertEqual(receipt['content_sha256'], runtime.item_digest(self.a, identifier))
-            self.assertIsNone(runtime.read_json(self.a / f'workitems/{identifier}/item.json')['owner'])
+            self.assertNotIn("owner", runtime.read_json(self.a / f'workitems/{identifier}/item.json'))
             self.assertIn(identifier + ' changed', git(self.a, 'show', receipt['git_source_commit'] + ':workitems/' + identifier + '/item.json'))
         self.assertEqual(runtime.validate_project(self.a), [])
 
-    def test_partial_create_retains_owner_resume_never_creates_twice(self):
+    def test_partial_create_retains_intent_resume_never_creates_twice(self):
         factory = self.enable_aone()
         self.backend.fail_after_create.add('B')
         result = project.apply(self.a, self.request('A', 'B'), adapter_factory=factory)
         self.assertEqual(result['status'], 'partial', result)
         self.assertEqual(result['synchronized'], ['A'])
         self.assertEqual(runtime.read_json(self.a / '.project/sync/B.json')['state'], 'unknown')
-        self.assertEqual(runtime.read_json(self.a / 'workitems/B/item.json')['owner']['token'], 'claim-one')
-        result = project.resume(self.a, 'session-one', 'claim-one', ['B'], adapter_factory=factory)
+        self.assertNotIn("owner", runtime.read_json(self.a / 'workitems/B/item.json'))
+        result = project.resume(self.a, ['B'], adapter_factory=factory)
         self.assertEqual(result['status'], 'published', result)
         self.assertEqual(self.backend.creates, ['A', 'B'])
-        self.assertIsNone(runtime.read_json(self.a / 'workitems/B/item.json')['owner'])
+        self.assertNotIn("owner", runtime.read_json(self.a / 'workitems/B/item.json'))
 
     def test_drift_keeps_pending_and_source_for_resume(self):
         factory = self.enable_aone()
@@ -206,7 +210,7 @@ class ProjectCliTest(unittest.TestCase):
             unchanged = project.apply(self.a, self.request('A'), adapter_factory=factory)
         self.assertEqual(unchanged['status'], 'partial')
         self.backend.drift.clear()
-        result = project.resume(self.a, 'session-one', 'claim-one', adapter_factory=factory)
+        result = project.resume(self.a, adapter_factory=factory)
         self.assertEqual(result['status'], 'published', result)
         self.assertEqual(self.backend.creates, ['A'])
 
@@ -215,36 +219,20 @@ class ProjectCliTest(unittest.TestCase):
         self.backend.fail_after_create.add('A')
         project.apply(self.a, self.request('A'), adapter_factory=factory)
         self.backend.remote_items.clear()
-        result = project.resume(self.a, 'session-one', 'claim-one', adapter_factory=factory)
+        result = project.resume(self.a, adapter_factory=factory)
         self.assertEqual(result['status'], 'partial')
         self.assertEqual(self.backend.creates, ['A'])
         self.assertEqual(runtime.read_json(self.a / '.project/sync/A.json')['state'], 'unknown')
 
-    def test_verified_owner_release_needs_no_sync(self):
-        factory = self.enable_aone()
-        request = self.request('A')
-        request['operations'] += [{'op': 'claim', 'item': 'A', 'stage': 'preparation'}]
-        result = project.apply(self.a, request, adapter_factory=factory)
-        self.assertEqual(result['status'], 'published', result)
-        self.assertIsNotNone(runtime.read_json(self.a / 'workitems/A/item.json')['owner'])
-        before = self.backend.preflights
-        request['operations'] = [{'op': 'release', 'item': 'A'}]
-        with mock.patch.object(project, '_publish', wraps=project._publish) as publish:
-            result = project.apply(self.a, request, adapter_factory=factory)
-        self.assertEqual(result['status'], 'published', result)
-        self.assertEqual(publish.call_count, 1)
-        self.assertEqual(self.backend.preflights, before)
 
-    def test_other_owner_and_stale_guard_rejected(self):
+    def test_pending_intent_and_stale_guard_remain_visible_across_sessions(self):
         factory = self.enable_aone()
         self.backend.drift.add('A')
         project.apply(self.a, self.request('A'), adapter_factory=factory)
         request = self.request('A')
-        request['session'], request['token'] = 'other', 'other'
-        with self.assertRaisesRegex(runtime.ProjectError, 'owned by another'):
-            project.apply(self.a, request, adapter_factory=factory)
-        with self.assertRaisesRegex(runtime.ProjectError, 'owned by another'):
-            project.resume(self.a, 'other', 'other', ['A'], adapter_factory=factory)
+        request['session'] = 'other'
+        self.assertEqual(project.apply(self.a, request, adapter_factory=factory)['status'], 'partial')
+        self.assertEqual(project.resume(self.a, ['A'], adapter_factory=factory)['status'], 'partial')
         runtime.refresh_project(self.b)
         bundle = fixtures.WorkspaceTest.bundle(self, self.b, 'B', {'title': 'B remote'})
         project._publish(self.b, bundle)
@@ -263,7 +251,7 @@ class ProjectCliTest(unittest.TestCase):
         receipt = runtime.read_json(self.a / '.project/sync/A.json')
         self.assertIsNone(receipt['git_source_commit'])
         business_commit = self.remote_head()
-        result = project.resume(self.a, 'session-one', 'claim-one', ['A'], adapter_factory=factory)
+        result = project.resume(self.a, ['A'], adapter_factory=factory)
         self.assertEqual(result['status'], 'published', result)
         receipt = runtime.read_json(self.a / '.project/sync/A.json')
         self.assertEqual(receipt['git_source_commit'], business_commit)
@@ -309,7 +297,11 @@ class ProjectCliTest(unittest.TestCase):
 
 
 class ProjectV2PublishTest(unittest.TestCase):
-    setUp = fixtures.WorkspaceTest.setUp
+    def setUp(self):
+        fixtures.WorkspaceTest.setUp(self)
+        session = mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'actual-recovery-session'})
+        session.start()
+        self.addCleanup(session.stop)
     configure = fixtures.WorkspaceTest.configure
     write = fixtures.WorkspaceTest.write
     remote_head = fixtures.WorkspaceTest.remote_head
@@ -414,7 +406,6 @@ class ProjectV2PublishTest(unittest.TestCase):
         for secret in (self.identity['token'], 'Private publication body', 'Rejected private title'):
             self.assertNotIn(secret, text(status))
 
-        identity_file = project._save_identity(self.a, self.identity)
         original_git = runtime._git
 
         def lose_response(root, *args, **kwargs):
@@ -428,10 +419,10 @@ class ProjectV2PublishTest(unittest.TestCase):
             status = project._public_result(project._status(self.a), argparse.Namespace(root=str(self.a), command='status'))
         self.assertEqual(status['status'], 'partial', status)
         self.assertEqual(len(status['pending_publications']), 1)
-        self.assertEqual(shlex.split(status['next_command'])[-3:], ['resume', '--identity-file', str(identity_file)])
+        self.assertEqual(shlex.split(status['next_command'])[-3:-1], ['resume', '--journal'])
         self.assertNotIn(self.identity['token'], text(status))
         self.assertNotIn('Private publication body', text(status))
-        recovered = project.resume(self.a, self.identity['session'], self.identity['token'])
+        recovered = project.resume(self.a)
         self.assertEqual(recovered['status'], 'published', recovered)
         self.assertEqual(store.item(runtime._working_files(self.a), 'A')['title'], 'Recover this candidate')
 
@@ -446,7 +437,7 @@ class ProjectV2PublishTest(unittest.TestCase):
         self.assertEqual(status['code'], 'publication_journal_ambiguous')
         self.assertEqual(len(status['pending_publications']), 2)
         self.assertNotIn('next_command', status)
-        self.assertEqual(project.resume(self.a, self.identity['session'], self.identity['token'])['code'], 'publication_journal_ambiguous')
+        self.assertEqual(project.resume(self.a)['code'], 'publication_journal_ambiguous')
         self.assertEqual(self.remote_head(), remote)
         self.assertEqual({path: path.read_bytes() for path in retained}, retained)
 
@@ -458,7 +449,7 @@ class ProjectV2PublishTest(unittest.TestCase):
         self.assertEqual(self.backend.creates, ['A'])
         files = runtime._working_files(self.a)
         receipt = store.receipt(files, 'A')
-        self.assertIsNone(store.item(files, 'A')['owner'])
+        self.assertNotIn("owner", store.item(files, 'A'))
         preflights = self.backend.preflights
         # Content changes in an already projected document do not alter Aone's
         # title/status/managed body. Their Git bytes still publish and validate.
@@ -508,26 +499,67 @@ class ProjectV2PublishTest(unittest.TestCase):
         self.assertEqual(self.backend.creates.count('A'), 1)
         self.assertEqual(runtime.validate_project(self.a), [])
 
+    def test_new_backend_intent_binds_normalized_current_state(self):
+        factory = self.v2(aone=True)
+        state_path = '.project/state/A.yaml'
+        state = store.load_yaml(runtime._working_files(self.a)[state_path])
+        state.update(owner={'session': 'old', 'machine': 'old', 'token': 'claim'},
+                     workflow={'control_transfers': {'old': {'to': 'controller'}}})
+        self.write(self.a, state_path, store.dump_yaml(state))
+        git(self.a, 'add', '.')
+        git(self.a, 'commit', '--quiet', '-m', 'Historical current state')
+        git(self.a, 'push', '--quiet', 'origin', 'main')
+        files = runtime._working_files(self.a)
+        metadata_path = 'workitems/A/metadata.yaml'
+        metadata = store.load_yaml(files[metadata_path])
+        metadata['title'] = 'Current revision'
+        result = project.publish_changes(self.a, {metadata_path: store.dump_yaml(metadata)},
+            self.identity, 'Publish current revision', adapter_factory=factory)
+        self.assertEqual(result['status'], 'published', result)
+        after = runtime._working_files(self.a)
+        self.assertEqual(store.receipt(after, 'A')['content_sha256'], runtime._business_digest(after, 'A'))
+        physical = store.load_yaml(after[state_path])
+        self.assertNotIn('owner', physical)
+        self.assertNotIn('control_transfers', physical['workflow'])
+        self.assertEqual(self.backend.creates, ['A'])
+
     def test_partial_resume_preserves_intent_and_never_recreates(self):
         factory = self.v2(aone=True)
         self.backend.fail_after_create.add('A')
         changes = self.rename('A', 'Changed')
         result = project.publish_changes(self.a, changes, self.identity, 'Rename', adapter_factory=factory)
         self.assertEqual(result['status'], 'partial', result)
+        # Reconstruct an interrupted legacy intent whose digest included its
+        # then-current claim fields. Recovery must use those original bytes.
+        files = runtime._working_files(self.a)
+        state = store.load_yaml(files['.project/state/A.yaml'])
+        state['owner'] = {'session': 'legacy', 'machine': 'old', 'token': 'claim'}
+        state.setdefault('workflow', {})['control_transfers'] = {'old': {'to': 'legacy'}}
+        state['workflow']['autonomy'] = {'authorization': {'source': 'original user source',
+            'coordinator': 'legacy', 'claim_token': 'claim', 'scope': ['A']}}
+        self.write(self.a, '.project/state/A.yaml', store.dump_yaml(state))
+        raw = runtime._working_files(self.a)
+        retained = store.receipt(raw, 'A')
+        retained.update(content_sha256=runtime._business_digest(raw, 'A'), release_owner=state['owner'],
+                        migration_sync={'session': 'original-migration', 'token': 'original-intent'})
+        self.write(self.a, '.project/sync/A.yaml', store.dump_yaml(retained))
+        git(self.a, 'add', '.')
+        git(self.a, 'commit', '--quiet', '-m', 'Retain exact legacy pending intent')
+        git(self.a, 'push', '--quiet', 'origin', 'main')
         before = runtime._working_files(self.a)
         receipt = store.receipt(before, 'A')
         self.assertEqual(receipt['state'], 'unknown')
         with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'another-session'}, clear=True):
             status = project._status(self.a)
-        self.assertEqual(status['status'], 'blocked')
-        self.assertEqual(status['code'], 'recovery_owned_by_another_session')
+        self.assertEqual(status['status'], 'partial')
+        self.assertEqual(status['code'], 'recovery_available')
         with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': self.identity['session']}, clear=True):
             status = project._public_result(project._status(self.a), argparse.Namespace(root=str(self.a), command='status'))
         self.assertEqual(status['status'], 'partial')
-        self.assertIn('--identity-file', status['next_command'])
+        self.assertEqual(shlex.split(status['next_command'])[-1], 'resume')
         self.assertNotIn(self.identity['token'], status['next_command'])
         external = self.backend.items.pop('A')
-        blocked = project.resume(self.a, self.identity['session'], self.identity['token'], ['A'], adapter_factory=factory)
+        blocked = project.resume(self.a, ['A'], adapter_factory=factory)
         self.assertEqual(blocked['status'], 'blocked')
         self.assertEqual(blocked['code'], 'sync_conflict')
         self.assertEqual(store.receipt(runtime._working_files(self.a), 'A'), receipt)
@@ -536,37 +568,26 @@ class ProjectV2PublishTest(unittest.TestCase):
                                          'Blocked', adapter_factory=factory)
         self.assertEqual(result['code'], 'sync_unresolved')
         self.assertEqual(store.receipt(runtime._working_files(self.a), 'A'), receipt)
-        result = project.publish_changes(self.a, changes, self.identity, 'Resume exact intent', adapter_factory=factory)
+        result = project.resume(self.a, ['A'], adapter_factory=factory)
         self.assertEqual(result['status'], 'published', result)
         self.assertEqual(self.backend.creates, ['A'])
-        self.assertIsNone(store.item(runtime._working_files(self.a), 'A')['owner'])
+        settled = store.receipt(runtime._working_files(self.a), 'A')
+        self.assertNotIn('release_owner', settled)
+        self.assertNotIn('migration_sync', settled)
+        self.assertNotIn("owner", store.item(runtime._working_files(self.a), 'A'))
         self.assertEqual(runtime.validate_project(self.a), [])
 
 
 class ProjectOutputTest(unittest.TestCase):
-    def test_explicit_identity_resume_keeps_business_token_separate_from_execution_context(self):
+    def test_publication_resume_keeps_actual_execution_context(self):
         with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'outer-session'}, clear=True):
-            for journal in (None, '/tmp/journal.json'):
-                sessions = []
-                def resume(*args, **kwargs):
-                    sessions.append(project.project_identity.current_session())
-                    return {'status': 'published'}
-                arguments = ['resume', '--identity-file', '/tmp/identity.json']
-                if journal:
-                    arguments += ['--journal', journal]
-                output = io.StringIO()
-                with mock.patch.object(project, '_json_input', return_value={'session': 'bound-session', 'token': 'business-token'}), \
-                        mock.patch.object(project, 'resume', side_effect=resume) as old_resume, \
-                        mock.patch.object(runtime, 'resume_publication', side_effect=resume) as publication, \
-                        contextlib.redirect_stdout(output):
-                    self.assertEqual(project.main(arguments, session='caller-session'), 0)
-                self.assertEqual(json.loads(output.getvalue()), {'status': 'published'})
-                self.assertEqual(sessions, ['caller-session'])
-                if journal:
-                    publication.assert_called_once_with('.', session='bound-session', token='business-token', journal=journal)
-                else:
-                    old_resume.assert_called_once_with('.', 'bound-session', 'business-token', None)
-                self.assertEqual(project.project_identity.current_session(), 'outer-session')
+            def recover(*args, **kwargs):
+                self.assertEqual(project.project_identity.current_session(), 'caller-session')
+                return {'status': 'published'}
+            with mock.patch.object(runtime, 'resume_publication', side_effect=recover) as publication, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(project.main(['resume', '--journal', '/tmp/journal.json'], session='caller-session'), 0)
+            publication.assert_called_once_with('.', journal='/tmp/journal.json')
+            self.assertEqual(project.project_identity.current_session(), 'outer-session')
 
     def test_caller_entrypoint_binds_nested_continuations_and_restores_context(self):
         entry = str(Path(project.__file__).resolve())
@@ -613,7 +634,7 @@ class ProjectOutputTest(unittest.TestCase):
         self.assertNotIn('checks', result)
         self.assertEqual(result['changed_files'], 1)
         command = shlex.split(result['next_command'])
-        self.assertEqual(command[-2:], ['--identity-file', '/tmp/migration identity.json'])
+        self.assertEqual(command[-1], 'resume')
         self.assertEqual(result['action'], 'resume')
         self.assertLess(len(json.dumps(result)), 1000)
 

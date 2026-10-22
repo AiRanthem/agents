@@ -41,6 +41,46 @@ class ConversionTest(unittest.TestCase):
                 'workitems/1-demo/handoff.md': b'# Original handoff\n',
                 'workitems/1-demo/reviews/old.md': b'Original independent provenance\n'}
 
+    def test_migration_cleans_current_claims_in_both_schemas_and_preserves_review_basis(self):
+        files = self.source()
+        record = json.loads(files['workitems/1-demo/item.json'])
+        base = 'workitems/1-demo/records/original-review'
+        basis = {'review': {'id': 'original-review', 'item': '1-demo', 'kind': 'design-review',
+                           'report': base + '.md', 'session': 'actual-reviewer', 'result': 'pass',
+                           'provenance': 'original independent assessment'},
+                 'approval': {'source': 'actual original user approval'},
+                 'read': [{'path': '/original/spec.md', 'content': 'Approved original contract'}],
+                 'read_hashes': {'/original/spec.md': hashlib.sha256(b'Approved original contract').hexdigest()}}
+        record['owner'] = {'session': 'old', 'machine': 'old', 'token': 'claim'}
+        record['workflow'].update(design_basis=basis, control_transfers={'obsolete': {'to': 'old-controller'}},
+            autonomy={'authorization': {'source': 'original user source', 'coordinator': 'old-controller',
+                                        'claim_token': 'claim', 'scope': ['1-demo']}})
+        files['workitems/1-demo/item.json'] = fixtures.text(record).encode()
+        files[base + '.yaml'] = store.dump_yaml(basis['review']).encode()
+        files[base + '.md'] = b'Actual original independent assessment\n'
+        review_pair = {name: files[name] for name in (base + '.yaml', base + '.md')}
+        first = migration.prepare_migration(files, instructions='Current business constraints')
+        converted = store.apply_writes(files, first['writes'])
+        state_path = '.project/state/1-demo.yaml'
+        state = store.load_yaml(converted[state_path])
+        self.assertNotIn('owner', state)
+        self.assertNotIn('control_transfers', state['workflow'])
+        self.assertNotIn('claim_token', state['workflow']['autonomy']['authorization'])
+        self.assertNotIn('recorded_by', state['workflow']['autonomy']['authorization'])
+        self.assertEqual(state['workflow']['design_basis'], basis)
+        # Already-v2 workspaces use the identical normalization boundary.
+        state['owner'] = record['owner']
+        state['workflow']['autonomy']['authorization']['claim_token'] = 'second-claim'
+        converted[state_path] = store.dump_yaml(state).encode()
+        second = migration.prepare_migration(converted)
+        cleaned = store.apply_writes(converted, second['writes'])
+        persisted = store.load_yaml(cleaned[state_path])
+        self.assertNotIn('owner', persisted)
+        self.assertNotIn('claim_token', persisted['workflow']['autonomy']['authorization'])
+        self.assertEqual(persisted['workflow']['design_basis'], basis)
+        self.assertEqual({name: cleaned[name] for name in review_pair}, review_pair)
+        self.assertEqual(migration.prepare_migration(cleaned)['status'], 'no_op')
+
     def test_exact_contract_and_prose_preservation_without_synthetic_approval(self):
         files = self.source()
         original = store.item(files, '1-demo')
@@ -464,17 +504,19 @@ class PublicationTest(unittest.TestCase):
             self.assertEqual(fixtures.git(root, 'status', '--porcelain'), '')
             self.assertEqual(fixtures.git(root, 'rev-list', '--count', before + '..HEAD'), '1')
             for identifier, owner in owners.items():
-                self.assertEqual(store.item(runtime._working_files(root), identifier)['owner'], owner)
+                self.assertNotIn('owner', store.item(runtime._working_files(root), identifier))
+                self.assertNotIn('owner', store.load_yaml(runtime._working_files(root)['.project/state/' + identifier + '.yaml']))
             repeat = migration.migrate(root, publish=mock.Mock(side_effect=AssertionError('no-op must not publish')))
             self.assertEqual(repeat['status'], 'no_op')
-            # Refresh changed installed instructions under the same v2 claims.
+            # Refresh changed installed instructions in the current v2 state.
             original = migration.item_entry
             with mock.patch.object(migration, 'item_entry', side_effect=lambda identifier: original(identifier) + '\nUpdated routing.\n'):
                 refreshed = migration.migrate(root, publish=publish_changes)
             self.assertEqual(refreshed['status'], 'published', refreshed)
             after = runtime._working_files(root)
             for identifier, owner in owners.items():
-                self.assertEqual(store.item(after, identifier)['owner'], owner)
+                self.assertNotIn('owner', store.item(after, identifier))
+                self.assertNotIn('owner', store.load_yaml(after['.project/state/' + identifier + '.yaml']))
 
     def test_permission_failure_resume_keeps_and_publishes_original_migration(self):
         import project
@@ -532,7 +574,7 @@ class PublicationTest(unittest.TestCase):
             self.assertEqual(current['status'], 'no_op')
             self.assertFalse(current['needs_update'])
 
-    def test_migration_publication_rejects_owner_or_business_changes_and_missing_guards(self):
+    def test_migration_publication_rejects_business_changes_and_missing_guards(self):
         import project
         source = ConversionTest().source()
         record = store.item(source, '1-demo')
@@ -542,21 +584,20 @@ class PublicationTest(unittest.TestCase):
         identity = {'session': 'migration', 'token': 'migration-token', 'migration': True}
         bundle = project._bundle(source, prepared['writes'], identity, 'Upgrade', ['1-demo'], prepared['checks'])
         candidate = store.apply_writes(source, bundle['writes'])
-        runtime._check_owners(bundle, source, candidate)
-        for field, value in (('owner', None), ('title', 'Unauthorized change')):
+        runtime._check_item_integrity(bundle, source, candidate)
+        for field, value in (('title', 'Unauthorized change'),):
             with self.subTest(field=field):
                 item = store.item(candidate, '1-demo')
                 item[field] = value
                 changed = store.apply_writes(candidate, store.write_item(candidate, item))
                 with self.assertRaisesRegex(runtime.ProjectError, 'deterministic candidate'):
-                    runtime._check_owners(bundle, source, changed)
+                    runtime._check_item_integrity(bundle, source, changed)
         missing = copy.deepcopy(bundle)
         missing['checks'].pop('workitems/1-demo/requirement.md')
         with self.assertRaisesRegex(runtime.ProjectError, 'guarded deterministic candidate'):
-            runtime._check_owners(missing, source, candidate)
+            runtime._check_item_integrity(missing, source, candidate)
         ordinary = dict(bundle, migration=False)
-        with self.assertRaisesRegex(runtime.ProjectError, 'owned by another'):
-            runtime._check_owners(ordinary, source, candidate)
+        runtime._check_item_integrity(ordinary, source, candidate)
 
     def test_empty_resume_requires_authority_and_can_verify_equivalent_publication(self):
         import project
@@ -589,7 +630,7 @@ class PublicationTest(unittest.TestCase):
     def test_verified_backend_receipts_get_new_intent_and_readback(self):
         self.check_backend_migration()
 
-    def test_migration_backend_resume_preserves_active_owners(self):
+    def test_migration_backend_resume_cleans_retired_claims(self):
         self.check_backend_migration(interrupt=True)
 
     def check_backend_migration(self, interrupt=False):
@@ -607,7 +648,7 @@ class PublicationTest(unittest.TestCase):
         fixtures.git(root, 'commit', '--quiet', '-m', 'Enable backend')
         fixtures.git(root, 'push', '--quiet', 'origin', 'main')
         backend = V2Adapter(workspace, config)
-        request = {'session': 'seed', 'token': 'seed-token', 'machine': 'test',
+        request = {'session': 'seed', 'machine': 'test',
                    'message': 'Synchronize legacy records', 'operations': [
                        {'op': 'update', 'item': identifier, 'set': {'title': identifier + ' accepted'}}
                        for identifier in ('A', 'B')]}
@@ -635,16 +676,21 @@ class PublicationTest(unittest.TestCase):
             self.assertEqual(result['status'], 'partial', result)
             pending = runtime._working_files(root)
             for identifier, owner in owners.items():
-                self.assertEqual(store.item(pending, identifier)['owner'], owner)
+                self.assertNotIn('owner', store.item(pending, identifier))
+                self.assertNotIn('owner', store.load_yaml(pending['.project/state/' + identifier + '.yaml']))
             receipt = store.receipt(pending, 'A')
             self.assertEqual(receipt['state'], 'unknown')
-            actor = receipt['migration_sync']
-            # Even the migration's sync identity cannot alter business content.
-            altered = dict(pending, **{'workitems/A/requirement.md': b'Unauthorized change\n'})
-            self.assertFalse(migration.sync_publication(actor, pending, altered, 'A'))
-            resumed = migration.resume(root, result['migration_operation'], publish=publish,
-                                       recover=lambda root, session, token: project.resume(
-                                           root, session, token, adapter_factory=lambda config: backend), inspect=project._status)
+            self.assertNotIn('migration_sync', receipt)
+            # New business content cannot replace an unresolved backend revision.
+            item = store.item(pending, 'A')
+            item['title'] = 'Unauthorized replacement'
+            blocked = project.publish_changes(root, store.write_item(pending, item),
+                {'session': 'later-session', 'machine': 'local'}, 'Changed pending intent',
+                adapter_factory=lambda config: backend)
+            self.assertEqual(blocked['code'], 'sync_unresolved')
+            with mock.patch.dict(project.os.environ, {'PROJECT_SESSION_ID': 'later-local-session'}):
+                resumed = migration.resume(root, result['migration_operation'], publish=publish,
+                                           recover=lambda root: project.resume(root, adapter_factory=lambda config: backend), inspect=project._status)
             self.assertEqual(resumed['status'], 'published', resumed)
         else:
             self.assertEqual(result['publication']['status'], 'published', result)
@@ -652,7 +698,8 @@ class PublicationTest(unittest.TestCase):
         after = runtime._working_files(root)
         for identifier in ('A', 'B'):
             receipt = store.receipt(after, identifier)
-            self.assertEqual(store.item(after, identifier)['owner'], owners[identifier])
+            self.assertNotIn('owner', store.item(after, identifier))
+            self.assertNotIn('owner', store.load_yaml(after['.project/state/' + identifier + '.yaml']))
             self.assertEqual(receipt['state'], 'verified')
             self.assertEqual(receipt['external_id'], previous[identifier]['external_id'])
             self.assertNotEqual(receipt['intent_id'], previous[identifier]['intent_id'])
@@ -669,7 +716,8 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(backend.items, backend_before)
         self.assertEqual(runtime.validate_project(root), [])
         for identifier, owner in owners.items():
-            self.assertEqual(store.item(runtime._working_files(root), identifier)['owner'], owner)
+            self.assertNotIn('owner', store.item(runtime._working_files(root), identifier))
+            self.assertNotIn('owner', store.load_yaml(runtime._working_files(root)['.project/state/' + identifier + '.yaml']))
 
 
 if __name__ == '__main__':

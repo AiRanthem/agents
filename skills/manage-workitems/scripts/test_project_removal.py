@@ -161,14 +161,14 @@ class RemovalTests(unittest.TestCase):
         self.assertEqual(self.execute(plan)["status"], "blocked")
         self.assertTrue(self.a.exists())
 
-    def test_stash_in_progress_owner_and_unknown_journal_block(self):
+    def test_stash_in_progress_and_unknown_journal_block_with_historical_owner(self):
         self.write(self.a, "AGENTS.md", "stashed data")
         git(self.a, "stash", "push", "--quiet")
         self.write(self.a, ".git/MERGE_HEAD", self.base)
         self.write(self.a, ".project-local/publish/unknown/journal.json", '{"state":"push_returned_verification_pending"}')
         self.add_item(self.a, "A", owner={"machine": "machine", "session": "session", "token": "token"})
         blockers = " ".join(self.plan()["blocked"])
-        for expected in ("stash", "in-progress", "active owner", "unaccounted local"):
+        for expected in ("stash", "in-progress", "unaccounted local"):
             self.assertIn(expected, blockers)
         self.assertTrue(self.a.exists())
 

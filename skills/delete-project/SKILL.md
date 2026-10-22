@@ -5,7 +5,7 @@ description: Inspect and remove an explicitly selected local managed project thr
 
 # Delete Project
 
-Use installed `manage-workitems/scripts/project.py --root PROJECT removal-plan` for the selected local project. The program resolves project identity, local resources, unpublished content, ownership, synchronization and remote recoverability. Read the returned exact manifest and reported blockers; do not assemble paths, inspect Git/Aone, choose preservation/recovery actions or edit manifest YAML yourself.
+Use installed `manage-workitems/scripts/project.py --root PROJECT removal-plan` for the selected local project. The program resolves project identity, local resources, unpublished content, synchronization and remote recoverability. Read the returned exact manifest and reported blockers; do not assemble paths, inspect Git/Aone, choose preservation/recovery actions or edit manifest YAML yourself.
 
 The manifest accounts for item-owned worktrees both inside and outside the project and preserves the main workspace, shared roots, environments, source checkouts, sibling projects and unrelated worktrees. Remote project/code branches and Aone history stay outside default local removal. A request to remove a project does not authorize discarding unpublished code or deleting remote resources.
 

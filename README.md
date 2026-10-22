@@ -46,8 +46,8 @@ $install 安装或更新这个 dev-kit
 | `$delete-project` | 核对并删除选定的本机项目工作区，保留远程分支和 Aone 历史。 |
 | `$manage-workitems` | 在项目中创建、查询、更新、归档抽象工作项；通过 Git 和已启用后端持久化。 |
 | `$split-workitem` | 将完整设计已通过独立审查的大工作项拆为承接设计的子项，按审定 DAG 组织交付；仅实际阻塞缺口触发子项设计补充。 |
-| `$advance-project` | 在已批准初版合同与前置人工验收交付满足后，并发推进指定范围的阶段，直到等待人工验收。 |
-| `$develop-workitem` | 准备工作树、探索设计、衔接独立审查，并在远程认领后实现项目工作项。 |
+| `$advance-project` | 在已批准初版合同与前置人工验收交付满足后，在单机上串行推进指定范围的阶段，直到等待人工验收。 |
+| `$develop-workitem` | 准备工作树、探索设计、衔接独立审查，并在满足当前阶段门槛后实现项目工作项。 |
 | `$complete-workitem` | 核实项目工作项的实际交付，解锁依赖并单独记录工作树清理结果。 |
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$cleanup-worktree` | 核验非忽略文件已提交并推送、工作树干净且可从远程恢复，按授权清理本地 worktree 和分支，保留远程恢复引用。 |
@@ -73,27 +73,27 @@ $review-design 评审 docs/proposal.md
 
 项目使用时始终从项目根目录启动 agent。项目的 `worktrees/` 通过空占位文件保留，源码内容被忽略，Git 状态由各代码仓库自行管理。也可关联 OKAWorkspace 这类业务主工作区，将源码工作树放在主工作区 `worktrees/<项目标识>/` 下；项目保存必要约束、业务上下文和技能的入口，本机绝对路径单独绑定。创建时可选择主工作区的远程仓库，用独立空分支存储项目，主工作区原检出保持原分支。详见 [主工作区关联](skills/manage-workitems/references/main-workspace.md)。
 
-新工作项使用“层级编号 + 英文短语”的 ID，汇报时附中文标题，例如 `123-quota-lock（统一配额锁）`。`123` 表示第 1 个根项下的第 2 个子项下的第 3 个子项；每层用 `1`–`9`、`A`–`Z`，`A` 表示第 10 项。可以用完整 ID、编号、短语或标题定位工作项。编号表达拆分归属，交付顺序仍由依赖图决定；以远端发布成功的编号为准，冲突方刷新后重新分配尚未发布的编号。详见 [编号约定](skills/manage-workitems/references/schema.md#identity-and-hierarchy)。
+新工作项使用“层级编号 + 英文短语”的 ID，汇报时附中文标题，例如 `123-quota-lock（统一配额锁）`。`123` 表示第 1 个根项下的第 2 个子项下的第 3 个子项；每层用 `1`–`9`、`A`–`Z`，`A` 表示第 10 项。可以用完整 ID、编号、短语或标题定位工作项。编号表达拆分归属，交付顺序仍由依赖图决定；编号由当前项目命令分配并发布。详见 [编号约定](skills/manage-workitems/references/schema.md#identity-and-hierarchy)。
 
-创建阶段只做到“元数据 + 需求骨架”：程序建立存储远程、专用分支和必要背景；用户同时提供需求时记录目标、范围、验收和交付义务，未知内容保持待确认。创建完成即收尾。发现工作项过大时，先完成包含多阶段交付和 DAG 的完整 spec，以 `design-update --next-action split` 登记后续拆解；独立设计评审通过（`implementable`）后进入拆解而非实现。子项承接父设计，可直接进行各自设计审查，只有实际阻塞缺口才补充细化；父设计不能因此降低严谨性。正式 spec 落盘前完成用户确认，审查前不再要求单独登记批准。普通单项设计与独立设计评审按用户请求执行；自主推进启动授权覆盖指定范围内的阶段调用。实现通常要求当前独立设计评审；用户明确指定某个简单需求可跳过时，用 `development-start --skip-design-review --approval-source <实际用户来源>` 记录当前合同的限定豁免，不伪造评审通过。实现独立评审、owner、依赖与交付证据仍保留，代码提交和推送需要用户授权。
+创建阶段只做到“元数据 + 需求骨架”：程序建立存储远程、专用分支和必要背景；用户同时提供需求时记录目标、范围、验收和交付义务，未知内容保持待确认。创建完成即收尾。发现工作项过大时，先完成包含多阶段交付和 DAG 的完整 spec，以 `design-update --next-action split` 登记后续拆解；独立设计评审通过（`implementable`）后进入拆解。子项承接父设计，可直接进行各自设计审查，只有实际阻塞缺口才补充细化；父设计不能因此降低严谨性。正式 spec 落盘前完成用户确认，发布记录批准来源及版本绑定，已发布设计按审查授权进入独立评审。普通单项设计与独立设计评审按用户请求执行；自主推进启动授权覆盖指定范围内的阶段调用。实现通常要求当前独立设计评审；用户明确指定某个简单需求可跳过时，用 `development-start --skip-design-review --approval-source <实际用户来源>` 记录当前合同的限定豁免，不伪造评审通过。实现独立评审、依赖与交付证据仍保留，代码提交和推送需要用户授权。
 
-在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控直接调度所有就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
+在项目根目录调用 `$advance-project` 可选择全项目、某项及后代，或若干明确工作项。主控在单机上依次调度就绪 development 项的设计审查、实现、独立代码审查、修复与复核，集中执行项目命令与持久化；每名一级执行者只负责一次阶段，读取原始合同并编辑指定源码工作树、候选稿或报告。aggregate 沿用聚合验收，不进入源码闭环。初版合同须已获用户批准，前置项须已人工验收并完成声明交付；缺少初版设计不会自动补写。设计审查默认执行，只有用户明确指定的范围可以跳过。
 
 自主推进在等待人工验收时保留未提交源码，不自动 commit、push 或创建 PR。AI 审查通过、人工验收与实际交付分别记录；只有人工验收和实际交付完成才解锁下游。合同内局部实现与修复连续执行；需求、公开或存储合同、兼容性、关键约束、安全正确性保证或验收标准改变时，主控合并问题交用户决定，只暂停受影响项。只读规划模式保留权限限制，不能委派写入绕过。详见 [主控入口](skills/advance-project/SKILL.md)；实际执行能力由调用方提供并验证，配置检查不等于真实委派成功。
 
 项目 CLI 需要当前工作区规定的 Python 3 环境、Git 和 PyYAML；用该环境执行 `-m pip install -r skills/manage-workitems/scripts/requirements.txt` 安装声明依赖，不绕过主工作区指定的解释器。
 
-项目命令优先使用调用方提供的入口，未提供时使用共享 `skills/manage-workitems/scripts/project.py`；入口解析见命令契约。Agent 执行固定机械流程：`begin OP [ID] --参数` → 完整读取程序返回的输入与外部原始指令 → 仅编辑返回的绝对 Markdown 路径 → 执行返回的 finish 命令（只有独立设计评审在评审后补程序声明的 result/provenance；实现评审的 result/provenance/reviewer-session/review-file 是 `begin development-finish` 输入）→ 按固定状态处理。YAML、编号、状态、文档路由、DAG、ownership 和 Git/Aone 检查由程序负责。`ready` 读取输入并完成指定编辑，`published`/`no_op` 结束当前操作并继续已授权的交接，`partial` 只执行返回的 resume；`blocked` 的 `stale_ticket` 只执行唯一返回的 `next_command`；携带授权或评审材料过期时为 `blocked`、code 是 `stale_evidence` 且不返回后续命令，其余阻塞或缺输入只报告所列事实。见 [命令契约](skills/manage-workitems/references/commands.md)。
+项目命令优先使用调用方提供的入口，未提供时使用共享 `skills/manage-workitems/scripts/project.py`。任意本机会话均可依当前工件和操作记录继续工作；同一项目按顺序完成操作及其恢复。普通写入使用 `begin OP [ID]` → 读取完整输入与外部原始指令 → 编辑返回的 Markdown 路径 → 执行返回的 finish 命令。设计评审、设计覆盖复用和实现评审均可在 finish 提交程序声明的 result/provenance；实现评审须在 begin 指定实际 reviewer-session，可附已有报告。程序维护 YAML、编号、状态、文档路由、DAG 与 Git/Aone 发布；按返回状态完成或恢复同一操作，输入变化时检查证据适用性。脚本故障依[授权恢复契约](skills/manage-workitems/references/recovery.md#user-authorized-manual-recovery)调查并修复。详见[命令契约](skills/manage-workitems/references/commands.md)。
 
 设计负责会话完成完整批准交接：呈现当前合同与版本，复用已有覆盖批准，或汇总实质变化请求用户决定；收到实际批准后核对版本并登记，再进入已授权的独立审查。自然语言“审查某项设计”可触发审查技能；`show.workflow_gates` 分别说明批准、审查和实施条件，查询成功的 `ready` 不代表可以实施。
 
-执行模式移交和旧成果替换使用程序的 `lifecycle` 命令。`handoff` 保留源码、评审与预研发基线；`replan` 保存旧源码、建立可处置的 generation，并通过 `prepare` 绑定新基线。资源策略单独授权内部存档发布与回收，精确管理 worktree、本地缓存和远端冻结 refs，保留实际引用、唯一旧成果与未决操作；宽限期和配额约束增长。回收使用精确 manifest 和条件删除，项目删除后登记仍可从保留的管理 Git 提交恢复。见 [资源生命周期](skills/manage-workitems/references/resource-lifecycle.md)。
+执行模式移交和旧成果替换使用程序的 `lifecycle` 命令。`handoff` 保留源码、评审与当前基线；`replan` 保存旧源码、建立可处置的 generation，并通过 `prepare` 绑定新基线。资源策略单独授权内部存档发布与回收，精确管理 worktree、本地缓存和远端冻结 refs，保留实际引用、唯一旧成果与未决操作；宽限期和配额约束增长。回收使用精确 manifest 和条件删除，项目删除后登记仍可从保留的管理 Git 提交恢复。见 [资源生命周期](skills/manage-workitems/references/resource-lifecycle.md)。
 
-工作项正文固定为 `requirement.md`（目标、范围、验收、交付）、`spec.md`（完整当前设计，无机器状态 frontmatter）、`decision.md`（当前有效决定）、`context.md`（当前事实、验证与交接）和 `logs.md`（当前运行摘要与交接）；decision/log 由 Agent 写成完整 Markdown，程序替换文件且不追加机器事件。Git 历史追溯旧版本；records 只保留当前 review、delivery、waiver、cleanup 指针所需的成对 Markdown/YAML 工件，以及待恢复操作材料。设计版本按原始字节生成，首版为 1，变化递增，相同不变。后台同步回执由程序维护。实际 Git 与已启用后端均核实完成后才算持久化；未知外部创建不会盲目重试。Git/Aone 没有原子事务，Aone 没有已验证的字段 CAS。见 [记录契约](skills/manage-workitems/references/schema.md)。
+工作项正文固定为 `requirement.md`（目标、范围、验收、交付）、`spec.md`（完整当前设计，无机器状态 frontmatter）、`decision.md`（当前有效决定）、`context.md`（当前事实、验证与交接）和 `logs.md`（当前运行摘要与交接）；decision/log 由 Agent 写成完整 Markdown，程序替换文件且不追加机器事件。Git 历史追溯旧版本；records 只保留当前 review、delivery、waiver、cleanup 指针所需的成对 Markdown/YAML 工件，以及待恢复操作材料。设计版本按原始字节生成，首版为 1，变化递增，相同不变。后台同步回执由程序维护。实际 Git 与已启用后端均核实完成后才算持久化；未知外部创建不会盲目重试。Git 与 Aone 分步发布，通过持久化意图和实际回读恢复中断。见 [记录契约](skills/manage-workitems/references/schema.md)。
 
 交付后发现缺陷，用 `begin fix ORIGINAL --title TITLE --slug SLUG` 创建独立关联修复项，原项保持 `done` 状态及当前交付证据。未交付的 fix 阻塞原项下游的新实现、交付及 aggregate 完成，活跃会话在下次检查点也受此约束；修复交付后仍需重新核实适用基线与评审。
 
-共享项目技能更新后，在项目根目录执行 `$upgrade-project`，也可显式指定路径。它调用确定性的 `migrate`，仅用户要求预览时使用 `--dry-run`，保留 ID、DAG、owner 和当前有效业务约束；未完成同步或活跃 owner 会明确阻断。迁移只保留当前有效项目内容和仍被当前状态引用的证据；旧正文由 Git 历史追溯。若程序要求整理当前业务指令，复用现有用户维护授权，按当前来源写完整正文；不确定的真实业务变化或权限才报告具体缺口。相同来源哈希不产生修改或空提交。克隆只恢复已发布记录与代码分支，未提交或未推送代码仍在原机器。
+共享项目技能更新后，在项目根目录执行 `$upgrade-project`，也可显式指定路径。它调用确定性的 `migrate`，仅用户要求预览时使用 `--dry-run`，保留 ID、DAG、源码位置、当前有效业务约束及证据；未完成的发布事务先按返回命令恢复。迁移只保留当前有效项目内容和仍被当前状态引用的证据；旧正文由 Git 历史追溯。若程序要求整理当前业务指令，复用现有用户维护授权，按当前来源写完整正文；不确定的真实业务变化或权限才报告具体缺口。相同来源哈希不产生修改或空提交。本机源码、未发布草稿与恢复记录须完整保留；Git 克隆恢复已发布的内容。
 
 在本仓库中使用 `$absorb-skill <第三方 skill 路径或来源>` 评估和整合技能。能力价值低或已有覆盖时不新增技能；代码质量由通用代码质量要求和现有评审覆盖。审计本地安装快照不代表已核查上游最新版本。
 

@@ -13,7 +13,6 @@ from pathlib import Path
 import secrets
 import shlex
 import shutil
-import socket
 import sys
 import tempfile
 
@@ -39,7 +38,18 @@ def _id(*parts):
 
 
 def _local_id(item, kind, identity, host=None):
-    return _id(item['id'], kind, [host or socket.gethostname(), identity])
+    # Existing resource IDs included their recorded host. Preserve those durable
+    # locators; new resources use only their project and local Git/path identity.
+    if host:
+        return _id(item['id'], kind, [host, identity])
+    key = _id(item['id'], kind, identity)
+    resources = state(item).get('resources', {})
+    if key not in resources:
+        for previous, row in resources.items():
+            if (row.get('kind') == kind and row.get('host') and
+                    previous == _id(item['id'], kind, [row['host'], identity])):
+                return previous
+    return key
 
 
 def _time(value):
@@ -57,16 +67,10 @@ def _command(root, action, *args):
 def _item(root, selector):
     root, files = autonomy._files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
-    return root, files, item, workflow._identity(root, item=item["id"])
+    return root, files, item, workflow._identity(root)
 
 
-def _quiescent(root, files, item, identity):
-    workflow._ownership(item, identity)
-    handoff = state(item).get('handoff')
-    if handoff and not workflow._ownership_module().handoff_authorized(handoff, identity):
-        raise ProjectError('lifecycle has another control claim; use explicit takeover')
-    if not workflow._ownership_module().authorized(item, identity):
-        raise ProjectError('lifecycle has another control claim; use explicit takeover')
+def _quiescent(root, files):
     # Unsettled metadata publications may still contain source or resource state.
     directory = root / '.project-local/publish'
     runtime._no_links(root, '.project-local/publish')
@@ -86,13 +90,13 @@ def _settled(result):
     return result.get('status') in {'published', 'no_op'}
 
 
-def handoff(root, selector, *, approval_source, mode, coordinator_session=None, publish=None):
-    """Change execution ownership while retaining contract, source and baseline."""
-    workflow._text(approval_source, 'explicit execution-mode and coordinator handoff authorization')
+def handoff(root, selector, *, approval_source, mode, publish=None):
+    """Change execution mode while retaining contract, source and baseline."""
+    workflow._text(approval_source, 'explicit execution-mode authorization')
     if mode not in {'manual', 'autonomous'}:
         raise ProjectError('mode must be manual or autonomous')
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     lifecycle = state(item)
     if lifecycle.get('transition') or lifecycle.get('replacement_pending') or (lifecycle.get('gc') or {}).get('state') in {'planned', 'collecting'}:
         raise ProjectError('settle the original resource transition before execution handoff')
@@ -101,9 +105,8 @@ def handoff(root, selector, *, approval_source, mode, coordinator_session=None, 
     if previous:
         lifecycle.setdefault('authorizations', []).append(previous)
     lifecycle['mode'] = mode
-    lifecycle['handoff'] = {'from': identity['session'], 'to': coordinator_session or identity['session'],
+    lifecycle['handoff'] = {'recorded_by': identity['session'],
                              'source': approval_source, 'created_at': workflow._now()}
-    item['owner'] = None
     return _save(root, files, item, identity, 'Hand off execution mode ' + item['id'], publish)
 
 
@@ -113,7 +116,7 @@ def policy(root, selector, *, approval_source, grace_days=7, max_retained=2, max
             type(max_snapshots) is not int or max_snapshots < 1):
         raise ProjectError('policy requires nonnegative grace days and positive retained-generation capacity')
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     state(item)['policy'] = {'source': approval_source, 'grace_days': grace_days,
                              'max_retained': max_retained, 'max_snapshots': max_snapshots, 'recorded_by': identity['session']}
     return _save(root, files, item, identity, 'Adopt internal resource lifecycle ' + item['id'], publish)
@@ -154,8 +157,9 @@ def _resource(item, kind, identity, **values):
     if kind == 'remote-ref':
         key = _id(item['id'], kind, identity)
     else:
-        values.setdefault('host', socket.gethostname())
-        key = _local_id(item, kind, identity, values['host'])
+        key = _local_id(item, kind, identity, values.get('host'))
+    if values.get('host') is None:
+        values.pop('host', None)
     return key, {'id': key, 'item': item['id'], 'kind': kind, **values}
 
 
@@ -202,7 +206,8 @@ def inventory(files, selector=None):
                           ('local-ref', value['branch'], 'refs/heads/' + value['branch'])]
             for kind, identity, ref in identities:
                 key, row = _resource(item, kind, identity, repository=value['repository'], ref=ref,
-                                     url=value['url'], oid=value.get('commit'), snapshot=value['id'])
+                                     url=value['url'], oid=value.get('commit'), snapshot=value['id'],
+                                     host=value.get('host') if kind == 'local-ref' else None)
                 # Published preservation branches remain subject to checked-out-worktree protection.
                 row['retained_by'] = reasons if kind == 'remote-ref' else (
                     ['pending-publication'] if value['status'] != 'published' else [])
@@ -211,7 +216,7 @@ def inventory(files, selector=None):
         for descriptor, reasons in _descriptors(item).values():
             key, row = _resource(item, 'worktree', descriptor['worktree'], repository=descriptor.get('repository', item['repository']),
                                  descriptor=copy.deepcopy(descriptor), retained_by=reasons,
-                                 host=descriptor.get('host', socket.gethostname()))
+                                 host=descriptor.get('host'))
             row = {**saved.get(key, {}), **row}
             rows.append(row)
         # Preserve tombstones, even when the current pointer no longer mentions a resource.
@@ -300,7 +305,7 @@ def _checkpoint(root, files, item, identity, source, publish, descriptor=None):
                       'url': descriptor['publish_url'], 'status': 'planned', 'source': actual,
                       'head': actual['head'], 'tree': actual['tree'], 'index_tree': index_tree,
                       'source_worktree': descriptor['worktree'],
-                      'authorization_source': source, 'host': identity['machine'],
+                      'authorization_source': source,
                       'common_dir': development._text(location, 'rev-parse', '--path-format=absolute', '--git-common-dir')}
         lifecycle.setdefault('checkpoints', {})[key] = checkpoint
         lifecycle.setdefault('transition', {})['checkpoint'] = key
@@ -350,13 +355,13 @@ def _checkpoint(root, files, item, identity, source, publish, descriptor=None):
     return result, checkpoint
 
 
-def replan(root, selector, *, approval_source, mode='autonomous', coordinator_session=None, publish=None):
+def replan(root, selector, *, approval_source, mode='autonomous', publish=None):
     """Close the old generation; prepare() creates the replacement from current inputs."""
     workflow._text(approval_source, 'explicit replan and mode-handoff authorization')
     if mode not in {'manual', 'autonomous'}:
         raise ProjectError('mode must be manual or autonomous')
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     _policy(item)
     previous = state(item).get('last_replan') or {}
     if (previous.get('contract') == workflow._approval_binding(files, item) and
@@ -368,7 +373,7 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
         raise ProjectError('resource deletion must settle before replacing this generation')
     auth = autonomy._state(item)
     if item.get('development'):
-        state(item).setdefault('transition', {}).update(requested_mode=mode, coordinator_session=coordinator_session, source=approval_source)
+        state(item).setdefault('transition', {}).update(requested_mode=mode, source=approval_source)
         result, checkpoint = _checkpoint(root, files, item, identity, approval_source, publish)
         if not _settled(result):
             return result
@@ -392,14 +397,14 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
     lifecycle['fresh_reviews_required'] = True
     lifecycle['last_replan'] = {'contract': workflow._approval_binding(files, item),
                                'source_worktree': (item.get('development') or {}).get('worktree')}
-    lifecycle['handoff'] = {'from': identity['session'], 'to': coordinator_session or identity['session'],
+    lifecycle['handoff'] = {'recorded_by': identity['session'],
                              'source': approval_source, 'created_at': workflow._now()}
     workflow._design_reuse().capture(root, files, item)
     workflow._invalidate_implementation(item)
     item['design'].pop('review', None)
     if item['design'].get('approval'):
         item['design']['state'] = 'review-pending'
-    item['status'], item['owner'] = 'in_progress', None
+    item['status'] = 'in_progress'
     # Retain the source pointer until prepare creates its replacement. Dirty source
     # is allowed only when it still exactly matches the verified checkpoint.
     return _save(root, files, item, identity, 'Retire generation and hand off ' + item['id'], publish)
@@ -407,7 +412,7 @@ def replan(root, selector, *, approval_source, mode='autonomous', coordinator_se
 
 def dispose(root, selector, *, generation, disposition, reference, approval_source=None, publish=None):
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     _policy(item)
     workflow._text(reference, 'actual migration review or discard evidence')
     value = state(item).get('generations', {}).get(generation)
@@ -438,21 +443,12 @@ def source_preserved(root, files, item):
     return False
 
 
-def replacement_item(item):
-    """A controlled cross-host replacement uses the new host's bound repository.
-
-    The old descriptor stays in generation history; it is not reinterpreted as a
-    same-named path on the receiving machine.
-    """
-    descriptor = item.get('development') or {}
-    lifecycle = state(item)
-    host = descriptor.get('host')
-    for generation in lifecycle.get('generations', {}).values():
-        if generation['development'].get('worktree') == descriptor.get('worktree'):
-            checkpoint = lifecycle.get('checkpoints', {}).get(generation.get('checkpoint'), {})
-            host = host or checkpoint.get('host')
-    if lifecycle.get('replacement_pending') and host and host != socket.gethostname():
-        return dict(item, development=None)
+def replacement_item(root, item, project):
+    """Use the bound repository only when the retained source path is absent."""
+    if state(item).get('replacement_pending') and item.get('development'):
+        location = development.worktree_location(root, item, project)
+        if not location.exists():
+            return dict(item, development=None)
     return item
 
 
@@ -490,7 +486,7 @@ def _switch_reservation(root, item, project, desired):
 def _new_worktree(root, files, item, generation, start, label):
     project = store.project(files)
     repo = development._repository(item, project)
-    checkout = development._checkout(root, replacement_item(item), project, repo, {})
+    checkout = development._checkout(root, replacement_item(root, item, project), project, repo, {})
     configuration = development._configuration(checkout, repo)
     _, container = runtime._layout(root, project)
     branch = repo.get("branch_pattern", "feature/{project}/{item}-{session}").format(
@@ -530,27 +526,26 @@ def _new_worktree(root, files, item, generation, start, label):
         raise ProjectError("generation worktree belongs to another Git repository")
     descriptor = {"repository": item["repository"], "branch": branch, "worktree": relative.as_posix(),
                   "base_commit": start, "publish_ref": ref, "branch_published": False, **configuration}
-    descriptor["host"] = socket.gethostname()
     _switch_reservation(root, item, project, descriptor)
     return descriptor
 
 
 def prepare(root, selector, *, publish=None):
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     lifecycle = state(item)
     _policy(item)
     if not lifecycle.get('replacement_pending'):
         return {'status': 'no_op'}
     capacity(item)
-    source_item = replacement_item(item)
+    source_item = replacement_item(root, item, store.project(files))
     if source_item is not item:
         repo = development._repository(item, store.project(files))
         checkout = development._checkout(root, source_item, store.project(files), repo, {})
         checkpoints = [value for value in lifecycle.get('checkpoints', {}).values()
                        if value.get('source_worktree') == item['development']['worktree'] and value['status'] == 'published']
         if not any(development._remote_head(checkout, value['url'], value['ref']) == value['commit'] for value in checkpoints):
-            raise ProjectError('cross-host replacement requires its verified preserved source')
+            raise ProjectError('missing local source requires its verified preservation checkpoint: ' + item['development']['worktree'])
     blocks = autonomy._dependency_blocks(root, files, item)
     if blocks:
         raise ProjectError('replacement requires actual accepted prerequisite delivery: ' + ','.join(blocks))
@@ -574,7 +569,7 @@ def prepare(root, selector, *, publish=None):
         root, files, item, plan['generation'], plan['base'], 'formal')
     workflow._invalidate_implementation(item)
     item['design'].pop('review', None)
-    item['status'], item['owner'] = 'in_progress', None
+    item['status'] = 'in_progress'
     lifecycle['replacement_pending'] = False
     # A completed intent must not select the same generation on a later replan.
     lifecycle.pop('replacement', None)
@@ -584,7 +579,7 @@ def prepare(root, selector, *, publish=None):
 def adopt(root, selector, *, worktree, publish=None):
     """Give an already registered legacy source a recoverable disposition record."""
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     policy = _policy(item)
     descriptor = _descriptors(item).get(worktree)
     if not descriptor or worktree == (item.get('development') or {}).get('worktree'):
@@ -623,8 +618,6 @@ def _checkout(root, files, item, row):
 
 def _inspect(root, files, item, row):
     """Bind physical identity and safety facts; no delete is performed here."""
-    if row['kind'] != 'remote-ref' and row.get('host') != socket.gethostname():
-        raise ProjectError('local resource is retained on another host')
     if row['kind'] == 'runtime-cache':
         runtime._no_links(root, row['relative_path'])
         path = root / row['relative_path']
@@ -637,7 +630,7 @@ def _inspect(root, files, item, row):
     common = development._text(checkout, 'rev-parse', '--path-format=absolute', '--git-common-dir')
     if row['kind'] != 'remote-ref' and row.get('common_dir', common) != common:
         raise ProjectError('registered local Git repository changed; preserve its original resource locator')
-    result.update(host=socket.gethostname(), common_dir=common)
+    result.update(common_dir=common)
     if row['kind'] == 'worktree':
         descriptor = row['descriptor']
         candidate = dict(item, development=descriptor, repository=row['repository'])
@@ -707,7 +700,7 @@ def _inspect(root, files, item, row):
 
 def plan(root, selector, *, publish=None):
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     policy = _policy(item)
     lifecycle = state(item)
     pending = lifecycle.get('gc')
@@ -762,7 +755,7 @@ def _plan_output(root, item, intent):
 
 def collect(root, selector, *, intent, confirm, publish=None):
     root, files, item, identity = _item(root, selector)
-    _quiescent(root, files, item, identity)
+    _quiescent(root, files)
     _policy(item)
     lifecycle = state(item)
     pending = lifecycle.get('gc') or {}
@@ -778,8 +771,6 @@ def collect(root, selector, *, intent, confirm, publish=None):
         saved = lifecycle['resources'][row['id']]
         if saved['state'] == 'deleted':
             continue
-        if row['host'] != socket.gethostname():
-            raise ProjectError('local resource collection requires its recorded host')
         checkout = None
         if row['kind'] != 'runtime-cache':
             checkout = _checkout(root, files, item, row)
@@ -863,8 +854,10 @@ def validate(item):
             type(policy.get('max_snapshots', 20)) is not int or policy.get('max_snapshots', 20) < 1):
         raise ProjectError('invalid resource lifecycle policy')
     handoff = lifecycle.get('handoff')
-    if handoff is not None and (not isinstance(handoff, dict) or any(not runtime._nonempty(handoff.get(key)) for key in ('from', 'to', 'source'))):
-        raise ProjectError('invalid coordinator handoff')
+    if handoff is not None and (not isinstance(handoff, dict) or
+            not runtime._nonempty(handoff.get('source')) or
+            not runtime._nonempty(handoff.get('recorded_by', handoff.get('from')))):
+        raise ProjectError('execution-mode record requires its actual source and recorder')
     for name in ('resources', 'generations', 'checkpoints'):
         values = lifecycle.get(name, {})
         if not isinstance(values, dict):

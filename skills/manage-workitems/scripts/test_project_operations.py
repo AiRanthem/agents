@@ -20,8 +20,8 @@ class OperationsTest(unittest.TestCase):
     publish = fixtures.WorkspaceTest.publish
     bundle = fixtures.WorkspaceTest.bundle
 
-    def request(self, *entries, token=None, **options):
-        return dict(session="test", token=token, message="更新项目", operations=list(entries), **options)
+    def request(self, *entries, **options):
+        return dict(session="test", message="更新项目", operations=list(entries), **options)
 
     def prepare(self, *entries, **options):
         return operations.prepare(self.a, self.request(*entries, **options))
@@ -72,8 +72,9 @@ class OperationsTest(unittest.TestCase):
         requests = [self.request({"op": "archive", "item": "A"}, dict(create, repo="code")),
                     self.request({"op": "archive", "item": "A"}, dict(create, dependsOn=["B"])),
                     self.request({"op": "update", "item": "A", "set": {"status": "cancelled"}, "provenance": "user correction"}),
-                    self.request({"op": "release", "item": "A", "reason": "Design handoff"}),
-                    dict(self.request(create), mesage="typo")]
+                    self.request({"op": "archive", "item": "A", "reason": "Design handoff"}),
+                    dict(self.request(create), mesage="typo"),
+                    dict(self.request(create), token="obsolete-unused-token")]
         for request in requests:
             with self.subTest(request=request):
                 result = None
@@ -86,7 +87,7 @@ class OperationsTest(unittest.TestCase):
         self.add_item(self.a, "1-quota-lock", title="统一配额锁")
         self.assertIsNone(self.prepare({"op": "update", "item": "1", "set": {"title": "统一配额锁"}})["bundle"])
         self.assertEqual(self.prepare({"op": "archive", "item": "quota-lock", "archived": False})["changes"], [])
-        self.assertEqual(self.prepare({"op": "release", "item": "统一配额锁"})["items"], [])
+        self.assertEqual(self.prepare({"op": "update", "item": "统一配额锁", "set": {"title": "统一配额锁"}})["items"], [])
 
     def test_document_hash_paths_and_append_guards(self):
         self.write(self.a, "workitems/A/requirement.md", "原始需求\n")
@@ -117,15 +118,14 @@ class OperationsTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(runtime.ProjectError):
                 self.prepare({"op": "document", "path": path, "text": "{}"})
 
-    def test_ownership_and_state_bypass_are_rejected(self):
+    def test_historical_owner_allows_edits_and_business_gates_remain(self):
         owner = {"machine": "old", "session": "other", "token": "secret"}
         self.add_item(self.a, "A", owner=owner)
-        for op in ({"op": "archive", "item": "A"}, {"op": "release", "item": "A"},
-                   {"op": "claim", "item": "A", "stage": "preparation", "machine": "here"}):
-            with self.subTest(op=op), self.assertRaisesRegex(runtime.ProjectError, "owned"):
-                self.prepare(op, token="mine")
+        changed = self.prepare({"op": "archive", "item": "A"})
+        self.assertEqual(changed["items"], ["A"])
+        self.assertNotIn("owner", json.loads(changed["bundle"]["writes"]["workitems/A/item.json"]))
         for status in ("done", "developing"):
-            with self.subTest(status=status), self.assertRaisesRegex(runtime.ProjectError, "claim.*deliver"):
+            with self.subTest(status=status), self.assertRaisesRegex(runtime.ProjectError, "migration.*deliver"):
                 self.prepare({"op": "update", "item": "B", "set": {"status": status}})
         with self.assertRaisesRegex(runtime.ProjectError, "through deliver"):
             self.prepare({"op": "update", "item": "B", "set": {"delivery": {"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "PR"}]}}})
@@ -155,8 +155,7 @@ class OperationsTest(unittest.TestCase):
                        {"status": "in_progress", "delivery": {"status": "pending"}}):
             with self.subTest(values=values), self.assertRaisesRegex(runtime.ProjectError, "cannot reopen"):
                 self.prepare({"op": "update", "item": "A", "set": values},
-                             {"op": "claim", "item": "A", "stage": "preparation"},
-                             token="repair", machine="here")
+                             machine="here")
 
     def test_create_can_publish_after_unrelated_remote_metadata_update(self):
         prepared = self.prepare({"op": "create", "slug": "quota-lock", "title": "统一配额锁", "requirement": "需求"})
@@ -166,51 +165,6 @@ class OperationsTest(unittest.TestCase):
         self.assertEqual(runtime.read_json(self.a / "workitems/A/item.json")["title"], "远端无关变更")
         self.assertEqual(runtime.read_json(self.a / "workitems/1-quota-lock/item.json")["title"], "统一配额锁")
 
-    def implementation_fixture(self):
-        development = {"worktree": "worktrees/A", "branch": "feature/A", "base_commit": "a" * 40}
-        self.add_item(self.a, "A", development=development)
-        self.write(self.a, "workitems/A/spec.md", "---\ndesign_status: implementable\n---\nThe complete design\n")
-        self.write(self.a, "workitems/A/requirement.md", "The complete requirement\n")
-        review = {"id": "independent-review", "result": "pass", "independent": True,
-                  "provenance": {"reviewer": "fresh-session"}, "reference": "review-session:123", "base_commit": "a" * 40}
-        for name in ("spec", "requirement"):
-            review[name + "_sha256"] = hashlib.sha256((self.a / f"workitems/A/{name}.md").read_bytes()).hexdigest()
-        return {"op": "claim", "item": "A", "stage": "implementation", "machine": "here", "review": review}
-
-    def test_implementation_evidence_prerequisites_and_handoff(self):
-        claim = self.implementation_fixture()
-        for field, value in (("spec_sha256", "0" * 64), ("base_commit", "b" * 40), ("independent", False)):
-            invalid = copy.deepcopy(claim)
-            invalid["review"][field] = value
-            with self.subTest(field=field), self.assertRaises(runtime.ProjectError):
-                self.prepare(invalid, token="claim-token")
-        self.add_item(self.a, "A", development={"worktree": "worktrees/A", "branch": "feature/A", "base_commit": "a" * 40}, depends_on=["B"])
-        with self.assertRaisesRegex(runtime.ProjectError, "prerequisite"):
-            self.prepare(claim, token="claim-token")
-        self.add_item(self.a, "B", status="done", delivery={"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "verified PR"}]})
-        claimed = self.prepare(claim, token="claim-token")
-        self.install(claimed)
-        with self.assertRaisesRegex(runtime.ProjectError, "hand off"):
-            self.prepare({"op": "release", "item": "A"}, token="claim-token")
-        with self.assertRaisesRegex(runtime.ProjectError, "hand off"):
-            self.prepare({"op": "update", "item": "A", "set": {"status": "new"}}, token="claim-token")
-        handoff = self.prepare({"op": "document", "item": "A", "name": "handoff.md", "text": "Implementation and quality review complete"},
-                               {"op": "update", "item": "A", "set": {"status": "awaiting_delivery"}},
-                               {"op": "release", "item": "A"}, token="claim-token")
-        updated = json.loads(handoff["bundle"]["writes"]["workitems/A/item.json"])
-        self.assertEqual(updated["status"], "awaiting_delivery")
-        self.assertIsNone(updated["owner"])
-        self.assertIn("workitems/B/item.json", claimed["bundle"]["checks"])
-
-    def test_batch_cannot_reopen_delivered_upstream_and_reuse_downstream_review(self):
-        claim = self.implementation_fixture()
-        development = runtime.read_json(self.a / "workitems/A/item.json")["development"]
-        self.add_item(self.a, "A", development=development, depends_on=["B"])
-        self.add_item(self.a, "B", status="done", delivery={"required": ["merged"], "status": "delivered", "evidence": [{"kind": "merged", "reference": "old PR"}]})
-        with self.assertRaisesRegex(runtime.ProjectError, "delivered items cannot reopen"):
-            self.prepare(claim, {"op": "update", "item": "B", "set": {"status": "new", "delivery": {"status": "pending"}}},
-                         {"op": "document", "item": "B", "name": "requirement.md", "text": "Changed upstream contract"},
-                         {"op": "deliver", "item": "B", "evidence": [{"kind": "merged", "reference": "new PR"}], "provenance": "verified updated contract"}, token="mine")
 
     def test_deliver_requires_evidence_and_aggregate_acceptance(self):
         delivery = {"op": "deliver", "item": "A", "evidence": [{"kind": "merged", "reference": "PR#1@commit"}], "provenance": "verified by current agent"}
@@ -239,8 +193,8 @@ class OperationsTest(unittest.TestCase):
         with self.assertRaisesRegex(runtime.ProjectError, "unresolved pending"):
             self.prepare({"op": "archive", "item": "A"})
         self.add_item(self.a, "A", owner={"machine": "here", "session": "test", "token": "mine"})
-        with self.assertRaisesRegex(runtime.ProjectError, "before releasing"):
-            self.prepare({"op": "release", "item": "A"}, token="mine")
+        with self.assertRaisesRegex(runtime.ProjectError, "before business update"):
+            self.prepare({"op": "update", "item": "A", "set": {"title": "New pending title"}})
         self.add_item(self.a, "A")
         self.assertEqual(runtime.read_json(self.a / ".project/sync/A.json"), receipt)
         receipt.update(state="verified", external_id="123", baseline_fields={"title": "A"}, git_source_commit=self.base, checked_at="now")

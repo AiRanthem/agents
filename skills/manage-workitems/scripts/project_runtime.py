@@ -363,12 +363,12 @@ def _item_for_path(name):
 def _business_digest(files, item_id):
     prefix = f"workitems/{item_id}/"
     try:
-        record = store.item(files, item_id)
+        record = store._item_snapshot(files, item_id)
     except store.StoreError as exc:
         raise ProjectError(str(exc)) from exc
     digest = hashlib.sha256()
-    # Normalize storage-owned machine records, keeping owner outside business state.
-    # v1's established digest remains byte-for-byte compatible.
+    # Hash the original stored payload so retained receipts and publication
+    # checkpoints keep their exact historical digest until they are settled.
     names = sorted(name for name in files if name.startswith(prefix))
     metadata = store.item_path(files, item_id)
     record.pop("owner", None)
@@ -543,17 +543,13 @@ def _validate_legacy_files(root, files, digest_files=None):
              prefix + "depends_on must be a list of identifiers")
         if isinstance(dependencies, list) and all(_identifier(value) for value in dependencies):
             need(len(dependencies) == len(set(dependencies)), prefix + "duplicate dependencies")
-        for key in ("split_from", "repository", "owner", "development"):
+        for key in ("split_from", "repository", "development"):
             need(key in item, prefix + f"{key} is required (may be null)")
         split = item.get("split_from")
         need(split is None or _identifier(split), prefix + "split_from must be null or an identifier")
         repository = item.get("repository")
         need(repository is None or (_identifier(repository) and repository in repo_ids),
              prefix + "repository must be null or one configured repository id")
-        owner = item.get("owner")
-        need(owner is None or (isinstance(owner, dict) and all(_nonempty(owner.get(key))
-                                                             for key in ("machine", "session", "token"))),
-             prefix + "owner must be null or contain machine/session/token")
         development = item.get("development")
         if development is not None:
             if not isinstance(development, dict):
@@ -583,8 +579,8 @@ def _validate_legacy_files(root, files, digest_files=None):
                  prefix + "aggregate cannot own a code repository or worktree")
         if item.get("status") == "developing":
             need(item.get("kind") == "development" and repository is not None and
-                 isinstance(development, dict) and isinstance(owner, dict),
-                 prefix + "developing requires repository, development and owner")
+                 isinstance(development, dict),
+                 prefix + "developing requires repository and development")
         delivery = item.get("delivery")
         if not isinstance(delivery, dict):
             errors.append(prefix + "delivery must be an object")
@@ -965,8 +961,6 @@ def _validate_bundle(bundle):
     for key in ("message", "session"):
         if not _nonempty(bundle.get(key)):
             raise ProjectError(f"bundle.{key} must be nonempty")
-    if "token" not in bundle or (bundle["token"] is not None and not _nonempty(bundle["token"])):
-        raise ProjectError("bundle.token must be null or a nonempty string")
     checks, writes = bundle.get("checks"), bundle.get("writes")
     if not isinstance(checks, dict) or not isinstance(writes, dict) or not writes:
         raise ProjectError("bundle checks/writes must be objects, with at least one write")
@@ -988,11 +982,7 @@ def _validate_bundle(bundle):
             raise ProjectError(f"write is not valid UTF-8 text: {name}") from exc
 
 
-def _check_owners(bundle, current, prospective):
-    try:
-        import project_ownership
-    except ImportError:
-        from . import project_ownership
+def _check_item_integrity(bundle, current, prospective):
     try:
         import project_migration
     except ImportError:
@@ -1000,9 +990,6 @@ def _check_owners(bundle, current, prospective):
     migration = bundle.get("migration") is True
     if migration:
         project_migration.validate_publication(bundle, current, prospective)
-    transfer = None
-    if "ownership_transfer" in bundle:
-        transfer = project_ownership.validate_transfer(bundle, current, prospective)
     touched = {identifier for name in bundle["writes"] if (identifier := _item_for_path(name)) is not None}
     for identifier in touched:
         for snapshot in (current, prospective):
@@ -1020,29 +1007,6 @@ def _check_owners(bundle, current, prospective):
             raise ProjectError(str(exc)) from exc
         if not new:
             raise ProjectError(f"workitem deletion is forbidden: {identifier}")
-        if migration or project_migration.sync_publication(bundle, current, prospective, identifier):
-            continue
-        if store.is_v2(current):
-            claim = project_ownership.claim_token(old)
-            authorized = project_ownership.authorized(old, {"session": bundle["session"], "token": bundle["token"]})
-            if ((claim is not None and claim != bundle["token"]) or not authorized) and transfer != identifier:
-                raise ProjectError(f"item {identifier} has another control claim; use explicit takeover")
-            if project_ownership.claim_token(new) not in {None, bundle["token"]}:
-                raise ProjectError(f"item {identifier}: new control claim must match the publication token")
-        owner = old.get("owner")
-        if owner is not None:
-            matching = (isinstance(owner, dict) and owner.get("token") == bundle["token"] and
-                        (store.is_v2(current) or owner.get("session") == bundle["session"]))
-            if not matching and transfer != identifier:
-                if not store.is_v2(current):
-                    raise ProjectError(f"item {identifier} is owned by another session/token; migrate before takeover")
-                raise ProjectError(f"item {identifier} has another control claim; use explicit takeover")
-        new_owner = new.get("owner")
-        if new_owner is not None:
-            unchanged_claim = store.is_v2(current) and new_owner == owner
-            if (not isinstance(new_owner, dict) or new_owner.get("token") != bundle["token"] or
-                    not unchanged_claim and new_owner.get("session") != bundle["session"]):
-                raise ProjectError(f"item {identifier}: claim owner.session/token must match bundle.session/token; release before handoff")
         if old.get("delivery", {}).get("status") == "delivered" and (
                 new.get("status") != "done" or new.get("delivery", {}).get("status") != "delivered"):
             raise ProjectError(f"item {identifier}: delivered items cannot reopen; create a separate fix item")
@@ -1143,9 +1107,7 @@ def refresh_project(root):
 
 def _verify_publication(root, remote, branch, commit, bundle, storage):
     """Observe the remote ref, including races or post-receive ref changes."""
-    # known-limit: this is a remote-state observation, not a server-enforced lease.
-    # A later operation must refresh its item owner/guards; a hosted CAS service
-    # would be needed to prevent direct Git writers from changing ownership later.
+    # Read back guarded state as well as intended writes before reporting success.
     verified = _fetch_selected(root, remote, branch)
     if _git(root, "merge-base", "--is-ancestor", commit, verified, check=False).returncode:
         raise ProjectError("remote verification failed: candidate is not contained in the selected remote ref")
@@ -1158,7 +1120,7 @@ def _verify_publication(root, remote, branch, commit, bundle, storage):
             continue
         actual = hashlib.sha256(files[name]).hexdigest() if name in files else None
         if actual != expected:
-            raise ProjectError(f"remote verification failed: guard/owner state changed for {name}")
+            raise ProjectError(f"remote verification failed: guard state changed for {name}")
     marker = store.project(files)
     if not isinstance(marker, dict) or marker.get("storage") != storage:
         raise ProjectError("remote verification failed: authoritative storage configuration changed")
@@ -1174,7 +1136,7 @@ def publish(root, bundle_path):
     Returns the published commit and local journal path. A failed push never
     mutates root HEAD or claims success; the candidate and bundle remain available.
     Success includes verified_remote_commit observed after push; its tree must
-    still contain the intended writes and unchanged non-write guards/owners.
+    still contain the intended writes and unchanged non-write guards.
     """
     root = find_project(root)
     bundle_path = Path(bundle_path)
@@ -1219,7 +1181,7 @@ def publish(root, bundle_path):
                     raise ProjectError(f"byte check conflict: {name}; refresh remote data and rebuild the bundle")
             prospective = store.apply_writes(current, bundle["writes"])
             _check_deletions(bundle, current, prospective)
-            _check_owners(bundle, current, prospective)
+            _check_item_integrity(bundle, current, prospective)
             new_marker = store.project(prospective)
             if not isinstance(new_marker, dict) or new_marker.get("storage") != storage:
                 raise ProjectError("publish cannot change authoritative storage remote/branch/url")
@@ -1282,7 +1244,7 @@ def publication_disposition(state):
     return "pending"
 
 
-def resume_publication(root, *, session=None, token=None, journal=None, expected_write_hashes=None):
+def resume_publication(root, *, journal=None, expected_write_hashes=None):
     """Recover one existing publication intent; retry its candidate at most once.
 
     Only an unchanged original remote base permits a retry. A published candidate
@@ -1291,8 +1253,6 @@ def resume_publication(root, *, session=None, token=None, journal=None, expected
     Callers recovering an unlinked intent can require exact saved write hashes.
     """
     root = find_project(root)
-    if not _nonempty(session) or token is not None and not _nonempty(token):
-        raise ProjectError("publication recovery requires the original session and token")
 
     def blocked(code, detail, path=None):
         result = {"status": "blocked", "code": code, "action": "blocked", "reason": str(detail)}
@@ -1316,8 +1276,6 @@ def resume_publication(root, *, session=None, token=None, journal=None, expected
         if not isinstance(state, dict) or state.get("bundle") != str(bundle_path):
             raise ProjectError("journal bundle path does not identify its program-owned saved bundle")
         _validate_bundle(bundle)
-        if bundle["session"] != session or bundle["token"] != token:
-            raise ProjectError("publication journal belongs to another session/token")
         return path, state, bundle
 
     with _project_lock(root):
@@ -1328,12 +1286,9 @@ def resume_publication(root, *, session=None, token=None, journal=None, expected
                 _no_links(root, ".project-local/publish")
                 candidates = []
                 for path in sorted((root / ".project-local/publish").glob("*/journal.json")):
-                    # Ignore other identities without changing or recovering their intents.
                     try:
                         candidate = owned_journal(path)
                     except ProjectError as exc:
-                        if "belongs to another" in str(exc):
-                            continue
                         return blocked("publication_journal_invalid", exc, path)
                     if publication_disposition(candidate[1]) == "pending":
                         candidates.append(candidate)
@@ -1379,7 +1334,7 @@ def resume_publication(root, *, session=None, token=None, journal=None, expected
             if _tree_files(root, candidate) != intended:
                 return blocked("publication_candidate_invalid", "candidate tree differs from the saved bundle intent", selected)
             _check_deletions(bundle, base_files, intended)
-            _check_owners(bundle, base_files, intended)
+            _check_item_integrity(bundle, base_files, intended)
             if store.project(base_files).get("storage") != storage or store.project(intended).get("storage") != storage:
                 return blocked("publication_storage_changed", "candidate/base storage differs from selected storage", selected)
             errors = _validate_files(root, intended)
@@ -1422,7 +1377,7 @@ def resume_publication(root, *, session=None, token=None, journal=None, expected
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, epilog=(
-        "No Aone calls, takeover, arbitrary item deletion, stash, reset or force-push. Run from the "
+        "No Aone calls, arbitrary item deletion, stash, reset or force-push. Run from the "
         "management Git root or its non-nested management subdirectories."))
     parser.add_argument("--root", default=".", help="project directory (default: current directory)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1430,7 +1385,7 @@ def main(argv=None):
     identifier = commands.add_parser("new-id", help="print locally available hierarchical id candidates; no writes or reservation")
     identifier.add_argument("slugs", nargs="+", help="short lowercase ASCII phrase for each new item")
     identifier.add_argument("--parent", help="existing parent's full canonical hierarchical id (default: root level)")
-    digest = commands.add_parser("digest", help="hash item business files (normalized item.json without owner), excluding sync receipts")
+    digest = commands.add_parser("digest", help="hash item business files (normalized item.json without historical owner), excluding sync receipts")
     digest.add_argument("item", help="workitem id")
     commands.add_parser("worktree-root", help="resolve the configured worktree directory; requires the local binding for an external base; no writes")
     worktree = commands.add_parser("worktree-path", help="resolve an item's recorded worktree with local binding and symlink checks; no writes")
@@ -1439,16 +1394,15 @@ def main(argv=None):
         description=("Publish only approved management files. The root must be clean with no "
                      "unfinished Git operation. The marker selects the exact remote URL and branch. "
                      "Checks are evaluated against that branch's latest tree, then the merged graph "
-                     "is validated before one non-force push. Existing item owners must match the "
-                     "bundle session/token; a new claim must name that session. No takeover."),
-        epilog=("After push, fetch and verify the selected ref, intended writes and owner guards; "
+                     "is validated before one non-force push."),
+        epilog=("After push, fetch and verify the selected ref, intended writes and input guards; "
                 "only then fast-forward the root. Success prints candidate commit, "
                 "verified_remote_commit and journal. Failure retains the bundle/candidate/journal "
                 "under ignored .project-local/publish/. Inspect remote state before retrying. "
                 "Receipt validation does not establish live Aone or delivery facts."))
     publication.add_argument("--bundle", required=True, help=(
         "JSON file with checks {relative_path: SHA256|null}, writes {relative_path: UTF8text|null deletion}, "
-        "message, session, token (string|null). Every write requires a check; item files and sync receipts "
+        "message and session. Every write requires a check; item files and sync receipts "
         "also require the item metadata check and v2 state check. Put local bundles under ignored .project-local/. "
         "Push failure retains a journal and candidate; inspect remote before rebuilding/retrying."))
     args = parser.parse_args(argv)

@@ -8,7 +8,7 @@ Read-only planning exists only when active host instructions establish it; a req
 
 For direct implementation outside managed projects, use a current `design_status: implementable` document as review evidence when available; check whether later changes invalidate it. If no current review status exists, including a conversation-only design, explain the missing review assurance and concrete uncertainty before affected edits, and ask whether to proceed unless that unchanged contract already has the user's agreement. Such agreement waives only missing review status. It does not settle product decisions or waive defects, permissions or verification. Do not invoke explicit-only `$review-design` without authorization.
 
-Execution of an approved read-only planning final plan does not add a new status gate. Authorized correction targets from `$receiving-code-review` are the correction contract without a separate design-status confirmation unless they materially revise Why/What. Managed projects use their program gate instead of this direct-implementation status rule.
+Use the approved final implementation plan or authorized `$receiving-code-review` correction targets as the current execution contract. Material Why/What revisions require the applicable approval handoff. Managed projects use their program gates.
 
 ## Contract correction
 
@@ -24,7 +24,7 @@ Do not modify repository instructions such as `AGENTS.md` without explicit autho
 
 In read-only planning, do not create or modify source, designs, temporary drafts or delegated files. Return the settled executable TODO decomposition once as the final planning result. Include the approved contract, component and necessary function boundaries, failure handling, verification, independent acceptance and handoff requirements. Distinguish proposed checks from checks actually run. Do not include document creation or a second planning task. Tell the executor to load `$implement-design` with the approved contract and TODOs and proceed in execution mode. Per-function self-review belongs to execution. Persistence performed by the surrounding runtime is permitted when its active permissions allow it.
 
-In execution, execute the settled TODOs directly without another approval-plan phase. When resuming an approved final plan, load the contract, confirm relevant assumptions and synchronize approved deferred edits into existing documents before affected code edits. Reconsider the approach only when new evidence or a user change invalidates it.
+In execution, execute the settled TODOs under the existing approval. When resuming an approved final plan, load the contract, confirm relevant assumptions and synchronize approved deferred edits into existing documents before affected code edits. Reconsider the approach only when new evidence or a user change invalidates it.
 
 ## Ordinary delegation
 

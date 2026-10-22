@@ -147,24 +147,9 @@ def _session():
     return session
 
 
-def _identity(root, *, item=None, create=True):
-    session = _session()
-    directory = _local(root, "identities") if create else root / ".project-local/identities"
-    path = directory / (_hash(session) + ".yaml")
-    runtime._no_links(root, path.relative_to(root).as_posix())
-    if path.exists():
-        identity = store.load_yaml(path.read_bytes(), str(path))
-        if identity.get("session") != session:
-            raise ProjectError("invalid stored workflow identity")
-        token = identity.get("claims", {}).get(item, identity["token"])
-        return {"machine": identity["machine"], "session": session, "token": token}
-    if not create:
-        return {"session": session, "token": None, "machine": socket.gethostname()}
-    identity = {"session": session, "token": secrets.token_hex(32), "machine": socket.gethostname()}
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        stream.write(store.dump_yaml(identity))
-    return identity
+def _identity(root):
+    """Record the actual caller for authorship and audit provenance."""
+    return {"session": _session(), "machine": socket.gethostname()}
 
 
 def _snapshot(root):
@@ -323,7 +308,7 @@ def skill_instructions(operation):
 def gates(files, item, actor=None):
     """Diagnostic operation gates reuse the authoritative checkpoint predicates.
 
-    Host identity, ownership and live source checks still run at begin/finish.
+    Artifact integrity and live source checks still run at begin/finish.
     """
     result = {}
     predicates = {"design-review": lambda: _review_ready(files, item, actor),
@@ -533,8 +518,8 @@ def _options(operation, options):
         _text(options.get("gate"), "validation checkpoint")
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,79}", options.get("gate", "")):
             raise ProjectError("gate must name one validation checkpoint")
-        if options["gate"] in {"ownership", "takeover", "permissions", "publication", "integrity"}:
-            raise ProjectError("validation waivers cannot bypass ownership, permissions or transaction integrity")
+        if options["gate"] in {"permissions", "publication", "integrity"}:
+            raise ProjectError("validation waivers cannot bypass permissions or transaction integrity")
     if operation == "delivery-record":
         _text(options.get("provenance"), "delivery provenance")
         for key in ("kind", "reference"):
@@ -594,7 +579,7 @@ def _new_item(items, options, operation):
     repository = options.get("repository", items[fixes].get("repository") if fixes else None)
     item = {"id": identifier, "title": options["title"], "kind": options.get("kind", "development"),
             "status": "new", "archived": False, "depends_on": [_resolve(items, value) for value in options.get("depends_on", [])],
-            "split_from": parent, "repository": repository, "owner": None, "development": None,
+            "split_from": parent, "repository": repository, "development": None,
             "delivery": {"required": options.get("delivery_required", ["merged"]),
                          "status": "pending", "evidence": []}, "cleanup": "not_applicable"}
     if fixes:
@@ -603,19 +588,6 @@ def _new_item(items, options, operation):
     item["documents"] = {"requirement": "requirement.md", "context": "context.md", "decision": "decision.md", "logs": "logs.md"}
     _design(item)
     return item
-
-
-def _ownership(item, identity):
-    if _ownership_module().requires_takeover(item, identity):
-        raise ProjectError("work item has another control claim; use explicit takeover")
-
-
-def _ownership_module():
-    try:
-        import project_ownership
-    except ImportError:
-        from . import project_ownership
-    return project_ownership
 
 
 def _development_module():
@@ -681,7 +653,7 @@ def _autonomous(item):
 
 
 def _begin(root, operation, selector=None, *, options=None, publish=None):
-    """Refresh, claim the item and return only relevant prose and fixed edit paths."""
+    """Refresh the item and return only relevant prose and fixed edit paths."""
     if operation not in OPERATIONS:
         raise ProjectError("unknown fixed workflow operation")
     options = _options(operation, options)
@@ -690,13 +662,12 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     items = store.items(files)
     item = _new_item(items, options, operation) if operation in {"create", "fix"} else copy.deepcopy(items[_resolve(items, selector)])
     identifier = item["id"]
-    identity = _identity(root, item=identifier)
+    identity = _identity(root)
     actor = _actor(item, identity, operation, options)
     if item.get("archived") and operation != "archive":
         raise ProjectError("archived work item cannot be edited")
     if item.get("status") == "done" and operation not in {"context-update", "log-record", "archive", "rename", "cleanup-record"}:
         raise ProjectError("delivered history cannot reopen; create a separate fix work item")
-    _ownership(item, identity)
     if operation == "create" and item.get("split_from"):
         _split_ready(files, items[item["split_from"]])
     if operation == "development-start":
@@ -712,7 +683,7 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
         elif operation != "development-finish" or item.get("status") != "awaiting_delivery" or _autonomous(item):
             _approved(files, item)
     if operation == "design-reuse":
-        _design_reuse().ready(item, identity)
+        _design_reuse().ready(item)
     if operation == "design-review":
         _review_ready(files, item, actor)
     if operation == "development-finish":
@@ -733,7 +704,7 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
         _validate_discard(root, files, item, options)
     if operation in METADATA_OPERATIONS:
         # These checkpoints never provision code. Reject unreadable instructions
-        # before publishing an ownership claim that cannot yield an edit.
+        # before creating a checkpoint that cannot yield an edit.
         _read_payload(root, files, item, operation)
     ticket = secrets.token_hex(16)
     directory = _local(root, "edits", ticket)
@@ -742,28 +713,6 @@ def _begin(root, operation, selector=None, *, options=None, publish=None):
     if review_source:
         manifest["review_source"] = review_source
     _save(root, directory, manifest)
-    # Claims are published before the agent sees an editable file. New IDs remain
-    # optimistic reservations until finish; concurrent creation is rejected there.
-    if operation not in {"create", "fix"} and item.get("owner") is None:
-        item["owner"] = identity
-        writes = store.write_item(files, item)
-        manifest.update(state="claim-pending", claim_writes=writes, checks=_checks(files, item, operation))
-        _save(root, directory, manifest)
-        try:
-            result = _publish(root, writes, identity, "Claim " + identifier, manifest["checks"], publish)
-        except (ProjectError, store.StoreError, OSError, ValueError) as exc:
-            result = _failure(exc)
-            result.update(ticket=ticket, next_command=_resume_command(root, ticket))
-            return result
-        if result.get("status") == "blocked":
-            return {**result, "ticket": ticket, "action_code": result.get("code", "publication_blocked")}
-        if result.get("status") not in {"published", "no_op"}:
-            manifest["state"] = "claim-pending"
-            manifest["claim_writes"] = writes
-            manifest["checks"] = _checks(files, item, operation)
-            _save(root, directory, manifest)
-            return {"status": "partial", "ticket": ticket}
-        return _continue_context(root, directory, manifest, None, publish)
     return _continue_context(root, directory, manifest, files, publish)
 
 
@@ -789,7 +738,6 @@ def _prepare_context(root, directory, manifest, files, publish):
     operation, options, identity = manifest["operation"], manifest["options"], manifest["identity"]
     identifier = manifest["item"]["id"]
     item = store.item(files, identifier) if operation not in {"create", "fix"} else manifest["item"]
-    _ownership(item, identity)
     manifest["item"] = item
     if operation in CODE_PREPARATION_OPERATIONS and item.get("repository"):
         development = dict(item.get("development") or {})
@@ -850,7 +798,7 @@ def _open_edit(root, directory, manifest, files):
                                if operation in {"design-review", "design-reuse", "development-start", "development-finish", "validation-waiver"} else
                                {entry["path"]: _hash(Path(entry["path"]).read_bytes()) for entry in read})
     if operation == "design-reuse":
-        _design_reuse().ready(item, manifest["identity"])
+        _design_reuse().ready(item)
         manifest["reuse_target"] = _design_reuse().target(root, files, item)
         manifest["read_hashes"] = manifest["reuse_target"]["read_hashes"]
     manifest["state"] = "editing"
@@ -882,7 +830,7 @@ def _open_edit(root, directory, manifest, files):
     if operation == "design-review" and item.get("workflow", {}).get("design_basis"):
         result["design_basis"] = copy.deepcopy(item["workflow"]["design_basis"])
     if operation == "design-reuse":
-        result["design_basis"] = copy.deepcopy(_design_reuse().ready(item, manifest["identity"]))
+        result["design_basis"] = copy.deepcopy(_design_reuse().ready(item))
         result["current_target"] = copy.deepcopy(manifest["reuse_target"])
     if operation in {"design-review", "design-reuse", "development-finish"}:
         result["finish_options"] = "--result pass|fail --provenance SOURCE"
@@ -1017,7 +965,6 @@ def _prepare_finish(root, manifest, files, drafts):
         approval.pop("record", None)
     if operation in {"create", "fix"} and identifier in items:
         raise ProjectError("allocated work item ID was published by another session; begin again")
-    _ownership(item, identity)
     if operation == "create" and item.get("split_from"):
         _split_ready(files, items[item["split_from"]])
     if operation == "development-start":
@@ -1148,7 +1095,7 @@ def _prepare_finish(root, manifest, files, drafts):
         design["approval"] = approval
         _review_ready(files, item, actor)
         # The approval baseline is the design's baseline, not the subsequent
-        # management commit that recorded approval or claimed this edit.
+        # management commit that recorded approval for this edit.
         manifest["base_commit"] = _base(item)
         review_files = files
         original_binding = _binding(files, item, manifest["base_commit"])
@@ -1241,7 +1188,6 @@ def _prepare_finish(root, manifest, files, drafts):
             authors.append(actor)
         item.setdefault("workflow", {}).pop("development_discard_record", None)
         item["status"] = "developing"
-        item["owner"] = identity
         item["cleanup"] = "pending"
         if _autonomous(item):
             state = item["workflow"]["autonomy"]
@@ -1267,7 +1213,6 @@ def _prepare_finish(root, manifest, files, drafts):
         development["reviewed_snapshot"] = current
         if options["result"] == "pass":
             item["status"] = "awaiting_delivery"
-            item["owner"] = None
     elif operation == "delivery-record":
         if ((item.get("workflow") or {}).get("autonomy") or {}).get("authorization") and not _autonomy_module()._acceptance_valid(root, files, item):
             raise ProjectError("delivery requires current explicit user acceptance")
@@ -1295,7 +1240,7 @@ def _prepare_finish(root, manifest, files, drafts):
             item["delivery"]["verification_waivers"] = waived
         writes["workitems/" + identifier + "/records/" + manifest["ticket"] + ".yaml"] = store.dump_yaml(record)
         item["delivery"].update(status="delivered", evidence=evidence, record=record["id"])
-        item["status"], item["owner"] = "done", None
+        item["status"] = "done"
     elif operation == "log-record":
         _text(writes[documents["logs"]], "log body")
     elif operation == "cleanup-record":
@@ -1379,8 +1324,6 @@ def _prepare_finish(root, manifest, files, drafts):
         if type(options.get("archived")) is not bool:
             raise ProjectError("archived must be an explicit boolean")
         item["archived"] = options["archived"]
-    if operation not in {"development-start", "development-finish"} and item.get("status") != "developing":
-        item["owner"] = None
     _autonomy_module().release_execution_state(item)
     writes.update(store.write_item(files, item))
     if operation in {"create", "fix", "dependency-update"}:
@@ -1409,8 +1352,6 @@ def _finish(root, ticket, *, options=None, publish=None):
     """Validate fixed drafts and publish the retained intent without stale writes."""
     root = runtime.find_project(root)
     directory, manifest = _load(root, ticket)
-    if _identity(root, item=manifest["item"]["id"]) != manifest["identity"]:
-        raise ProjectError("edit ticket belongs to another session")
     if manifest["state"] == "finished":
         manifest = _compact_finished(root, directory, manifest)
         result = {"status": "no_op", "ticket": ticket, "item": manifest["item"]["id"]}
@@ -1431,9 +1372,20 @@ def _finish(root, ticket, *, options=None, publish=None):
         if manifest["state"] != "editing" and merged != manifest["options"]:
             raise ProjectError("published review intent cannot change result or provenance")
         manifest["options"] = merged
+    # Stored tickets from the claim-based schema may have stopped before opening
+    # their drafts. Reconcile any original Git intent, then prepare the operation
+    # directly; the obsolete claim write is never replayed as a new operation.
+    if manifest["state"] == "claim-pending":
+        recovered = runtime.resume_publication(root)
+        if recovered.get("status") not in {"published", "no_op"}:
+            return {**recovered, "ticket": ticket}
+        manifest["state"] = "context-pending"
+        manifest.pop("claim_writes", None)
+        manifest.pop("checks", None)
+        _save(root, directory, manifest)
     drafts = _validate_edits(directory, manifest)
     source = manifest.get("review_source")
-    if source and manifest["state"] not in {"claim-pending", "context-pending", "context-publication-pending"}:
+    if source and manifest["state"] not in {"context-pending", "context-publication-pending"}:
         if "body" in source:
             source_current = _hash(source["body"]) == source["sha256"]
         else:
@@ -1445,12 +1397,10 @@ def _finish(root, ticket, *, options=None, publish=None):
     files = _snapshot(root)
     if manifest["state"] == "context-pending":
         return _continue_context(root, directory, manifest, files, publish)
-    if manifest["state"] in {"claim-pending", "context-publication-pending"}:
-        context_publication = manifest["state"] == "context-publication-pending"
-        writes = manifest["context_writes" if context_publication else "claim_writes"]
-        message = manifest["context_message"] if context_publication else "Claim " + manifest["item"]["id"]
+    if manifest["state"] == "context-publication-pending":
+        writes = manifest["context_writes"]
+        message = manifest["context_message"]
         current_item = store.item(files, manifest["item"]["id"])
-        _ownership(current_item, manifest["identity"])
         for path, expected in manifest["checks"].items():
             current_hash = _hash(files.get(path))
             if current_hash != expected and (path not in writes or current_hash != _hash(writes[path])):
@@ -1465,17 +1415,12 @@ def _finish(root, ticket, *, options=None, publish=None):
         files = _snapshot(root)
         manifest["item"] = store.item(files, manifest["item"]["id"])
         manifest["base_commit"] = _base(manifest["item"])
-        manifest.pop("claim_writes", None)
-        if context_publication:
-            manifest.pop("context_writes", None)
-            manifest.pop("context_message", None)
-            return _open_edit(root, directory, manifest, files)
-        if manifest["operation"] == "development-finish":
-            manifest["code_snapshot"] = _code_snapshot(root, manifest["item"], store.project(files))
-        return _continue_context(root, directory, manifest, files, publish)
+        manifest.pop("context_writes", None)
+        manifest.pop("context_message", None)
+        return _open_edit(root, directory, manifest, files)
     if manifest["operation"] == "design-reuse":
         reuse_item = store.item(files, manifest["item"]["id"])
-        _design_reuse().ready(reuse_item, manifest["identity"])
+        _design_reuse().ready(reuse_item)
         if manifest.get("code_snapshot") is not None and _code_snapshot(root, reuse_item, store.project(files)) != manifest["code_snapshot"]:
             return _stale(root, manifest, "Assessment source snapshot changed; draft is retained.")
         if manifest["state"] == "prepared":
@@ -1519,14 +1464,12 @@ def _finish(root, ticket, *, options=None, publish=None):
         identifier = manifest["item"]["id"]
         intended = store.apply_writes(files, writes)
         same_business = runtime._business_digest(files, identifier) == runtime._business_digest(intended, identifier)
-        owner = store.item(files, identifier).get("owner")
-        own_sync = owner is None or (owner.get("session"), owner.get("token")) == (manifest["identity"]["session"], manifest["identity"]["token"])
         scoped = _checks(files, manifest["item"], manifest["operation"])
         for path in set(scoped) | set(writes):
             value = files.get(path)
             sync_path = path == store.receipt_path(files, identifier) or path == ".project/state/" + identifier + ".yaml"
             if _hash(value) != expected.get(path) and (path not in writes or _hash(value) != _hash(writes[path])):
-                if not (sync_path and same_business and own_sync):
+                if not (sync_path and same_business):
                     return _stale(root, manifest, "Publication recovery inputs changed; intent is retained.")
         for path in set(expected) - set(files):
             if expected[path] is not None and (path not in writes or writes[path] is not None):
@@ -1557,8 +1500,7 @@ def _finish(root, ticket, *, options=None, publish=None):
 
 def _failure(error):
     message = str(error)
-    rules = (("control claim", "control_claim_required"), ("owned", "owner_conflict"), ("another session", "session_conflict"),
-             ("approval", "approval_required"), ("independent", "independent_review_required"),
+    rules = (("approval", "approval_required"), ("independent", "independent_review_required"),
              ("checkpoint blocked", "checkpoint_blocked"), ("snapshot changed", "code_changed"),
              ("symlink", "unsafe_path"), ("manifest", "invalid_ticket"),
              ("refresh", "refresh_required"), ("requires migration", "migration_required"))
@@ -1616,8 +1558,7 @@ def resume(root, ticket=None, *, publish=None):
             for directory in _local(root, "edits").iterdir():
                 if TICKET.fullmatch(directory.name):
                     _, manifest = _load(root, directory.name)
-                    identity = _identity(root, item=manifest["item"]["id"])
-                    if manifest["state"] in {"prepared", "claim-pending", "context-pending", "context-publication-pending"} and manifest["identity"] == identity:
+                    if manifest["state"] in {"prepared", "claim-pending", "context-pending", "context-publication-pending"}:
                         candidates.append((manifest["created_at"], directory.name))
             if not candidates:
                 return {"status": "no_op", "code": "no_pending_ticket"}

@@ -47,5 +47,5 @@ edit formal documents or dispatch another stage. Native Plan and inherited permi
 Return the item/role, current contract and stable dirty-source identity/base, outcome and report
 path, coverage of all review dimensions, findings and baseline warnings, actual checks/raw-output
 locations, independence and remaining gaps. Use the controller-assigned contributor-session label
-for this genuine review; it is not a worker-liveness claim. Include host/tool IDs only when exposed,
+for this genuine review. Include host/tool IDs only when exposed,
 mark an unexposed runtime model unverified, and never fabricate evidence or an independent verdict.

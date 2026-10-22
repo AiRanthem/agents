@@ -47,7 +47,7 @@ class MakeBundleTest(unittest.TestCase):
 
     def bundle(self, *args):
         out = self.root / "bundle.json"
-        make_bundle.main(["--root", str(self.root), "--session", "s1", "--token", "t1",
+        make_bundle.main(["--root", str(self.root), "--session", "s1",
                           "--message", "m", "--out", str(out), *args])
         return json.loads(out.read_text())
 
@@ -129,8 +129,7 @@ class MakeBundleTest(unittest.TestCase):
         self.assertEqual(bundle["checks"][self.sync_path], sha256_text((self.root / self.sync_path).read_text()))
         self.assertFalse(any(call.args[1] == "log" for call in commands.call_args_list))
         trees = [call for call in commands.call_args_list if call.args[1] == "ls-tree"]
-        self.assertEqual(len(trees), 2)
-        self.assertTrue(all(call.args[-1] in {f"workitems/{ITEM}/", self.sync_path} for call in trees))
+        self.assertTrue(all(call.args[-1] in {f"workitems/{ITEM}/", self.sync_path, ".project/project.yaml"} for call in trees))
 
     def test_selected_base_is_resolved_once_before_reading_any_content(self):
         original_commit = git(self.root, "rev-parse", "HEAD")
@@ -260,7 +259,7 @@ class RemoteBundleTest(unittest.TestCase):
 
     def assemble(self, root, *args):
         out = self.directory / "constructed.json"
-        make_bundle.main(["--root", str(root), "--session", "test", "--token", "t1",
+        make_bundle.main(["--root", str(root), "--session", "test",
                           "--message", "checkpoint", "--out", str(out), *args])
         return out, json.loads(out.read_text())
 

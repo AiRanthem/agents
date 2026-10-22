@@ -49,7 +49,7 @@ class UserValidationTest(unittest.TestCase):
         self.a.snapshot["tree"] = "e" * 40
         self.assertFalse(autonomy._acceptance_valid(self.root, runtime._working_files(self.root), self.f.record()))
 
-    def test_human_acceptance_does_not_implicitly_waive_design_or_ownership(self):
+    def test_human_acceptance_keeps_design_gate_and_allows_later_session(self):
         self.implement()
         item = self.f.record()
         item["design"]["review"]["result"] = "fail"
@@ -57,14 +57,13 @@ class UserValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(runtime.ProjectError, "design"):
             autonomy.accept(self.root, "A", approval_source="User accepts implementation", publish=self.f.publisher)
         self.waive("design-review")
-        before = self.f.record()
-        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "foreign-owner"}):
-            with self.assertRaisesRegex(runtime.ProjectError, "control claim"):
-                autonomy.accept(self.root, "A", approval_source="User accepts implementation", publish=self.f.publisher)
-        self.assertEqual(self.f.record(), before)
+        with mock.patch.dict(os.environ, {"PROJECT_SESSION_ID": "later-session"}):
+            result = autonomy.accept(self.root, "A", approval_source="User accepts implementation", publish=self.f.publisher)
+        self.assertEqual(result["status"], "published", result)
+        self.assertEqual(self.f.record()["workflow"]["autonomy"]["acceptance"]["recorded_by"], "later-session")
 
     def test_named_waivers_require_actual_source_and_expire_with_contract(self):
-        for options in ({"gate": "e2e"}, {"gate": "ownership", "approval_source": "Skip all"}):
+        for options in ({"gate": "e2e"}, {"gate": "integrity", "approval_source": "Skip all"}):
             result = workflow.begin(self.root, "validation-waiver", "A", options=options, publish=self.f.publisher)
             self.assertEqual(result["status"], "blocked")
         record = self.waive("e2e")

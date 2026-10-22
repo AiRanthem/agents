@@ -104,6 +104,8 @@ class DevelopmentTests(unittest.TestCase):
         self.assertFalse(prepared["branch_published"])
         self.assertFalse(any("push" in call.args[1:] for call in calls.call_args_list))
         self.assertEqual(git(self.remote, "show-ref"), remote_before)
+        self.assertNotIn("host", prepared)
+        prepared["host"] = "historical-machine-name"
         self.item["development"] = prepared
         location = self.worktree()
         (location / "code.txt").write_text("unsubmitted implementation\n")

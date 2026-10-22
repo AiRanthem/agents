@@ -463,13 +463,34 @@ class ProjectContextTests(unittest.TestCase):
         (root / "evidence/e1.md").write_text("Evidence body", encoding="utf-8")
         return root, items
 
-    def test_v2_state_and_receipt_yaml_invalidate_cache_and_show_current_owner(self):
+    def test_legacy_show_rebuilds_cached_claims_and_keeps_real_sources(self):
+        raw = item("one", "First")
+        raw["owner"] = {"machine": "old", "session": "old", "token": "claim"}
+        raw["workflow"] = {"control_transfers": {"old": {"to": "controller"}},
+            "autonomy": {"authorization": {"source": "user", "coordinator": "old-controller", "claim_token": "claim"}},
+            "design_basis": {"review": {"session": "actual-reviewer", "token": "immutable-proof"}}}
+        write_json(self.root / "workitems/one/item.json", raw)
+        project_context.get_index(self.root)
+        cache = self.root / ".project-local/index.json"
+        cached = json.loads(cache.read_text())
+        cached["version"] = 2
+        cached["items"][0]["metadata"]["owner"] = raw["owner"]
+        write_json(cache, cached)
+        shown = project_context.command(project_context.parser().parse_args(["--path", str(self.root), "show", "one"]))
+        self.assertTrue(shown["index_rebuilt"])
+        self.assertNotIn("owner", shown["metadata"])
+        self.assertNotIn("control_transfers", shown["metadata"]["workflow"])
+        self.assertNotIn("claim_token", shown["metadata"]["workflow"]["autonomy"]["authorization"])
+        self.assertEqual(shown["metadata"]["workflow"]["design_basis"], raw["workflow"]["design_basis"])
+        self.assertEqual(json.loads((self.root / "workitems/one/item.json").read_text()), raw)
+
+    def test_v2_state_and_receipt_invalidate_cache_without_showing_retired_claims(self):
         root, _ = self.v2_workspace()
         first, rebuilt = project_context.get_index(root)
         self.assertTrue(rebuilt)
         target = next(entry for entry in first["items"] if entry["id"] == "111-target")
         self.assertEqual(target["path"], "workitems/111-target/metadata.yaml")
-        self.assertIsNone(target["metadata"]["owner"])
+        self.assertNotIn("owner", target['metadata'])
 
         state_path = root / ".project/state/111-target.yaml"
         state = store.load_yaml(state_path.read_bytes())
@@ -478,7 +499,7 @@ class ProjectContextTests(unittest.TestCase):
         second, rebuilt = project_context.get_index(root)
         self.assertTrue(rebuilt)
         target = next(entry for entry in second["items"] if entry["id"] == "111-target")
-        self.assertEqual(target["metadata"]["owner"]["token"], "current")
+        self.assertNotIn("owner", target["metadata"])
 
         receipt_path = root / ".project/sync/111-target.yaml"
         receipt = {"intent_id": "i1", "state": "pending", "external_id": "external-1"}

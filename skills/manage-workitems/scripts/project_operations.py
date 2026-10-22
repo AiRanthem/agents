@@ -12,10 +12,11 @@ import re
 
 try:
     import project_runtime as runtime
+    import project_store as store
     from project_context import ContextError, _resolve_item
     from workitem_ids import allocate_ids
 except ImportError:  # pragma: no cover - package entrypoint
-    from . import project_runtime as runtime
+    from . import project_runtime as runtime, project_store as store
     from .project_context import ContextError, _resolve_item
     from .workitem_ids import allocate_ids
 
@@ -23,15 +24,13 @@ except ImportError:  # pragma: no cover - package entrypoint
 ProjectError = runtime.ProjectError
 UPDATE_FIELDS = {"title", "kind", "repository", "status", "archived", "depends_on",
                  "delivery", "cleanup", "development"}
-REQUEST_FIELDS = {"session", "token", "machine", "message", "operations"}
+REQUEST_FIELDS = {"session", "machine", "message", "operations"}
 OPERATION_FIELDS = {
     "create": {"op", "slug", "title", "requirement", "kind", "repository",
                "delivery_required", "depends_on", "parent", "alias"},
     "update": {"op", "item", "set"},
     "archive": {"op", "item", "archived"},
     "document": {"op", "item", "name", "path", "text", "mode", "expected_sha256"},
-    "claim": {"op", "item", "machine", "stage", "review"},
-    "release": {"op", "item"},
     "deliver": {"op", "item", "evidence", "provenance", "acceptance_coverage"},
 }
 DESIGN_STATUS = re.compile(r"(?m)^design_status:[ \t]*([^\r\n]*)(\r?)$")
@@ -108,13 +107,11 @@ class _Preparation:
         _known_fields(request, REQUEST_FIELDS, "request")
         for key in ("session", "message"):
             _required_text(request.get(key), "request." + key)
-        if "token" not in request or (request["token"] is not None and not runtime._nonempty(request["token"])):
-            raise ProjectError("request.token must be null or a nonempty string")
         if not isinstance(request.get("operations"), list) or not request["operations"]:
             raise ProjectError("request.operations must be a nonempty list")
         for entry in request["operations"]:
             if not isinstance(entry, dict) or not isinstance(entry.get("op"), str) or entry["op"] not in OPERATION_FIELDS:
-                raise ProjectError("unsupported operation; expected create/update/archive/document/claim/release/deliver")
+                raise ProjectError("unsupported operation; expected create/update/archive/document/deliver")
             _known_fields(entry, OPERATION_FIELDS[entry["op"]], "operation " + entry["op"])
         self.root = runtime.find_project(root)
         runtime._check_tracked_paths(self.root)
@@ -128,12 +125,11 @@ class _Preparation:
         self.items = {}
         for name, content in self.files.items():
             if name.startswith("workitems/") and name.endswith("/item.json"):
-                record = runtime._decode_json(content, name)
+                record = store.item(self.files, name.split("/")[1])
                 self.items[record["id"]] = record
         self.aliases = {}
         self.actions = []
         self.changed_contracts = set()
-        self.explicitly_reviewed = set()
 
     def guard(self, name):
         runtime._managed_path(name)
@@ -160,11 +156,6 @@ class _Preparation:
             raise ProjectError("depends_on must be a list of item selectors")
         return [self.resolve(value) for value in values]
 
-    def owned(self, identifier):
-        owner = self.items[identifier].get("owner")
-        if owner is not None and (owner.get("session") != self.request["session"] or
-                                  owner.get("token") != self.request["token"]):
-            raise ProjectError(f"item {identifier} is owned by another session/token; no takeover is available")
 
     def put(self, name, text):
         if not isinstance(text, str):
@@ -199,7 +190,7 @@ class _Preparation:
         self.items[identifier] = {
             "id": identifier, "title": op["title"], "kind": op.get("kind", "development"),
             "status": "new", "archived": False, "depends_on": [], "split_from": parent,
-            "repository": op.get("repository"), "owner": None, "development": None,
+            "repository": op.get("repository"), "development": None,
             "delivery": {"required": op.get("delivery_required", ["merged"]),
                          "status": "pending", "evidence": []}, "cleanup": "not_applicable"}
         self.items[identifier]["depends_on"] = self.dependencies(op.get("depends_on", []))
@@ -208,7 +199,6 @@ class _Preparation:
 
     def update(self, op):
         identifier = self.resolve(op.get("item"))
-        self.owned(identifier)
         values = op.get("set")
         if not isinstance(values, dict) or not values or set(values) - UPDATE_FIELDS:
             raise ProjectError("update.set must contain only supported mutable fields")
@@ -223,7 +213,7 @@ class _Preparation:
             values["depends_on"] = self.dependencies(values["depends_on"])
         status = values.get("status", record["status"])
         if status != record["status"] and status in ("developing", "done"):
-            raise ProjectError("enter developing through claim, and done through deliver")
+            raise ProjectError("legacy developing records require migration; enter done through deliver")
         if record["status"] == "developing" and status not in ("developing", "awaiting_delivery"):
             raise ProjectError("developing must first hand off to awaiting_delivery")
         delivery = values.get("delivery", record["delivery"])
@@ -265,13 +255,11 @@ class _Preparation:
             identifier = runtime._item_for_path(path)
             if identifier is not None:
                 identifier = self.resolve(identifier)
-                self.owned(identifier)
                 name = path.split("/", 2)[2]
             else:
                 name = path
         else:
             identifier = self.resolve(op.get("item"))
-            self.owned(identifier)
             name = op.get("name")
             if not isinstance(name, str) or not name.endswith(".md"):
                 raise ProjectError("document.name must be an approved item Markdown path")
@@ -302,74 +290,9 @@ class _Preparation:
             if record["status"] == "cancelled" or record["delivery"]["status"] != "delivered":
                 raise ProjectError(f"item {identifier} requires delivered, non-cancelled prerequisite {dependency}")
 
-    def claim(self, op):
-        identifier = self.resolve(op.get("item"))
-        self.owned(identifier)
-        token = _required_text(self.request["token"], "claim request.token")
-        machine = _required_text(op.get("machine", self.request.get("machine")), "claim.machine")
-        stage = op.get("stage")
-        if stage not in ("preparation", "implementation"):
-            raise ProjectError("claim.stage must be preparation or implementation")
-        record = self.items[identifier]
-        if record["kind"] != "development" or record["status"] in {"done", "cancelled", "awaiting_delivery"}:
-            raise ProjectError("claim requires an active development item; resume an awaiting delivery separately")
-        if stage == "preparation" and record["status"] == "developing":
-            raise ProjectError("cannot replace an implementation claim with preparation")
-        if stage == "implementation":
-            if identifier in self.changed_contracts:
-                raise ProjectError("changed requirement/spec/dependencies require a fresh independent review before implementation")
-            self.prerequisites(identifier)
-            review = op.get("review")
-            if not isinstance(review, dict) or review.get("result") != "pass" or review.get("independent") is not True:
-                raise ProjectError("implementation claim requires an explicit independent pass review attestation")
-            _attestation(review.get("provenance"), "review.provenance")
-            _required_text(review.get("reference"), "review.reference")
-            if not runtime._identifier(review.get("id")):
-                raise ProjectError("review.id must be a safe identifier")
-            for name in ("spec.md", "requirement.md"):
-                path = f"workitems/{identifier}/{name}"
-                self.guard(path)
-                content = self.files.get(path)
-                if not content or review.get(name[:-3] + "_sha256") != _hash(content):
-                    raise ProjectError(f"review must identify the current full {name} hash")
-                if name == "spec.md" and _design_status(content.decode("utf-8")) != "implementable":
-                    raise ProjectError("implementation claim requires an implementable current spec.md")
-            development = record.get("development")
-            if not isinstance(development, dict) or review.get("base_commit") != development.get("base_commit"):
-                raise ProjectError("review.base_commit must match actual development metadata")
-            path = f"workitems/{identifier}/reviews/{review['id']}.md"
-            if path in self.files:
-                if self.files[path] != ("# Implementation review attestation\n\n```json\n" + _text(review) + "```\n").encode("utf-8"):
-                    raise ProjectError("review.id already identifies different review evidence")
-            self.put(path, "# Implementation review attestation\n\n```json\n" + _text(review) + "```\n")
-            self.explicitly_reviewed.add(identifier)
-        owner = {"machine": machine, "session": self.request["session"], "token": token}
-        if record.get("owner") is not None and record["owner"] != owner:
-            raise ProjectError("release an existing claim before changing its machine identity")
-        record["owner"] = owner
-        record["status"] = "developing" if stage == "implementation" else "in_progress"
-        self.save_item(identifier)
-
-    def release(self, op):
-        identifier = self.resolve(op.get("item"))
-        self.owned(identifier)
-        record = self.items[identifier]
-        if record["owner"] is None:
-            return
-        if record["status"] == "developing":
-            raise ProjectError("developing must first hand off to awaiting_delivery before release")
-        receipt_path = f".project/sync/{identifier}.json"
-        self.guard(receipt_path)
-        if receipt_path in self.files:
-            receipt = runtime._decode_json(self.files[receipt_path], receipt_path)
-            if receipt["state"] in {"pending", "unknown"}:
-                raise ProjectError("reconcile the pending/unknown sync outcome before releasing ownership")
-        record["owner"] = None
-        self.save_item(identifier)
 
     def deliver(self, op):
         identifier = self.resolve(op.get("item"))
-        self.owned(identifier)
         record = self.items[identifier]
         if record["status"] in {"developing", "cancelled"}:
             raise ProjectError("delivery requires implementation handoff and a non-cancelled item")
@@ -432,8 +355,6 @@ class _Preparation:
         for identifier in sorted(affected - self.changed_contracts):
             self.actions.append({"item": identifier, "action": "assess_dependency_review",
                                  "reason": "an upstream contract changed; assess current dependency assumptions before implementation"})
-        if affected.intersection(self.explicitly_reviewed):
-            raise ProjectError("implementation claim was invalidated by a contract change in this batch")
         for identifier in sorted(self.changed_contracts):
             path = f"workitems/{identifier}/spec.md"
             self.guard(path)
@@ -442,7 +363,6 @@ class _Preparation:
             text = self.files[path].decode("utf-8")
             invalidated = _invalidate(text)
             if invalidated != text:
-                self.owned(identifier)
                 self.guard(f"workitems/{identifier}/item.json")
                 self.put(path, invalidated)
                 self.actions.append({"item": identifier, "action": "review_design",
@@ -478,10 +398,10 @@ class _Preparation:
         if errors:
             raise ProjectError("invalid proposed project:\n" + "\n".join(errors))
         bundle = {"checks": dict(sorted(self.checks.items())), "writes": writes,
-                  "session": self.request["session"], "token": self.request["token"],
+                  "session": self.request["session"],
                   "message": self.request["message"]}
         runtime._validate_bundle(bundle)
-        runtime._check_owners(bundle, self.original, self.files)
+        runtime._check_item_integrity(bundle, self.original, self.files)
         changes = [{"item": runtime._item_for_path(name), "path": name,
                     "before_sha256": _hash(self.original.get(name)),
                     "after_sha256": _hash(self.files[name])} for name in writes]
@@ -498,8 +418,8 @@ def prepare(root, request):
 
     The result describes a local snapshot, not remote publication or externally
     verified review/delivery. With Aone enabled, the persistence coordinator must
-    retain ownership and prepare pending intents before passing the bundle to Git.
-    Dependency readiness describes prerequisite delivery only; review, ownership
+    prepare pending intents before passing the bundle to Git.
+    Dependency readiness describes prerequisite delivery only; review
     and implementation approval remain separate gates.
     """
     operation = _Preparation(root, copy.deepcopy(request))

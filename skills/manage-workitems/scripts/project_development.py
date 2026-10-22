@@ -1,7 +1,7 @@
 """Prepare one recoverable code worktree and verify Git delivery against its review.
 
 This module never commits code, changes the main checkout's branch, or replaces a
-remote branch. The workflow publishes exclusive ownership before calling prepare.
+remote branch. The workflow prepares one local operation at a time.
 """
 
 import hashlib
@@ -10,7 +10,6 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import os
 import re
-import socket
 
 try:
     import project_store as store
@@ -365,8 +364,6 @@ def _legacy_original(root, item):
 def _existing_record(root, item, project, checkout, configuration):
     """Validate one actual worktree; only authenticated v1 records may omit v2 facts."""
     recorded = item["development"]
-    if recorded.get("host", socket.gethostname()) != socket.gethostname():
-        raise ProjectError("recorded development belongs to another host; prepare a controlled replacement")
     original = _legacy_original(root, item)
     normalized = dict(recorded)
     if original is not None:
@@ -471,11 +468,9 @@ def _reservation(root, identity, branch, relative, configuration, discarded=None
             with path.open("x") as stream:
                 stream.write(store.dump_yaml(desired))
         except FileExistsError as exc:
-            raise ProjectError("development reservation changed concurrently; retry from published ownership") from exc
+            raise ProjectError("development reservation changed concurrently; resume the retained reservation") from exc
     else:
-        # known-limit: published ownership excludes protocol participants, but a
-        # direct local writer can race the byte check and replace. Strict cross-writer
-        # CAS needs a shared locking/atomic coordination protocol.
+        # Preserve the discarded reservation until its replacement is durable.
         with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
             temporary = Path(stream.name)
             stream.write(store.dump_yaml(desired))
@@ -490,7 +485,7 @@ def _reservation(root, identity, branch, relative, configuration, discarded=None
 
 
 def prepare(root, item, project, *, options=None, publish_branch=True):
-    """Create or reuse one worktree after the workflow has published ownership."""
+    """Create or reuse one worktree from the retained local reservation."""
     root, options = Path(root).resolve(), options or {}
     _main_workspace(root, project)
     repo = _repository(item, project)
@@ -516,8 +511,7 @@ def prepare(root, item, project, *, options=None, publish_branch=True):
             if _git(checkout, "merge-base", "--is-ancestor", remote_head, "HEAD", check=False).returncode:
                 raise ProjectError("recorded published development branch has diverged")
         if legacy:
-            # Ownership has already been published by the caller. These are local
-            # coordination facts only; code/index and existing remote refs stay intact.
+            # Record local provenance without changing source or remote refs.
             values = {"project-identity": identity, "project-base-commit": existing["base_commit"],
                       "project-configuration": json.dumps(configuration, sort_keys=True),
                       "remote": configuration["publish_remote"], "merge": expected_ref}
@@ -525,10 +519,9 @@ def prepare(root, item, project, *, options=None, publish_branch=True):
                 if _config(checkout, "branch." + branch + "." + key) != value:
                     _git(checkout, "config", "branch." + branch + "." + key, value)
         return normalized
-    owner = item.get("owner") or {}
     discarded = _discard_record(root, item)
     generation = "\0" + discarded["id"] if discarded is not None else ""
-    suffix = hashlib.sha256(((owner.get("token") or owner.get("session") or identity) + generation).encode()).hexdigest()[:12]
+    suffix = hashlib.sha256((identity + generation).encode()).hexdigest()[:12]
     branch = options.get("branch") or repo.get("branch_pattern", "feature/{project}/{item}-{session}").format(
         project=project["id"], item=item["id"], session=suffix)
     _ref(checkout, "refs/heads/" + branch)
@@ -573,16 +566,14 @@ def prepare(root, item, project, *, options=None, publish_branch=True):
         if _git(checkout, "merge-base", "--is-ancestor", remote_head, branch, check=False).returncode:
             raise ProjectError("published branch has diverged; remote updates are forbidden")
     elif publish_branch:
-        # known-limit: published item ownership plus a session-derived reservation
-        # excludes protocol participants. Direct Git writers require server-side
-        # create-only policy for strict CAS; post-push verification detects divergence.
+        # Verify the actual remote branch before recording publication success.
         _git(checkout, "push", "--set-upstream", configuration["publish_remote"], "refs/heads/" + branch + ":" + published_ref)
         if _remote_head(checkout, configuration["publish_url"], published_ref) != _text(checkout, "rev-parse", branch):
             raise ProjectError("published branch changed concurrently; reservation retained for recovery")
     _git(checkout, "config", "branch." + branch + ".remote", configuration["publish_remote"])
     _git(checkout, "config", "branch." + branch + ".merge", published_ref)
     result = {"repository": repo["id"], "worktree": relative.as_posix(), "branch": branch,
-              "base_commit": base_commit, "publish_ref": published_ref, "host": socket.gethostname(), **configuration}
+              "base_commit": base_commit, "publish_ref": published_ref, **configuration}
     if not remote_head and not publish_branch:
         result["branch_published"] = False
     return result

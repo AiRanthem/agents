@@ -224,11 +224,9 @@ def _publish(root, files, records, identity, message, publish, *, extra=None):
     return workflow._publish(root, writes, identity, message, checks, publish)
 
 
-def _owned(item, identity):
-    workflow._ownership(item, identity)
-    authorization = _state(item).get("authorization") or {}
-    if not authorization or not workflow._ownership_module().authorized(item, identity):
-        raise ProjectError("autonomy has another control claim; use explicit takeover")
+def _authorized(item):
+    if not (_state(item).get("authorization") or {}):
+        raise ProjectError("project advancement requires explicit user authorization")
 
 
 def _artifact_binding(root, files, item):
@@ -271,7 +269,7 @@ def _dependency_blocks(root, files, item):
     return result
 
 
-def _next(root, files, item, session):
+def _next(root, files, item):
     state = _state(item)
     result = {"id": item["id"], "next_role": None, "reasons": []}
     waivers = ((item.get("workflow") or {}).get("validation_waivers") or {})
@@ -294,13 +292,11 @@ def _next(root, files, item, session):
         return result
     authorization = state.get("authorization") or {}
     lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
-    identity = workflow._identity(root, item=item["id"], create=False) if authorization or item.get("owner") or lifecycle.get("handoff") else {"session": session, "token": None}
-    result["takeover_required"] = workflow._ownership_module().requires_takeover(item, identity)
     if not authorization:
         result["reasons"].append("not_authorized")
     splitting = item.get("design", {}).get("next_action") == "split"
     waived_design = workflow._validation_waived(files, item, "design-review")
-    assess_reuse = not waived_design and not result["reasons"] and workflow._design_reuse().needed(root, files, item, session)
+    assess_reuse = not waived_design and not result["reasons"] and workflow._design_reuse().needed(root, files, item)
     pending_confirmation = not waived_design and workflow._design_reuse().pending(files, item)
     if not waived_design and not assess_reuse and not pending_confirmation and not _approved_contract(files, item):
         result["reasons"].append("published_initial_design_required")
@@ -367,12 +363,11 @@ def _next(root, files, item, session):
 
 def status(root, *, all_items=False, tree=None, items=None):
     root, files = _files(root)
-    session = workflow._session()
     entries = []
     for key in scope(files, all_items=all_items, tree=tree, items=items):
         item = store.item(files, key)
         try:
-            entry = _next(root, files, item, session)
+            entry = _next(root, files, item)
         except (ProjectError, store.StoreError, OSError) as error:
             entry = {"id": key, "state": "blocked", "next_role": None,
                      "reasons": ["input_unavailable"], "error": str(error)}
@@ -388,43 +383,11 @@ def authorize(root, *, approval_source, all_items=False, tree=None, items=None, 
     workflow._text(approval_source, "explicit user advancement authorization source")
     root, files = _files(root)
     selected = scope(files, all_items=all_items, tree=tree, items=items)
-    groups = {}
+    identity = workflow._identity(root)
+    records = []
     for identifier in selected:
-        identity = workflow._identity(root, item=identifier)
-        groups.setdefault(identity["token"], {"identity": identity, "items": []})["items"].append(identifier)
-    authorized, blocked, publications = [], [], []
-    for group in groups.values():
-        if publications:
-            root, files = _files(root)
-        response = _authorize_group(root, files, group["items"], selected, group["identity"],
-            approval_source, skip_design_review, publish)
-        authorized.extend(response["authorized"])
-        blocked.extend(response["blocked_items"])
-        publications.append(response)
-        if response["status"] not in {"published", "no_op"}:
-            remaining = [key for key in selected if key not in authorized and key not in {value["id"] for value in blocked}]
-            return {**response, "authorized": authorized, "blocked_items": blocked, "remaining_items": remaining}
-    if len(publications) == 1:
-        return publications[0]
-    return {"status": "published" if any(value["status"] == "published" for value in publications) else "no_op",
-            "authorized": authorized, "blocked_items": blocked, "publications": publications}
-
-
-def _authorize_group(root, files, identifiers, selected, identity, approval_source, skip_design_review, publish):
-    """Keep each publication within one claim while retaining the requested scope."""
-    records, blocked = [], []
-    for identifier in identifiers:
         item = store.item(files, identifier)
         state = _state(item)
-        owner = item.get("owner") or {}
-        handoff = ((item.get("workflow") or {}).get("lifecycle") or {}).get("handoff")
-        if handoff and not workflow._ownership_module().handoff_authorized(handoff, identity):
-            blocked.append({"id": identifier, "reason": "recorded_coordinator_handoff"})
-            continue
-        if (owner and owner.get("token") != identity["token"]) or not workflow._ownership_module().authorized(item, identity):
-            blocked.append({"id": identifier, "reason": "control_claim_required"})
-            continue
-        workflow._ownership(item, identity)
         if _approved_contract(files, item) and (item.get("design", {}).get("approval") or {}).get("kind") in {None, "user"}:
             item["design"]["approval"] = workflow._published_approval(files, item, identity["session"])
         approval = item.get("design", {}).get("approval") or {}
@@ -445,8 +408,7 @@ def _authorize_group(root, files, identifiers, selected, identity, approval_sour
             state["approved_contract"] = {"approval": copy.deepcopy(basis.get("approval", approval) if original_read else approval),
                 **{name: original_read.get(str(root / path), files.get(path, b"").decode("utf-8"))
                    for name, path in paths.items()}}
-        state["authorization"] = {"source": approval_source, "coordinator": identity["session"],
-                                  "claim_token": identity["token"],
+        state["authorization"] = {"source": approval_source, "recorded_by": identity["session"],
                                   "scope": selected, "created_at": workflow._now(),
                                   "requirement_sha256": _contract(files, item)["requirement_sha256"],
                                   "decision_sha256": workflow._hash(files.get(workflow._documents(item)["decision"])),
@@ -456,7 +418,7 @@ def _authorize_group(root, files, identifiers, selected, identity, approval_sour
     publication = _publish(root, files, records, identity, "Authorize project advancement", publish) if records else {"status": "no_op"}
     confirmed = publication["status"] in {"published", "no_op"}
     return {**publication, "authorized": [item["id"] for item in records] if confirmed else [],
-            "blocked_items": blocked, **({"pending_authorization": [item["id"] for item in records]} if not confirmed else {})}
+            **({"pending_authorization": [item["id"] for item in records]} if not confirmed else {})}
 
 
 def _read_report(path):
@@ -476,8 +438,8 @@ def complete(root, selector, *, role, report_file, provenance, publish=None):
     report = _read_report(report_file)
     root, files = _files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
-    identity = workflow._identity(root, item=item["id"])
-    _owned(item, identity)
+    identity = workflow._identity(root)
+    _authorized(item)
     basis = _state(item).get("implementation_basis") or {}
     if item.get("status") != "developing" or basis.get("binding") != _binding(root, files, item, code=False):
         raise ProjectError("implementation contract changed; begin a current development-start checkpoint")
@@ -497,7 +459,6 @@ def complete(root, selector, *, role, report_file, provenance, publish=None):
 def validate_state(item):
     workflow._lifecycle_module().validate(item)
     workflow._design_reuse().validate(item)
-    workflow._ownership_module().validate(item)
     waivers = (item.get("workflow") or {}).get("validation_waivers", {})
     if not isinstance(waivers, dict):
         raise ProjectError("validation waivers must be named records")
@@ -530,10 +491,11 @@ def validate_state(item):
     if authorization is not None:
         if not isinstance(authorization, dict):
             raise ProjectError("autonomy authorization must be an object")
-        for key in ("source", "coordinator"):
-            workflow._text(authorization.get(key), "autonomy authorization " + key)
-        if "claim_token" in authorization:
-            workflow._text(authorization["claim_token"], "autonomy control claim token")
+        workflow._text(authorization.get("source"), "autonomy authorization source")
+        if "recorded_by" in authorization:
+            workflow._text(authorization["recorded_by"], "autonomy authorization recorder")
+        else:
+            workflow._text(authorization.get("coordinator"), "legacy coordination provenance")
         if not isinstance(authorization.get("scope"), list) or item["id"] not in authorization["scope"]:
             raise ProjectError("autonomy authorization must include its item")
     for value in [state.get("implementation")]:
@@ -588,8 +550,7 @@ def accept(root, selector, *, approval_source, publish=None):
     workflow._text(approval_source, "actual user acceptance source")
     root, files = _files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
-    identity = workflow._identity(root, item=item["id"])
-    workflow._ownership(item, identity)
+    identity = workflow._identity(root)
     extra = {}
     if item.get("kind") != "aggregate":
         if not item.get("development"):
@@ -614,7 +575,7 @@ def accept(root, selector, *, approval_source, publish=None):
                           read_hashes=_read_hashes(root, files, item, "code-review"))
             extra["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)
             item["development"].update(review=record, reviewed_snapshot=current)
-            item["status"], item["owner"] = "awaiting_delivery", None
+            item["status"] = "awaiting_delivery"
             _acceptance_review(root, files, item)
     _state(item)["acceptance"] = {"status": "accepted", "source": approval_source,
         "recorded_by": identity["session"], "created_at": workflow._now(), "binding": _artifact_binding(root, files, item)}

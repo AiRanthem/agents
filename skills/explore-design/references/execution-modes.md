@@ -10,7 +10,7 @@ Return only the single implementation plan produced by `$implement-design` as th
 
 After the complete Why/What is approved, read and invoke `$implement-design` in the current conversation with those requirements and decisions. This handoff is part of the approved workflow; do not ask the user to invoke it again. It resolves How and produces the sole final implementation plan without requiring a design document or `implementable` status. If unavailable, report the missing capability conversationally; do not replace it with a design document or an approval plan.
 
-Before handoff, verify there were no design-file writes or new document tasks. Continue into implementation planning instead of ending with a design summary as the final plan.
+Before handoff, verify there were no design-file writes or new document tasks. Continue into implementation planning and return its executable plan.
 
 ## Ordinary execution
 

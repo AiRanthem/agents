@@ -231,8 +231,6 @@ class AoneAdapter:
                 "expected_fields": expected, "identity": self.identity,
                 "receipt": receipt_snapshot, "body": expected["managed_body"], "observed_fields": None}
         old = previous_operation
-        if isinstance(old, dict) and "release_owner" in old:
-            plan["release_owner"] = copy.deepcopy(old["release_owner"])
         if receipt["state"] == "unknown" and receipt.get("baseline_fields") is None and isinstance(old, dict) and old.get("action") == "adopt":
             if old.get("expected_fields") != expected or old.get("marker") != marker:
                 raise AoneError("unknown adoption differs from recorded operation; reconciliation required")

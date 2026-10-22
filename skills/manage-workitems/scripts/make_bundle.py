@@ -173,7 +173,6 @@ def main(argv=None):
     parser.add_argument("--root", default=".")
     parser.add_argument("--base", default="HEAD", help="committed guard/digest revision; resolved once (default: HEAD)")
     parser.add_argument("--session", required=True)
-    parser.add_argument("--token", required=True)
     parser.add_argument("--message", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--write", action="append", default=[], help="content from a working-tree path")
@@ -242,7 +241,7 @@ def main(argv=None):
                 checks[item_path] = hashlib.sha256(old).hexdigest()
 
         bundle = {"checks": checks, "writes": writes, "message": args.message,
-                  "session": args.session, "token": args.token}
+                  "session": args.session}
         runtime._validate_bundle(bundle)
         Path(args.out).write_text(json.dumps(bundle, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     except (runtime.ProjectError, OSError, ValueError, UnicodeError) as exc:

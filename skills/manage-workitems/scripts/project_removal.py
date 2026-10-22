@@ -272,8 +272,6 @@ def _inspect(root):
     if errors:
         blocked.extend("invalid project: " + error for error in errors)
     for identifier, item in items.items():
-        if item.get("owner"):
-            blocked.append("active owner: " + identifier)
         resource_state = (item.get("workflow") or {}).get("lifecycle") or {}
         if resource_state.get("transition") or (resource_state.get("gc") or {}).get("state") in {"planned", "collecting"}:
             blocked.append("unresolved resource lifecycle: " + identifier)

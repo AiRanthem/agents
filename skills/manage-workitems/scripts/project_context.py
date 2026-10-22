@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - test loader can inject the sibling mod
 
 
 ROLES = ("manage", "explore", "review-design", "implement", "review-implementation")
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 ITEM_STATUSES = {"new", "in_progress", "developing", "awaiting_delivery", "done", "cancelled"}
 
@@ -293,7 +293,7 @@ def _load_sources(root: Path, include_evidence: bool) -> dict[str, Any]:
         identifier = Path(path).stem
         if not IDENTIFIER.fullmatch(identifier):
             raise ContextError(f"receipt id is invalid: {path}")
-        receipts.append({"id": identifier, "metadata": receipt, "path": path, "sha256": digest})
+        receipts.append({"id": identifier, "metadata": store.receipt(files, identifier), "path": path, "sha256": digest})
 
     evidences = []
     for path, data in sorted(files.items()):

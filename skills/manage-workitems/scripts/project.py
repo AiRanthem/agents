@@ -53,13 +53,6 @@ def _local_directory(root, *parts):
     return current
 
 
-def _save_identity(root, request):
-    directory = _local_directory(root, "requests", uuid.uuid4().hex)
-    path = directory / "identity.json"
-    runtime._write_journal(path, {key: request[key] for key in ("session", "token", "machine")})
-    return path
-
-
 def _error_details(error):
     message = str(error)
     result = {"error": message}
@@ -110,9 +103,7 @@ def _bundle(files, writes, request, message, identifiers, checks=None):
     if checks is not None:
         guarded.update(checks)
     result = {"checks": guarded, "writes": writes, "session": request["session"],
-              "token": request["token"], "message": message}
-    if "ownership_transfer" in request:
-        result["ownership_transfer"] = request["ownership_transfer"]
+              "message": message}
     if request.get("migration") is True:
         result["migration"] = True
     return result
@@ -133,18 +124,8 @@ def _receipt(files, identifier):
     return store.receipt(files, identifier)
 
 
-def _sync_owner(files, identifier):
-    receipt = _receipt(files, identifier) or {}
-    return receipt.get("migration_sync") or _record(files, identifier).get("owner") or {}
-
-
-def _recovery(request, identifiers, identity_file=None):
-    result = {"action": "resume", "session": request["session"], "items": identifiers}
-    if identity_file:
-        result["identity_file"] = str(identity_file)
-    else:
-        result["token"] = request["token"]
-    return result
+def _recovery(identifiers):
+    return {"action": "resume", "items": identifiers}
 
 
 def _sync_conflict(message):
@@ -153,7 +134,7 @@ def _sync_conflict(message):
                                                 "requires installed"))
 
 
-def _sync(root, identifiers, request, adapter, source_commit=None, identity_file=None, project_record=None):
+def _sync(root, identifiers, request, adapter, source_commit=None, project_record=None):
     """Batch write-ahead plans, then batch verified receipts; never retry a write."""
     # known-limit: interruption can leave an unsent create journaled as unknown.
     # It then needs reconciliation; avoiding that requires server idempotency or
@@ -165,9 +146,6 @@ def _sync(root, identifiers, request, adapter, source_commit=None, identity_file
     for identifier in identifiers:
         try:
             item, receipt = _record(files, identifier), _receipt(files, identifier)
-            owner = _sync_owner(files, identifier)
-            if not owner or owner.get("session") != request["session"] or owner.get("token") != request["token"]:
-                raise ProjectError(f"item {identifier} does not have this session/token's sync owner")
             if not receipt or receipt.get("state") not in {"pending", "unknown"}:
                 raise ProjectError(f"item {identifier} has no pending/unknown sync intent")
             if receipt["content_sha256"] != runtime._business_digest(files, identifier):
@@ -215,8 +193,6 @@ def _sync(root, identifiers, request, adapter, source_commit=None, identity_file
             if (not durable or durable.get("intent_id") != receipt["intent_id"] or
                     runtime._business_digest(files, identifier) != receipt["content_sha256"]):
                 raise ProjectError(f"item {identifier} changed while synchronizing; retain unknown intent")
-            item["owner"] = copy.deepcopy(receipt.get("release_owner"))
-            writes.update(store.write_item(files, item))
             writes.update(store.write_receipt(files, identifier, receipt))
         checkpoint = _publish(root, _bundle(files, writes, request, "Verify Aone synchronization", verified))
     blocked = store.is_v2(files) and any(_sync_conflict(failure["error"]) for failure in failures)
@@ -227,7 +203,7 @@ def _sync(root, identifiers, request, adapter, source_commit=None, identity_file
     if checkpoint:
         result.update({key: checkpoint[key] for key in ("commit", "verified_remote_commit", "journal")})
     if failures and not blocked:
-        result["recovery"] = _recovery(request, [failure["item"] for failure in failures], identity_file)
+        result["recovery"] = _recovery([failure["item"] for failure in failures])
     return result
 
 
@@ -236,12 +212,12 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
 
     An unresolved receipt is immutable until resume reconciles it. Backend writes
     follow a remote write-ahead checkpoint and their readback is published before
-    the original owner is restored.
+    the next business revision.
     """
     root = runtime.find_project(root)
     if not isinstance(identity, dict) or any(not runtime._nonempty(identity.get(key))
-                                             for key in ("session", "token", "machine")):
-        raise ProjectError("publication identity requires session, token and machine")
+                                             for key in ("session", "machine")):
+        raise ProjectError("publication identity requires session and machine")
     if not isinstance(writes, dict) or any(value is not None and not isinstance(value, str)
                                           for value in writes.values()):
         raise ProjectError("publication writes must map physical paths to text or null")
@@ -254,15 +230,9 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
     if pending:
         intended = store.apply_writes(files, writes)
         same_intent = all(_receipt(files, identifier)["content_sha256"] ==
-                          runtime._business_digest(intended, identifier) and
-                          (_record(files, identifier).get("owner") or {}).get("session") == identity["session"] and
-                          (_record(files, identifier).get("owner") or {}).get("token") == identity["token"]
-                          for identifier in pending)
-        # A fixed ticket may finish the exact retained intent after interruption.
-        # New business content must wait until the original intent is reconciled.
-        same_intent = same_intent and all(
-            _record(intended, identifier).get("owner") == _receipt(files, identifier).get("release_owner")
-            for identifier in pending)
+                          runtime._business_digest(intended, identifier) for identifier in pending)
+        # The retained intent can finish after interruption; new content waits for
+        # the actual pending or unknown backend outcome to be reconciled.
         same_intent = same_intent and all(
             runtime._item_for_path(name) in pending or
             (value.encode("utf-8") if value is not None else None) == files.get(name)
@@ -271,12 +241,12 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
             for name, expected in (checks or {}).items():
                 if name not in writes and _hash(files.get(name)) != expected:
                     raise ProjectError("byte check conflict: " + name)
-            result = resume(root, identity["session"], identity["token"], pending,
+            result = resume(root, pending,
                             adapter_factory=adapter_factory)
             result["items"] = identifiers
             return result
         return {"status": "partial", "code": "sync_unresolved", "action": "resume",
-                "recovery": _recovery(identity, pending)}
+                "recovery": _recovery(pending)}
     # Check the original read even for no-op input; a stale successful no-op would
     # allow a ticket to finish without validating what its author actually saw.
     if checks is not None:
@@ -290,14 +260,14 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
     prospective = store.apply_writes(files, changes)
     config = store.project(prospective)
     sync_ids, adapter = [], None
-    if config.get("backends", {}).get("aone") is not None and identifiers and "ownership_transfer" not in identity:
+    if config.get("backends", {}).get("aone") is not None and identifiers:
         adapter = adapter_factory(config)
         for identifier in identifiers:
             if store.item_path(prospective, identifier) not in prospective:
                 raise ProjectError("backend-synchronized workitems cannot be deleted")
             old = _receipt(files, identifier)
             # Reuse the immutable source revision when comparing the actual
-            # managed projection. Context/log content and owner-only changes do
+            # managed projection. Context/log content changes do
             # not force a new Git link or a meaningless backend mutation.
             unchanged = bool(old and old.get("state") == "verified" and
                              isinstance(old.get("baseline_fields"), dict) and
@@ -311,39 +281,34 @@ def publish_changes(root, writes, identity, message, checks=None, *, adapter_fac
                     changes.update(store.write_receipt(prospective, identifier, receipt))
                 continue
             item = _record(prospective, identifier)
-            owner = item.get("owner")
-            if owner and not identity.get("migration") and (owner.get("session"), owner.get("token")) != (identity["session"], identity["token"]):
-                raise ProjectError(f"item {identifier} is owned by another session/token")
+            item_writes = store.write_item(prospective, item)
+            prospective = store.apply_writes(prospective, item_writes)
+            changes.update(item_writes)
             receipt = copy.deepcopy(old) if old else {}
             receipt.update(intent_id=uuid.uuid4().hex,
                            content_sha256=runtime._business_digest(prospective, identifier), state="pending",
                            external_id=receipt.get("external_id"), baseline_fields=receipt.get("baseline_fields"),
-                           git_source_commit=None, checked_at=None, release_owner=copy.deepcopy(owner))
+                           git_source_commit=None, checked_at=None)
             receipt.pop("operation", None)
-            if identity.get("migration"):
-                receipt["migration_sync"] = {key: identity[key] for key in ("session", "token")}
-            else:
-                receipt.pop("migration_sync", None)
-                item["owner"] = {key: identity[key] for key in ("machine", "session", "token")}
-            changes.update(store.write_item(prospective, item))
+            receipt.pop("release_owner", None)
+            receipt.pop("migration_sync", None)
             changes.update(store.write_receipt(prospective, identifier, receipt))
             sync_ids.append(identifier)
     if sync_ids:
         adapter.preflight()
-    identity_file = _save_identity(root, identity)
     stage = "business_publish"
     try:
         publication = _publish(root, _bundle(files, changes, identity, message, identifiers, checks))
         if not sync_ids:
-            return {"status": "published", "items": identifiers, "identity_file": str(identity_file), **publication}
+            return {"status": "published", "items": identifiers, **publication}
         stage = "synchronize"
         sync_identity = {key: value for key, value in identity.items() if key != "migration"}
-        result = _sync(root, sync_ids, sync_identity, adapter, publication["commit"], identity_file, config)
-        result.update(items=identifiers, identity_file=str(identity_file))
+        result = _sync(root, sync_ids, sync_identity, adapter, publication["commit"], project_record=config)
+        result.update(items=identifiers)
         return result
     except (ProjectError, OSError, ValueError) as exc:
         details = _error_details(exc)
-        recovery = _recovery(identity, sync_ids, identity_file)
+        recovery = _recovery(sync_ids)
         if stage == "business_publish" and details.get("publication_recovery"):
             recovery["journal"] = details["publication_recovery"]["journal"]
         return {"status": "partial", "code": "publication_incomplete", "action": "resume",
@@ -358,8 +323,6 @@ def apply(root, request, *, dry_run=False, adapter_factory=AoneAdapter):
     request["session"] = request.get("session") or project_identity.current_session()
     if not runtime._nonempty(request["session"]):
         raise ProjectError("request.session is required when the execution session is unavailable")
-    if request.get("token") is None:
-        request["token"] = uuid.uuid4().hex
     request["machine"] = request.get("machine") or socket.gethostname()
     if store.is_v2(runtime._working_files(root, paths=(".project",))):
         raise ProjectError("v2 requires begin/finish; handwritten apply requests are not accepted")
@@ -388,20 +351,15 @@ def apply(root, request, *, dry_run=False, adapter_factory=AoneAdapter):
         if pending:
             return {"status": "partial", **summary,
                     "error": "The requested business content is unchanged but its backend intent is unresolved",
-                    "recovery": _recovery(request, sorted(pending))}
+                    "recovery": _recovery(sorted(pending))}
         return {"status": "no_op", **summary}
     bundle = copy.deepcopy(prepared["bundle"])
     project = runtime._decode_json(prepared["files"][".project/project.json"], ".project/project.json")
     if project.get("backends", {}).get("aone") is None:
-        owned = any((_record(prepared["files"], identifier).get("owner") or {}).get("token") == request["token"]
-                    for identifier in prepared["items"])
-        identity_file = _save_identity(root, request) if owned else None
         try:
             result = {"status": "published", **summary, **_publish(root, bundle)}
         except (ProjectError, OSError, ValueError) as exc:
             result = {"status": "failed", **summary, **_error_details(exc)}
-        if identity_file:
-            result["identity_file"] = str(identity_file)
         return result
     identifiers = []
     for identifier in prepared["items"]:
@@ -418,39 +376,34 @@ def apply(root, request, *, dry_run=False, adapter_factory=AoneAdapter):
         receipt.update(intent_id=uuid.uuid4().hex, content_sha256=prepared["business_digests"][identifier],
                        state="pending", external_id=receipt.get("external_id"),
                        baseline_fields=receipt.get("baseline_fields"), git_source_commit=None,
-                       checked_at=None, release_owner=copy.deepcopy(item.get("owner")))
+                       checked_at=None)
         receipt.pop("operation", None)
         receipt.pop("migration_sync", None)
-        item["owner"] = {key: request[key] for key in ("machine", "session", "token")}
         bundle["writes"][path] = _text(item)
         bundle["writes"][f".project/sync/{identifier}.json"] = _text(receipt)
     adapter = adapter_factory(project) if identifiers else None
     if adapter:
         adapter.preflight()
-    identity_file = _save_identity(root, request) if identifiers else None
     stage = "business_publish"
     try:
         publication = _publish(root, bundle)
         stage = "synchronize"
         if not identifiers:
             return {"status": "published", **summary, **publication}
-        result = _sync(root, identifiers, request, adapter, publication["commit"], identity_file, project)
+        result = _sync(root, identifiers, request, adapter, publication["commit"], project_record=project)
         result.update(summary)
-        result["identity_file"] = str(identity_file)
         return result
     except (ProjectError, OSError, ValueError) as exc:
-        recovery = _recovery(request, identifiers, identity_file) if stage == "synchronize" else {
-            "action": "inspect_publication", "identity_file": str(identity_file) if identity_file else None}
+        recovery = _recovery(identifiers) if stage == "synchronize" else {
+            "action": "inspect_publication"}
         return {"status": "partial", "stage": stage, **summary, **_error_details(exc),
                 "recovery": recovery,
                 "notice": "Inspect the retained Git publication journal before resuming an ambiguous publication."}
 
 
-def resume(root, session, token, selectors=None, *, adapter_factory=AoneAdapter):
+def resume(root, selectors=None, *, adapter_factory=AoneAdapter):
     root = runtime.find_project(root)
-    if not runtime._nonempty(session) or not runtime._nonempty(token):
-        raise ProjectError("resume requires the original nonempty session and token")
-    recovered = runtime.resume_publication(root, session=session, token=token)
+    recovered = runtime.resume_publication(root)
     if recovered.get("status") not in {"no_op", "published"}:
         return recovered
     runtime.refresh_project(root)
@@ -459,14 +412,10 @@ def resume(root, session, token, selectors=None, *, adapter_factory=AoneAdapter)
     if selectors:
         selected = [context._resolve_item(entries, selector) for selector in selectors]
     else:
-        selected = [entry for entry in entries if _sync_owner(snapshot, entry["id"]).get("session") == session
-                    and _sync_owner(snapshot, entry["id"]).get("token") == token]
+        selected = entries
     identifiers = []
     for entry in selected:
         identifier = entry["id"]
-        owner = _sync_owner(snapshot, identifier)
-        if not owner or owner.get("session") != session or owner.get("token") != token:
-            raise ProjectError(f"item {identifier} is owned by another session/token")
         receipt = _receipt(_sync_files(root, [identifier]), identifier)
         if receipt and receipt.get("state") in {"pending", "unknown"}:
             identifiers.append(identifier)
@@ -479,7 +428,9 @@ def resume(root, session, token, selectors=None, *, adapter_factory=AoneAdapter)
     project = store.project(snapshot)
     if project.get("backends", {}).get("aone") is None:
         raise ProjectError("pending synchronization cannot resume with Aone disabled")
-    request = {"session": session, "token": token}
+    request = {"session": project_identity.current_session()}
+    if not runtime._nonempty(request["session"]):
+        raise ProjectError(project_identity.session_error())
     try:
         adapter = adapter_factory(project)
         adapter.preflight()
@@ -489,7 +440,7 @@ def resume(root, session, token, selectors=None, *, adapter_factory=AoneAdapter)
             return {"status": "blocked", "code": "sync_conflict", "action": "blocked", **_error_details(exc)}
         return {"status": "partial", **_error_details(exc),
                 "code": "synchronization_incomplete", "action": "resume",
-                "recovery": _recovery(request, identifiers)}
+                "recovery": _recovery(identifiers)}
 
 
 def _query(args):
@@ -527,7 +478,7 @@ def _item_summary(record):
     result = {key: record[key] for key in ("id", "title", "kind", "status", "archived", "repository", "depends_on")
               if key in record}
     for key, allowed in {"design": ("state", "version"), "delivery": ("status", "required"),
-                         "owner": ("session", "machine"), "development": ("branch", "worktree")}.items():
+                         "development": ("branch", "worktree")}.items():
         value = record.get(key)
         if isinstance(value, dict):
             result[key] = {name: value[name] for name in allowed if name in value}
@@ -726,9 +677,6 @@ def parser():
             command.add_argument("--provenance", required=True)
         if action == "accept":
             command.add_argument("--approval-source", required=True)
-    takeover = sub.add_parser("takeover")
-    takeover.add_argument("item")
-    takeover.add_argument("--approval-source", required=True)
     lifecycle = sub.add_parser("lifecycle")
     lifecycle_actions = lifecycle.add_subparsers(dest="lifecycle_action", required=True)
     lifecycle_status = lifecycle_actions.add_parser("status")
@@ -744,7 +692,6 @@ def parser():
             command.add_argument("--max-snapshots", type=int, default=20)
         if action in {"replan", "handoff"}:
             command.add_argument("--mode", choices=("manual", "autonomous"), default="autonomous", required=action == "handoff")
-            command.add_argument("--coordinator-session")
         if action == "adopt":
             command.add_argument("--worktree", required=True)
         if action == "dispose":
@@ -792,9 +739,6 @@ def parser():
     change.add_argument("--request", required=True, help="JSON file, or - for stdin")
     change.add_argument("--dry-run", action="store_true")
     recovery = sub.add_parser("resume")
-    recovery.add_argument("--session")
-    recovery.add_argument("--token")
-    recovery.add_argument("--identity-file")
     recovery.add_argument("--journal")
     recovery.add_argument("--ticket")
     recovery.add_argument("--migration")
@@ -824,13 +768,11 @@ def _status(root, summarize=_item_summary):
     root = runtime.find_project(root)
     files = runtime._working_files(root)
     items = store.items(files)
-    pending, identities = [], set()
+    pending = []
     for identifier, item in items.items():
         receipt = store.receipt(files, identifier)
         if receipt and receipt.get("state") in {"pending", "unknown"}:
-            owner = _sync_owner(files, identifier)
-            pending.append({"item": identifier, "state": receipt["state"], "session": owner.get("session")})
-            identities.add((owner.get("session"), owner.get("token")))
+            pending.append({"item": identifier, "state": receipt["state"]})
     publications, rejected = [], []
     runtime._no_links(root, ".project-local/publish")
     for path in sorted((root / ".project-local/publish").glob("*/journal.json")):
@@ -846,39 +788,23 @@ def _status(root, summarize=_item_summary):
             rejected.append({"journal": str(path), "state": state["state"],
                              "code": "publication_rejected_before_push"})
             continue
-        identities.add((bundle.get("session"), bundle.get("token")))
         publications.append({"journal": str(path), "state": state.get("state"), "session": bundle.get("session")})
     result = _redact({"status": "ready", "project": store.project(files),
                       "items": [summarize(record) for record in items.values()],
                       "pending_sync": pending, "pending_publications": publications,
                       "rejected_publications": rejected, **refreshed})
     result["pending_migrations"] = _module("project_migration").pending(root)
-    if not identities:
-        if len(result["pending_migrations"]) == 1:
-            result.update(status="partial", migration_operation=result["pending_migrations"][0]["operation"])
-        elif result["pending_migrations"]:
-            result.update(status="blocked", code="migration_operation_ambiguous")
-        return result
-    result.update(status="blocked", code="recovery_identity_ambiguous", action="blocked")
-    if len(identities) != 1:
-        return result
     if len(publications) > 1:
-        result["code"] = "publication_journal_ambiguous"
-        return result
-    session, token = next(iter(identities))
-    current = project_identity.current_session()
-    if not session or not token or (session != current and session != "project-migration"):
-        result["code"] = "recovery_owned_by_another_session"
-        return result
-    runtime._no_links(root, ".project-local/requests")
-    for path in sorted((root / ".project-local/requests").glob("*/identity.json")):
-        runtime._no_links(root, path.relative_to(root).as_posix())
-        identity = runtime.read_json(path)
-        if (identity.get("session"), identity.get("token")) == (session, token):
-            result.update(status="partial", code="recovery_available", action="resume",
-                          recovery={"action": "resume", "identity_file": str(path)})
-            return result
-    result["code"] = "recovery_identity_missing"
+        result.update(status="blocked", code="publication_journal_ambiguous")
+    elif pending or publications:
+        result.update(status="partial", code="recovery_available", action="resume",
+                      recovery={"action": "resume"})
+        if publications:
+            result["recovery"]["journal"] = publications[0]["journal"]
+    elif len(result["pending_migrations"]) == 1:
+        result.update(status="partial", migration_operation=result["pending_migrations"][0]["operation"])
+    elif result["pending_migrations"]:
+        result.update(status="blocked", code="migration_operation_ambiguous")
     return result
 
 
@@ -909,10 +835,6 @@ def _public_result(result, args):
             command += ["--migration", result["migration_operation"]]
         elif result.get("ticket"):
             command += ["--ticket", result["ticket"]]
-        elif recovery.get("identity_file"):
-            command += ["--identity-file", recovery["identity_file"]]
-        elif recovery.get("session") and recovery.get("token"):
-            command += ["--session", recovery["session"], "--token", recovery["token"]]
         if recovery.get("journal"):
             command += ["--journal", recovery["journal"]]
         result["next_command"] = shlex.join(command)
@@ -940,15 +862,12 @@ def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
                 result = autonomy.complete(args.root, args.item, role=args.role, report_file=args.report_file, provenance=args.provenance, publish=publish_changes)
             elif action == "accept":
                 result = autonomy.accept(args.root, args.item, approval_source=args.approval_source, publish=publish_changes)
-        elif args.command == "takeover":
-            result = _module("project_ownership").takeover(args.root, args.item,
-                approval_source=args.approval_source, publish=publish_changes)
         elif args.command == "lifecycle":
             lifecycle = _module("project_lifecycle")
             action = args.lifecycle_action
             fields = {"policy": ("approval_source", "grace_days", "max_retained", "max_snapshots"),
-                      "replan": ("approval_source", "mode", "coordinator_session"),
-                      "handoff": ("approval_source", "mode", "coordinator_session"),
+                      "replan": ("approval_source", "mode"),
+                      "handoff": ("approval_source", "mode"),
                       "dispose": ("generation", "disposition", "reference", "approval_source"),
                       "adopt": ("worktree",),
                       "collect": ("intent", "confirm")}
@@ -998,21 +917,14 @@ def main(argv=None, *, session=project_identity.UNSET, command_prefix=None):
                 result = _migration_output(args.root, result, None)
             elif args.ticket:
                 result = _module("project_workflow").resume(args.root, args.ticket, publish=publish_changes)
-            elif not any((args.identity_file, args.session, args.token, args.journal, args.item)):
-                workflow = _module("project_workflow")
-                result = workflow.resume(args.root, publish=publish_changes)
-                if result.get("status") == "no_op":
-                    identity = workflow._identity(runtime.find_project(args.root))
-                    result = resume(args.root, identity["session"], identity["token"])
+            elif args.journal:
+                result = runtime.resume_publication(args.root, journal=args.journal)
+            elif args.item:
+                result = resume(args.root, args.item)
             else:
-                identity = _json_input(args.identity_file) if args.identity_file else {}
-                if not args.identity_file and not args.session and not args.token:
-                    identity = _module("project_workflow")._identity(runtime.find_project(args.root))
-                session, token = args.session or identity.get("session"), args.token or identity.get("token")
-                if args.journal:
-                    result = runtime.resume_publication(args.root, session=session, token=token, journal=args.journal)
-                else:
-                    result = resume(args.root, session, token, args.item)
+                result = _module("project_workflow").resume(args.root, publish=publish_changes)
+                if result.get("status") == "no_op":
+                    result = resume(args.root)
         elif args.command == "refresh":
             result = {"status": "refreshed", **runtime.refresh_project(args.root)}
         elif args.command == "init":

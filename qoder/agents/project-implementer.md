@@ -37,6 +37,5 @@ contract decision or missing essential capability to the controller, while compl
 work. Native Plan and inherited harness permissions remain binding.
 
 Return the item/role, current contract/source identity including dirty content and source tree, artifact/report paths, actual authorship, checks and resource state. Use the
-controller-assigned contributor-session label for this genuine execution; it is not a worker-liveness
-claim. Include host/tool IDs only when exposed, mark an unexposed runtime model unverified, and never
+controller-assigned contributor-session label for this genuine execution. Include host/tool IDs only when exposed, mark an unexposed runtime model unverified, and never
 fabricate evidence or independent approval.

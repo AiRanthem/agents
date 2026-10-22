@@ -1,6 +1,6 @@
 # Actual delivery and cleanup
 
-Apply explicit [user verification decisions](../../manage-workitems/references/commands.md#user-verification-decisions) before the default gates below. Actual human acceptance may replace independent implementation review with an attributed pass. Any verification checkpoint may be explicitly skipped for the specified scope; preserve its user source and report the skipped verification rather than inventing evidence. Source publication, cleanup actions, ownership and transaction safety retain their separate authorization.
+Apply explicit [user verification decisions](../../manage-workitems/references/commands.md#user-verification-decisions) before the default gates below. Actual human acceptance may replace independent implementation review with an attributed pass. Any verification checkpoint may be explicitly skipped for the specified scope; preserve its user source and report the skipped verification rather than inventing evidence. Source publication and cleanup require covering authorization; transaction safety remains in force.
 
 Use the project entrypoint resolved by the [fixed command contract](../../manage-workitems/references/commands.md), preserving the caller's binding. Record actual obligation coverage through `begin delivery-record ID --kind KIND --reference SOURCE --provenance SOURCE`, repeating paired kinds/references as needed. Read the complete returned payload and required original external instructions, write only the returned Markdown report and execute `finish_command` unchanged.
 

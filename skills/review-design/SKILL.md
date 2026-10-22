@@ -13,7 +13,7 @@ Read [discussion and authorization](../advance-project/references/discussion-and
 
 - **Delegated autonomous project stage:** Read [stage executor](../advance-project/references/stage-executor.md). Read the original requirements, approved design, applicable original instructions and primary evidence. Write only the assigned report and any expressly authorized candidate mechanical corrections under the shared standard, then return them to the controller; do not load controller write instructions below.
 - **Project controller or ordinary project review session, including a fresh subagent assigned the complete ordinary review:** Read [project mode](references/project-mode.md).
-- **Ordinary report-only review of an owned project item:** Read the report-only boundary in [project mode](references/project-mode.md); the owner registers your actual evidence, while you retain independent assessment.
+- **Delegated report-only project review:** Read the report-only boundary in [project mode](references/project-mode.md); the project operator registers your actual evidence, while you retain independent assessment.
 - **Outside a project stage:** Read [host modes and status](references/execution-modes.md).
 
 If the actual assigned role is `design-revision`, route directly to [explore-design](../explore-design/SKILL.md) as the assigned authoring stage and stop this independent-review entry. Return the candidate and revision evidence under the stage-executor contract; do not conduct an independent review or issue an independent verdict on that revision. This role check also applies when the host role template initially invokes `review-design`.

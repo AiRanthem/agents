@@ -94,9 +94,11 @@ def root_entry(project):
 def item_entry(identifier):
     return f'''# Work item {identifier}
 
-Use the project root's generated `AGENTS.md` and its resolved project command entrypoint, retaining the caller's identity and command prefix. For the requested Markdown workflow operation on `{identifier}`, run `begin OP {identifier}` with typed inputs. Read its complete `read` payload and required original external instructions, edit only its absolute `editable` Markdown paths, and execute the returned `finish_command` unchanged; review and reuse checkpoints supply only their program-declared result, provenance and applicable contract-preservation or mechanical-correction arguments after assessment.
+Use the project root's generated `AGENTS.md` and its resolved project command entrypoint. Execute one project operation at a time on this machine; complete or recover the current operation before starting the next. Any local session can continue an existing operation using its original ticket or journal. Preserve its original author and reviewer provenance; record the actual source for each new operation.
 
-`published` or `no_op` ends the operation; `partial` permits only the returned resume command; `blocked` with `code: stale_ticket` permits only its returned begin command; expired tickets carrying authorization or review evidence return `code: stale_evidence` without a continuation command; otherwise report the listed blockers or missing facts and stop the affected operation. YAML, state, guards, ownership, review bindings, dependency/fix gates and Git/Aone publication belong to the program. The spec is the complete current design without machine-status frontmatter. Formal spec publication attests prior user approval; no separate approval registration gates its independent review. A migrated label or old review cannot establish current independence or implementation permission. Use the root command contract for direct execution handoff, source-generation replacement and internal-resource lifecycle commands. Preserve the user's code-submission and external-action boundaries.
+For the requested Markdown operation on `{identifier}`, run `begin OP {identifier}` with typed inputs. Read its complete `read` payload and required original external instructions, edit its absolute `editable` Markdown paths, and execute the returned `finish_command` unchanged. Review and reuse checkpoints accept their declared result, provenance and applicable contract-preservation or mechanical-correction arguments after assessment.
+
+`published` or `no_op` completes the operation. For `partial`, execute the returned resume command. For `blocked`, follow the returned continuation or report the listed blockers and missing facts. `stale_ticket` returns a fresh begin command; `stale_evidence` requires fresh authorization or review evidence. The program maintains machine state, input guards, artifact-bound review evidence, dependency and fix gates, and Git/Aone publication recovery. Keep the spec as the complete approved design in Markdown. Formal spec publication records the user's approval and leads to independent review of the current artifacts by their actual independent reviewer. Apply the root command contract to execution-mode changes, source replacement and resource lifecycle operations. Preserve the user's source-submission and external-action authorization boundaries.
 '''
 
 
@@ -160,27 +162,26 @@ def _instructions_required(sources, *, custom=False):
 
 
 def validate_publication(bundle, current, prospective):
-    """Permit only the exact deterministic migration under unchanged claims."""
+    """Permit only the exact deterministic migration against its exact retained inputs."""
     instructions = prospective.get('.project/business-instructions.md')
     prepared = prepare_migration(current, instructions=instructions.decode('utf-8') if instructions is not None else None)
     if prepared['status'] not in {'prepared', 'no_op'}:
         raise runtime.ProjectError('migration publication requires a valid deterministic candidate')
     expected = store.apply_writes(current, prepared['writes'])
     actual = dict(prospective)
-    actor = {key: bundle[key] for key in ('session', 'token')}
     for identifier, item in store.items(expected).items():
         name = store.receipt_path(expected, identifier)
         receipt = store.receipt(actual, identifier)
-        if receipt and receipt.get('migration_sync') == actor and receipt.get('state') == 'pending':
+        if receipt and receipt.get('state') == 'pending':
             planned = copy.deepcopy(store.receipt(current, identifier) or {})
             planned.update(intent_id=receipt.get('intent_id'), state='pending',
                            content_sha256=runtime._business_digest(expected, identifier),
                            external_id=planned.get('external_id'), baseline_fields=planned.get('baseline_fields'),
-                           git_source_commit=None, checked_at=None, release_owner=copy.deepcopy(item.get('owner')),
-                           migration_sync=actor)
-            planned.pop('operation', None)
+                           git_source_commit=None, checked_at=None)
+            for key in ('operation', 'release_owner', 'migration_sync'):
+                planned.pop(key, None)
             if receipt != planned:
-                raise runtime.ProjectError('migration synchronization must preserve the original owner and content')
+                raise runtime.ProjectError('migration synchronization must preserve the original content')
             if name in expected:
                 actual[name] = expected[name]
             else:
@@ -193,22 +194,6 @@ def validate_publication(bundle, current, prospective):
     if actual != expected or any(bundle['checks'].get(name, 'missing') != digest
                                  for name, digest in prepared['checks'].items()):
         raise runtime.ProjectError('migration publication differs from the guarded deterministic candidate')
-
-
-def sync_publication(bundle, current, prospective, identifier):
-    """A migration sync identity may update its receipt, never the item claim."""
-    receipt = store.receipt(current, identifier)
-    actor = {key: bundle[key] for key in ('session', 'token')}
-    if not receipt or receipt.get('state') not in {'pending', 'unknown'} or receipt.get('migration_sync') != actor:
-        return False
-    updated = store.receipt(prospective, identifier)
-    immutable = ('intent_id', 'content_sha256', 'release_owner', 'migration_sync')
-    if not updated or any(updated.get(key) != receipt.get(key) for key in immutable):
-        return False
-    receipts = {store.receipt_path(current, value) for value in store.items(current)}
-    return ({name: data for name, data in current.items() if name not in receipts} ==
-            {name: data for name, data in prospective.items() if name not in receipts} and
-            receipt.get('content_sha256') == runtime._business_digest(prospective, identifier))
 
 
 def _minimal_provenance(marker, files):
@@ -372,11 +357,12 @@ def prepare_migration(files, *, instructions=None):
             documents.setdefault('spec', 'spec.md')
         writes.update({name: text for name, text in store.write_item(interim, record).items()
                        if files.get(name) != text.encode('utf-8')})
-        if not v2_source:
-            receipt = store.receipt(files, identifier)
-            if receipt is not None:
+        receipt = store.receipt(files, identifier)
+        if receipt is not None:
+            if not v2_source:
                 writes[f'.project/sync/{identifier}.json'] = None
-                writes.update(store.write_receipt(interim, identifier, receipt))
+            writes.update({name: text for name, text in store.write_receipt(interim, identifier, receipt).items()
+                           if files.get(name) != text.encode('utf-8')})
     interim = store.apply_writes(files, writes)
     if '.project/graph.yaml' not in files:
         _put(writes, files, '.project/graph.yaml', store.dump_yaml({'revision': 0}))
@@ -439,7 +425,7 @@ def _read_intent(root, operation):
         raise runtime.ProjectError('invalid retained migration operation')
     result, identity = record['result'], record['identity']
     if (result.get('migration_operation') != operation or result.get('validated') is not True or
-            identity.get('session') != 'project-migration' or identity.get('token') != operation or identity.get('migration') is not True):
+            identity.get('session') != 'project-migration' or identity.get('operation', identity.get('token')) != operation or identity.get('migration') is not True):
         raise runtime.ProjectError('retained migration identity or validation does not match its operation')
     runtime._validate_bundle(dict(identity, writes=result.get('writes'), checks=result.get('checks'), message='Resume migration'))
     return record
@@ -472,10 +458,10 @@ def resume(root, operation, *, publish, recover, inspect):
     # Never regenerate the candidate from newer installed sources during recovery.
     journal = (result.get('publication', {}).get('recovery') or {}).get('journal')
     try:
-        recovered = (runtime.resume_publication(root, session=identity['session'], token=identity['token'], journal=journal)
-                     if journal else recover(root, identity['session'], identity['token']))
+        recovered = (runtime.resume_publication(root, journal=journal)
+                     if journal else recover(root))
         if journal and recovered.get('status') in {'published', 'no_op'}:
-            recovered = recover(root, identity['session'], identity['token'])
+            recovered = recover(root)
         if recovered.get('code') == 'publication_rejected_before_push':
             authority = inspect(root)
             if not authority.get('pending_publications') and not authority.get('pending_sync'):
@@ -569,7 +555,7 @@ def migrate(root, *, dry_run=False, publish=None, instructions_file=None):
     if publish is None:
         raise runtime.ProjectError('migration requires the guarded publication coordinator; use dry_run to inspect')
     operation = uuid.uuid4().hex
-    identity = {'session': 'project-migration', 'token': operation, 'machine': platform.node() or 'localhost',
+    identity = {'session': 'project-migration', 'operation': operation, 'machine': platform.node() or 'localhost',
                 'migration': True}
     result.update(status='partial', migration_operation=operation)
     record = {'identity': identity, 'result': result}

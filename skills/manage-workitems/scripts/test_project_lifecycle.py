@@ -9,7 +9,6 @@ import project
 import project_autonomy as autonomy
 import project_development as development
 import project_lifecycle as lifecycle
-import project_ownership as ownership
 import project_removal as removal
 import project_runtime as runtime
 import project_store as store
@@ -73,6 +72,15 @@ class LifecycleCapacityTest(unittest.TestCase):
         item['workflow']['lifecycle']['generations'][key]['unused'] = {'source': 'still active'}
         with self.assertRaisesRegex(runtime.ProjectError, 'unsupported retained generation'):
             lifecycle.validate(item)
+
+    def test_historical_resource_locator_survives_without_host_routing(self):
+        path = 'worktrees/retained'
+        key = lifecycle._id('A', 'worktree', ['historical-host', path])
+        item = {'id': 'A', 'workflow': {'lifecycle': {'resources': {key: {
+            'id': key, 'kind': 'worktree', 'host': 'historical-host'}}}}}
+        current, row = lifecycle._resource(item, 'worktree', path)
+        self.assertEqual(current, key)
+        self.assertNotIn('host', row)
 
     def test_pending_current_source_and_disposed_resident_copies_share_one_capacity(self):
         item = {'id': 'A', 'development': {'worktree': 'current'}, 'workflow': {'lifecycle': {
@@ -266,16 +274,15 @@ class LifecycleTest(unittest.TestCase):
         self.assertIsNone(development._remote_head(self.p.code, captured['url'], captured['ref']))
 
 
-    def test_project_does_not_require_executor_closure_but_foreign_claim_is_fenced(self):
+    def test_later_session_replans_and_preserves_legacy_execution_evidence(self):
         self.p.configure('A')
         self.p.authorize('A')
         self.policy('A')
-        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'other'}), self.assertRaisesRegex(runtime.ProjectError, 'control claim'):
-            lifecycle.replan(self.root, 'A', approval_source='Unauthorized foreign claim', publish=self.f.publisher)
         item = self.p.item('A')
         item['workflow']['autonomy'].update(current='0' * 32, executions={})
         self.f.install(item)
-        result = lifecycle.replan(self.root, 'A', approval_source='User replans source managed by this agent', publish=self.f.publisher)
+        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'later-session'}):
+            result = lifecycle.replan(self.root, 'A', approval_source='User replans preserved source', publish=self.f.publisher)
         self.assertEqual(result['status'], 'published', result)
         self.assertNotIn('current', self.p.item('A')['workflow']['autonomy'])
 
@@ -408,20 +415,16 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(git(self.p.code, 'rev-parse', branch), head)
 
 
-    def test_takeover_continues_exact_collection_without_original_conversation(self):
+    def test_new_session_continues_exact_collection_without_original_conversation(self):
         self.retired_clean_source()
         plan = lifecycle.plan(self.root, 'B', publish=self.f.publisher)
         self.assertTrue(plan['resources'])
         original = copy.deepcopy(lifecycle.state(self.p.item('B'))['gc'])
         with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'receiving-controller'}):
-            transferred = ownership.takeover(self.root, 'B', approval_source='User continues B in the receiving conversation',
-                                             publish=self.f.publisher)
-            self.assertEqual(transferred['status'], 'published', transferred)
             self.assertEqual(lifecycle.state(self.p.item('B'))['gc'], original)
             result = lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)
             self.assertEqual(result['status'], 'published', result)
-        with self.assertRaisesRegex(runtime.ProjectError, 'control claim'):
-            lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)
+        self.assertEqual(lifecycle.collect(self.root, 'B', intent=plan['intent'], confirm=plan['digest'], publish=self.f.publisher)['status'], 'no_op')
 
 
     def test_source_replacement_waits_for_actual_dependency_delivery_in_both_modes(self):
@@ -440,18 +443,18 @@ class LifecycleTest(unittest.TestCase):
             self.assertTrue(source.is_dir())
             self.assertTrue(lifecycle.state(self.p.item('A'))['replacement_pending'])
 
-    def test_cross_host_handoff_opens_fresh_baseline_without_reinterpreting_old_path(self):
+    def test_replacement_keeps_recorded_resource_host_without_reinterpreting_old_path(self):
         source = self.source()
         self.policy('A')
         result = lifecycle.replan(self.root, 'A', approval_source='Replan and transfer to receiving coordinator',
-                                  mode='manual', coordinator_session='receiving-coordinator', publish=self.f.publisher)
+                                  mode='manual', publish=self.f.publisher)
         self.assertEqual(result['status'], 'published', result)
         original = copy.deepcopy(lifecycle.state(self.p.item('A'))['generations'])
         with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'receiving-coordinator'}), mock.patch('socket.gethostname', return_value='receiving-host'):
             result = lifecycle.prepare(self.root, 'A', publish=self.f.publisher)
             self.assertEqual(result['status'], 'published', result)
             current = self.p.item('A')
-            self.assertEqual(current['development']['host'], 'receiving-host')
+            self.assertNotIn('host', current['development'])
             self.assertEqual(lifecycle.state(current)['generations'], original)
             self.assertTrue(source.is_dir())
             self.assertNotEqual(current['development']['worktree'], next(iter(original.values()))['development']['worktree'])
