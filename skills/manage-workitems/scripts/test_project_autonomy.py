@@ -221,8 +221,10 @@ class AutonomyTest(unittest.TestCase):
         self.assertEqual(self.state()["state"], "awaiting_acceptance")
         decision.write_text("Changed approved decision after the independent code review.\n")
         with self.assertRaises(runtime.ProjectError):
-            autonomy.accept(self.root, "A", approval_source="User cannot reuse the obsolete review",
-                            publish=self.f.publisher)
+            autonomy._acceptance_review(self.root, runtime._working_files(self.root), self.f.record())
+        self.assertEqual(autonomy.accept(self.root, "A", approval_source="User explicitly accepts the current implementation and decisions",
+                                         publish=self.f.publisher)["status"], "published")
+        self.assertEqual(self.state()["state"], "accepted_awaiting_delivery")
 
     def test_project_configuration_change_invalidates_both_reviews_before_acceptance(self):
         self.reviewed()
@@ -234,10 +236,9 @@ class AutonomyTest(unittest.TestCase):
         files = runtime._working_files(self.root)
         for check in (workflow._approved, workflow._implementation_approved):
             with self.subTest(check=check.__name__), self.assertRaises(runtime.ProjectError):
-                check(files, self.f.record())
+                check(files, self.f.record(), **({"root": self.root} if check is workflow._implementation_approved else {}))
         with self.assertRaises(runtime.ProjectError):
-            autonomy.accept(self.root, "A", approval_source="User cannot accept a stale repository review",
-                            publish=self.f.publisher)
+            autonomy._acceptance_review(self.root, files, self.f.record())
         path.write_bytes(original)
         self.assertEqual(autonomy.accept(self.root, "A", approval_source="User accepts the current repository",
                                         publish=self.f.publisher)["status"], "published")
@@ -331,12 +332,17 @@ class AutonomyTest(unittest.TestCase):
         result = workflow.finish(self.root, stage["ticket"], options={"result": "pass", "provenance": "Actual prior snapshot review"}, publish=self.f.publisher)
         self.assertEqual(result["status"], "blocked", result)
 
-    def test_new_design_failure_prevents_accepting_an_earlier_code_pass(self):
+    def test_new_explicit_human_acceptance_replaces_failed_design_and_earlier_code_pass(self):
         self.reviewed()
         self.finish_execution(self.dispatch("design-review", "new-design-reviewer"), outcome="fail")
         self.assertEqual(self.state()["next_role"], "design-revision")
         with self.assertRaisesRegex(runtime.ProjectError, "design"):
-            autonomy.accept(self.root, "A", approval_source="Earlier code pass cannot override current design findings", publish=self.f.publisher)
+            autonomy._acceptance_review(self.root, runtime._working_files(self.root), self.f.record())
+        self.assertEqual(autonomy.accept(self.root, "A", approval_source="User explicitly accepts the current implementation despite the earlier design assessment",
+                                         publish=self.f.publisher)["status"], "published")
+        self.assertEqual(self.f.record()["development"]["review"]["approval_kind"], "human_acceptance")
+        self.assertEqual(self.f.record()["design"]["review"]["result"], "fail")
+        self.assertEqual(self.state()["state"], "accepted_awaiting_delivery")
 
     def test_contract_internal_revision_needs_independent_confirmation(self):
         self.approved()

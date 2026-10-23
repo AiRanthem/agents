@@ -419,7 +419,7 @@ def dispose(root, selector, *, generation, disposition, reference, approval_sour
     if not value:
         raise ProjectError('unknown retained generation')
     if disposition == 'migrated':
-        workflow._implementation_approved(files, item)
+        workflow._implementation_approved(files, item, root=root)
         if (item.get('development') or {}).get('worktree') == value['development']['worktree']:
             raise ProjectError('replacement generation must differ from the source')
         if workflow._code_snapshot(root, item, store.project(files)) != item['development']['reviewed_snapshot']:

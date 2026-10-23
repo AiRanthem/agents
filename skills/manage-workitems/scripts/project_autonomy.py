@@ -240,8 +240,8 @@ def _artifact_binding(root, files, item):
     return binding
 
 
-def _acceptance_valid(root, files, item):
-    if workflow._validation_waived(files, item, "human-acceptance"):
+def _acceptance_valid(root, files, item, *, allow_waiver=True):
+    if allow_waiver and workflow._validation_waived(files, item, "human-acceptance"):
         return True
     acceptance = _state(item).get("acceptance") or {}
     if acceptance.get("status") != "accepted" or not acceptance.get("source"):
@@ -290,6 +290,10 @@ def _next(root, files, item):
     if item.get("kind") == "aggregate":
         result.update(state="accepted_awaiting_delivery" if _acceptance_valid(root, files, item) else "blocked", reasons=[] if _acceptance_valid(root, files, item) else ["aggregate_manual_acceptance"])
         return result
+    if _acceptance_valid(root, files, item, allow_waiver=False):
+        reasons = _dependency_blocks(root, files, item)
+        result.update(state="blocked" if reasons else "accepted_awaiting_delivery", reasons=reasons)
+        return result
     authorization = state.get("authorization") or {}
     lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
     if not authorization:
@@ -329,7 +333,7 @@ def _next(root, files, item):
     reviewed = (review.get("result") == "pass" and bool(review.get("code_snapshot")) and review["code_snapshot"].get("tree") == (binding.get("code_snapshot") or {}).get("tree")) or workflow._validation_waived(files, item, "implementation-review")
     if reviewed:
         try:
-            workflow._implementation_approved(files, item)
+            workflow._implementation_approved(files, item, root=root)
         except ProjectError:
             reviewed = False
     if reviewed:
@@ -536,7 +540,7 @@ def _acceptance_review(root, files, item):
     if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
         raise ProjectError("user acceptance requires the current approved contract")
     missing_root = _cleaned_code_root(root, files, item) if item.get("cleanup") == "done" else None
-    workflow._implementation_approved(files, item, missing_root=missing_root)
+    workflow._implementation_approved(files, item, root=root, missing_root=missing_root)
     review = item["development"].get("review") or {}
     current = (item["development"].get("reviewed_snapshot", {}) if missing_root is not None else
                workflow._code_snapshot(root, item, store.project(files)))
@@ -546,37 +550,73 @@ def _acceptance_review(root, files, item):
         raise ProjectError("implementation approval does not cover the current code")
 
 
+def record_acceptance(root, files, item, manifest, writes, *, report=None):
+    """Build current acceptance evidence; callers own publication and input guards."""
+    source = workflow._text(manifest["options"].get("approval_source"), "actual user acceptance source")
+    identity = manifest["identity"]
+    if item.get("kind") != "aggregate":
+        if not item.get("development"):
+            raise ProjectError("human acceptance requires recorded development")
+        if item.get("status") != "done" and (item.get("archived") or item.get("status") == "cancelled"):
+            raise ProjectError("human acceptance requires an active implementation")
+        current_review = False
+        if report is None:
+            try:
+                _acceptance_review(root, files, item)
+                current_review = True
+            except ProjectError:
+                pass
+        if not current_review:
+            if item.get("status") == "done" or item.get("cleanup") == "done":
+                raise ProjectError("historical acceptance requires its retained current implementation approval")
+            published = bool(files.get(workflow._spec(item), b"").strip() and item.get("design", {}).get("version", 0) >= 1)
+            if not published and not workflow._validation_waived(files, item, "design-review"):
+                raise ProjectError("user acceptance requires the current published contract")
+            current = workflow._code_snapshot(root, item, store.project(files))
+            if manifest.get("code_snapshot", current) != current:
+                raise ProjectError("code snapshot changed during human acceptance")
+            body = report if report is not None else "# Human acceptance\n\n" + source + "\n"
+            workflow._text(body, "implementation/design comparison report")
+            record = workflow._report(root, manifest, item, files, writes, "development-finish", body)
+            hashes = _read_hashes(root, files, item, "code-review")
+            # Required reads bind the final published spec, while the operation's
+            # original-input guards still protect the comparison that produced it.
+            for name, value in writes.items():
+                path = str(root / name)
+                if path in hashes:
+                    hashes[path] = workflow._hash(value)
+            record.update(result="pass", approval_kind="human_acceptance", source=source,
+                          provenance=source, recorded_by=identity["session"],
+                          code_snapshot=current, read_hashes=hashes)
+            writes["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)
+            item["development"].update(review=record, reviewed_snapshot=current)
+            item["status"] = "awaiting_delivery"
+            design = item.get("design") or {}
+            if files.get(workflow._spec(item), b"").strip() and design.get("version", 0) >= 1:
+                design["approval"] = {**workflow._approval_binding(files, item), "kind": "human_acceptance",
+                    "source": source, "session": identity["session"], "recorded_by": identity["session"],
+                    "record": record["id"]}
+                design["state"] = "implementable"
+                state = _state(item)
+                state["approved_contract"] = {"approval": copy.deepcopy(design["approval"]),
+                    "requirement": files.get(workflow._documents(item)["requirement"], b"").decode("utf-8"),
+                    "spec": files[workflow._spec(item)].decode("utf-8"),
+                    "decision": files.get(workflow._documents(item)["decision"], b"").decode("utf-8")}
+            # This is a prospective record: its final spec may not be on disk
+            # until publication. The caller guards original reads and code;
+            # consumers validate these final read hashes after publication.
+    _state(item)["acceptance"] = {"status": "accepted", "source": source,
+        "recorded_by": identity["session"], "created_at": workflow._now(), "binding": _artifact_binding(root, files, item)}
+
+
 def accept(root, selector, *, approval_source, publish=None):
     workflow._text(approval_source, "actual user acceptance source")
     root, files = _files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
     identity = workflow._identity(root)
+    manifest = {"ticket": workflow.secrets.token_hex(16), "identity": identity,
+                "created_at": workflow._now(), "base_commit": workflow._base(item),
+                "options": {"approval_source": approval_source}}
     extra = {}
-    if item.get("kind") != "aggregate":
-        if not item.get("development"):
-            raise ProjectError("human acceptance requires recorded development")
-        # An actual current human acceptance can replace missing/failed/stale code
-        # review, but does not silently waive another design gate.
-        try:
-            _acceptance_review(root, files, item)
-        except ProjectError:
-            if not _approved_contract(files, item) and not workflow._validation_waived(files, item, "design-review"):
-                raise ProjectError("user acceptance requires the current approved contract")
-            if item.get("design", {}).get("review", {}).get("result") == "fail" and not workflow._validation_waived(files, item, "design-review"):
-                raise ProjectError("unresolved independent design findings block implementation acceptance")
-            manifest = {"ticket": workflow.secrets.token_hex(16), "identity": identity,
-                        "created_at": workflow._now(), "base_commit": workflow._base(item),
-                        "options": {"provenance": approval_source}}
-            record = workflow._report(root, manifest, item, files, extra, "development-finish",
-                                      "# Human acceptance\n\n" + approval_source + "\n")
-            current = workflow._code_snapshot(root, item, store.project(files))
-            record.update(result="pass", approval_kind="human_acceptance", source=approval_source,
-                          recorded_by=identity["session"], code_snapshot=current,
-                          read_hashes=_read_hashes(root, files, item, "code-review"))
-            extra["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)
-            item["development"].update(review=record, reviewed_snapshot=current)
-            item["status"] = "awaiting_delivery"
-            _acceptance_review(root, files, item)
-    _state(item)["acceptance"] = {"status": "accepted", "source": approval_source,
-        "recorded_by": identity["session"], "created_at": workflow._now(), "binding": _artifact_binding(root, files, item)}
+    record_acceptance(root, files, item, manifest, extra)
     return _publish(root, files, [item], identity, "Record user acceptance " + item["id"], publish, extra=extra)
