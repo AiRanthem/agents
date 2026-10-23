@@ -1,0 +1,17 @@
+id: 2-e2b-team-limits-status
+title: '补齐 E2B 团队 limits 与 status 接口（Issue #1115）'
+kind: development
+status: new
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft
