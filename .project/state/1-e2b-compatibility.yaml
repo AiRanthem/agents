@@ -1,7 +1,3 @@
-owner:
-  machine: Sophon-1A.local
-  session: 01a15f95-d0a8-7d72-9e73-1eb01993b35d
-  token: 787ce429fc9d35b5fa096ed2d9624659393afbefddee319d5b504ce299395272
 development:
   repository: agents
   worktree: worktrees/1-e2b-compatibility
@@ -894,60 +890,6 @@ workflow:
     basis_review: 96344c83b286eb313d760a9349ea99a4
     basis_sha256: 85825846bc83b54cb7e387a6cfb98acc1b3bc5da169771e2bef3e32b6d9f22d8
   autonomy: {}
-  control_transfers:
-    f0e3c2779776e81ffb7a287218624212:
-      id: f0e3c2779776e81ffb7a287218624212
-      source: 会话 e933eec0-f2b0-46e5-8b79-c2eef79d1b20：用户要求同步设计文档并按已确认的修复计划继续实施本项
-      from:
-        session: ef9ae57d-ce49-4e90-bb9d-dd3b39f9be4e
-        token: 13da6c45fbf9e7cb54969d6fddc3f8e219d6dce7123c95b111b75e83e847af75
-        machine: Sophon-1A.local
-      to:
-        machine: Sophon-1A.local
-        session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
-        token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
-      coordinator: null
-      created_at: '2026-10-21T08:42:51.606000+00:00'
-    9b840073066d25f6023e08aa01be6122:
-      id: 9b840073066d25f6023e08aa01be6122
-      source: 'conversation e24d30c2-7d22-4166-b75d-975eb7ae5ad0, 2026-10-21 17:54
-        user: 帮我落地一下改动 (land the owner-scoped snapshot alias change for item 1)'
-      from:
-        machine: Sophon-1A.local
-        session: e933eec0-f2b0-46e5-8b79-c2eef79d1b20
-        token: 4f6933d3e338055c1e3ff14e30cabb7c3fbf158094c383c77dc34edfd323811b
-      to:
-        machine: Sophon-1A.local
-        session: e24d30c2-7d22-4166-b75d-975eb7ae5ad0
-        token: db8b83552a4cb9e449c1274e15a258ef1f9ffd59eef3019240e4a245281f26e3
-      coordinator: null
-      created_at: '2026-10-21T09:56:45.027760+00:00'
-    61f8a85cb4d0c38592193ea117850f7d:
-      id: 61f8a85cb4d0c38592193ea117850f7d
-      source: 会话 3387366e-d695-4926-9dea-fc31e52a5491：用户 2026-10-22 要求设计评审发现的修复方案并回复“全部批准”，覆盖在当前会话继续该工作项范围
-      from:
-        machine: Sophon-1A.local
-        session: e24d30c2-7d22-4166-b75d-975eb7ae5ad0
-        token: db8b83552a4cb9e449c1274e15a258ef1f9ffd59eef3019240e4a245281f26e3
-      to:
-        machine: Sophon-1A.local
-        session: 3387366e-d695-4926-9dea-fc31e52a5491
-        token: 03b2dc05e9832b1ce831138670d7e30a7e779724fee9a4c02a439141e5893e9e
-      coordinator: null
-      created_at: '2026-10-21T17:06:49.605832+00:00'
-    f05d3a8f8692b424ed6d0897c5874f13:
-      id: f05d3a8f8692b424ed6d0897c5874f13
-      source: 本会话用户明确要求：接管工作项。承接前文工作项1的人工验收与源码提交PR登记。
-      from:
-        machine: Sophon-1A.local
-        session: 3387366e-d695-4926-9dea-fc31e52a5491
-        token: 03b2dc05e9832b1ce831138670d7e30a7e779724fee9a4c02a439141e5893e9e
-      to:
-        machine: Sophon-1A.local
-        session: 01a15f95-d0a8-7d72-9e73-1eb01993b35d
-        token: 787ce429fc9d35b5fa096ed2d9624659393afbefddee319d5b504ce299395272
-      coordinator: null
-      created_at: '2026-10-21T17:57:30.346248+00:00'
 design:
   approval:
     requirement_sha256: 675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0
