@@ -1,28 +1,28 @@
-# 补齐 E2B 团队 limits 与 status 接口（Issue #1115）
+# 补齐 E2B 团队 limits 接口（Issue #1115）
 
 ## 目标
 
-解决 [openkruise/agents Issue #1115](https://github.com/openkruise/agents/issues/1115)，补齐 E2B 团队资源限制与团队状态查询接口，避免调用这两个接口的兼容客户端因路由缺失收到 404。
+解决 [openkruise/agents Issue #1115](https://github.com/openkruise/agents/issues/1115) 中的团队资源限制查询缺口，补齐 E2B `limits` 接口，避免调用该接口的兼容客户端因路由缺失收到 404。
 
 用户于 2026-10-23 明确提出「新需求，解决 Issue https://github.com/openkruise/agents/issues/1115」，确认需要解决该具体问题。该确认覆盖问题解决必要性，不代表已批准尚未形成的设计。
+
+用户在本次设计讨论中明确决定「这个接口我们先不支持」，所指为 `status` 接口。本工作项当前仅覆盖 `limits`；团队状态查询暂不支持，不属于本次验收或交付范围。
 
 ## 范围
 
 - 增加 `GET /teams/{teamID}/limits`，按官方协议返回 `TeamLimitsResponse`，从团队已配置配额与平台默认值形成有效限制；没有对应能力的字段需明确其语义和默认值依据。
-- 增加 `GET /teams/{teamID}/status`，按官方协议返回 `TeamStatusResponse`。如部署没有封禁或阻断能力，可按 Issue 提议返回 `isBanned=false`、`isBlocked=false`、空或省略的 `blockedReason`，并说明该能力边界。
 - 复用现有团队与 API-key 认证机制：团队身份只能读取自身团队，管理员可以读取任意团队。缺失团队与跨团队访问的错误语义须与现有团队接口及官方协议核对。
 - 通过 `RegisterE2BRoute` 在现有 `GET /teams` 附近注册，保持 `keyCfg != nil` 的启用条件。
-- 不包含团队 metrics 接口、新的认证系统或云端封禁系统建设。
+- 不包含团队 `status`、`metrics` 接口、新的认证系统或云端封禁系统建设。
 
 协议参考为 Issue 指定的 `e2b-dev/E2B@db8d80dad5be3d6a94c960e29017c8a9e29680c4/spec/openapi.yml`；Issue 报告的 Agents 基线为 `6c50bb16d810a9bdf0c2363f0906c39338b4d85f`。实际开发基线和协议字段须在设计阶段核验。
 
 ## 验收条件
 
-1. 两个接口在启用团队认证配置时可访问，响应结构符合指定官方 OpenAPI；路由门控与现有 E2B 团队接口一致。
+1. `limits` 接口在启用团队认证配置时可访问，响应结构符合指定官方 OpenAPI；路由门控与现有 E2B 团队接口一致。
 2. 团队身份查询自身团队成功，跨团队查询被拒绝；管理员可查询任意存在的团队；缺失团队返回约定的错误，不能绕过鉴权。
 3. limits 返回值与现有配额或明确的平台默认值一致；设计明确字段映射、单位、缺省与不支持能力的表达，避免对未实施的限制作出错误承诺。
-4. status 的封禁、阻断及原因字段符合协议与实际部署能力，并记录缺少云端封禁能力时的行为。
-5. 用最小有意义的单元或接口级测试覆盖两个接口的自身团队成功、跨团队拒绝、管理员访问、缺失团队、响应值和路由门控；E2E 的适用环境及执行情况单独说明，未执行不得报告通过。
+4. 用最小有意义的单元或接口级测试覆盖 `limits` 接口的自身团队成功、跨团队拒绝、管理员访问、缺失团队、响应值和路由门控；E2E 的适用环境及执行情况单独说明，未执行不得报告通过。
 
 ## 交付结果
 
