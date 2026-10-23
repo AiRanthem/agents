@@ -42,8 +42,22 @@ import (
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache/controllers"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 )
+
+// CacheScope configures informer filtering scope for the cache's controller
+// manager. It is intentionally neutral — it must not depend on sandbox-manager
+// — so that pkg/cache stays importable by the sandbox controller. Callers map
+// their own options onto it at the call site.
+type CacheScope struct {
+	// SandboxNamespace scopes the Sandbox-family CR informers; empty means all
+	// namespaces.
+	SandboxNamespace string
+	// SystemNamespace scopes the Secret/ConfigMap informers; empty disables them.
+	SystemNamespace string
+	// SandboxLabelSelector is an optional label selector applied to the
+	// Sandbox-family CR informers.
+	SandboxLabelSelector string
+}
 
 // watchErrorSettle is how long sandbox informer health stays conservative after
 // a watch error. It is well under the anti-drift grace, so leaked-entry
@@ -145,14 +159,14 @@ type Cache struct {
 // D — Sandbox pods (sandbox namespace + created-by selector):
 //
 //	Pod
-func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]ctrlcache.ByObject, error) {
+func BuildCacheConfig(scope CacheScope) (map[ctrlclient.Object]ctrlcache.ByObject, error) {
 	// Parse label selector if configured
 	var labelSelector labels.Selector
-	if opts.SandboxLabelSelector != "" {
+	if scope.SandboxLabelSelector != "" {
 		var err error
-		labelSelector, err = labels.Parse(opts.SandboxLabelSelector)
+		labelSelector, err = labels.Parse(scope.SandboxLabelSelector)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse sandbox label selector %q: %w", opts.SandboxLabelSelector, err)
+			return nil, fmt.Errorf("failed to parse sandbox label selector %q: %w", scope.SandboxLabelSelector, err)
 		}
 	}
 
@@ -163,9 +177,9 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 
 	// Custom resources: namespace + label filtering.
 	customObjConfig := ctrlcache.ByObject{}
-	if opts.SandboxNamespace != "" {
+	if scope.SandboxNamespace != "" {
 		customObjConfig.Namespaces = map[string]ctrlcache.Config{
-			opts.SandboxNamespace: {},
+			scope.SandboxNamespace: {},
 		}
 	}
 	if labelSelector != nil {
@@ -183,10 +197,10 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 	}
 
 	// System namespace resources
-	if opts.SystemNamespace != "" {
+	if scope.SystemNamespace != "" {
 		sysNsConfig := ctrlcache.ByObject{
 			Namespaces: map[string]ctrlcache.Config{
-				opts.SystemNamespace: {},
+				scope.SystemNamespace: {},
 			},
 		}
 		byObject[&corev1.Secret{}] = sysNsConfig
@@ -207,9 +221,9 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 	podConfig := ctrlcache.ByObject{
 		Label: labels.Set{utils.PodLabelCreatedBy: utils.CreatedBySandbox}.AsSelector(),
 	}
-	if opts.SandboxNamespace != "" {
+	if scope.SandboxNamespace != "" {
 		podConfig.Namespaces = map[string]ctrlcache.Config{
-			opts.SandboxNamespace: {},
+			scope.SandboxNamespace: {},
 		}
 	}
 	byObject[&corev1.Pod{}] = podConfig
@@ -219,16 +233,16 @@ func BuildCacheConfig(opts config.SandboxManagerOptions) (map[ctrlclient.Object]
 
 // NewControllerManagerWithHealth creates a controller-runtime manager together
 // with the informer health gate used by cache-backed quota maintenance.
-func NewControllerManagerWithHealth(cfg *rest.Config, opts config.SandboxManagerOptions) (ctrl.Manager, *InformerHealth, error) {
+func NewControllerManagerWithHealth(cfg *rest.Config, scope CacheScope) (ctrl.Manager, *InformerHealth, error) {
 	health := NewInformerHealth()
-	mgr, err := newControllerManager(cfg, opts, health)
+	mgr, err := newControllerManager(cfg, scope, health)
 	if err != nil {
 		return nil, nil, err
 	}
 	return mgr, health, nil
 }
 
-func newControllerManager(cfg *rest.Config, opts config.SandboxManagerOptions, health *InformerHealth) (ctrl.Manager, error) {
+func newControllerManager(cfg *rest.Config, scope CacheScope, health *InformerHealth) (ctrl.Manager, error) {
 	if cfg == nil {
 		return nil, errors.NewBadRequest("rest config cannot be nil")
 	}
@@ -238,7 +252,7 @@ func newControllerManager(cfg *rest.Config, opts config.SandboxManagerOptions, h
 	utilruntime.Must(agentsv1alpha1.AddToScheme(scheme))
 
 	// Build cache configuration with informer filtering
-	byObject, err := BuildCacheConfig(opts)
+	byObject, err := BuildCacheConfig(scope)
 	if err != nil {
 		return nil, err
 	}

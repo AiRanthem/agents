@@ -28,9 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
-	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/utils"
 	"github.com/openkruise/agents/pkg/utils/expectations"
+	"github.com/openkruise/agents/pkg/utils/logs"
 )
 
 // CustomReconcileHandler is a custom reconcile handler.

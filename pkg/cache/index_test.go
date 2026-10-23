@@ -25,7 +25,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 )
 
 // recordingCache records IndexField calls; any other ctrlcache.Cache method
@@ -152,7 +151,7 @@ func TestBuildCacheConfig_SkipsTrafficPolicyWhenCRDAbsent(t *testing.T) {
 			}
 			t.Cleanup(func() { discoverGVK = old })
 
-			byObject, err := BuildCacheConfig(config.SandboxManagerOptions{})
+			byObject, err := BuildCacheConfig(CacheScope{})
 			if err != nil {
 				t.Fatalf("BuildCacheConfig() error = %v", err)
 			}

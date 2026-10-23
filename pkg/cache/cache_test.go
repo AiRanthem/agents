@@ -35,7 +35,6 @@ import (
 	agentsv1alpha1 "github.com/openkruise/agents/api/v1alpha1"
 	"github.com/openkruise/agents/pkg/cache"
 	cacheutils "github.com/openkruise/agents/pkg/cache/utils"
-	"github.com/openkruise/agents/pkg/sandbox-manager/config"
 	"github.com/openkruise/agents/pkg/utils"
 )
 
@@ -1387,7 +1386,7 @@ func countTypesByCategory(byObject map[ctrlclient.Object]ctrlcache.ByObject) (cu
 func TestBuildCacheConfig(t *testing.T) {
 	tests := []struct {
 		name            string
-		opts            config.SandboxManagerOptions
+		opts            cache.CacheScope
 		wantErr         bool
 		wantErrMsg      string
 		wantCustom      int    // expected count of custom resource types (Sandbox, SandboxSet, Checkpoint, SandboxTemplate)
@@ -1399,7 +1398,7 @@ func TestBuildCacheConfig(t *testing.T) {
 	}{
 		{
 			name:            "empty options - only custom resources and PersistentVolume",
-			opts:            config.SandboxManagerOptions{},
+			opts:            cache.CacheScope{},
 			wantErr:         false,
 			wantCustom:      5, // Sandbox, SandboxSet, Checkpoint, SandboxTemplate, TrafficPolicy
 			wantSystem:      0,
@@ -1410,7 +1409,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name: "SandboxNamespace only - custom resources filtered by namespace",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SandboxNamespace: "team-a",
 			},
 			wantErr:         false,
@@ -1423,7 +1422,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name: "valid SandboxLabelSelector only - custom resources filtered by label",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SandboxLabelSelector: "env=prod",
 			},
 			wantErr:         false,
@@ -1436,13 +1435,13 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name:       "invalid SandboxLabelSelector - returns parse error",
-			opts:       config.SandboxManagerOptions{SandboxLabelSelector: "invalid!!!selector"},
+			opts:       cache.CacheScope{SandboxLabelSelector: "invalid!!!selector"},
 			wantErr:    true,
 			wantErrMsg: "failed to parse sandbox label selector",
 		},
 		{
 			name: "SandboxNamespace and valid SandboxLabelSelector - combined filtering",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SandboxNamespace:     "team-a",
 				SandboxLabelSelector: "env=prod",
 			},
@@ -1456,7 +1455,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name: "SystemNamespace only - adds Secret and ConfigMap filtering",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SystemNamespace: "sandbox-system",
 			},
 			wantErr:         false,
@@ -1469,7 +1468,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name: "SystemNamespace with SandboxNamespace - both filtering",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SystemNamespace:  "sandbox-system",
 				SandboxNamespace: "team-a",
 			},
@@ -1483,7 +1482,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name: "all options configured - full filtering",
-			opts: config.SandboxManagerOptions{
+			opts: cache.CacheScope{
 				SystemNamespace:      "sandbox-system",
 				SandboxNamespace:     "team-a",
 				SandboxLabelSelector: "env=prod",
@@ -1498,7 +1497,7 @@ func TestBuildCacheConfig(t *testing.T) {
 		},
 		{
 			name:            "complex valid label selector",
-			opts:            config.SandboxManagerOptions{SandboxLabelSelector: "app=myapp,version in (v1,v2),!deprecated"},
+			opts:            cache.CacheScope{SandboxLabelSelector: "app=myapp,version in (v1,v2),!deprecated"},
 			wantErr:         false,
 			wantCustom:      5,
 			wantSystem:      0,

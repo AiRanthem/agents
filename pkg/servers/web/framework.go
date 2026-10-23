@@ -26,9 +26,9 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/openkruise/agents/pkg/sandbox-manager/logs"
 	"github.com/openkruise/agents/pkg/tracing"
 	"github.com/openkruise/agents/pkg/utils"
+	"github.com/openkruise/agents/pkg/utils/logs"
 )
 
 type Handler[T any] func(r *http.Request) (response ApiResponse[T], err *ApiError)
