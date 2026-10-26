@@ -45,5 +45,5 @@ Share facts, navigation and check results while preserving independent judgments
 
 # Native entry bindings
 
-* Resolve this rule's physical repository path. For an authorized installation request, load the adjacent parent directory's `INSTALL.md` and supply it alongside the shared installation contract before invoking the public installer. Preserve unrelated configuration.
+* Resolve this rule's physical repository path. A fresh environment, including Cloud Agent initialization, is installed by running the adjacent `install.py`; exit 0 means the repository links and CLI config are in place. Update an existing installation by loading the adjacent `INSTALL.md` and supplying it with the shared installation contract. Preserve unrelated configuration.
 * Active native Plan maps to the shared read-only planning contract, and Agent to ordinary execution subject to actual permissions. A request mentioning a plan or a tool refusal does not switch modes. Reserve `CreatePlan` for the sole settled implementation plan; questions and approvals stay conversational.
