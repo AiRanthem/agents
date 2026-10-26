@@ -30,27 +30,31 @@ import (
 // LifecycleHookFunc is the function type for executing lifecycle hooks.
 type LifecycleHookFunc func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction) (exitCode int32, stdout, stderr string, err error)
 
-// NewLifecycleHookFunc binds the runtime TLS bundle to the lifecycle hook path
-// so upgrade hooks use the same transport decision as the other controller
-// runtime clients.
-func NewLifecycleHookFunc(tlsBundle *agentsruntime.TLSBundle) LifecycleHookFunc {
+// NewLifecycleHookFunc builds the lifecycle hook path used by sandbox upgrades.
+//
+// Upgrade hooks always run over the plaintext runtime URL, even for sandboxes
+// that advertise the runtime TLS port (AnnotationRuntimeTLSPort): they execute
+// commands through the envd process API, which is served on the plaintext
+// runtime port. The TLS bundle is accepted so call sites stay stable and is not
+// used until the process API is served over TLS; routing hooks over TLS then
+// only means passing TransportOptionsFor's options to executeLifecycleHook.
+func NewLifecycleHookFunc(_ *agentsruntime.TLSBundle) LifecycleHookFunc {
 	return func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction) (exitCode int32, stdout, stderr string, err error) {
-		return executeLifecycleHook(ctx, box, action, tlsBundle)
+		return executeLifecycleHook(ctx, box, action, nil)
 	}
 }
 
 // executeLifecycleHook executes an upgrade action inside the sandbox pod via
-// envd, resolving the runtime transport from the sandbox capability stamp.
+// envd over the transport selected by rtOpts: non-empty options reach the
+// runtime over HTTPS at the Pod IP, empty options use the plaintext runtime
+// URL. It does not read the sandbox capability stamp; the caller chooses the
+// transport, and NewLifecycleHookFunc passes none.
 func executeLifecycleHook(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction,
-	tlsBundle *agentsruntime.TLSBundle) (exitCode int32, stdout, stderr string, err error) {
+	rtOpts []agentsruntime.Option) (exitCode int32, stdout, stderr string, err error) {
 	if action == nil || action.Exec == nil || len(action.Exec.Command) == 0 {
 		return 0, "", "", nil
 	}
 
-	rtOpts, err := agentsruntime.TransportOptionsFor(box, tlsBundle)
-	if err != nil {
-		return -1, "", "", err
-	}
 	// Readiness gates per transport: plaintext is addressed by the runtime URL
 	// (with a Pod-IP fallback), while TLS dials the Pod IP directly.
 	if len(rtOpts) == 0 && agentsruntime.GetRuntimeURL(box) == "" {
