@@ -135,7 +135,9 @@ class UserValidationTest(unittest.TestCase):
         self.assertEqual(self.a.state()["state"], "accepted_awaiting_delivery")
         self.a.snapshot["tree"] = "e" * 40
         self.assertFalse(autonomy._acceptance_valid(self.root, runtime._working_files(self.root), self.f.record()))
-        self.assertIn("not_authorized", self.a.state()["reasons"])
+        self.assertEqual(self.a.state()["state"], "awaiting_acceptance")
+        self.assertIsNone(self.a.state()["next_role"])
+        self.assertTrue(self.a.state()["acceptance_refresh_required"])
 
     def test_comparison_rejects_code_or_document_changes_after_begin(self):
         self.implement()

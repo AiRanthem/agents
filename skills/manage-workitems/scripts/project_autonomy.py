@@ -290,9 +290,21 @@ def _next(root, files, item):
     if item.get("kind") == "aggregate":
         result.update(state="accepted_awaiting_delivery" if _acceptance_valid(root, files, item) else "blocked", reasons=[] if _acceptance_valid(root, files, item) else ["aggregate_manual_acceptance"])
         return result
-    if _acceptance_valid(root, files, item, allow_waiver=False):
+    accepted = _acceptance_valid(root, files, item, allow_waiver=False)
+    if workflow._acceptance_phase(item) or accepted:
+        if not accepted:
+            workflow._code_snapshot(root, item, store.project(files))
+        if not accepted and workflow._validation_waived(files, item, "human-acceptance"):
+            try:
+                _acceptance_review(root, files, item)
+                accepted = True
+            except ProjectError:
+                pass
         reasons = _dependency_blocks(root, files, item)
-        result.update(state="blocked" if reasons else "accepted_awaiting_delivery", reasons=reasons)
+        result.update(state="blocked" if reasons else "accepted_awaiting_delivery" if accepted else "awaiting_acceptance", reasons=reasons)
+        if not accepted:
+            prior = state.get("acceptance") or {}
+            result["acceptance_refresh_required"] = prior.get("status") == "accepted" and bool(prior.get("source"))
         return result
     authorization = state.get("authorization") or {}
     lifecycle = (item.get("workflow") or {}).get("lifecycle") or {}
@@ -513,6 +525,14 @@ def validate_state(item):
             not runtime._nonempty(acceptance.get("source")) or not isinstance(acceptance.get("binding"), dict)):
         raise ProjectError("autonomy acceptance requires explicit user source and artifact binding")
     approval = item.get("design", {}).get("approval") or {}
+    design = item.get("design") or {}
+    if "registered_sha256" in design and not runtime.HASH.fullmatch(str(design["registered_sha256"])):
+        raise ProjectError("design registration requires its exact spec digest")
+    finalization = design.get("finalization")
+    if finalization is not None and (not isinstance(finalization, dict) or
+            not runtime._nonempty(finalization.get("source")) or not runtime._nonempty(finalization.get("recorded_by")) or
+            not runtime.HASH.fullmatch(str(finalization.get("spec_sha256")))):
+        raise ProjectError("user final design requires its actual source, recorder and spec digest")
     if approval.get("kind") == "derived_revision":
         original = approval.get("original_user_approval") or {}
         if original.get("kind") != "user" or not original.get("source") or not (approval.get("revision") or approval.get("execution")):
@@ -550,6 +570,17 @@ def _acceptance_review(root, files, item):
         raise ProjectError("implementation approval does not cover the current code")
 
 
+def acceptance_source(item, options):
+    source = options.get("approval_source")
+    if source:
+        return workflow._text(source, "actual user acceptance source")
+    prior = _state(item).get("acceptance") or {}
+    if (workflow._acceptance_phase(item) and options.get("finalization_source") and
+            prior.get("status") == "accepted" and prior.get("source")):
+        return prior["source"]
+    raise ProjectError("actual human acceptance is required; supply --approval-source with the user's passing conclusion")
+
+
 def record_acceptance(root, files, item, manifest, writes, *, report=None):
     """Build current acceptance evidence; callers own publication and input guards."""
     source = workflow._text(manifest["options"].get("approval_source"), "actual user acceptance source")
@@ -559,6 +590,9 @@ def record_acceptance(root, files, item, manifest, writes, *, report=None):
             raise ProjectError("human acceptance requires recorded development")
         if item.get("status") != "done" and (item.get("archived") or item.get("status") == "cancelled"):
             raise ProjectError("human acceptance requires an active implementation")
+        spec = workflow._spec(item)
+        if item.get("status") != "done" and files.get(spec, b"").strip():
+            workflow._register_spec(files, item, files[spec])
         current_review = False
         if report is None:
             try:
@@ -588,6 +622,8 @@ def record_acceptance(root, files, item, manifest, writes, *, report=None):
             record.update(result="pass", approval_kind="human_acceptance", source=source,
                           provenance=source, recorded_by=identity["session"],
                           code_snapshot=current, read_hashes=hashes)
+            if manifest["options"].get("finalization_source"):
+                record["finalization_source"] = manifest["options"]["finalization_source"]
             writes["workitems/" + item["id"] + "/records/" + record["id"] + ".yaml"] = store.dump_yaml(record)
             item["development"].update(review=record, reviewed_snapshot=current)
             item["status"] = "awaiting_delivery"
@@ -607,12 +643,17 @@ def record_acceptance(root, files, item, manifest, writes, *, report=None):
             # consumers validate these final read hashes after publication.
     _state(item)["acceptance"] = {"status": "accepted", "source": source,
         "recorded_by": identity["session"], "created_at": workflow._now(), "binding": _artifact_binding(root, files, item)}
+    if manifest["options"].get("finalization_source"):
+        _state(item)["acceptance"]["finalization_source"] = manifest["options"]["finalization_source"]
 
 
 def accept(root, selector, *, approval_source, publish=None):
     workflow._text(approval_source, "actual user acceptance source")
     root, files = _files(root)
     item = store.item(files, workflow._resolve(store.items(files), selector))
+    if (item.get("status") != "done" and workflow._registered_spec_digest(files, item) !=
+            workflow._hash(files.get(workflow._spec(item)))):
+        raise ProjectError("externally edited spec requires human-acceptance --finalization-source before direct acceptance")
     identity = workflow._identity(root)
     manifest = {"ticket": workflow.secrets.token_hex(16), "identity": identity,
                 "created_at": workflow._now(), "base_commit": workflow._base(item),

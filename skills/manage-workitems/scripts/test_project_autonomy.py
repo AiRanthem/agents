@@ -188,9 +188,13 @@ class AutonomyTest(unittest.TestCase):
         self.snapshot["tree"] = "f" * 40
         self.assertFalse(autonomy._acceptance_valid(self.root, runtime._working_files(self.root), self.f.record()))
         self.authorize()
-        self.assertEqual(self.state()["next_role"], "code-review")
-        self.finish_execution(self.dispatch("code-review", "updated-code-reviewer"))
         self.assertEqual(self.state()["state"], "awaiting_acceptance")
+        self.assertIsNone(self.state()["next_role"])
+        self.assertTrue(self.state()["acceptance_refresh_required"])
+        stage = self.f.begin("human-acceptance", finalization_source="User final code changes remain covered by the actual passing conclusion")
+        self.f.edit(stage, "Register the user's current finals without another review or approval.\n", "report.md")
+        self.assertEqual(self.f.finish(stage)["status"], "published")
+        self.assertEqual(self.state()["state"], "accepted_awaiting_delivery")
 
     def test_ordinary_development_still_requires_its_explicit_review_or_waiver(self):
         blocked = workflow.begin(self.root, "development-start", "A", publish=self.f.publisher)

@@ -713,7 +713,7 @@ def parser():
     begin = sub.add_parser("begin")
     begin.add_argument("operation")
     begin.add_argument("selector", nargs="?")
-    for name in ("title", "slug", "parent", "repository", "approval-source", "result", "provenance",
+    for name in ("title", "slug", "parent", "repository", "approval-source", "finalization-source", "result", "provenance",
                  "reviewer-session", "review-file", "branch", "author-session",
                  "base-ref", "commit", "worktree", "fixes", "cleanup-status", "mode", "gate", "next-action"):
         begin.add_argument("--" + name)
