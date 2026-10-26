@@ -2,25 +2,23 @@
 
 本目录维护个人 Cursor 用户级规则、CLI status line 和 CLI 偏好。共享 skills 在本机的 Cursor 入口安装为 `~/.cursor/skills/<name>` 的绝对软链接，目标为仓库 `skills/<name>`。
 
-## Cloud Agent 首次初始化
+## Cloud Agent 环境初始化
 
-全新环境直接运行安装脚本，不必先启动 Agent 阅读下文。依赖 Python 3 和本仓库完整工作副本，无第三方 Python 依赖。
+这个脚本只作为 Cursor Cloud Agent environment 的 install 命令。开发机的安装和更新仍由 agent 执行下一节，不运行该脚本。
 
 ```sh
 python3 /absolute/path/to/dev-kit/cursor/install.py
 ```
 
-脚本以自身真实路径定位仓库。它安装本目录收录的规则、`statusline.sh`、`agents/*.md`，以及每个共享 skill 在 `~/.cursor/skills/<name>` 和 `~/.agents/skills/<name>` 的绝对软链接，并写入 `~/.cursor/cli-config.json` 中由本目录 `cli-config.json` 与 `cli-statusline.json` 提供的键。仓库必须在后续 Agent 运行期间保留原路径。`--home <directory>` 可指定目标用户目录，默认是当前用户。
+脚本用自身路径定位仓库，依赖 Python 3 标准库。它只删除并重新复制 `~/.cursor/rules`、`~/.cursor/agents` 和 `~/.cursor/skills`。规则、agents 和每个含 `SKILL.md` 的共享 skill 都是仓库文件的普通副本。不写 `~/.agents`，也不写 status line 或 `cli-config.json`。不修改 `~/.cursor/skills-cursor`。
 
-成功时这些链接指向当前仓库，CLI 配置含有上述键并保留其他顶层键，且用样例 payload 运行已安装的 status line 时标准输出非空。脚本输出 JSON `status=disk_ready`，`runtime_verified=false`：这只证明磁盘安装和 status line 样例输出，不证明 Cloud Agent 会话已经加载规则或 skills。
-
-Build 会重复执行 install。结果已经正确时脚本不修改文件并以 0 退出。待安装目标若是普通文件、目录、无法解析的链接，或指向其他位置，脚本以非零状态退出且不创建任何新链接；已有 CLI 键与仓库不一致时同样拒绝覆盖。此入口不负责升级，也不删除仓库已移除条目留下的旧链接。已有 kit 的更新继续使用 Agent 和下文契约。文件系统故障可能留下部分安装，初始化任务应失败并重建临时环境。不修改 `~/.cursor/skills-cursor`。
+Rebuild 会再次执行 install。再次执行仍先删除上述路径再复制当前仓库内容，因此环境升到这次检出的 devkit，并去掉仓库里已经不存在的旧规则、agent 和 skill。该脚本不保留这些路径上的其他内容。
 
 本地回归检查：`python3 -m unittest discover -s cursor -p 'test_install.py'`。
 
 ## 安装
 
-以下步骤更新已经存在的安装。全新环境使用上一节的脚本，不逐步执行这些步骤。
+以下步骤用于开发机。Cloud Agent 环境不执行这些步骤。
 
 1. 读取仓库根目录的 `AGENTS.md`，并读取维护当日与 Cursor Rules、Agent Skills、CLI status line 和 `cli-config.json` 相关的官方文档。
 2. 解析本仓库的绝对路径，并确保 `~/.cursor`、`~/.cursor/rules` 与 `~/.cursor/skills` 存在。
@@ -36,7 +34,7 @@ Build 会重复执行 install。结果已经正确时脚本不修改文件并以
 
 ## 更新
 
-已有安装在仓库更新后由 agent 重新执行上一节，不使用首次初始化脚本代替清理或覆盖。规则、`statusline.sh`、`~/.cursor/skills` 和 `~/.cursor/agents/composer.md` 的软链接会直接使用仓库版本；`~/.cursor/cli-config.json` 中由本目录 `cli-config.json` 与 `cli-statusline.json` 提供的键需要重新合并。新增规则或 skill 补齐对应软链接；移除规则则删除 `~/.cursor/rules` 中指向本仓库、但已无对应规则的软链接；移除 skill 则删除 `~/.cursor/skills` 中指向本仓库、但已无对应 skill 的软链接；移除 agent 则删除 `~/.cursor/agents` 中指向本仓库 `cursor/agents/`、但已无对应源文件的软链接。不得遗留悬空链接。
+开发机上的已有安装在仓库更新后由 agent 重新执行上一节。Cloud Agent 环境由 install 脚本在每次 Rebuild 时替换副本。规则、`statusline.sh`、`~/.cursor/skills` 和 `~/.cursor/agents/composer.md` 的软链接会直接使用仓库版本；`~/.cursor/cli-config.json` 中由本目录 `cli-config.json` 与 `cli-statusline.json` 提供的键需要重新合并。新增规则或 skill 补齐对应软链接；移除规则则删除 `~/.cursor/rules` 中指向本仓库、但已无对应规则的软链接；移除 skill 则删除 `~/.cursor/skills` 中指向本仓库、但已无对应 skill 的软链接；移除 agent 则删除 `~/.cursor/agents` 中指向本仓库 `cursor/agents/`、但已无对应源文件的软链接。不得遗留悬空链接。
 
 ## 验证
 
@@ -56,4 +54,4 @@ Build 会重复执行 install。结果已经正确时脚本不修改文件并以
 
 ## 云端范围
 
-Agent 安装只在执行安装的机器上建立上述链接和配置。Cloud Agent 的环境初始化运行上一节脚本，在该机器上直接得到规则、skills、agents、CLI 配置和 status line。桌面安装不会把这些内容同步进 Cloud Agent：Sync Skills for Cloud Agents 只复制 `~/.cursor/skills/`。只依赖该同步、没有在 Cloud Agent 机器上运行脚本时，安装完成仍须报告这个开关需要人工确认。
+开发机安装只在该机器上建立软链接和合并配置。Cloud Agent 环境使用上面的 install 脚本替换副本，不依赖桌面同步。Sync Skills for Cloud Agents 仍只复制 `~/.cursor/skills/`；只依赖该同步、没有在 Cloud Agent 环境运行脚本时，安装完成仍须报告这个开关需要人工确认。
