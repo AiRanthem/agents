@@ -28,7 +28,13 @@ import (
 )
 
 // LifecycleHookFunc is the function type for executing lifecycle hooks.
-type LifecycleHookFunc func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction) (exitCode int32, stdout, stderr string, err error)
+type LifecycleHookFunc func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.LifecycleAction) (exitCode int32, stdout, stderr string, err error)
+
+// lifecycleHookMaxOutputBytes bounds the stdout/stderr bytes captured for one
+// pause/resume hook execution. Captured output is only ever joined into the
+// hook wrapper's return values; conditions and events carry a safe failure
+// summary instead.
+const lifecycleHookMaxOutputBytes = 1024
 
 // NewLifecycleHookFunc builds the lifecycle hook path used by sandbox upgrades.
 //
@@ -39,18 +45,32 @@ type LifecycleHookFunc func(ctx context.Context, box *agentsv1alpha1.Sandbox, ac
 // used until the process API is served over TLS; routing hooks over TLS then
 // only means passing TransportOptionsFor's options to executeLifecycleHook.
 func NewLifecycleHookFunc(_ *agentsruntime.TLSBundle) LifecycleHookFunc {
-	return func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction) (exitCode int32, stdout, stderr string, err error) {
-		return executeLifecycleHook(ctx, box, action, nil)
+	return func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.LifecycleAction) (exitCode int32, stdout, stderr string, err error) {
+		return executeLifecycleHook(ctx, box, action, nil, "root")
 	}
 }
 
-// executeLifecycleHook executes an upgrade action inside the sandbox pod via
+// NewPauseResumeLifecycleHookFunc returns the hook executor used by PrePause
+// and PostResume. Like upgrade hooks they run as root — older envd builds have
+// no server-side default-user resolution and reject credential-less requests,
+// so the identity is explicit on every wire call — and over the plaintext
+// runtime URL, because the envd process API is served on the plaintext runtime
+// port. Selecting the running user per hook is future work recorded in the
+// proposal.
+func NewPauseResumeLifecycleHookFunc(_ *agentsruntime.TLSBundle) LifecycleHookFunc {
+	return func(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.LifecycleAction) (exitCode int32, stdout, stderr string, err error) {
+		return executeLifecycleHook(ctx, box, action, nil, "root")
+	}
+}
+
+// executeLifecycleHook executes a lifecycle action inside the sandbox pod via
 // envd over the transport selected by rtOpts: non-empty options reach the
 // runtime over HTTPS at the Pod IP, empty options use the plaintext runtime
 // URL. It does not read the sandbox capability stamp; the caller chooses the
-// transport, and NewLifecycleHookFunc passes none.
-func executeLifecycleHook(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.UpgradeAction,
-	rtOpts []agentsruntime.Option) (exitCode int32, stdout, stderr string, err error) {
+// transport, and the hook constructors pass none. authUser is the identity the
+// command runs as on the wire.
+func executeLifecycleHook(ctx context.Context, box *agentsv1alpha1.Sandbox, action *agentsv1alpha1.LifecycleAction,
+	rtOpts []agentsruntime.Option, authUser string) (exitCode int32, stdout, stderr string, err error) {
 	if action == nil || action.Exec == nil || len(action.Exec.Command) == 0 {
 		return 0, "", "", nil
 	}
@@ -70,17 +90,29 @@ func executeLifecycleHook(ctx context.Context, box *agentsv1alpha1.Sandbox, acti
 		timeout = 60 * time.Second // default 60s
 	}
 
-	// Execute the command via shared runtime utility
+	processTimeout := timeout
+	// Keep the client stream open for five seconds beyond envd's server-side
+	// process deadline so it can deliver the terminal End event after timeout
+	// cleanup. This grace period does not extend the command's allowed runtime.
+	clientTimeout := timeout + 5*time.Second
+	// Pause/resume hooks bound captured output and suppress the result log:
+	// the manager keeps only a safe failure summary, and the proposal forbids
+	// raw hook output from reaching controller logs or memory unbounded.
+	outputOptions := agentsruntime.ProcessOutputOptions{
+		MaxBytes:          lifecycleHookMaxOutputBytes,
+		SuppressResultLog: true,
+	}
+
 	result, err := agentsruntime.RunCommandWithRuntime(ctx, agentsruntime.RunCmdFuncArgs{
 		Sbx: box,
 		ProcessConfig: &process.ProcessConfig{
 			Cmd:  action.Exec.Command[0],
 			Args: action.Exec.Command[1:],
 		},
-		Timeout: timeout,
-		// Lifecycle hook commands run as root, matching the historical behavior
-		// of the shared runtime process client.
-		AuthUser: "root",
+		Timeout:        clientTimeout,
+		ProcessTimeout: processTimeout,
+		OutputOptions:  outputOptions,
+		AuthUser:       authUser,
 	}, rtOpts...)
 	if err != nil {
 		return -1, strings.Join(result.Stdout, ""), strings.Join(result.Stderr, ""), err
