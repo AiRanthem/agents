@@ -2,6 +2,31 @@
 
 本文定义本目录内容向 Codex 的安装、更新、清理和验证方式。配置与提示词内容以仓库源文件为准。
 
+## Cloud Agent 首次初始化
+
+全新环境可直接运行安装脚本，无需先启动 Agent 阅读安装文档。依赖 Python 3.11+ 和本仓库完整工作副本，无第三方 Python 依赖；脚本不安装 Codex 可执行程序，也不配置登录凭据。
+
+```sh
+python3 /absolute/path/to/dev-kit/codex/install.py
+```
+
+脚本以自身真实路径定位仓库，安装全局指令、两个 hook 入口、全部共享及原生 skill 链接、原生角色普通文件和 hooks 定义，并生成线程上限与重复技能来源禁用配置。仓库必须在后续 Agent 运行期间保留原路径。
+
+默认安装到当前用户的 `~/.codex` 与 `~/.agents/skills`；`--home <directory>` 可指定初始化目标用户目录。若设置了 `CODEX_HOME`，必须与目标目录的 `.codex` 一致。基础镜像可以预置其他模型、provider、MCP 等配置：脚本保留已有 `config.toml` 字节与权限，追加本 kit 的配置；已有 `[agents]` 或 `skills.config` 时停止，交由 Agent 整合。保留认证文件、`.system` 和无关 skills。
+
+脚本先检查全部目标。任何待安装目标已存在、非空 `AGENTS.override.md`、无效配置或安装父目录软链接都会使它以非零状态退出，不覆盖已有内容。此入口只用于首次初始化；已有 kit 的升级继续使用 Agent 和下文契约。文件系统故障可能留下部分安装，初始化任务应失败并重建临时环境。
+
+成功时输出 JSON `status=disk_ready`，表示安装文件及现有磁盘检查通过，`runtime_verified=false`。可在镜像提供 Codex CLI 时继续运行：
+
+```sh
+codex --strict-config doctor --summary --no-color
+codex debug prompt-input
+```
+
+这两条命令检查配置加载，不调用模型。真实 cloud 环境的技能发现、角色派发及 hook 事件仍需该环境验证。脚本不修改 hook 信任记录；支持交互审核的环境须通过 `/hooks` 信任新增定义，再开启 Agent 会话。cloud 执行器的信任与事件支持由执行器决定，磁盘安装成功不证明 hooks 已执行。
+
+本地回归检查：`python3 -m unittest discover -s codex -p 'test_install.py'`。
+
 ## 安装来源
 
 * `AGENTS.md`：安装到 `~/.codex/AGENTS.md` 的全局指令源文件。
