@@ -1,0 +1,7 @@
+# Recover this workspace
+
+Restore the dedicated branch `projects/oka-daily-open-source` from `git@github.com:AiRanthem/agents.git` and start the agent at this project's management root. Read its generated `AGENTS.md`. If shared skills are missing, install the dev-kit from `git@github.com:AiRanthem/agents.git` using its installation contract. Credentials and unpublished code are not restored by cloning project records.
+
+Use the project entrypoint resolved by the root `AGENTS.md` for `status` and follow its operation-specific continuation under installed `manage-workitems/references/commands.md`. Complete pending publication recovery before starting the next operation. Keep local operation and recovery records; any local session may resume the recorded operation with its actual inputs and contribution provenance. For a script defect, investigate and use "User-authorized manual recovery" in installed `manage-workitems/references/recovery.md` for a concrete approved repair.
+
+Use `upgrade-project` for deterministic migration and generated instruction refresh. Project documents contain only current effective instructions and knowledge; Git retains prior versions. Preserve current approval, delivery and unresolved recovery credentials. Required original main-workspace instructions and code-worktree paths come from the program; read the originals before dependent work. Restore missing bindings, originals or unpublished code from their verified recorded locations.
