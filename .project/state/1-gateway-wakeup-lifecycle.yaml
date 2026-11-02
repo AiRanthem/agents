@@ -10,4 +10,16 @@ development:
   publish_remote: origin
   publish_url: git@github.com:AiRanthem/agents.git
   branch_published: false
-workflow: {}
+workflow:
+  design_authors:
+  - 01a19b74-fe57-7cb3-9210-d1794ccbf164
+design:
+  approval:
+    requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+    spec_sha256: 30dc5700d60b12b0c39cac6470663e79a5e77de12027f7538793adaa77ea4a89
+    version: 1
+    kind: user
+    source: 'Approved design publication: workitems/1-gateway-wakeup-lifecycle/spec.md
+      sha256:30dc5700d60b12b0c39cac6470663e79a5e77de12027f7538793adaa77ea4a89'
+    session: 01a19b74-fe57-7cb3-9210-d1794ccbf164
+    recorded_by: 01a19b74-fe57-7cb3-9210-d1794ccbf164
