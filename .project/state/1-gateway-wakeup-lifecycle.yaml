@@ -14,6 +14,7 @@ workflow:
   design_authors:
   - 01a19b74-fe57-7cb3-9210-d1794ccbf164
   - 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
+  - 419237c3-01b1-4e62-8218-3e1f7f1690f4
   design_basis:
     review:
       id: 7915fe6baf16a0c72cc695684846b7f0
@@ -1047,85 +1048,10 @@ workflow:
 design:
   approval:
     requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-    spec_sha256: fbb509ab96ef8e1469b7b9ad11487e4a681ca81c5287f2373882628d39f8d149
-    version: 4
-    kind: derived_reuse
+    spec_sha256: 591cb26568ffe9ab91be65aec9646a4abb4962d4ef18fce363e133d1f82e76e5
+    version: 5
+    kind: user
     source: 'Approved design publication: workitems/1-gateway-wakeup-lifecycle/spec.md
-      sha256:fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5'
-    original_user_approval:
-      requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-      spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
-      version: 3
-      kind: user
-      source: 'Approved design publication: workitems/1-gateway-wakeup-lifecycle/spec.md
-        sha256:fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5'
-      session: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
-      recorded_by: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
-    assessment: 1da5b3b15ed3957b7740d42a2e00bddb
-    session: e38c177b-3df1-4ba1-aa20-0b0b039e07f7
-  review:
-    id: 7915fe6baf16a0c72cc695684846b7f0
-    kind: design-review
-    item: 1-gateway-wakeup-lifecycle
-    report: workitems/1-gateway-wakeup-lifecycle/records/7915fe6baf16a0c72cc695684846b7f0.md
-    session: e38c177b-3df1-4ba1-aa20-0b0b039e07f7
-    created_at: '2026-11-02T12:52:49.736109+00:00'
-    provenance: Independent follow-up design review by session e38c177b-3df1-4ba1-aa20-0b0b039e07f7
-      (Cursor agent, Claude Opus 5.5), original independent reviewer of 738e9aaab5ca1e3f5a2f1e1030622904,
-      on user instruction '保留 implementable，把 Low 发现顺手修掉'; two mechanical corrections
-      (L2 PauseTimeout precedence statement, L3 docs/proposals obligation) on v3 sha256
-      fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5 yielding candidate
-      sha256 fbb509ab96ef8e1469b7b9ad11487e4a681ca81c5287f2373882628d39f8d149; L1
-      not mechanical, recorded as implementation handoff; requirement sha256 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8;
-      base cfbd102bc05c6df663965c5e23463a0eafd34948
-    requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-    spec_sha256: fbb509ab96ef8e1469b7b9ad11487e4a681ca81c5287f2373882628d39f8d149
-    version: 4
-    base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
-    dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
-    mechanical_correction:
-      original_binding:
-        requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-        spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
-        version: 3
-        base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
-        dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
-      candidate_sha256: fbb509ab96ef8e1469b7b9ad11487e4a681ca81c5287f2373882628d39f8d149
-      contract_unchanged: true
-      diff: "--- original/spec.md\n+++ candidate/spec.md\n@@ -103,7 +103,7 @@\n \n\
-        \ 续期与自动唤醒是独立选择。仅开启续期不会使 Paused Sandbox 自动恢复，也不会绕过 Gateway 的唤醒总开关。Running Sandbox\
-        \ 的续期不依赖唤醒总开关。\n \n-两者都开启且通过既有唤醒条件时，共用 connect 核心能力以保存的 R 发起恢复。计时 Sandbox\
-        \ 沿用现有恢复保护，将本次恢复时长取为 `max(R, 300 秒)`；这不改写保存的 H、R。解除暂停与初始新期限必须在同一次受保护状态更新中完成，避免旧期限在恢复途中生效。恢复成功后的补充延期遵守上述恢复有效性和只延长条件；流量等到\
-        \ Sandbox Ready、路由可用后再转发。\n+两者都开启且通过既有唤醒条件时，共用 connect 核心能力以保存的 R 发起恢复。计时\
-        \ Sandbox 沿用现有恢复保护，将本次恢复时长取为 `max(R, 300 秒)`；这不改写保存的 H、R。此时恢复时长由 R 决定，不采用唤醒规则\
-        \ `AutoPausePolicy.Resume.OnIngressTraffic.PauseTimeout`。解除暂停与初始新期限必须在同一次受保护状态更新中完成，避免旧期限在恢复途中生效。恢复成功后的补充延期遵守上述恢复有效性和只延长条件；流量等到\
-        \ Sandbox Ready、路由可用后再转发。\n \n 自动暂停模式重新设置暂停期限和对应的暂停保留窗口；自动销毁模式只重新设置销毁期限。无期限对象仍保持无期限。未开启续期的\
-        \ Sandbox 继续使用已有唤醒行为。恢复失败、等待超时或请求取消继续沿用现有唤醒的返回和取消语义。\n \n@@ -124,6 +124,8\
-        \ @@\n 没有阈值的对象保持关闭，不自动迁移或启用历史对象。持久化策略缺失、非法或不可安全表示时 Gateway 跳过续期，对异常值记录诊断，不猜测或回填。新\
-        \ API 与支持该能力的 Gateway 配合才能提供完整能力：旧 API 不识别这些扩展，旧 Gateway 不执行续期；混合版本期间不能保证配置更新被识别或任意流量路径均触发续期。升级、回滚均不将无期限对象转为计时对象。\n\
-        \ \n 本次复用既有 create/connect/timeout 入口，不增加独立配置接口、CRD spec 字段或模板级默认开关。暂停保留策略、自动唤醒准入和其他主动暂停规则保持各自职责。\n\
-        +\n+新增扩展参数、系统 annotation 和共享生命周期核心属于仓库规则所指的新 API 和架构变更，实现交付须在 `docs/proposals/`\
-        \ 提交描述本设计的提案。\n \n 本功能延长生命周期期限，不改变访问令牌有效期、代理空闲超时、负载均衡连接限制或其他主动暂停规则。它不能阻止手动暂停/删除、探针驱动暂停、集群故障或已经发生的到期动作。接近到期时的突发流量和后端故障可能来不及续期；异步设计提供尽力续期，不承诺每一次合格流量都能阻止到期。\n\
-        \ \n"
-    result: pass
-    read_hashes:
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md: d9b4a122edfa940e490128cba7645712a49bace68e44f910f8378c622a725f7b
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md: b77fbac784527e2df5e6922ebe6aafe7d78ac9ab697b956b9c2c25b209b7fce9
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md: 382c1f8ed26d67011ce391b81660b04f1b0ebb791487884fa0f15df94fc07b0a
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md: 71fa95e50dbcf10ac78e34153a28448825ed61cc2f37c333e89b1d1af9ce1e71
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md: b2eaf222db38d9f6cfbd535ad37e2d0e0f7ff061b8d79fa7daa76caeaeb20b11
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: fbb509ab96ef8e1469b7b9ad11487e4a681ca81c5287f2373882628d39f8d149
-      /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
-      /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
-      /AGENTS.md: null
-      /Users/AGENTS.md: null
-      /Users/sophon/Workspace/AGENTS.md: null
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
-      /Users/sophon/AGENTS.md: null
-      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+      sha256:591cb26568ffe9ab91be65aec9646a4abb4962d4ef18fce363e133d1f82e76e5'
+    session: 419237c3-01b1-4e62-8218-3e1f7f1690f4
+    recorded_by: 419237c3-01b1-4e62-8218-3e1f7f1690f4
