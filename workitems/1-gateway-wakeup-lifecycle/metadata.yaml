@@ -14,8 +14,8 @@ documents:
   logs: logs.md
 design:
   file: spec.md
-  version: 2
-  state: draft
-  registered_sha256: 15252278114ad4758a945b9fb633461e01117ef17e48cc9d461388cda763b018
-  author_session: 01a19b74-fe57-7cb3-9210-d1794ccbf164
+  version: 3
+  state: review-pending
+  registered_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+  author_session: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
 cleanup: pending
