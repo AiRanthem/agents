@@ -14,6 +14,944 @@ workflow:
   design_authors:
   - 01a19b74-fe57-7cb3-9210-d1794ccbf164
   - 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
+  design_basis:
+    review:
+      id: 69c5c3e98bf085af6ab63ceb8ebfb18e
+      kind: design-review
+      item: 1-gateway-wakeup-lifecycle
+      report: workitems/1-gateway-wakeup-lifecycle/records/69c5c3e98bf085af6ab63ceb8ebfb18e.md
+      session: 01a19bf3-40ea-7c52-8b82-50b8158a578a
+      created_at: '2026-11-02T12:05:15.391825+00:00'
+      provenance: Independent incremental review by original reviewer 01a19bf3-40ea-7c52-8b82-50b8158a578a;
+        user-confirmed v3 sha256 fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5;
+        D1 resolved and affected precision/API/lifecycle boundaries verified; report
+        in current ticket
+      requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+      spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+      version: 3
+      base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
+      dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+      result: pass
+      read_hashes:
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md: d9b4a122edfa940e490128cba7645712a49bace68e44f910f8378c622a725f7b
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md: b77fbac784527e2df5e6922ebe6aafe7d78ac9ab697b956b9c2c25b209b7fce9
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md: 382c1f8ed26d67011ce391b81660b04f1b0ebb791487884fa0f15df94fc07b0a
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md: 71fa95e50dbcf10ac78e34153a28448825ed61cc2f37c333e89b1d1af9ce1e71
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md: b2eaf222db38d9f6cfbd535ad37e2d0e0f7ff061b8d79fa7daa76caeaeb20b11
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+        /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+        /Users/sophon/AGENTS.md: null
+        /AGENTS.md: null
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
+        /Users/sophon/Workspace/AGENTS.md: null
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
+        /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+        /Users/AGENTS.md: null
+    approval:
+      requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+      spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+      version: 3
+      kind: user
+      source: 'Approved design publication: workitems/1-gateway-wakeup-lifecycle/spec.md
+        sha256:fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5'
+      session: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
+      recorded_by: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
+    read:
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md
+      content: '# 项目强制指令
+
+
+        ## 开发分支基线
+
+
+        本项目的所有代码开发分支必须从 OpenKruise Agents 上游仓库 `https://github.com/openkruise/agents`
+        的最新 `master` 创建。
+
+
+        每次创建开发分支前，必须核验 `upstream` 指向该上游仓库，成功执行 `git fetch upstream master`，并以本次刷新后的
+        `upstream/master` 提交作为新分支的起点。刷新失败时停止创建分支，待成功取得上游最新提交后继续。
+
+
+        按主工作区约定在 `worktrees/` 下创建隔离 Git worktree，主检出保持约定主分支。创建后核验新分支的初始 HEAD 与本次获取的
+        `upstream/master` 提交一致，并记录基线 commit。
+
+
+        本规则适用于项目全部工作项；本项目创建代码开发分支时，以本条统一基线要求为准。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md
+      content: '# OKA 日常开源开发
+
+
+        # OKA 日常开源开发
+
+
+        本项目用于持续记录和管理 OpenKruise Agents 的日常开源开发需求，关联 OKAWorkspace，共享主工作区的业务背景、仓库约定和
+        Python 环境。
+
+
+        初始需求来自用户：当前的 sandbox-gateway 支持流量自动唤醒，但是没有调整 shutdownTime/pauseTime。需要优化这个问题。
+
+
+        当前仅创建项目并登记初始工作项。上述现状为用户提供的需求背景，尚未通过源码或运行环境核验；具体调整规则、适用场景、验收标准和交付要求留待后续确认。
+
+
+        Record overall goals, stable domain context, terminology and project-wide
+        constraints here. Individual requirements, acceptance and designs belong to
+        work items. Keep this introduction concise; link additional material only
+        when it is needed.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md
+      content: '# Main workspace association
+
+
+        Identity: **OKAWorkspace** (`oka`).
+
+
+        Recovery reference: `git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git`
+        at `refs/heads/master`.
+
+
+        Local binding: `.project-local/main-workspace.json`.
+
+
+        ## Project-specific instructions and routes
+
+
+        # OKA 主工作区关联
+
+
+        本项目关联 OKAWorkspace（`oka`），本机根目录为 `/Users/sophon/Workspace/OKAWorkspace`。主工作区仓库为
+        `git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git`，主分支为 `refs/heads/master`。
+
+
+        依赖主工作区的操作应读取其原始 `AGENTS.md`，以其中的业务约束、仓库布局、主检出纪律、隔离 worktree 规则、Python 环境和发布规则为准，并按需加载工作区技能。共享
+        Python 解释器为主工作区 `.venv/bin/python`。
+
+
+        项目管理记录使用独立 Git 仓库及专用远程分支，代码 worktree 放在项目内的 `worktrees/`。开源代码仓库为 `https://github.com/openkruise/agents`，开源开发基线为最新
+        `upstream/master`。实际开发前读取主工作区 `agents/.agents/skills/internal-external-isolation/SKILL.md`，按任务分类刷新对应基线，并在隔离
+        worktree 中开发。主检出保持约定主分支。
+
+
+        创建阶段登记项目背景和已知需求。具体设计、实现、验收和代码交付由后续明确授权的任务推进。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md
+      content: '# Current project instructions
+
+
+        The program includes these current project sources in the operation''s read
+        payload for business background, constraints and main-workspace routes:
+
+
+        - `.project/context.md`
+
+        - `.project/main-workspace.md`
+
+        - `.project/business-instructions.md`
+
+
+        Keep only current effective requirements, design, decisions, knowledge and
+        business instructions in project documents. Replace superseded content; Git
+        retains earlier versions. Keep current approval, delivery and unresolved recovery
+        records. The generated entrypoints and installed skills define the shared
+        protocol.
+
+
+        Read required original main-workspace instructions before dependent work.
+        Preserve explicit permission, delivery and environment constraints. Migration
+        grants no design approval, implementation authorization, independent review
+        or delivery evidence.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md
+      content: '# OKA 日常开源开发
+
+
+        This is the management workspace for project `oka-daily-open-source`. Resolve
+        the caller-supplied project entrypoint through installed `manage-workitems/references/commands.md`;
+        use shared `manage-workitems/scripts/project.py` only when no caller binding
+        exists. The program owns configuration, YAML state, dependencies, document
+        routes and Git/Aone publication.
+
+
+        Operate this project serially on one machine. Any local session may continue
+        authorized work from the current artifacts and saved operation records. Finish
+        or recover the current operation before beginning the next. Session identities
+        record actual authors, reviewers and operation provenance. Read-only investigations
+        and reviews keep project records and source unchanged and return a separate
+        report bound to stable inputs.
+
+
+        The user may explicitly skip any verification checkpoint for the specified
+        current scope. Follow the command contract''s user verification decisions:
+        register the actual source and target as a named `validation-waiver`, honor
+        the skip and report its limits. Explicit human acceptance of the current implementation
+        uses `begin human-acceptance ID --approval-source SOURCE`: preserve the user’s
+        final code and design, reconcile remaining outdated design text and write
+        the comparison report, then finish to publish design and acceptance together.
+        The human conclusion covers that alignment and enters waiting for delivery
+        without additional design approval or independent design/code review, with
+        truthful `human_acceptance` provenance. Preserve downstream designs for their
+        own later design review. User code/design edits during human acceptance are
+        final drafts and stay in the acceptance/delivery phase without further review.
+        Reuse an existing covering acceptance conclusion when updating final-draft
+        bindings; wait for the actual conclusion if none exists. Changed ticket inputs
+        still require a fresh checkpoint and current reads. A PR alone establishes
+        no acceptance. Default review, verification and acceptance gates below apply
+        unless covered by such a current user decision. Never relabel a skip or human
+        acceptance as an executed check or independent review. Host permissions, data
+        safety and transaction integrity retain their own requirements.
+
+
+        For a script failure, follow installed `manage-workitems/references/recovery.md`
+        under "User-authorized manual recovery". Investigate actual facts and prepare
+        a concrete correction; covering explicit user authorization permits the scoped
+        state/file changes and script repair. Preserve genuine approvals/reviews,
+        uncertain transactions, source and recovery data; actual permissions still
+        apply. Stage executors return recovery needs to the controller.
+
+
+        For each ordinary requested work-item write operation, run `begin OP [ID]`
+        with its typed inputs. Read the complete returned `read` payload and actually
+        read required original external instruction paths. Edit only the absolute
+        Markdown paths in `editable`, then execute the returned `finish_command` unchanged;
+        design review, design-reuse assessment and implementation review declare `--result
+        pass|fail --provenance SOURCE` arguments supplied after the actual assessment;
+        design review may additionally declare `--contract-unchanged` for actual independent
+        confirmation and `--mechanical-correction` for an authorized mechanical candidate
+        edit. Such an edit uses the returned `spec.md` draft and actual pass with
+        both flags; the runtime retains original substantive authors and binds the
+        final candidate and exact diff. The project operator/controller records actual
+        applicability through `design-reuse`. `published` or `no_op` ends the operation;
+        `partial` permits only the returned resume command; `blocked` with `code:
+        stale_ticket` permits only its returned `next_command` to begin the same operation
+        again; expired tickets carrying authorization or review evidence return `code:
+        stale_evidence` without a continuation command; other blockers or missing
+        input mean report the listed facts and stop the affected operation. For ordinary
+        operations, use the returned drafts and program-maintained state, gates and
+        publication results. Route script defects to the recovery contract above.
+
+
+        For execution-mode handoff, generation replacement and registered internal
+        resources, use the direct typed `lifecycle` commands in the command contract.
+        Preserve completed stage work, source recovery, explicit lifecycle policy
+        and exact collection manifests. Diagnostic `ready` does not establish design
+        approval or implementation eligibility.
+
+
+        For project knowledge, run `knowledge-show ID` and use its returned complete
+        update/remove commands and byte guards. Maintain the current YAML metadata
+        and same-id Markdown body through those commands; replace current knowledge
+        in full or explicitly remove it.
+
+
+        The program includes current business instructions from `.project/project-instructions.md`
+        and current context in its inputs. Project documents contain only current
+        effective content; Git retains prior versions. Keep current approval, delivery
+        and unresolved recovery credentials. For an associated main workspace, required
+        original `AGENTS.md` paths must be returned and read before dependent work;
+        a copied summary does not replace them. Read the code repository''s applicable
+        instructions before source operations.
+
+
+        Use `manage-workitems` for requirements, `split-workitem` for requested decomposition,
+        `develop-workitem` for requested design/implementation, `complete-workitem`
+        for verified delivery and separately requested cleanup, and `upgrade-project`
+        for deterministic migration/instruction refresh. Creation ends at metadata
+        and requirement skeletons. Design and independent design review each require
+        the user''s request; reuse existing explicit authorization for unchanged scope.
+        The design owner obtains user confirmation before formal spec publication,
+        reusing approval of an unchanged complete contract. Publication records that
+        approval and its version binding for the authorized independent review. Oversized
+        parents include the full design, usable stages and DAG and select `design-update
+        --next-action split` before review. Current independent Pass routes them to
+        `split-workitem`. Children inherit complete relevant specs and can enter their
+        own review directly; only demonstrated blocking gaps require supplemental
+        design. Future child refinement never reduces parent rigor; changes to shared
+        or parent contracts return to that design layer for confirmation and affected
+        review. Implementation requires current independent design-review coverage
+        or an actual user-scoped simple-requirement waiver, plus delivered prerequisites
+        and recorded development preparation. Follow `review-design/references/implementable-gate.md`
+        for a complete first review and subsequent reuse of valid coverage, with independent
+        assessment of changes and affected interactions. The authorized project operator/controller
+        uses `design-reuse` to assess retained independent coverage against unchanged
+        current contracts and assumptions; this preserves the original reviewer and
+        approval with current bindings, and creates neither a new independent Pass
+        nor a waiver. A failed assessment requires affected independent review; material
+        contract changes still require actual approval. Reviewers default to read-only;
+        uniquely determined mechanical corrections within the authorized candidate
+        do not block Pass or constitute substantive authorship, and may be corrected
+        and assessed in the same round under the shared standard. A separate author
+        corrects substantive blockers, then the original reviewer is preferred while
+        still independent. Equivalent documentation and contract-preserving implementation
+        corrections do not themselves require a complete design re-review. Formal
+        baseline changes require design-applicability assessment and independent formal
+        code review; user-owned contract changes still need actual approval. For a
+        simple requirement, the user may explicitly authorize `development-start --skip-design-review
+        --approval-source SOURCE` for this unchanged contract; the program records
+        a requirement/spec/base/dependency-bound waiver, not a review pass. The agent
+        cannot decide to skip review itself. Project publication does not authorize
+        code commits or code pushes. Preserve main-workspace, cleanup, removal and
+        other user permission boundaries.
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md
+      content: '# 当前上下文
+
+
+        本工作项属于“OKA 日常开源开发”项目，目标代码仓库登记为 OpenKruise Agents（`agents`）。
+
+
+        设计基线为开源 master 提交 `cfbd102bc05c6df663965c5e23463a0eafd34948`。已核实该版本的 Gateway
+        自动唤醒通过底层 Resume 调整自动暂停期限；运行中尚无流量自动续期。E2B connect 已实现只延长有效截止时间的语义。
+
+
+        当前完整契约见 [设计文档](spec.md)，设计版本为 2，SHA-256 为 `15252278114ad4758a945b9fb633461e01117ef17e48cc9d461388cda763b018`，设计发布提交为
+        `55f47f44894dc25a13a30b3f3bd9a0a687840b71`，程序已回读核验远端提交。
+
+
+        用户已确认：通过阈值和目标时长两个参数配置续期；阈值支持绝对 duration 或按本次接口 timeout 换算的百分比，持久化为绝对 duration。零阈值关闭时删除阈值记录，目标继续保留；create
+        的目标缺省为本次 timeout，connect/timeout 通过 header 按字段更新，缺省不改。新请求及双向非空数据触发检查，空闲连接不续期，connect
+        与 Gateway 共用生命周期核心逻辑。
+
+
+        本会话 `01a19b74-fe57-7cb3-9210-d1794ccbf164` 中，用户明确要求“改自动续期配置与当次改期在同一个接口中完成，应该是原子性的，校验需要前置”，并要求同时研究
+        create 校验。在完整参数校验、create 默认与继承、并发组合冲突和恢复提交边界分析之后，用户回复“确认”，确认目标时长限定正整秒、暂停恢复配置与初始期限原子提交且等待失败不回滚、新扩展参数错误使用
+        400/409。v2 整合这些逐项确认的约定；当前待独立设计评审，尚未执行业务源码实现或功能验证。
+
+
+        ## 当前恢复记录
+
+
+        用户于 2026-11-02 明确授权修复共享项目脚本及必要测试，使设计和设计评审仅准备本地源码上下文；授权将本项目源码远端明确为 upstream=openkruise/agents、origin=AiRanthem/agents，并保留本地副本和原设计事务。此授权不包含业务源码实现或代码分支推送。
+
+
+        核对恢复目标时发现最初的设计准备命令已在先前检查后继续完成：项目提交 `58174ae190aa995986eae6258b4d5038677053e3`
+        已发布，本地 worktree 干净且 HEAD 为上述基线。它还未经设计授权向 openkruise/agents 创建了 `feature/oka-daily-open-source/1-gateway-wakeup-lifecycle-da492871d798`，远端回读
+        OID 为上述基线，没有业务源码改动。该事实已向用户披露；用户随后明确授权删除这一精确分支。已使用该 OID 的 force-with-lease
+        条件删除，随后 ls-remote 确认分支不存在。AiRanthem/agents 的同名源码分支也未发布。
+
+
+        因此保留现有完整克隆和干净 worktree，修正配置、开发绑定及本地 reservation，使后续目标指向 AiRanthem/agents；该目标上的源码分支记录为未发布。恢复前配置、事务及
+        Git 配置备份在本机 `.project-local/recovery/20261102-design-recovery-before.tar.gz`。原
+        tickets `06dd51633c8712d5670c23c7773957ae` 与 `307b5885dffecf5414f1bd489fc7ab5f`
+        作为恢复证据保留。
+
+
+        本次在用户确认新协议后执行原 `resume --ticket 307b5885dffecf5414f1bd489fc7ab5f`，误将事务内保留的旧候选发布为
+        v1，提交 `83a1cf8075ab9975dba916a9e97c09abb687f9a7`。旧稿仍含布尔开关和固定 10% 阈值，与用户当前确认内容不符；程序对它的发布登记不能作为这些旧约定仍获用户认可的依据。该事实已立即向用户披露。随后通过正常
+        `design-update` 事务 `8c06a296720b09eff3c59a982935d7ea` 发布上述 v2，替换正式文档并核验远端；原恢复事务已结束。后续评审及实现只能使用当前
+        v2，不得使用旧候选或将旧版本登记当作当前合同依据。业务源码未因这些文档操作改变。
+
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md
+      content: '# 当前决策
+
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md
+      content: '# 优化 sandbox-gateway 流量自动唤醒后的 shutdownTime/pauseTime 调整
+
+
+        ## 目标
+
+
+        优化 sandbox-gateway 流量自动唤醒时对 `shutdownTime` / `pauseTime` 的处理。
+
+
+        用户原始需求：
+
+
+        > 当前的 sandbox-gateway 支持流量自动唤醒，但是没有调整 shutdownTime/pauseTime。需要优化这个问题。
+
+
+        ## 范围
+
+
+        - 关注 sandbox-gateway 流量自动唤醒流程与 `shutdownTime` / `pauseTime` 调整之间的关系。
+
+        - 具体调整规则、触发条件、涉及组件及兼容性要求待后续确认。
+
+
+        ## 验收条件
+
+
+        待确认：自动唤醒后两个时间字段的预期值、适用场景及验证方式。
+
+
+        ## 交付结果
+
+
+        待确认具体代码交付和文档要求。本次仅登记需求，尚未进入设计或实现。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md
+      content: '# Gateway 流量自动续期
+
+
+        ## 摘要
+
+
+        为通过 Gateway 使用的 Sandbox 增加按实际流量触发的自动续期。用户配置续期阈值 H 和目标时长 R；Gateway 在新请求或双向数据到达时检查剩余生命周期，未到期且小于
+        H 才尝试延长到续期时刻起 R。没有阈值即关闭，连接空闲不续期。
+
+
+        create 通过 metadata 配置，connect 和 timeout 通过扩展 header 按字段修改。阈值接受 duration 或相对于本次请求
+        timeout 的百分比，目标仅接受至少 2 秒的整秒 duration；持久化时均为绝对 duration。create 的目标缺省为创建 timeout。配置和本次期限变化原子提交，校验失败不产生部分更新。
+
+
+        E2B connect 与 Gateway 共用生命周期核心能力，保持期限计算、暂停保留策略和受保护写入的一致性。Gateway 负责流量准入、触发条件和合并请求，不调用
+        E2B connect HTTP 接口。运行中续期异步执行；已暂停 Sandbox 的自动唤醒仍取决于已有唤醒配置。
+
+
+        ## 背景
+
+
+        现有 Gateway 能在流量到达时唤醒允许自动恢复的 Sandbox，并为自动暂停场景重新设置暂停期限。它尚不在 Running 状态下根据持续流量延长期限，因此用户正在访问或接收流式输出时仍可能触发时间到期。
+
+
+        现有 connect 已包含运行中延长期限、暂停后恢复、恢复时长保护和暂停保留时间计算。直接调用底层 Resume 不会为已经 Running 的
+        Sandbox 续期；另写一套期限规则则会增加行为分歧和维护负担。复用 connect 的核心能力能够让两种入口采用同一套生命周期语义。
+
+
+        目标是让显式选择此功能的用户减少主动发送 connect 保活的需要。功能只响应经过 Gateway 的实际流量，不承诺单凭连接存续或后台计算持续运行就一直保活，也不取代既有暂停、删除和其他生命周期规则。
+
+
+        ## 设计终态
+
+
+        ### 配置协议与持久化
+
+
+        提供两个扩展参数，适用于现有 v1/v2 create、v1/v2 connect 和 timeout 入口；原生路径与自定义路径行为一致。
+
+
+        | 参数 | create metadata | connect / timeout header |
+
+        | --- | --- | --- |
+
+        | 续期阈值 H | `e2b.agents.kruise.io/auto-renew-threshold` | `X-E2B-Kruise-Auto-Renew-Threshold`
+        |
+
+        | 目标时长 R | `e2b.agents.kruise.io/auto-renew-target` | `X-E2B-Kruise-Auto-Renew-Target`
+        |
+
+
+        阈值同时承担开关功能。正值开启；合法零值（如 `0`、`0s`、`0%`）关闭。关闭时删除阈值 annotation，不保存零值或空字符串，目标时长继续保留。缺少阈值的对象自然保持关闭，不另设布尔开关。
+
+
+        阈值接受 Go duration 字符串或非负十进制百分比，例如 `1m`、`500ms`、`12.5%`。百分比只在收到该字段时，按照本次接口经过默认值填充和校验的
+        timeout 计算一次。计算基准不包含暂停恢复的 300 秒保护下限，也不是当前剩余时间或续期目标。后续不带阈值扩展的调用不重新计算已保存的阈值。
+
+
+        目标仅接受换算后为整秒且至少 2 秒的 duration，例如 `2s`、`1m30s`、`1.5m`；不接受 `1s`、`1.5s`、零、百分比或
+        `forever`。目标不能超过服务端 timeout 上限。该下限适用于显式目标及 create 默认目标，也适用于关闭时显式提供的目标。阈值允许亚秒，沿用
+        duration 的纳秒精度，正阈值换算后至少为 `2ns`；百分比计算结果向下取至纳秒，正数换算后不足 `2ns` 时拒绝，不能因取整而关闭续期。输入负数、非法单位、非有限数值、溢出或无法安全表示的值均拒绝。
+
+
+        生命周期截止时间沿用现有 UTC 整秒向下截断。选择 R 至少 2 秒，是为了排除 R=`1s` 与亚秒阈值组合在到期前始终无法产生更晚整秒期限的配置，同时保留现有时间规范化和主动改期语义。正
+        H 至少 `2ns` 则排除了严格阈值窗口 `0 < E-t < 1ns` 中不存在可表示剩余时间的另一边界。对于整秒 E、任意合法 H 和 R，在
+        `0 < E-t < min(H, 1s)` 内存在可表示的时间点，且计算的续期目标严格晚于 E；这只保证表示精度下存在可延长的机会，不保证时钟采样或异步写入一定赶上该窗口。
+
+
+        metadata 中的值必须是字符串。扩展值去除首尾空白后不得为空；header 名称按 HTTP 规则大小写不敏感，每个参数只允许单值，重复 header
+        或逗号拼接多值均拒绝。百分比使用普通十进制写法，不接受科学计数法。duration 沿用 Go 单位，不额外支持 `d`。显式提供的非法字段始终使整次请求失败，即使阈值同时设为零。
+
+
+        服务端将有效阈值与目标分别写入系统 annotation `agents.kruise.io/traffic-renewal-threshold`、`agents.kruise.io/traffic-renewal-target`，值均为规范化的绝对
+        duration 字符串，不持久化百分比。外部 metadata 不能直接写入这些系统键；公开扩展键作为功能参数消费，不承诺普通 metadata
+        原样回显，不增加响应字段。Gateway 只信任经过 API 处理的系统记录，不从创建时间和当前截止时间反推原始 timeout。
+
+
+        开启或修改一个仍开启的配置时，合并后的 H、R 须分别满足上述时长规则，且必须满足 `0 < H < R`。目标不必等于本次 timeout，阈值也不必小于本次
+        timeout；百分比不另设 100% 上限，是否可接受由换算后的组合决定。
+
+
+        ### create 的默认值与前置校验
+
+
+        create 先按既有规则确定本次 timeout：缺省或零使用 300 秒，再校验既有最小值 30 秒及服务端上限。随后完成百分比换算、目标默认值填充和续期组合校验。不能在
+        timeout 尚未填充默认值时，把百分比错误地换算为零。全部请求级校验通过后才能进入 Claim 或 Clone；非法续期参数不会先领取、创建或修改
+        Sandbox。
+
+
+        create 未传阈值则关闭；未传目标则将本次有效 timeout 保存为 R，即使关闭也保存目标。只传目标允许预配置，但不自动开启。Claim 和
+        Clone 都只采用本次请求的选择：清除候选、模板或 checkpoint 中可能残留的阈值，按本次请求写入或保持缺失，并重新确定目标；不继承上一交付的续期配置。
+
+
+        auto-pause、auto-resume 与 never-timeout 的既有合法组合继续允许。续期不隐式开启 auto-pause 或 auto-resume。never-timeout
+        仍保持没有生命周期截止时间；配置可以保存，但不触发续期，也不把对象转换为计时 Sandbox。
+
+
+        ### connect / timeout 的配置更新与原子性
+
+
+        两个 header 分别按字段修改：未提供的字段保持现值，都未提供则配置完全不变。只改目标不重算阈值，只改阈值不重设目标；目标缺省为 timeout
+        的规则只在 create 生效。历史对象没有保存目标时，首次开启必须显式提供目标；不猜测历史创建 timeout。历史对象仅设置目标也允许保持关闭。
+
+
+        请求体 timeout 决定本次主动改期，扩展字段决定后续自动续期，两者独立。connect 保持只延长有效截止时间，timeout 保持主动覆盖、允许缩短的语义。v1
+        connect 和 timeout 保留既有必填与范围规则；v2 connect 缺省 timeout 使用 300 秒。暂停 connect 的百分比仍按请求
+        timeout、而非恢复下限计算。
+
+
+        鉴权、所属用户和资源身份验证沿用现有 API 边界。首次产生资源变更前，完成输入合法性、合并后续期配置、当前操作资格及期限计算的校验。缺少扩展的请求不新增对既有续期配置的校验或回填；显式关闭可以删除异常阈值，不因保留的旧目标异常而阻止关闭，但显式传入的新目标仍须合法。
+
+
+        新配置和此次期限在同一个 Sandbox 对象的受版本条件保护的写入中原子提交，删除阈值也是该次提交的一部分。不得先保存配置、再修改期限或反过来。connect
+        判定无需延长、timeout 的期限值未变，以及 never-timeout 不产生期限时，仍必须接受合法配置更新；即使最终没有字段变化，也不能仅凭旧缓存宣告请求已满足。
+
+
+        并发冲突后重新读取同一交付的状态，只合并本次明确提供的字段，再检查组合和操作资格；不能重新提交旧快照覆盖别人修改的字段。配置和期限要么按这次合法组合一起提交，要么此次尝试都不生效。同字段的并发更新以实际接受的提交顺序为准，不保证请求到达顺序。
+
+
+        初次校验发现新扩展或其合并配置非法时返回 400；已通过前置校验、但并发变更使其不再合法或无法在有界重试内提交时返回新增扩展的 409 冲突。原有鉴权、查找及其他错误保持既有类别与映射，不把后端内部细节暴露给用户。timeout
+        外层不得把这些新增 400/409 错误改成 500；不带扩展的旧请求保持既有映射。
+
+
+        ### 暂停恢复的提交边界
+
+
+        暂停 connect 在任何恢复变更前完成上述校验。接受恢复的首次写入将新续期配置、恢复保护期限和 `paused=false` 一起提交。计时 Sandbox
+        的恢复时长沿用 `max(请求 timeout, 300 秒)`；这不改写保存的 H、R，never-timeout 仍不产生期限。并发调用中已经由其他请求解除暂停时，不重放旧的暂停状态或覆盖胜方期限；按当前可接受的恢复或运行状态，原子处理本次字段更新和只延长规则，保持已有同向恢复等待语义。
+
+
+        等待 Sandbox Ready 是提交之后的生命周期过程，不属于可回滚的存储事务。恢复完成后的补充延期仅在本次恢复仍有效、未被后续配置修改、显式改期或暂停/恢复取代时执行；它不重新提交旧配置，并继续遵守当前身份、状态和只延长条件。
+
+
+        参数校验拒绝发生在首次提交之前，不先唤醒再报参数错误。首次提交成功后，恢复等待失败、请求取消或后续步骤失败不会回滚已提交的配置与期限，也不能把已接受的配置重新报告为参数校验失败。后端写入响应丢失时结果可能未确认，不能声称肯定未生效；重新观察实际状态后再判断，不能盲目补偿覆盖并发更新。
+
+
+        ### 流量与触发条件
+
+
+        只有按现有 Gateway 规则获得准入并定位到具体 Sandbox 的请求才产生续期资格。其新请求到达、非空请求数据及非空响应数据均可触发检查，包括正常
+        HTTP、SSE 和 WebSocket。沿用已有流级鉴权语义，不逐数据块重新认证；续期始终绑定该流最初获得准入的 Sandbox 身份。
+
+
+        流量按非空字节事件计算，不解析业务内容。因此 SSE 心跳、WebSocket 心跳也属于流量；空回调、连接仍打开、连接关闭事件以及 Gateway
+        自己生成的拒绝响应不算流量。经过其他入口或直接访问 Pod 的流量不在范围内，Sandbox 主动访问外部的流量也不在范围内。
+
+
+        有效截止时间 E 沿用 connect 的选择：存在 `pauseTime` 时使用它，否则使用 `shutdownTime`。Running 且尚未要求暂停、未进入删除的同一
+        Sandbox，持有有效的 H、R 且满足 `0 < E - 当前时间 < H` 时可发起续期。恰好等于阈值不续期；已经到期时不通过普通续期抢救，后续按既有生命周期执行。首次流量检查与重试都要尊重当前状态和当前记录。
+
+
+        没有流量时不进行周期性保活。事件检查使用本地缓存；不为每个数据块发管理请求或 Kubernetes 请求，不保留或记录数据内容。
+
+
+        ### 共用 connect 核心能力
+
+
+        共用范围是协议无关的生命周期计算和执行能力：有效期限选择、按时长计算期限、自动暂停与销毁模式、暂停保留时间、恢复最短时长、只延长规则，以及配置和期限的受保护持久化。将需要共享的能力放在
+        Gateway 可依赖的中立边界，现有 connect 通过其 Manager/Infra 路径调用；共享代码不依赖 E2B handler、HTTP
+        模型或状态码，不扩大 Gateway 对 API/Manager 包的遗留依赖。
+
+
+        API 层负责 API Key、所属用户、metadata/header 解析、默认值和百分比换算、协议校验及 E2B 响应。Manager 经中立
+        Infra 能力执行生命周期用例；具体后端负责条件写、同一交付核验和冲突重试。Gateway 负责其现有流量准入、已保存策略的检查、异步任务及本地请求合并。Sandbox
+        Controller 继续负责观察期限并执行暂停/删除，不引入对 API 或 Manager 的反向依赖。
+
+
+        调用核心能力时区分显式 connect、流量续期和获准的流量唤醒：显式 connect 按上述扩展协议更新配置并保留主动改期规则；流量续期只允许更新
+        Running Sandbox 的期限，不允许恢复暂停状态；流量唤醒只有通过现有自动唤醒条件才允许恢复。Gateway 不构造管理 API 凭证或发起
+        E2B connect HTTP 请求。
+
+
+        ### 运行中续期
+
+
+        一次续期首次计算目标时固定基准时间 t 和本次配置，目标有效截止时间为 `t + R` 向下截断至 UTC 整秒；相对 t 的目标时长大于 `R-1s`
+        且不超过 R。若规范化后的目标不晚于当前有效截止时间，本次不写入，后续合格流量可重新检查。重试同一次工作不不断推进 t，不把目标计算为旧截止时间再加
+        R。若重试发现策略已经改变或关闭，终止旧配置下的工作，后续新流量按新配置触发。
+
+
+        对于自动销毁模式，只延长 `shutdownTime`，不产生 `pauseTime`。对于自动暂停模式，延长 `pauseTime`，并按 connect
+        的同一暂停保留策略计算配套 `shutdownTime`。暂停保留时长独立于 R；缺失或非法的保留策略沿用 connect 的默认和诊断规则，仅在实际接受的期限更新中写入必要的默认值。冲突重试采用当前模式与保留策略，不覆盖较新的策略。
+
+
+        “只延长”约束的是有效生命周期截止时间，不能把暂停后的保留窗口误当作 Running 生命周期。若其他请求已经把有效期限延长到目标之后，本次不缩短它。普通续期不使用恢复过程的最短
+        5 分钟规则，使用当前保存的 R。
+
+
+        显式 timeout 仍可缩短当前期限；没有扩展时 H、R 不变，后续合格流量可能再次续期。需要缩短期限并禁止后续续期时，可在同一次 timeout
+        请求中传零阈值，原子删除阈值并修改期限。关闭不撤销在它之前已经提交的续期；connect 的只延长规则也不会因关闭而变成允许缩短。
+
+
+        ### 与自动唤醒的关系
+
+
+        续期与自动唤醒是独立选择。仅开启续期不会使 Paused Sandbox 自动恢复，也不会绕过 Gateway 的唤醒总开关。Running Sandbox
+        的续期不依赖唤醒总开关。
+
+
+        两者都开启且通过既有唤醒条件时，共用 connect 核心能力以保存的 R 发起恢复。计时 Sandbox 沿用现有恢复保护，将本次恢复时长取为 `max(R,
+        300 秒)`；这不改写保存的 H、R。解除暂停与初始新期限必须在同一次受保护状态更新中完成，避免旧期限在恢复途中生效。恢复成功后的补充延期遵守上述恢复有效性和只延长条件；流量等到
+        Sandbox Ready、路由可用后再转发。
+
+
+        自动暂停模式重新设置暂停期限和对应的暂停保留窗口；自动销毁模式只重新设置销毁期限。无期限对象仍保持无期限。未开启续期的 Sandbox 继续使用已有唤醒行为。恢复失败、等待超时或请求取消继续沿用现有唤醒的返回和取消语义。
+
+
+        ### 并发、身份与失败
+
+
+        本功能涉及的 API 配置更新、流量续期及唤醒状态变更，都在执行前和每次条件写重试中核对当前对象的 namespace/name、UID 和公开 Sandbox
+        ID，确保仍为最初获得授权或准入的交付，不操作同名替代对象。普通续期还要重新核对有效配置、Running 状态、暂停意图、删除状态和阈值；身份变化、对象消失、策略变化或移除、已要求暂停或删除时终止旧工作，绝不写
+        `paused=false`。获准的唤醒则重新核对当前唤醒资格、删除状态和期限策略，保持既有并发恢复的幂等语义。
+
+
+        后端写入采用版本条件，只修改本次需要更新的期限和必要策略字段。Gateway informer 中被裁剪的模板等字段不得因更新而被擦除。发生冲突后重读并重新判断，不使用旧模式、旧身份或旧阈值判断强行覆盖新状态；本次新增流量续期使用缓存和条件写实现，不新增
+        APIReader 直读依赖。
+
+
+        同一 Gateway 对同一 Sandbox UID 合并并发触发，工作量和等待队列有界。多个 Gateway 可以竞争，但以存储中的最新对象和条件写决定结果，重试时再次判断阈值和目标是否仍需要延长。不会因
+        N 个并发流量事件而累计增加 N 个 R，也不引入跨 Gateway 分布式锁。短时长的整秒规范化、缓存滞后或配置接近边界不能造成无界重试或逐数据块写入。
+
+
+        运行中续期异步执行，不阻塞数据转发。失败时记录可定位的结构化错误，不改变正在服务的响应或断开流；后续流量可以在退避后再次触发。一次工作及其冲突重试必须有截止时间；无新流量时不形成无限后台重试。网络返回不确定时不把本地期限标成已成功，后续根据实际观察重新判断；同一次工作重试仍使用固定目标，避免重复延长。
+
+
+        流结束后不再产生新触发；已经接收的有界续期可完成，成功写入不因客户端断开而回滚。后台工作不持有已销毁流的 Envoy 回调或数据缓冲；Gateway
+        停止时取消尚未完成的工作。日志不得包含访问凭证或业务数据，本次不新增 Prometheus 指标。
+
+
+        ### 兼容性与能力边界
+
+
+        没有阈值的对象保持关闭，不自动迁移或启用历史对象。持久化策略缺失、非法或不可安全表示时 Gateway 跳过续期，对异常值记录诊断，不猜测或回填。新
+        API 与支持该能力的 Gateway 配合才能提供完整能力：旧 API 不识别这些扩展，旧 Gateway 不执行续期；混合版本期间不能保证配置更新被识别或任意流量路径均触发续期。升级、回滚均不将无期限对象转为计时对象。
+
+
+        本次复用既有 create/connect/timeout 入口，不增加独立配置接口、CRD spec 字段或模板级默认开关。暂停保留策略、自动唤醒准入和其他主动暂停规则保持各自职责。
+
+
+        本功能延长生命周期期限，不改变访问令牌有效期、代理空闲超时、负载均衡连接限制或其他主动暂停规则。它不能阻止手动暂停/删除、探针驱动暂停、集群故障或已经发生的到期动作。接近到期时的突发流量和后端故障可能来不及续期；异步设计提供尽力续期，不承诺每一次合格流量都能阻止到期。
+
+
+        ### 可观察验收结果
+
+
+        | 场景 | 结果 |
+
+        | --- | --- |
+
+        | create 的 timeout 缺省，阈值 `10%`，目标缺省 | 保存 H=`30s`、R=`5m` |
+
+        | create timeout=600，阈值 `10%`，目标 `5m` | 保存 H=`1m`、R=`5m` |
+
+        | create timeout=600，阈值 `10%`，目标 `30s` | 400；不进入 Claim/Clone，不创建或领取 Sandbox
+        |
+
+        | create timeout=30，阈值 `500ms`，目标 `1s`，或未传阈值但显式目标为 `1s` | 400；不进入 Claim/Clone，不创建或领取
+        Sandbox |
+
+        | create 未传阈值，候选对象带有旧阈值 | 清除旧阈值保持关闭；目标按本次 create 确定 |
+
+        | H=`500ms`、R=`2s`，E=`12:00:10Z`，t=`12:00:09.600Z` | 目标为 `12:00:11Z`；无竞争且提交及时成功时，有效期限延长
+        1 秒，自动暂停模式按同一保留策略配套调整 shutdownTime |
+
+        | create timeout=30，目标 `2s`，阈值 `1ns` 或 `0.000000005%` | 400；后者向下取至纳秒后为 `1ns`，不进入
+        Claim/Clone；`2ns` 或换算后至少 `2ns` 的正阈值可通过本项校验 |
+
+        | H=`2ns`、R=`2s`，整秒 E | t=E-2ns 时不续期；t=E-1ns 时满足触发条件且规范化目标为 E+1 秒 |
+
+        | H=`500ms`、R=`2s`，当前时间等于或晚于 E | 不通过普通续期抢救；最小目标不改变到期规则 |
+
+        | H=`1m`、R=`10m`，剩余 60 秒时有流量 | 不更新期限 |
+
+        | H=`1m`、R=`10m`，剩余 59 秒时有新请求或流内数据 | 异步尝试将有效期限延长至本次计算时间加 10 分钟 |
+
+        | 原 R=`10m`；connect timeout=1200，只传阈值 `20%` | H 改为 `4m`，R 保持原值；本次 connect
+        按 1200 秒和只延长规则改期 |
+
+        | 原 R=`10m`；计时 Sandbox 的 Paused connect timeout=30，只传阈值 `10%` | 保存 H=`3s`，R
+        不变；恢复保护时长至少 300 秒 |
+
+        | connect 无需延长，但传入合法的新目标 | 期限不缩短，新目标仍被保存 |
+
+        | timeout 请求同时缩短期限并传零阈值 | 同次提交修改期限并删除阈值；后提交的旧续期工作不能越过关闭 |
+
+        | connect / timeout 同时提交目标 `1s` 和零阈值，包括 Paused connect | 400；既不关闭续期，也不修改期限或先唤醒
+        |
+
+        | 原 H=`1m`、R=`10m`；并发请求分别改 H=`8m` 和 R=`5m`，均通过首次校验 | 一个先提交，另一个重校验后返回 409；不出现
+        H=`8m`、R=`5m` 的非法组合，失败请求的改期也不生效 |
+
+        | 只有下行 SSE 数据或 WebSocket 心跳持续经过 Gateway | 与新请求采用相同阈值和续期规则 |
+
+        | 连接一直打开但没有数据，或命令一直计算但不输出 | 不因连接存在而续期 |
+
+        | 同时有大量流量命中多个 Gateway | 续期不累加为多个 R，已接受的更晚有效期限不被缩短 |
+
+        | H=`500ms`、R=`2s`，已暂停且续期与流量唤醒都开启 | 恢复时至少设置 300 秒；R 仍为 `2s`，后续 Running 续期按整秒向下截断和
+        R 计算 |
+
+        | 续期任务排队期间对象已要求暂停，或同名对象 UID 已替换 | 该任务不恢复暂停、不写新对象 |
+
+        | 写入发生冲突、超时或结果不确定 | 业务流保持现有转发行为，不虚报续期成功，不无限重试 |
+
+        | Paused connect 初次提交成功，随后恢复等待失败 | 新配置与保护期限都已提交，不回滚；失败不意味着对象未发生变化 |
+
+        | 自动暂停与自动销毁两种模式 | 分别保持原模式，暂停保留时长不被原始 timeout 替换 |
+
+        | Gateway 读到构造的 H=`500ms`、R=`1s` 记录 | 按非法持久化策略跳过续期并诊断，不猜测或回填 |
+
+        | 历史对象没有目标，只传正阈值要求开启 | 400，要求显式提供目标；不猜测原创建 timeout |
+
+        | 没有阈值，或对象为 never-timeout | 不产生自动续期行为 |
+
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/AGENTS.md
+      content: '# Workspace
+
+
+        - `agents/`：OpenKruise Agents 源码仓库。
+
+        - `agents-harness/`：OpenKruise Agents 测试仓库。
+
+        - `ack-components/`：ACK 线上编排仓库。
+
+        - `openkruise.io/`：OpenKruise 官方文档与网站仓库；主检出保持在 `master`，文档变更在 `worktrees/`
+        下的隔离 worktree 中完成。
+
+        - `agents/` 的 remote 由 `$setup` 统一维护：`upstream` 指向 GitHub 开源仓库，`origin` 指向内部
+        GitLab；开源基线使用 `upstream/master`，内部开发与发布引用使用 `origin/develop`、`origin/release/*`。
+
+
+        # 任务纪律
+
+        - **ack-components 路径硬约束**：对 `ack-components/` 仓库及其所有隔离 worktree，仅允许新增、修改、删除仓库根目录下
+        `addons/`、`node-components/`、`kdm-templates/` 内的文件；重命名的源路径与目标路径均须位于上述范围。提交和推送前，必须检查本次变更及相对
+        MR 目标分支（无 MR 时使用任务集成基线）的完整 diff，确认所有变更路径均满足此白名单；发现越界变更时立即停止提交和推送，先将其移出该仓库的交付差异。
+
+        - Workspace 中所有代码仓库的原始目录是供读取和维护的主检出，必须始终保持在约定主分支，不得切换。约定主分支：存在 `develop` 分支的仓库使用
+        `develop`，否则使用 `master`。该约定只决定主检出停在哪条分支。
+
+        - 开发 `agents/` 前，先读主检出中的 `agents/.agents/skills/internal-external-isolation/SKILL.md`，按其中的内部/外部分类判断任务目标。开发分支和开发
+        worktree 在创建前 fetch 基线：任务目标全部是内部代码变更时，从 `origin/develop` 的最新提交切出；任务目标包含外部代码时，从
+        `upstream/master` 的最新提交切出。
+
+        - 任何需要切换分支或检出 tag 的操作，都必须在 `worktrees/` 目录下创建隔离的 Git worktree，并根据任务使用简洁、清晰的名称。
+
+        - 创建开发分支时，先核对目标仓库现有的分支命名风格，并按该风格选取分支名。
+
+        - 任务完成后，如果确认该 worktree 不再需要，必须将其清理。
+
+        - 直接克隆进 Workspace 的仓库原始目录（非 `worktrees/` 下的隔离 worktree），在对它做任何操作前，必须确保位于约定主分支并先
+        `git pull` 更新到远端最新，再读取引用或做规划；不依赖陈旧的本地分支或远端跟踪引用。创建 worktree 前 fetch 所选基线的远端引用，从该最新提交创建。
+
+        - 运行任何 `ali` CLI 命令时必须从第一次执行起申请提权，不得先在受限沙箱中尝试后再重试。
+
+        - 修改 Skill 时直接描述"应该怎么做"，不保留"不做旧行为"的否定式描述（如"without MR"/"not why"），避免历史脏数据。
+
+
+        # Python 环境
+
+
+        - 主工作区唯一的 Python 虚拟环境为根目录 `.venv/`，由 Git 忽略；子仓库、隔离 worktree 和任务目录共用这个环境。
+
+        - 执行 Python 前确定主工作区绝对路径 `WORKSPACE_ROOT`（包含本文件与 `.agents/skills/setup-readonly/`
+        的主检出），始终使用 `"$WORKSPACE_ROOT/.venv/bin/python"`；pip 和 pytest 分别通过该解释器的 `-m
+        pip`、`-m pytest` 调用。
+
+        - 完整 setup 与只读 setup 均调用 `.agents/skills/setup-readonly/scripts/setup-python.sh`：环境已存在则跳过，缺失则创建并安装该目录
+        `requirements.txt` 中所有工作区技能及测试依赖。系统 Python 仅用于此次环境创建。
+
+        - Agent 可自行使用主工作区解释器向 `.venv/` 安装任何需要的包（`"$WORKSPACE_ROOT/.venv/bin/python"
+        -m pip install ...`），无需事先询问。安装后自行验证可用。
+
+        - 工作区技能及测试的公共依赖仍统一维护在 `setup-readonly` 目录的 `requirements.txt`：新增此类共享依赖时同步更新该清单，临时或任务专用包则按需直接安装，无需登记。
+
+        - 技能脚本及其本地 Python 子进程使用同一解释器，子进程通过 `sys.executable` 继承。
+
+
+        # OKA 版本与发布规则
+
+
+        - 应用产物是镜像，不具有预发或生产阶段；ACK 组件产物是 `ack-components` 中的 Helm 包或 YAML，只有组件版本具有预发、生产和测试状态。`manager`、`sandbox-manager`、`sandbox-api`
+        指同一应用，内部发布分支、tag 和应用说明统一沿用 `sandbox-api`。
+
+        - 所有版本中，裸 `vX.Y.Z` 与 `vX.Y.Z-release.1` 等价；比较、推荐和冲突检查按同一逻辑版本处理，记录与 Git 引用保留实际写法，二者同时存在时报告冲突。
+
+        - 社区 master commit 按 minor 边界 tag 的区间 `[vX.Y, 下一边界)` 归属；边界之前的历史默认 `v0.6`，后续按
+        `v0.7` 等已核验边界划分，不补建历史 tag。通过 develop 的社区同步记录核验来源，不能从应用镜像或内部 Git tag 反推社区版本。
+
+        - 应用 feature/重要优化必须先合入 develop，再从 develop 切 `release/ack-APP-vX.Y.Z`，创建不可变正式
+        tag `ack-APP-vX.Y.Z-release.1`；X/Y 取社区归属，与该应用上版相同则 Z+1，否则 Z=0。应用 fix 从 develop
+        以 `cherry-pick -x` 回补该应用最新正式 release 分支，递增 `release.N`。既有正式 tag 不得移动；回补后的
+        SHA 不同不代表 develop 缺少修复，须核验补丁及最终行为。
+
+        - 组件按发布周期独立递增，普通正式版为 `vX.Y.Z-release.1`。组件可选择任意已核验应用镜像，不从镜像 tag 推导组件版本或状态。生产开始灰度
+        rollout 才算线上正式版；代码推送或最大版本号不能证明已上线。
+
+        - 线上正式版开始 rollout 后，立即准备下一预发正式版；同 minor 原样复制镜像与编排，仅修改组件版本元数据。跨 minor 由用户明确选择新的组件版本线，应用镜像仍按实际选择记录。周期开发只更新尚未上线的预发正式版，并在公共组件文档汇总变更。
+
+        - 组件紧急修复从用户指定的线上正式版派生 `release.N+1`，不夹带下一预发版内容，可跳过预发验证。完成后询问是否把编排修复带入正式预发；镜像一律不带入，含模板或引用间接造成的镜像变化。非紧急修复优先随下一周期发布。
+
+        - 应用 release 版本从 develop 切 `release/ack-APP-vX.Y.Z`，创建不可变正式 tag `ack-APP-vX.Y.Z-release.1`。应用
+        alpha 版本同样从 develop 切 `release/ack-APP-vX.Y.Z-alpha.N`，创建 tag `ack-APP-vX.Y.Z-alpha.N`；X/Y/Z
+        取下一正式版本，N 按同应用同目标版本递增。组件测试版为下一正式 X/Y/Z 的 `alpha.N`，同组件、同目标版本的所有测试共享递增 N；线上换版后改用新的下一正式版本并重新计数。仅最新
+        alpha 且周期未切换时，可由用户选择原版本修改并卸载重装；不可覆盖预发正式版。按数字版本段推荐，并核验平台升级顺序，不能假设字符串字典序正确。
+
+        - 版本工作流通过 release note 共享上下文：应用构建验证后，将仓库、源码 commit、镜像/digest、可选 Git tag 及流水线信息写入
+        `release-notes/APP/images/PIPELINE_ID.md` 的结构化 frontmatter。组件技能默认直接消费已核验镜像记录，在
+        `release-notes/components/ACK-COMPONENT/` 保存镜像元数据及源 note 哈希快照，并另记编排 commit；缺失或冲突时才回查产物。应用镜像发布和组件更新分开调用。对外文档发布组件白名单版本/日期/变更内容，以及该组件版本捆绑的各应用镜像版本
+        tag；源码与编排 commit、流水线、digest、完整 dev 镜像 tag、仓库地址与内部路径仍留在内部记录。具体格式共用 `release-oka-app/references/release-note-contract.md`。
+
+        - 对外文档中的镜像版本 tag 取该组件版本实际部署到 `acs/` 命名空间的 tag，权威来源是 `ack-components` 对应版本目录的
+        `configs/default.yaml`（`values.yaml` 是 chart 默认值，可能陈旧；`component.yaml` 的 `images:`
+        段是 dev→acs 同步映射，用于反查源镜像）。同步技能在渲染时实时读取组件仓取值，读不到就停下问用户，不用记录里的 `git_tag` 或 `image_tag`
+        顶替。每个组件版本按应用分别列出管控面（sandbox-manager）与网关（sandbox-gateway）镜像 tag。仓库历史中查不到镜像记录的早期组件版本（`ack-sandbox-manager`
+        的 v0.1.0–v0.4.3、v0.5.2）跳过镜像行，其余内容照常发布。
+
+        - 组件编排落位时，同步到 `acs/` 的目标 tag 写应用版本号，由应用镜像记录的 `git_tag` 去掉 `ack-<APP>-` 前缀得到（`ack-sandbox-api-v0.6.14-release.1`
+        → `v0.6.14-release.1`），并同时写入 `component.yaml` 的 `源镜像;目标tag`、`values.yaml`
+        与 `configs/default.yaml`；源镜像一侧写记录里的完整 dev 镜像地址。`image_tag` 只用于源镜像一侧与产物追溯。`git_tag`
+        为 `null`（从任意 commit 构建）时停下问用户指定目标 tag。这样 `acs/` 里的镜像 tag 与对外文档发布的镜像版本一致，且
+        commit 与构建时间戳不进入对外文档。细则见 `release-oka-component/references/orchestration-edit.md`。
+
+        - 组件更新先询问 `ack-components` 的目标版本分支，在 `worktrees/` 隔离检出，依据分支现状推荐 release/alpha
+        给用户选择；完成编排修改与该分支代码推送即结束，不自动建 MR、部署或启动生产 rollout。修改公共组件说明只产生本地文件；发布它需另有授权。
+
+        - 官方文档中的每个 `ack-sandbox-manager` 组件版本都必须标明 E2B Python SDK（`e2b` 包）的兼容范围，并带明确下界。下界由用户手动指定；每次正式版本更新官网文档时，将下界与是否封顶合并询问并复用已有明确答复。封顶、解除封顶、继承封顶及两篇接入文档的安装命令联动遵循
+        `.agents/skills/sync-oka-release-notes/references/e2b-compatibility.md`。
+
+
+        # 阿里云文档审批
+
+
+        - 主工作区所有阿里云文档统一由王腾䶮（虹雉，工号 `449946`）审批。用户要求提交审批时，沿用文档空间的审批流：R1 的编辑评审与技术评审均指定
+        `449946`，R2 的一审与二审均指定 `449946`，R3 的评审人指定 `449946`。复用此默认配置；用户另有明确指定时以本次指定为准。平台若要求不同审批人，报告具体限制后再请用户补充人选。
+
+        '
+    - path: /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md
+      content: "# OpenKruise Agents Guide\n\nThis file contains repository-wide rules.\n\
+        \n## Instruction Scope\n\n- Root rules apply repository-wide; keep durable\
+        \ cross-file or silently critical\n  constraints in the deepest applicable\
+        \ `AGENTS.md`, leave details and public\n  contracts to their owning code,\
+        \ tests, specifications, or proposals, and\n  review changes root-to-leaf\
+        \ before removing guidance.\n\n## Control Plane Layering\n\n### Sandbox-manager\
+        \ Runtime Contract\n\n- Sandbox recycle cannot occur in any cluster running\
+        \ sandbox-manager. All\n  sandbox-manager API, Manager, Infra, cache, quota,\
+        \ and token flows treat\n  recycle as nonexistent; do not add recycle-specific\
+        \ handling or compatibility.\n- The independent Sandbox controller retains\
+        \ recycle support for other\n  deployments. Its recycle capability does not\
+        \ imply CR reuse across deliveries\n  in sandbox-manager deployments.\n\n\
+        ### API Layer — sandbox-manager\n\n- The API layer is `pkg/servers/**`, including\
+        \ E2B-compatible protocols.\n- It owns routing, transport protocols, request\
+        \ and response models,\n  protocol-level validation, authentication and authorization,\
+        \ error and status\n  mapping, and compatibility behavior.\n- Logic that directly\
+        \ expresses an API protocol contract must remain here. Do\n  not push protocol\
+        \ models, HTTP semantics, or compatibility rules into Manager\n  or Infra.\n\
+        \n### Manager Layer — sandbox-manager\n\n- The Manager layer is `pkg/sandbox-manager/**`,\
+        \ excluding its `infra/**`\n  subtree.\n- It owns protocol- and backend-independent\
+        \ business rules and use-case\n  orchestration, including lifecycle, quota,\
+        \ admission, and release policy.\n- It accesses Sandbox backends only through\
+        \ neutral Infra interfaces and must\n  not depend on `pkg/servers` or directly\
+        \ read or write backend-state resources.\n- Classify Kubernetes-backed capabilities\
+        \ by ownership, not technology:\n  sandbox-manager process coordination, discovery,\
+        \ publication, and identity\n  allocation stay in Manager when they are not\
+        \ Sandbox backend capabilities.\n\n### Infra Layer — sandbox-manager\n\n-\
+        \ The Infra layer is `pkg/sandbox-manager/infra/**`. It owns Sandbox backend\n\
+        \  infrastructure, not every Kubernetes operation used by sandbox-manager.\n\
+        - Concrete Kubernetes implementations of Sandbox infrastructure capabilities\n\
+        \  and their clients, caches, reads, and writes belong in implementation\n\
+        \  subpackages such as `infra/sandboxcr`.\n- It exposes protocol-neutral Sandbox\
+        \ capabilities and data upward. It must not\n  depend on API models, HTTP\
+        \ status codes, authentication semantics, or Manager\n  business policy.\n\
+        \n### Agent Sandbox Controller\n\n- `cmd/agent-sandbox-controller` and `pkg/controller/**`\
+        \ form an independent\n  Kubernetes operator.\n- The controller's complete\
+        \ dependency closure must not include\n  `pkg/servers/**` or `pkg/sandbox-manager/**`.\
+        \ Code shared with\n  sandbox-manager must move to a genuinely neutral package;\
+        \ a shared or utility\n  package must not hide an indirect reverse dependency.\n\
+        - Controllers may reconcile CRDs directly, but must not reuse sandbox-manager\n\
+        \  API behavior, business orchestration, or Infra implementations.\n\n###\
+        \ Kubernetes Read Discipline\n\n- Never use `APIReader` for `List`; prefer\
+        \ informer-backed clients or caches\n  for Kubernetes reads.\n- Use `APIReader`\
+        \ for `Get` only when informer-backed reads cannot provide\n  acceptable correctness\
+        \ or functionality, and only after explaining why and\n  obtaining explicit\
+        \ user approval.\n\n### Dependency Rules\n\n- New sandbox-manager dependencies\
+        \ follow `API -> Manager -> Infra`. Do not\n  add API-to-Infra shortcuts or\
+        \ lower-to-upper reverse dependencies.\n- `pkg/features` is controller-only.\
+        \ Code under `pkg/sandbox-manager/**` and\n  `pkg/servers/**` must not import\
+        \ it or consume its gates through a shared\n  wrapper.\n- For optional sandbox-manager\
+        \ behavior, prefer interface or option parameters\n  that control a single\
+        \ call. Avoid package-global or process-global feature\n  switches. Add a\
+        \ global switch only when per-call control cannot safely express\n  the requirement,\
+        \ and document why global scope is necessary.\n- `cmd/*` entrypoints assemble\
+        \ dependencies and start components only; business\n  logic belongs in the\
+        \ appropriate layer.\n- These rules are normative for new work. Existing cross-layer\
+        \ imports are\n  legacy debt, not architectural precedent: do not add to or\
+        \ widen them. If a\n  task requires a wider violation, propose a layering\
+        \ refactor first.\n- Shared packages must stay policy-neutral and must not\
+        \ import domain-specific\n  packages merely to make reuse convenient.\n\n\
+        ## Development\n\n- Follow standard Go idioms. Run `gofmt -w` on changed Go\
+        \ files.\n- New Go files must use the Apache 2.0 header from\n  `hack/boilerplate.go.txt`.\
+        \ Keep code comments in English.\n- Prefer table-driven unit tests. Extend\
+        \ a suitable existing table; use a\n  standalone test only when no table fits.\n\
+        - Do not introduce test stubs, fakes, or mocks unless necessary. Prefer\n\
+        \  exercising real implementations or existing test infrastructure first.\n\
+        - Do not create abstract interfaces or new types unless necessary. Introduce\n\
+        \  an abstraction only when a concrete, current need requires it.\n- Test\
+        \ only when needed, using the narrowest changed package or selected test\n\
+        \  (`-run`, `-count=1`). Do not run unrelated tests or repeat stable tests.\
+        \ For\n  probabilistic failures, races, or other concurrency risks, rerun\
+        \ the relevant\n  test enough times to trust it (`-count=N`, `-race`). `make\
+        \ test` runs the full\n  `pkg/...` suite; use `make vet` and `make lint` only\
+        \ when warranted. Never run\n  E2E tests for ordinary validation.\n- Check\
+        \ cancellation in retrying or long-running work and preserve meaningful\n\
+        \  error context.\n- Do not add Prometheus metrics (new collectors, counters,\
+        \ gauges, histograms,\n  or instrumentation) unless the user explicitly requests\
+        \ them.\n\n## Generated Files And Design Changes\n\n- Do not edit generated\
+        \ files under `client/`, `proto/`, or `config/crd/`\n  directly.\n- After\
+        \ changing `api/v1alpha1/`, run `make generate manifests`. Use\n  `make generate`\
+        \ or `make manifests` for their respective generated\n  outputs.\n- New APIs\
+        \ and architectural changes require a proposal in `docs/proposals/`.\n- Prefer\
+        \ responsibility-specific package names. Do not create new catch-all\n  `utils`,\
+        \ `common`, `helpers`, `util`, or `base` packages.\n\n## Errors And Logging\n\
+        \n- Never ignore errors. Classify wrapped errors with `errors.Is` and\n  `errors.As`;\
+        \ use Kubernetes API error helpers for Kubernetes errors and\n  `client.IgnoreNotFound`\
+        \ only where absence is acceptable.\n- Sandbox-manager domain errors belong\
+        \ in\n  `pkg/sandbox-manager/errors/`; transport status mapping belongs in\
+        \ the API\n  layer.\n- Use structured key-value logging. Controllers use\n\
+        \  `logf.FromContext(ctx)`; sandbox-manager code uses\n  `klog.FromContext(ctx)`.\
+        \ Do not use `fmt.Println` for runtime logging.\n\n## Repository Hygiene\n\
+        \n- Do not remove useful comments unless they are obsolete.\n- A new submodule\
+        \ `AGENTS.md` must have a sibling `CLAUDE.md` whose sole\n  content is `@./AGENTS.md`.\n\
+        - Commits must include sign-off, for example `git commit -s`.\n"
+    read_hashes:
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md: d9b4a122edfa940e490128cba7645712a49bace68e44f910f8378c622a725f7b
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md: b77fbac784527e2df5e6922ebe6aafe7d78ac9ab697b956b9c2c25b209b7fce9
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md: 382c1f8ed26d67011ce391b81660b04f1b0ebb791487884fa0f15df94fc07b0a
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md: 71fa95e50dbcf10ac78e34153a28448825ed61cc2f37c333e89b1d1af9ce1e71
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md: b2eaf222db38d9f6cfbd535ad37e2d0e0f7ff061b8d79fa7daa76caeaeb20b11
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+      /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+      /Users/sophon/AGENTS.md: null
+      /AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
+      /Users/sophon/Workspace/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+      /Users/AGENTS.md: null
 design:
   approval:
     requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
@@ -24,3 +962,41 @@ design:
       sha256:fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5'
     session: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
     recorded_by: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
+  review:
+    id: 69c5c3e98bf085af6ab63ceb8ebfb18e
+    kind: design-review
+    item: 1-gateway-wakeup-lifecycle
+    report: workitems/1-gateway-wakeup-lifecycle/records/69c5c3e98bf085af6ab63ceb8ebfb18e.md
+    session: 01a19bf3-40ea-7c52-8b82-50b8158a578a
+    created_at: '2026-11-02T12:05:15.391825+00:00'
+    provenance: Independent incremental review by original reviewer 01a19bf3-40ea-7c52-8b82-50b8158a578a;
+      user-confirmed v3 sha256 fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5;
+      D1 resolved and affected precision/API/lifecycle boundaries verified; report
+      in current ticket
+    requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+    spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+    version: 3
+    base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
+    dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+    result: pass
+    read_hashes:
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md: d9b4a122edfa940e490128cba7645712a49bace68e44f910f8378c622a725f7b
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md: b77fbac784527e2df5e6922ebe6aafe7d78ac9ab697b956b9c2c25b209b7fce9
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md: 382c1f8ed26d67011ce391b81660b04f1b0ebb791487884fa0f15df94fc07b0a
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md: 71fa95e50dbcf10ac78e34153a28448825ed61cc2f37c333e89b1d1af9ce1e71
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md: b2eaf222db38d9f6cfbd535ad37e2d0e0f7ff061b8d79fa7daa76caeaeb20b11
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+      /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+      /Users/sophon/AGENTS.md: null
+      /AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
+      /Users/sophon/Workspace/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
+      /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+      /Users/AGENTS.md: null

@@ -15,7 +15,7 @@ documents:
 design:
   file: spec.md
   version: 3
-  state: review-pending
+  state: implementable
   registered_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
   author_session: 01a19c14-b08c-7182-a5e0-7f3ae8f5c25c
 cleanup: pending

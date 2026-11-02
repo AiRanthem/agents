@@ -1,0 +1,37 @@
+id: 69c5c3e98bf085af6ab63ceb8ebfb18e
+kind: design-review
+item: 1-gateway-wakeup-lifecycle
+report: workitems/1-gateway-wakeup-lifecycle/records/69c5c3e98bf085af6ab63ceb8ebfb18e.md
+session: 01a19bf3-40ea-7c52-8b82-50b8158a578a
+created_at: '2026-11-02T12:05:15.391825+00:00'
+provenance: Independent incremental review by original reviewer 01a19bf3-40ea-7c52-8b82-50b8158a578a;
+  user-confirmed v3 sha256 fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5;
+  D1 resolved and affected precision/API/lifecycle boundaries verified; report in
+  current ticket
+requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+spec_sha256: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+version: 3
+base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
+dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+result: pass
+read_hashes:
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/business-instructions.md: d9b4a122edfa940e490128cba7645712a49bace68e44f910f8378c622a725f7b
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/context.md: b77fbac784527e2df5e6922ebe6aafe7d78ac9ab697b956b9c2c25b209b7fce9
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/main-workspace.md: 382c1f8ed26d67011ce391b81660b04f1b0ebb791487884fa0f15df94fc07b0a
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/context.md: 71fa95e50dbcf10ac78e34153a28448825ed61cc2f37c333e89b1d1af9ce1e71
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/decision.md: b2eaf222db38d9f6cfbd535ad37e2d0e0f7ff061b8d79fa7daa76caeaeb20b11
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: fe6cb2ccaa363883ea6bc1e07bb15243f9e0e4866f30c20567e9aecbd9bd62a5
+  /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+  /Users/sophon/AGENTS.md: null
+  /AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
+  /Users/sophon/Workspace/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+  /Users/AGENTS.md: null
