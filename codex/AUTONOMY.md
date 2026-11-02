@@ -21,7 +21,7 @@ python3 <dev-kit-root>/codex/skill_entries.py --check
 
 | runtime role | 原生角色 | 一级配置 |
 | --- | --- | --- |
-| design-review / design-revision | project-design-reviewer | gpt-6.1-sol / xhigh |
+| design-review / design-revision | project-design-reviewer | gpt-6-astra / xhigh |
 | implementation | project-implementer | gpt-6.1-sol / medium |
 | code-review | project-implementation-reviewer | gpt-6.1-sol / xhigh |
 | fix | project-fixer | gpt-6.1-sol / medium |
@@ -34,6 +34,7 @@ python3 <dev-kit-root>/codex/skill_entries.py --check
 固定角色的显式派发；记录实际方式与参数，不伪称原生模板选择。只有两种路径均不能
 实际执行、角色被覆盖或模型不可用时才报告阻塞。主控不按难度自动升档。
 上述任务正文回退仅用于四个阶段角色，不能替代 Astra 子代理要求的持久策略重载。
+设计角色模板自身提供持久 developer instructions，在启动和每次压缩后重新加载完整 Astra 子代理策略。
 
 一级执行者使用干净上下文（工具支持时设 `fork_turns: "none"`），接收最小充分输入，
 不继承或复制 main 的动态路由正文。执行者可以自主选择后代模型、effort 和组织方式，

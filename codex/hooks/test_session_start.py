@@ -135,21 +135,23 @@ class DelegationHookTests(unittest.TestCase):
                     self.assertIn("Unable to load", result.stderr)
 
     def test_persistent_astra_role_loader_uses_installed_entry_and_complete_policy(self):
-        role = tomllib.loads((HOOKS.parent / "agents" / "astra-delegate.toml").read_text())
-        command = next(line for line in role["developer_instructions"].splitlines()
-                       if line.startswith("printf "))
-        with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
-            installed = home / ".codex" / "hooks" / "subagent-start.py"
-            installed.parent.mkdir(parents=True)
-            installed.symlink_to(HOOKS / "subagent-start.py")
-            result = subprocess.run(["sh", "-c", command], env={**os.environ, "HOME": str(home),
-                                    "CODEX_HOME": str(home / ".codex")},
-                                    text=True, capture_output=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        policy = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
         names = ["delegation-subagent.md", *SHARED, "delegation-astra.md"]
-        self.assertEqual(policy, "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n")
+        expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
+        for name in ("astra-delegate", "project-design-reviewer"):
+            with self.subTest(role=name), tempfile.TemporaryDirectory() as directory:
+                role = tomllib.loads((HOOKS.parent / "agents" / f"{name}.toml").read_text())
+                command = next(line for line in role["developer_instructions"].splitlines()
+                               if line.startswith("printf "))
+                home = Path(directory)
+                installed = home / ".codex" / "hooks" / "subagent-start.py"
+                installed.parent.mkdir(parents=True)
+                installed.symlink_to(HOOKS / "subagent-start.py")
+                result = subprocess.run(["sh", "-c", command], env={**os.environ, "HOME": str(home),
+                                        "CODEX_HOME": str(home / ".codex")},
+                                        text=True, capture_output=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                policy = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+                self.assertEqual(policy, expected)
 
 
 if __name__ == "__main__":

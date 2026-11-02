@@ -87,7 +87,7 @@ class NativeHostTest(unittest.TestCase):
                 self.assertEqual(host.main(["role", "--name", name]), 0)
             role = json.loads(output.getvalue())
             self.assertEqual(role['name'], name)
-            self.assertEqual(role['model'], 'gpt-6.1-sol')
+            self.assertEqual(role['model'], 'gpt-6-astra' if name == 'project-design-reviewer' else 'gpt-6.1-sol')
             self.assertEqual(role['model_reasoning_effort'], 'xhigh' if 'reviewer' in name else 'medium')
             body = role['developer_instructions']
             self.assertIn('direct stage assignment', body)
