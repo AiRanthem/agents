@@ -16,10 +16,10 @@ workflow:
 design:
   approval:
     requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
-    spec_sha256: 30dc5700d60b12b0c39cac6470663e79a5e77de12027f7538793adaa77ea4a89
-    version: 1
+    spec_sha256: 15252278114ad4758a945b9fb633461e01117ef17e48cc9d461388cda763b018
+    version: 2
     kind: user
     source: 'Approved design publication: workitems/1-gateway-wakeup-lifecycle/spec.md
-      sha256:30dc5700d60b12b0c39cac6470663e79a5e77de12027f7538793adaa77ea4a89'
+      sha256:15252278114ad4758a945b9fb633461e01117ef17e48cc9d461388cda763b018'
     session: 01a19b74-fe57-7cb3-9210-d1794ccbf164
     recorded_by: 01a19b74-fe57-7cb3-9210-d1794ccbf164
