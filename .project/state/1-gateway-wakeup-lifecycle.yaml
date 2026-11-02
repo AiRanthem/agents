@@ -4,9 +4,10 @@ development:
   branch: feature/oka-daily-open-source/1-gateway-wakeup-lifecycle-da492871d798
   base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
   publish_ref: refs/heads/feature/oka-daily-open-source/1-gateway-wakeup-lifecycle-da492871d798
-  base_remote: origin
+  base_remote: upstream
   base_ref: refs/heads/master
   base_url: git@github.com:openkruise/agents.git
   publish_remote: origin
-  publish_url: git@github.com:openkruise/agents.git
+  publish_url: git@github.com:AiRanthem/agents.git
+  branch_published: false
 workflow: {}
