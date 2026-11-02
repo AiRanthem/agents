@@ -4,7 +4,11 @@
 
 设计基线为开源 master 提交 `cfbd102bc05c6df663965c5e23463a0eafd34948`。已核实该版本的 Gateway 自动唤醒通过底层 Resume 调整自动暂停期限；运行中尚无流量自动续期。E2B connect 已实现只延长有效截止时间的语义。
 
-用户已确认：create metadata 显式开启；使用创建时的初始 timeout；新请求及双向实际数据到达时按 10% 阈值检查；空闲连接不续期；connect 与 Gateway 共用生命周期核心逻辑。完整设计仍在收敛，尚未执行独立评审或业务源码实现。
+当前完整契约见 [设计文档](spec.md)，设计版本为 2，SHA-256 为 `15252278114ad4758a945b9fb633461e01117ef17e48cc9d461388cda763b018`，设计发布提交为 `55f47f44894dc25a13a30b3f3bd9a0a687840b71`，程序已回读核验远端提交。
+
+用户已确认：通过阈值和目标时长两个参数配置续期；阈值支持绝对 duration 或按本次接口 timeout 换算的百分比，持久化为绝对 duration。零阈值关闭时删除阈值记录，目标继续保留；create 的目标缺省为本次 timeout，connect/timeout 通过 header 按字段更新，缺省不改。新请求及双向非空数据触发检查，空闲连接不续期，connect 与 Gateway 共用生命周期核心逻辑。
+
+本会话 `01a19b74-fe57-7cb3-9210-d1794ccbf164` 中，用户明确要求“改自动续期配置与当次改期在同一个接口中完成，应该是原子性的，校验需要前置”，并要求同时研究 create 校验。在完整参数校验、create 默认与继承、并发组合冲突和恢复提交边界分析之后，用户回复“确认”，确认目标时长限定正整秒、暂停恢复配置与初始期限原子提交且等待失败不回滚、新扩展参数错误使用 400/409。v2 整合这些逐项确认的约定；当前待独立设计评审，尚未执行业务源码实现或功能验证。
 
 ## 当前恢复记录
 
@@ -12,5 +16,7 @@
 
 核对恢复目标时发现最初的设计准备命令已在先前检查后继续完成：项目提交 `58174ae190aa995986eae6258b4d5038677053e3` 已发布，本地 worktree 干净且 HEAD 为上述基线。它还未经设计授权向 openkruise/agents 创建了 `feature/oka-daily-open-source/1-gateway-wakeup-lifecycle-da492871d798`，远端回读 OID 为上述基线，没有业务源码改动。该事实已向用户披露；用户随后明确授权删除这一精确分支。已使用该 OID 的 force-with-lease 条件删除，随后 ls-remote 确认分支不存在。AiRanthem/agents 的同名源码分支也未发布。
 
-因此保留现有完整克隆和干净 worktree，修正配置、开发绑定及本地 reservation，使后续目标指向 AiRanthem/agents；该目标上的源码分支记录为未发布。恢复前配置、事务及 Git 配置备份在本机 `.project-local/recovery/20261102-design-recovery-before.tar.gz`。原 tickets `06dd51633c8712d5670c23c7773957ae` 与 `307b5885dffecf5414f1bd489fc7ab5f` 均保留，按原返回命令恢复后者并刷新当前输入。
+因此保留现有完整克隆和干净 worktree，修正配置、开发绑定及本地 reservation，使后续目标指向 AiRanthem/agents；该目标上的源码分支记录为未发布。恢复前配置、事务及 Git 配置备份在本机 `.project-local/recovery/20261102-design-recovery-before.tar.gz`。原 tickets `06dd51633c8712d5670c23c7773957ae` 与 `307b5885dffecf5414f1bd489fc7ab5f` 作为恢复证据保留。
+
+本次在用户确认新协议后执行原 `resume --ticket 307b5885dffecf5414f1bd489fc7ab5f`，误将事务内保留的旧候选发布为 v1，提交 `83a1cf8075ab9975dba916a9e97c09abb687f9a7`。旧稿仍含布尔开关和固定 10% 阈值，与用户当前确认内容不符；程序对它的发布登记不能作为这些旧约定仍获用户认可的依据。该事实已立即向用户披露。随后通过正常 `design-update` 事务 `8c06a296720b09eff3c59a982935d7ea` 发布上述 v2，替换正式文档并核验远端；原恢复事务已结束。后续评审及实现只能使用当前 v2，不得使用旧候选或将旧版本登记当作当前合同依据。业务源码未因这些文档操作改变。
 
