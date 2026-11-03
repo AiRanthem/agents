@@ -12,8 +12,9 @@
 
 必要性讨论可以澄清现象、影响、适用版本与现有证据。尚未确认需要解决的问题保持待讨论；确认暂不解决或无需解决的问题保留结论。已确认问题的设计审批、实现、独立审查与验收继续遵循项目工作流。
 
-## 创建范围与待确认事项
+## 当前工作项
 
-本次创建项目并持久化上述项目约束。用户尚未提供具体兼容性问题，本次不预设 SDK/协议版本、问题清单、优先级、修复方案或交付承诺。后续逐项确认解决必要性后，再形成相应设计与验收标准。
+- `1-e2b-compatibility`：管理已确认需要解决的兼容性问题；当前需求、设计、评审与源码交付证据见该工作项原文件。
+- `2-e2b-team-limits-status`：团队 limits/status 接口评估，记录为不实施并已归档；保留用户结论。
 
-Record overall goals, stable domain context, terminology and project-wide constraints here. Individual requirements, acceptance and designs belong to work items. Keep this introduction concise; link additional material only when it is needed.
+具体 SDK/协议版本、影响范围、验收标准及交付义务按工作项维护，不从项目创建或状态标签推导。

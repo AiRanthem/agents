@@ -889,7 +889,6 @@ workflow:
       authorization: null
     basis_review: 96344c83b286eb313d760a9349ea99a4
     basis_sha256: 85825846bc83b54cb7e387a6cfb98acc1b3bc5da169771e2bef3e32b6d9f22d8
-  autonomy: {}
 design:
   approval:
     requirement_sha256: 675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0

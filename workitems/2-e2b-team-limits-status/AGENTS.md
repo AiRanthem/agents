@@ -1,9 +1,7 @@
-# Work item 2-e2b-team-limits-status
+# 工作项 2-e2b-team-limits-status
 
-Use the project root's generated `AGENTS.md` and its resolved project command entrypoint. Execute one project operation at a time on this machine; complete or recover the current operation before starting the next. Any local session can continue an existing operation using its original ticket or journal. Preserve its original author and reviewer provenance; record the actual source for each new operation.
+读取项目根 `AGENTS.md`、`.project/business-instructions.md`、`.project/context.md` 和本工作项的需求、决定、设计及上下文。每项兼容性问题须先获得用户对解决必要性的确认，再进入设计。
 
-For the requested Markdown operation on `2-e2b-team-limits-status`, run `begin OP 2-e2b-team-limits-status` with typed inputs. Read its complete `read` payload and required original external instructions, edit its absolute `editable` Markdown paths, and execute the returned `finish_command` unchanged. Review and reuse checkpoints accept their declared result, provenance and applicable contract-preservation or mechanical-correction arguments after assessment.
+直接在本目录原文件及 `.project/state/2-e2b-team-limits-status.yaml` 维护授权范围内的文档和事实，完成项目记录修改后提交相关文件并普通推送项目配置分支。保留稳定 ID、依赖、原始作者与评审来源、用户决定、验收和交付证据。
 
-When the user explicitly accepts the current implementation, run `begin human-acceptance 2-e2b-team-limits-status --approval-source SOURCE`. Compare the captured code with the complete current spec, align implementation drift in its spec draft, and describe the comparison in its report draft. The same ticket publishes current human acceptance and factual design alignment, then waits for actual delivery. A PR alone does not establish human acceptance.
-
-`published` or `no_op` completes the operation. For `partial`, execute the returned resume command. For `blocked`, follow the returned continuation or report the listed blockers and missing facts. `stale_ticket` returns a fresh begin command; `stale_evidence` requires fresh authorization or review evidence. The program maintains machine state, input guards, artifact-bound review evidence, dependency and fix gates, and Git/Aone publication recovery. Keep the spec as the complete approved design in Markdown. Ordinary spec publication records the user's approval and leads to independent review by its actual reviewer; explicit current human acceptance covers the accepted implementation and its factual design alignment. Apply the root command contract to execution-mode changes, source replacement and resource lifecycle operations. Preserve the user's source-submission and external-action authorization boundaries.
+完整设计、真实独立评审、人工验收与实际交付分别记录其目标和结果。进展从当前记录及实际证据判断，历史评审报告保持原有适用范围。源码提交、推送、部署、消息和删除按各自授权执行；依赖主工作区或源码时先读其原始指令。

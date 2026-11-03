@@ -1,7 +1,9 @@
-# Recover this workspace
+# 项目位置与保留资产
 
-Restore the dedicated branch `projects/e2b-compatibility` from `git@github.com:AiRanthem/agents.git` and start the agent at this project's management root. Read its generated `AGENTS.md`. If shared skills are missing, install the dev-kit from `git@github.com:AiRanthem/agents.git` using its installation contract. Credentials and unpublished code are not restored by cloning project records.
+项目记录仓库为 `git@github.com:AiRanthem/agents.git`，分支 `projects/e2b-compatibility`。读取项目根 `AGENTS.md`、当前配置和受影响工作项文件，直接维护记录并提交、普通推送该分支。
 
-Use the project entrypoint resolved by the root `AGENTS.md` for `status` and follow its operation-specific continuation under installed `manage-workitems/references/commands.md`. Complete pending publication recovery before starting the next operation. Keep local operation and recovery records; any local session may resume the recorded operation with its actual inputs and contribution provenance. For a script defect, investigate and use "User-authorized manual recovery" in installed `manage-workitems/references/recovery.md` for a concrete approved repair.
+主工作区位置记录在 `.project/main-workspace.json`，源码主检出映射记录在 `.project/repositories.yaml`。开发分支、基线及工作树以 `.project/state/<id>.yaml` 和实际 Git 工作树为准；本次说明升级保持源码位置不变。
 
-Use `upgrade-project` for deterministic migration and generated instruction refresh. Project documents contain only current effective instructions and knowledge; Git retains prior versions. Preserve current approval, delivery and unresolved recovery credentials. Required original main-workspace instructions and code-worktree paths come from the program; read the originals before dependent work. Restore missing bindings, originals or unpublished code from their verified recorded locations.
+现有 `.project-local/` 内的旧草稿、发布记录和本地数据继续留在 Git 外，仅作为保留资料，不作为编辑或发布项目文件的前置条件。未经逐项确认用途和保存位置，不删除这些资料；秘密文件和凭据继续留在 Git 外。
+
+Git 推送失败时保留本地修改与提交，依据实际错误处理普通 Git 同步；未确认的外部操作结果单独记录。克隆项目记录不能替代未推送源码或本地数据的保存。

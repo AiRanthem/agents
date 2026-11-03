@@ -1,11 +1,11 @@
-# Current project instructions
+# 当前项目指令
 
-The program includes these current project sources in the operation's read payload for business background, constraints and main-workspace routes:
+直接读取以下原始项目文件，按实际任务保持其业务约束：
 
-- `.project/context.md`
-- `.project/main-workspace.md`
-- `.project/business-instructions.md`
+- `.project/context.md`：项目目标及逐项确认解决必要性的要求。
+- `.project/business-instructions.md`：当前项目约束与授权边界。
+- `.project/main-workspace.md`：主工作区、源码位置与原始指令入口。
 
-Keep only current effective requirements, design, decisions, knowledge and business instructions in project documents. Replace superseded content; Git retains earlier versions. Keep current approval, delivery and unresolved recovery records. The generated entrypoints and installed skills define the shared protocol.
+项目根和受影响工作项的 `AGENTS.md` 说明记录维护方式；当前共享 skills 提供实质工作的指导。保持需求、设计、决定和上下文当前有效，保留真实审批、评审、验收、交付及未决外部结果。历史版本由 Git 保存。
 
-Read required original main-workspace instructions before dependent work. Preserve explicit permission, delivery and environment constraints. Migration grants no design approval, implementation authorization, independent review or delivery evidence.
+开展依赖主工作区的操作前读取原始 `AGENTS.md`。项目说明升级本身不改变已有业务结论，也不构成新的设计批准、实施、独立评审或源码交付。

@@ -8,9 +8,11 @@
 
 2026-10-22，独立实现评审（multi-agent，会话 `3387366e-d695-4926-9dea-fc31e52a5491`）判定实现与 v4 文本冲突：别名收敛按 owner 作用域执行，而 v4 要求 team 作用域。用户裁决采用 **owner 作用域并修订契约**；同时确认 `template` 筛选以中性 Infra 的 `GetTemplate()` 为准、不在 API 层叠加池名匹配，SandboxSet `spec.templateRef` 造成的模板身份不一致判定为 SandboxSet 侧缺陷并已提上游 Issue #1102，由快照恢复的 Sandbox 的模板身份记录为已接受限制。
 
-当前合同为 `spec.md` v5（sha256 `773c6bb3c5a55db6415cdcecab7f7ca65a3f77aeb470ca1fdab5c69bc3d430bf`）与 `requirement.md`（sha256 `675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0`），批准来源会话 `3387366e-d695-4926-9dea-fc31e52a5491`，程序记录 `approval: current`。v4 及更早的批准与独立评审报告保留在 `records/`，其合同绑定已被 v5 取代。
+当前业务合同为 `spec.md` v5 与 `requirement.md`，批准来源会话 `3387366e-d695-4926-9dea-fc31e52a5491`，实际用户批准来源及其原始目标哈希保存在 `.project/state/1-e2b-compatibility.yaml`。2026-11-03 的管理说明升级仅替换 spec 首部的工作方式文字，业务设计不变；原审批与评审证据保留各自原始目标，不重写为新的评审结论。v4 及更早的批准与独立评审报告保留在 `records/`，其合同绑定已被 v5 取代。
 
 ## 当前实现状态
+
+以下实现、PR 和验证状态来自既有记录；2026-11-03 的管理说明升级未重新核验源码、远端 PR 或运行环境。
 
 源码仓库 `openkruise/agents`，工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`，基线 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
 
@@ -28,16 +30,12 @@
 
 本会话提交前新增验证：E2B 列表、Pause、Snapshot、模型扩展头、分页定向测试通过，日志 `/tmp/e2b-item1-pr-tests.log`；cache Checkpoint 列举及 Infra Succeeded Checkpoint 筛选定向测试通过，日志 `/tmp/e2b-item1-pr-infra-tests.log`。后者曾受到生成脚本临时 vendor 清理干扰，待生成结束后以 `-mod=mod` 重跑通过。`make generate manifests` 成功且未产生额外源码差异，日志 `/tmp/e2b-item1-pr-generate.log`；gofmt、`git diff --check` 通过；与最新 `upstream/master@a4df9e5498d2a9ba7d34bf87820a48b48680cebf` 的 merge-tree 检查无冲突。未在本会话执行 E2E 或核验 CI 通过；推送钩子返回 `No data need to be scanned`，不作为有效泄漏扫描通过证据。
 
-## 人工验收与控制权
+## 人工验收与后续事实
 
-2026-10-22，本会话用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交与创建上游 PR；随后明确要求「接管工作项」。已通过原生入口的 `takeover 1-e2b-compatibility` 接管，项目记录提交 `009c734332892a01af0bcbbd68eff3c218e64706` 已发布并核验远端。接管不改变当前合同，不补造独立评审，也不代表交付完成。
+2026-10-22，用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交与创建上游 PR。该人工结论按原始来源保留，与独立评审及实际交付分别记录；本次管理说明升级未重新验证源码或外部 PR 状态。
 
-接管后尝试以用户上述真实确认执行 `autonomy accept`，控制器返回 `blocked`，原因为 `delivery requires a current independent implementation review`。用户人工验收确认在本文保留；程序绑定的验收尚未成功登记。需要当前独立实现评审证据满足控制器门禁后才能登记，不能将旧合同的评审或本会话提交前测试当作当前独立评审通过。
+当前记录仍缺少针对 v5 修订后目标的独立实现评审结果。历史评审保持其原始目标，不将旧合同评审或提交前测试描述为当前独立评审通过。后续工作按用户授权及当前源码事实进行。
 
-## 门禁与后续
-
-- `design-review` 当前 eligible（approval 已 current），需要未实质编写 v5 的独立会话执行。
-- `development-start` 仍被“独立设计评审”门禁阻塞。
 - 源码已按单独授权提交、推送并创建 PR #1103；PR 尚未合入，未执行 Issue 关闭、部署、清理或将工作项标记为完成。
 - 已按用户授权向上游 `openkruise/agents` 提交 SandboxSet `spec.templateRef` 模板身份与 E2B TemplateID 不一致的 Issue：https://github.com/openkruise/agents/issues/1102（bug 标签，核对基线 `master@fd2bea719`）；该授权仅覆盖创建该 Issue，不覆盖源码提交、PR 或关闭既有 Issue。
 - 已知残余：同一 owner 的并发同名创建在多副本或 informer 滞后下可能残留重复对象，由后续同名创建清理；跨 owner 同名共存是契约预期；较早返回的 `snapshotID` 可能被较新请求删除。`CheckpointInfo.CreationTimestamp` 为固定宽度 UTC 纳秒串，存量对象缺失 annotation 时降级为秒级精度。

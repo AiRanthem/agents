@@ -1,13 +1,9 @@
-# Project workflow
+# 项目工作方式
 
-If project scripts block or malfunction, use installed `manage-workitems/references/recovery.md` under "User-authorized manual recovery" for concrete approved state/file correction and script repair. Preserve truthful evidence, source, actual permissions and transaction integrity.
+Agent 直接编辑项目原有 Markdown、YAML 和配置文件，维护完整、当前有效的内容；完成授权的项目记录修改后，仅提交相关文件并普通推送 `.project/project.yaml` 指定的分支。保留无关修改；推送失败时保留本地文件和提交，报告实际结果。
 
-Operate serially on this machine, completing or recovering each operation before the next. Use the project command entrypoint resolved by the root `AGENTS.md` and installed `manage-workitems/references/commands.md` for the begin/read/edit/finish/status workflow. The program returns the complete prose inputs and exact editable Markdown paths; it owns YAML, gates and Git/Aone publication. Use the current shared `references/workflow.md` for lifecycle evidence and authorization.
+每个兼容性问题先按 `.project/context.md` 与用户讨论解决必要性，确认需要解决后再开展获授权的设计、评审或实现。需求、设计与实现边界以用户当前要求和已有授权为准。
 
-Follow the delivery requirements recorded in each work item.
+保留工作项 ID、依赖、实际作者与评审者、用户决定及真实验收来源。人工验收、独立评审、源码提交、PR 合入、部署与 E2E 各自记录事实，不能相互替代。`records/` 和状态文件中的既有评审快照保留其原始目标与来源，不能当作后续修改的当前结论。
 
-Explicit human acceptance of current code enters the `human-acceptance` checkpoint: compare the current spec with accepted code, automatically align this item’s design and publish the alignment and bound acceptance together. This accepted target then waits for actual delivery without further independent design/code review or design approval. Preserve the real user source, current snapshot and downstream specs; downstream design review resolves contradictions. A PR alone establishes no acceptance. Use installed `complete-workitem` for the comparison, registration and delivery contract.
-
-Creation ends at metadata and requirement skeletons. Design and independent design review require the user's requested scope. Implementation requires current approval/review or an explicit user-scoped design-review waiver, actual prerequisite delivery and recorded development preparation. A waiver never manufactures a review pass and is rechecked against current contract/base/dependencies. A post-delivery defect gets a separate linked fix item; retain the original item's verified delivery evidence. Keep code submission, actual delivery and local cleanup as separate authorized outcomes.
-
-The design owner obtains user confirmation before publishing the complete formal spec, reusing covering approval of an unchanged contract. Publication records that approval and its version binding for the authorized independent review. An oversized item includes its whole design, usable stages and DAG and selects `design-update --next-action split` before review. Current independent Pass routes to decomposition, with inherited child specs ready for their own review. Only demonstrated blocking gaps require supplementary child design; future refinement never reduces parent design rigor. For execution handoff, source replacement and internal resources, use the typed lifecycle contract, preserving actual prerequisite gates, exact source recovery and separately adopted collection policy.
+源码操作遵循主工作区和源码仓库原始指令。项目记录发布仅覆盖管理文件；源码发布、外部操作和清理由各自授权决定。进展从当前文件和实际证据读取，外部同步单独报告。
