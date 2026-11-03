@@ -13,3 +13,5 @@ Webhook 采用 Gateway 内存接收后确认、异步恢复与交付，用户接
 本轮源码核验确认完整 E2B 数据面 URL 可复用 Host 解析定位 Sandbox 和端口；域名不携带访问 token 或 Kubernetes UID，飞书专用入口的来源验证配置与异步任务身份约束仍需明确。应用接收确认采用标准 HTTP 200，不要求 OpenClaw 私有 durable 标记。详见 `evidence/feishu-e2b-webhook-entry.md`。
 
 具体契约、状态及交付义务以各工作项为准。
+
+第二轮复审后，用户进一步确定：沿用当前默认等待唤醒配置，恢复后指数退避最多重试五次，失败记日志放弃。已同步父项和代码子项；实际 ACK Chart 默认值为 600 秒，二进制缺省为 60 秒，具体安装覆盖未查询。正常下线仍以 60 秒业务排空截止为准。飞书验证配置、入口授权及启停方案的信息输入见 `evidence/feishu-webhook-config-and-retry.md`，其中建议尚未全部由用户选择，本轮未登记新的独立通过或实施。
