@@ -2,7 +2,7 @@
 
 Read this reference only for ordinary execution-mode document writing after identifying the active host mode. Read-only planning discussion and delegated project stage executors do not use this write workflow. Executors follow their assigned candidate paths and return them to the controller without official-document writes.
 
-In a schema-v2 project, [shared project context](../../manage-workitems/references/project-context.md) supplies the project path and persistence rules: use `workitems/<id>/spec.md` as the sole Why/What document, keep machine status out of its frontmatter, and record approval/review state through the project command workflow. An oversized item needs a complete parent spec with delivery stages and DAG, followed by independent Pass before decomposition. Child specs inherit the approved contract; additional design exploration is conditional on actual blocking gaps. Do not create a second standalone design document. read-only planning mode remains read-only.
+For a project work item, use [project context](../../manage-workitems/references/project-context.md) and maintain `workitems/<id>/spec.md` as its sole current Why/What document. Keep project status and actual approval/review evidence in existing metadata and reports, updating those files directly and committing and pushing completed project changes. An oversized item needs a complete parent spec with delivery stages and dependencies and actual independent review before decomposition. Child specs inherit the approved contract; additional design addresses demonstrated gaps. Maintain the existing design path, and keep read-only planning read-only.
 
 ## Confirm the path
 

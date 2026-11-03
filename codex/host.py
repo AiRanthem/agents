@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Codex project-stage configuration and session identity."""
+"""Codex project-stage configuration."""
 
 import argparse
 import json
-import os
 from pathlib import Path
 import tomllib
 
@@ -73,9 +72,6 @@ def check(home):
     return _check_files(home, role_config,
                               profile_fields=("model_reasoning_effort",))
 
-
-def session():
-    return os.environ.get("CODEX_THREAD_ID") or os.environ.get("PROJECT_SESSION_ID")
 
 
 def main(argv=None):

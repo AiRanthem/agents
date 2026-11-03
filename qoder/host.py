@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Qoder project-stage configuration and session identity."""
+"""Qoder project-stage configuration."""
 
 import json
 import argparse
-import os
 from pathlib import Path
 import re
 
@@ -96,21 +95,10 @@ def _settings_gaps(home):
         settings = json.loads(path.read_text())
         if not isinstance(settings, dict):
             raise ValueError("settings must be an object")
-        groups = settings.get("hooks", {}).get("SessionStart", [])
         overrides = settings.get("agents", {}).get("overrides", {})
-        if not isinstance(groups, list) or not isinstance(overrides, dict):
-            raise ValueError("invalid SessionStart or agents.overrides")
-        handlers = [hook for group in groups for hook in group.get("hooks", [])
-                    if "session-identity.py" in hook.get("command", "")]
-        expected = {"type": "command", "command": "python3 ~/.qoder/hooks/session-identity.py", "timeout": 10}
+        if not isinstance(overrides, dict):
+            raise ValueError("invalid agents.overrides")
         gaps = []
-        if not any(all(hook.get(key) == value for key, value in expected.items())
-                   and not group.get("matcher") and not group.get("async")
-                   and not hook.get("async")
-                   for group in groups for hook in group.get("hooks", [])):
-            gaps.append(f"missing current SessionStart identity handler: {path}")
-        if len(handlers) != 1:
-            gaps.append(f"expected exactly one SessionStart identity handler: {path}")
         for name in ROLES:
             _, _, config = role_config(name)
             override = overrides.get(name, {})
@@ -130,22 +118,14 @@ def _settings_gaps(home):
 
 def check(home):
     result = _check_files(home, role_config, profile_fields=("effort",))
-    hook = home / ".qoder" / "hooks" / "session-identity.py"
-    source = ROOT / "qoder" / "hooks" / "session-identity.py"
-    if not hook.is_symlink() or not hook.exists() or hook.resolve() != source.resolve():
-        result["missing"].append(f"identity hook must link to repository script: {hook} -> {source}")
     result["missing"].extend(_settings_gaps(home))
     result["configuration_scope"] = {
         "settings": str(home / ".qoder" / "settings.json"),
-        "hook": str(hook),
         "override_fields": ["enabled", "modelConfig.model", "runConfig.maxTurns"],
     }
     result["disk_ready"] = not result["missing"]
     return result
 
-
-def session():
-    return os.environ.get("PROJECT_SESSION_ID")
 
 
 def main(argv=None):

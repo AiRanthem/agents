@@ -11,7 +11,7 @@ Own **How** to realize the approved **Why** and **What**. Deliver the agreed beh
 
 Always read [discussion and authorization](../advance-project/references/discussion-and-authorization.md). Reuse existing decisions and authorization; decide internal implementation and private type choices within the contract. Changes to requirements, public or stored contracts, compatibility, key constraints, approved safety or correctness guarantees, acceptance criteria, or explicit user tradeoffs require the relevant user decision.
 
-- **Autonomous stage executor:** Read [stage executor](../advance-project/references/stage-executor.md) and [implementation stage](references/autonomous-stage.md). Follow the assigned single-stage scope; ordinary project commands and model-routing guidance do not apply.
+- **Autonomous stage executor:** Read [stage executor](../advance-project/references/stage-executor.md) and [implementation stage](references/autonomous-stage.md). Follow the assigned single-stage scope; project-record writes remain with the controller and ordinary model-routing guidance does not apply.
 - **Ordinary managed-project development:** Read [project workflow](references/project-workflow.md) and [ordinary modes](references/ordinary-modes.md).
 - **Other implementation or read-only planning work:** Read [ordinary modes](references/ordinary-modes.md).
 

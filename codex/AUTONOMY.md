@@ -9,12 +9,9 @@ python3 <dev-kit-root>/codex/host.py check
 python3 <dev-kit-root>/codex/skill_entries.py --check
 ```
 
-`codex/host.py` 维护本宿主模型配置；项目命令使用
-`python3 <dev-kit-root>/codex/project.py --root <project> COMMAND`。该入口读取
-`CODEX_THREAD_ID`，缺失时读取 `PROJECT_SESSION_ID`，并将身份传给共享项目逻辑；
-返回命令继续使用本入口并绑定准确身份的环境参数，不依赖上一条 shell 的环境；
-项目记录保留实际贡献及操作来源。主控在进入共享 coordinator 前
-提供以上命令入口、角色映射、配置检查证据和当前权限；共享层不负责加载本适配。
+`codex/host.py` 提供本宿主角色配置。主控在进入共享 coordinator 前提供角色映射、
+实际配置证据和当前权限；共享层不负责加载本适配。Agent 直接维护项目原文件，
+完成获授权修改后提交并普通推送，记录真实作者、审查者和操作来源。
 
 检查只证明磁盘配置与技能入口就绪。实际权限、工具、模型访问、项目级覆盖及
 原生角色发现仍以当前会话为准；不得把 `disk_ready` 当作真实派发证据。
@@ -51,9 +48,6 @@ python3 <dev-kit-root>/codex/skill_entries.py --check
 用户指定其他原生角色时保留该角色；它须自带等价持久重载，或宿主支持合并持久指令。
 若两者均无，则报告能力缺口，不替换用户角色。
 
-项目主控身份使用 runtime 已识别的真实 Codex 会话元数据；不要把 worker ID、随机值
-或每次命令的新值用作主控身份。需要 `PROJECT_SESSION_ID` 的客户端应从当前真实
-会话元数据赋值；App Server 提供 `thread.sessionId`，不从 fork 的 thread ID 推导它。
 
 推进 agent 依次向原生阶段角色交付完整当前合同、源代码位置、基线与允许输出路径，
 等待当前阶段及其后代收尾后登记结果，再选择下一阶段。项目状态保存内容绑定的成果、

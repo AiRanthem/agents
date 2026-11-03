@@ -2,11 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
-import os
 from pathlib import Path
-import shlex
-import sys
-import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -15,9 +11,6 @@ DIRECTORY = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("native_host_tests_qoder", DIRECTORY / "host.py")
 host = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(host)
-spec = importlib.util.spec_from_file_location("native_project_tests_qoder", DIRECTORY / "project.py")
-entry = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(entry)
 
 
 def install_fixture(home):
@@ -30,11 +23,7 @@ def install_fixture(home):
     skills.mkdir(parents=True)
     for name in host.SKILLS:
         (skills / name).symlink_to(host.ROOT / "skills" / name)
-    hooks = home / '.qoder' / 'hooks'
-    hooks.mkdir(parents=True)
-    (hooks / 'session-identity.py').symlink_to(host.ROOT / 'qoder/hooks/session-identity.py')
-    (home / '.qoder/settings.json').write_text(json.dumps({'hooks': {'SessionStart': [
-        {'hooks': [{'type': 'command', 'command': 'python3 ~/.qoder/hooks/session-identity.py', 'timeout': 10}]}]}}))
+    (home / '.qoder/settings.json').write_text('{}')
     return agents, skills
 
 
@@ -44,7 +33,7 @@ class NativeHostTest(unittest.TestCase):
             result = host.check(Path(temp))
             self.assertFalse(result["disk_ready"])
             self.assertFalse(result["runtime_verified"])
-            self.assertEqual(len(result["missing"]), 4 + len(host.SKILLS) + 2)
+            self.assertEqual(len(result["missing"]), 4 + len(host.SKILLS) + 1)
             self.assertFalse(list(Path(temp).iterdir()))
 
     def test_local_role_edits_and_symlinks_are_rejected(self):
@@ -102,56 +91,7 @@ class NativeHostTest(unittest.TestCase):
             if name == "project-implementation-reviewer":
                 self.assertIn("single-agent", body)
 
-    def test_session_and_continuation_use_native_entry(self):
-        command = shlex.join([sys.executable, str(Path(entry.core.__file__).resolve()), '--root', '/tmp/project with spaces', 'resume', '--ticket', 'ticket'])
-        with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'native-session', 'FOREIGN_RUNTIME_SESSION': 'foreign'}, clear=True):
-            self.assertEqual(host.session(), 'native-session')
-            def query(args):
-                self.assertEqual(entry.core.project_identity.current_session(), 'native-session')
-                return {'status': 'ready', 'finish_command': command, 'external_command': 'git status'}
-            output = io.StringIO()
-            with mock.patch.object(entry.core, '_query', side_effect=query), contextlib.redirect_stdout(output):
-                self.assertEqual(entry.main(['show', 'A']), 0)
-            result = json.loads(output.getvalue())
-            bound = shlex.split(result['finish_command'])
-            index = bound.index(str(DIRECTORY / 'project.py'))
-            self.assertEqual(bound[index+1:], shlex.split(command)[2:])
-            self.assertIn('PROJECT_SESSION_ID=native-session', bound)
-            self.assertEqual(result['external_command'], 'git status')
-            self.assertEqual(entry.core.project_identity.current_session(), os.environ.get('PROJECT_SESSION_ID'))
-
-    def test_begin_finish_keeps_identity_and_shared_schema(self):
-        import test_project_workflow as workflow_tests
-        fixture = workflow_tests.WorkflowTest()
-        fixture.setUp()
-        try:
-            fixture.real_publish = True
-            with mock.patch.dict(os.environ, {'PROJECT_SESSION_ID': 'native-session', 'FOREIGN_RUNTIME_SESSION': 'foreign'}, clear=True), mock.patch.object(entry.core, 'publish_changes', side_effect=fixture.publisher):
-                output = io.StringIO()
-                with contextlib.redirect_stdout(output):
-                    self.assertEqual(entry.main(['--root', str(fixture.a), 'begin', 'requirement-update', 'A']), 0)
-                result = json.loads(output.getvalue())
-                # The signed workflow payload is authoritative for the session and schema.
-                import project_workflow as workflow
-                _, ticket = workflow._load(fixture.a, result['ticket'])
-                self.assertEqual(ticket['identity']['session'], 'native-session')
-                self.assertNotIn('host', ticket['options'])
-                fixture.edit(result, 'Native requirement\n')
-                arguments = shlex.split(result['finish_command'])
-                self.assertIn(str(DIRECTORY / 'project.py'), arguments)
-                self.assertIn('PROJECT_SESSION_ID=native-session', arguments)
-                # Run the exact returned shell command in a fresh environment with no identity.
-                finished = subprocess.run(result['finish_command'], shell=True, capture_output=True, text=True,
-                                          env={'PATH': os.defpath}, timeout=60)
-                self.assertEqual(finished.returncode, 0, finished.stdout + finished.stderr)
-                self.assertEqual(json.loads(finished.stdout)['status'], 'published')
-                self.assertEqual((fixture.a / 'workitems/A/requirement.md').read_text(), 'Native requirement\n')
-        finally:
-            fixture.doCleanups()
-            fixture.tearDown()
-
-
-    def test_overrides_and_identity_hook_validation_are_read_only(self):
+    def test_override_validation_is_read_only(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp)
             install_fixture(home)
@@ -168,8 +108,6 @@ class NativeHostTest(unittest.TestCase):
             settings['agents'] = {'overrides': {'project-implementer': {'modelConfig': {'model': 'dfmodel'}}}}
             path.write_text(json.dumps(settings))
             self.assertTrue(host.check(home)['disk_ready'])
-            (home / '.qoder/hooks/session-identity.py').unlink()
-            self.assertIn('identity hook', host.check(home)['missing'][0])
             path.write_text('[]')
             self.assertIn('unreadable Qoder settings', host.check(home)['missing'][-1])
 
@@ -178,11 +116,6 @@ class NativeHostTest(unittest.TestCase):
         with mock.patch.object(host, '_markdown_config', return_value={**config, 'model': 'inherit'}):
             with self.assertRaisesRegex(ValueError, 'expected model format'):
                 host.injected_role('project-design-reviewer')
-
-    def test_identity_does_not_infer_other_environment(self):
-        with mock.patch.dict(os.environ, {'FOREIGN_RUNTIME_SESSION': 'foreign'}, clear=True):
-            self.assertIsNone(host.session())
-
 
 if __name__ == '__main__':
     unittest.main()

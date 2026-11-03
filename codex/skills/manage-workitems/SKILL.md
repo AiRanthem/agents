@@ -1,6 +1,6 @@
 ---
 name: manage-workitems
-description: Create, find, update or archive work items through project commands, and recover blocked scripts or state with explicit user authorization. A project progress or status report runs the progress command once and reports current lifecycle evidence. Applies inside a schema-v2 managed project; v1 projects support diagnostic reading and explicit migration. Requirement recording does not start design or development.
+description: Create, find, update or archive project work items by editing their documents and metadata directly, then committing and pushing the project branch. Report progress from current project facts. Requirement recording does not start design or development.
 ---
 
 # Native entry

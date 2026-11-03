@@ -1,6 +1,6 @@
 ---
 name: complete-workitem
-description: Record verified human acceptance, actual delivery obligations and separately requested cleanup for a managed-project item. AI review or tests alone never establish delivery.
+description: Record user final code and design edits during human acceptance, actual acceptance, delivery obligations and separately requested cleanup for a project item. AI review or tests alone never establish delivery.
 ---
 
 # Native entry

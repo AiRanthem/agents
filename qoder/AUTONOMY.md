@@ -2,7 +2,7 @@
 
 适用于同一 Qoder harness 的各使用形态。业务流程读取共享 `advance-project`
 及其 coordinator / stage-executor 引用；本文件只定义 Qoder 宿主边界。
-安装检查、角色发现、配置核对与主控身份操作只由主控执行。阶段执行者读取其适用的
+安装检查、角色发现与配置核对只由主控执行。阶段执行者读取其适用的
 上下文、权限与报告规则，不运行宿主配置检查或查看安装副本、执行者设置及账户。
 主控从已安装 skill 的物理路径找到本仓库并运行：
 
@@ -11,9 +11,9 @@ python3 <dev-kit-root>/qoder/host.py check
 ```
 
 Qoder 专用入口为 `qoder/host.py`（`check`、`role --name`）。`disk_ready` 只证明报告
-列明的磁盘模板、技能入口、身份 hook 和配置核对通过，不证明当前会话工具、模型访问、
-身份注入或权限可用。主控在进入共享 coordinator 前提供本文件的角色绑定、检查证据、
-项目命令入口和权限边界；共享层不负责加载本适配。
+列明的磁盘模板、技能入口和配置核对通过，不证明当前会话工具、模型访问、
+角色派发或权限可用。主控在进入共享 coordinator 前提供本文件的角色绑定、检查证据、
+权限边界；共享层不负责加载本适配。
 
 四个原生角色固定具体型号：两类审查 Qwen3.8-Max / xhigh，实现和修复 DeepSeek-Flash / max。
 原生 `model` 字段使用 `"[显示名](模型 ID)"` 形式；ID 于 2026-10-19 按本机 `/model`
@@ -70,16 +70,10 @@ follow-up 工具时，复审用新的干净派发交付当前原始输入与可�
 
 ## 身份、证据与权限
 
-主控使用 SessionStart 身份 hook（`qoder/hooks/session-identity.py`）注入的
-`additionalContext`，在每条 project.py 命令的同一命令内导出其准确的
-`PROJECT_SESSION_ID=<session_id>`，调用
-`python3 <dev-kit-root>/qoder/project.py --root <project> COMMAND`。
-该入口只读取 `PROJECT_SESSION_ID`，返回续接命令保留本入口与准确身份的环境参数，原样执行，不依赖上一条 shell 的环境。
-身份来自当前 Qoder hook，不能用逐轮值、worker ID、其他宿主变量或随机值替代。
-hook 未安装、未生效或当前主控身份未暴露时，报告缺口并阻塞项目状态写入。
+主控直接维护项目原文件，完成获授权修改后提交并普通推送。记录实际作者、审查者和操作来源。
 
-主控为每个真实贡献执行安排 contributor-session 标签，供 `--author-session` /
-`--reviewer-session` 与报告归属使用；标签区分真实作者、审查者和登记者，不登记存活
+主控为每个真实贡献执行安排 contributor-session 标签，用于报告归属；标签区分
+真实作者、审查者和登记者，不登记存活
 状态，也不要求未暴露的宿主 worker ID。写入前记录实际作者，替换或修复执行继续保留
 累积作者归属。独立审查必须排除相应成果的实质作者及登记者；新标签、干净上下文或
 其他作者的后续修改，都不能让先前实质作者恢复独立性。设计的机械修正遵循共享边界。

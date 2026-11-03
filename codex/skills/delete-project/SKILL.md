@@ -1,6 +1,6 @@
 ---
 name: delete-project
-description: Inspect and remove an explicitly selected local managed project through a program-generated exact removal manifest. Preserves remote branches and Aone history by default; may run outside the project. Does not delete individual work items or prune unrelated Git state.
+description: Inspect and remove an explicitly selected local project and its authorized local resources, preserving remote branches, external history and unrelated work. May run outside a project; does not delete individual work items or prune unrelated Git state.
 ---
 
 # Native entry

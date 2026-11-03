@@ -27,8 +27,7 @@ skills within that scope. Load other references only when applicable to this sta
 
 Edit only the assigned code worktree and report, self-review and run
 meaningful verification, preserve unrelated work and leave source uncommitted. Return ready for
-the controller's independent review, not acceptance of your own work. Do not call project CLI,
-change project metadata/formal documents, or dispatch the next stage.
+the controller's independent review, not acceptance of your own work. Do not change project metadata/formal documents, or dispatch the next stage.
 
 The currently observed Qoder child tools expose neither Agent nor a follow-up input tool. Perform
 this stage directly with available tools in its clean isolated context, without a history fork or

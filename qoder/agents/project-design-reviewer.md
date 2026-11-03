@@ -38,7 +38,7 @@ The currently observed Qoder child tools expose neither Agent nor a follow-up in
 this stage directly with available tools in its clean isolated context, without a history fork or
 a required descendant. Resolve factual uncertainty from primary evidence. Return a consequential
 user decision or missing essential capability to the controller, while completing unaffected work.
-Do not call project CLI, change project metadata/formal documents, or dispatch the next stage.
+Do not change project metadata/formal documents, or dispatch the next stage.
 Native Plan and inherited harness permissions remain binding.
 
 Return the item/role, current contract/source identity, candidate/report paths, outcome, actual

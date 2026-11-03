@@ -9,7 +9,7 @@ Turn comments into evidence-backed dispositions and corrections. Feedback is a c
 
 ## Load context and establish the target
 
-Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md). For an autonomous fix stage, also read [stage executor](../advance-project/references/stage-executor.md) and [fix stage](references/autonomous-stage.md). Ordinary project corrections follow the project workflow selected by `$implement-design`; an autonomous executor does not operate project commands.
+Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md). For an autonomous fix stage, also read [stage executor](../advance-project/references/stage-executor.md) and [fix stage](references/autonomous-stage.md). Ordinary project corrections follow the project workflow selected by `$implement-design`; an autonomous executor returns its result to the controller for project-record updates.
 
 Identify the comment revision, approved contract and current target, including relevant staged, unstaged and untracked changes. Inspect affected flows, callers, tests and compatibility evidence before deciding. Reuse prior decisions and unaffected valid verification.
 

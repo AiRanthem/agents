@@ -109,8 +109,7 @@ python3 <dev-kit-root>/codex/host.py role --name project-implementer
 
 ## 共享入口与官方依据
 
-执行本目录安装后，再执行 [共享技能安装](../skills/INSTALL.md)。项目命令使用
-`python3 <dev-kit-root>/codex/project.py --root <project> COMMAND`；返回续接命令含准确身份的环境参数，原样执行，不依赖上一条 shell 的环境。
+执行本目录安装后，再执行 [共享技能安装](../skills/INSTALL.md)。项目文件由 Agent 原处维护并提交推送。
 自主推进先加载 [AUTONOMY.md](AUTONOMY.md)，再进入共享技能。
 
 - [Custom instructions with AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)

@@ -1,7 +1,7 @@
-# Recover this workspace
+# Resume this workspace
 
-Restore the dedicated branch `{{STORAGE_BRANCH}}` from `{{STORAGE_URL}}` and start the agent at this project's management root. Read its generated `AGENTS.md`. If shared skills are missing, install the dev-kit from `{{DEVKIT_SOURCE}}` using its installation contract. Credentials and unpublished code are not restored by cloning project records.
+The project branch is `{{STORAGE_BRANCH}}` in `{{STORAGE_URL}}`. Read current local records and `AGENTS.md` before continuing. If shared skills are missing, install the dev-kit from `{{DEVKIT_SOURCE}}` through its installation contract.
 
-Use the project entrypoint resolved by the root `AGENTS.md` for `status` and follow its operation-specific continuation under installed `manage-workitems/references/commands.md`. Complete pending publication recovery before starting the next operation. Keep local operation and recovery records; any local session may resume the recorded operation with its actual inputs and contribution provenance. For a script defect, investigate and use "User-authorized manual recovery" in installed `manage-workitems/references/recovery.md` for a concrete approved repair.
+Inspect existing files, Git changes and actual source locations. Complete authorized work in place, commit affected project records and push normally. A failed push leaves the local commit for correction and retry. Preserve unrelated files and unpublished source.
 
-Use `upgrade-project` for deterministic migration and generated instruction refresh. Project documents contain only current effective instructions and knowledge; Git retains prior versions. Preserve current approval, delivery and unresolved recovery credentials. Required original main-workspace instructions and code-worktree paths come from the program; read the originals before dependent work. Restore missing bindings, originals or unpublished code from their verified recorded locations.
+Git retains prior project records. Cloning them does not restore credentials, separate environments or unpublished code. Read original business/source instructions and locate existing work from recorded locations. Inspect the actual outcome before repeating an uncertain external action and report unresolved facts accurately.

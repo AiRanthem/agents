@@ -41,7 +41,7 @@ of the registrar. A fresh label or clean dispatch cannot make a prior author ind
 currently observed Qoder child tools expose neither Agent nor a follow-up input tool. Review
 directly in the clean isolated context without a history fork; do not simulate descendants or
 follow-up executions. Return required user decisions or missing essential capabilities to the
-controller while completing unaffected review. Do not call project CLI, change project metadata,
+controller while completing unaffected review. Do not change project metadata,
 edit formal documents or dispatch another stage. Native Plan and inherited permissions remain binding.
 
 Return the item/role, current contract and stable dirty-source identity/base, outcome and report

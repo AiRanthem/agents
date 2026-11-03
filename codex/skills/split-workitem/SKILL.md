@@ -1,6 +1,6 @@
 ---
 name: split-workitem
-description: Materialize an oversized work item's complete independently reviewed design into cohesive child work items and a dependency DAG. Requires an implementable parent spec routed to splitting; children inherit its design and need refinement only for demonstrated blocking gaps.
+description: Materialize an oversized work item's complete independently reviewed design into cohesive child work items and a dependency DAG. Children inherit the design and need refinement only for demonstrated gaps.
 ---
 
 # Native entry

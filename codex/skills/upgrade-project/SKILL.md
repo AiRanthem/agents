@@ -1,6 +1,6 @@
 ---
 name: upgrade-project
-description: Deterministically migrate a selected managed project to the current schema and refresh generated project instructions from installed sources. Preserves IDs, DAG and current effective business constraints; use for an existing project's protocol upgrade, not source-code or host-skill changes.
+description: Refresh a selected existing project's structure and instructions from current shared conventions while preserving IDs, dependencies, source locations, effective business constraints and actual evidence. Excludes source-code and host-skill installation changes.
 ---
 
 # Native entry

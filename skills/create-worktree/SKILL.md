@@ -9,7 +9,7 @@ Create one local branch and linked worktree for the user's task, publish the cor
 
 ## Project workitems
 
-For a schema-v2 project work item, implementation worktree preparation and resolution belong to the program workflow invoked by `develop-workitem`; use the returned development location and do not create a parallel project worktree or edit project state here. Read the returned main-workspace constraints and target repository instructions before source operations. In ordinary non-project workspaces, infer paths using the generic rules below.
+For a project work item, read its recorded source location, main-workspace constraints and original repository instructions. Reuse an existing suitable worktree; create a new one only for the requested scope. Record the actual repository, branch, base and worktree path directly in the existing project metadata, then commit and push that project update. The rules below govern the requested source branch and worktree creation.
 
 - Inspect the repository's remotes, fetch and push mappings, tracking and default branches, existing worktrees, related branch names, and sibling directory names. Infer the upstream base, publishing remote and destination, branch name, and worktree location from the task and established conventions; do not assume `origin`, `main`, or a fixed directory layout.
 - Fetch and prune the chosen upstream remote, then base the new branch directly on its refreshed remote-tracking branch. Do not pull, rebase, or reset an existing worktree.

@@ -27,8 +27,7 @@
 
 # Native entry bindings
 
-* Resolve this instruction file's physical repository directory and use its `project.py` for project commands; it supplies the stable identity from `CODEX_THREAD_ID` or `PROJECT_SESSION_ID` and preserves that entrypoint in returned continuations. Do not generate a new identity or substitute a worker ID.
-* Before starting `advance-project`, load this directory's `AUTONOMY.md` and supply its role bindings, configuration evidence, project command entrypoint and permission limits to the shared controller. Other shared skills remain platform-neutral.
+* Before starting `advance-project`, load this directory's `AUTONOMY.md` and supply its role bindings, configuration evidence and permission limits to the shared controller. Other shared skills remain platform-neutral.
 * For an authorized installation request, load this directory's `INSTALL.md` and supply it alongside the shared installation contract. Native skill entries own invocation policy and UI metadata; their shared sources remain the business contract.
 
 # Execution mode binding

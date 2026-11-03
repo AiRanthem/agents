@@ -9,7 +9,7 @@ Produce the fastest runnable proof that the user's explicit acceptance scenario 
 
 ## Project workitems
 
-In a schema-v2 project, preserve the generic POC acceptance and trimmed-scope authorization below, while using [the fixed project command workflow](../manage-workitems/references/commands.md) for project records and development preparation. Read the complete returned requirement/spec and original instructions, edit only returned Markdown drafts, execute the returned finish command unchanged and follow its status branch. Program-owned YAML replaces generic document-status writes. A missing design review may be bypassed only by the user's actual explicit scoped waiver through `development-start --skip-design-review --approval-source SOURCE`; POC scope does not waive dependencies, upstream-fix gates, independent implementation review or delivery evidence. Do not alter the generic POC behavior outside project mode.
+For a project work item, read its complete requirement/design and original project/source instructions and use the actual source location. Preserve the POC acceptance and trimmed-scope contract below. An ordinary project session or controller records the confirmed scope and actual result directly in the existing project context and metadata, then commits and pushes those project updates. A delegated POC executor returns evidence within its assigned write scope. POC success proves only its accepted scenario and does not establish production delivery.
 
 ## Respect authority and host mode
 
@@ -33,7 +33,7 @@ When criteria are missing or ambiguous, inspect the design and relevant current 
 
 ## Trim the design with the user
 
-Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. In execution mode, when starting a POC without a current `implementable` status, explain the missing review assurance and obtain the user's explicit agreement before implementation; combine this with the acceptance and trimmed-design confirmation when useful. An approved read-only planning final plan and its execution need no document status. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
+Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. Use the actual design and review evidence to explain the POC's assurance and remaining uncertainty. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
 
 Present the user with three explicit groups and obtain confirmation before planning or implementation:
 

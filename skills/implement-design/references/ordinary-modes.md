@@ -8,13 +8,13 @@ Read-only planning exists only when active host instructions establish it; a req
 
 For direct implementation outside managed projects, use a current `design_status: implementable` document as review evidence when available; check whether later changes invalidate it. If no current review status exists, including a conversation-only design, explain the missing review assurance and concrete uncertainty before affected edits, and ask whether to proceed unless that unchanged contract already has the user's agreement. Such agreement waives only missing review status. It does not settle product decisions or waive defects, permissions or verification. Do not invoke explicit-only `$review-design` without authorization.
 
-Use the approved final implementation plan or authorized `$receiving-code-review` correction targets as the current execution contract. Material Why/What revisions require the applicable approval handoff. Managed projects use their program gates.
+Use the approved final implementation plan or authorized `$receiving-code-review` correction targets as the current execution contract. Material Why/What revisions require the applicable approval handoff. Managed projects follow the same actual authorization and evidence principles and maintain their existing records directly.
 
 ## Contract correction
 
-After the user approves a material Why/What correction, reassess the whole implementation against it, retaining still-correct work and evidence. A waiver for a previous contract does not approve a revised contract.
+After the user approves a material Why/What correction, reassess the whole implementation against it, retaining still-correct work and evidence. Approval of a previous contract does not approve a material contract change.
 
-- Existing design in execution: synchronize the approved correction into that document in its language and set `design_status: review-pending`. Approval of the concrete correction authorizes its scoped writeback. Keep implementation tasks and history out of the design. Managed projects use their draft/publish workflow instead of direct writes.
+- Existing design in execution: synchronize the approved correction into that document in its language and set `design_status: review-pending`. Approval of the concrete correction authorizes its scoped writeback. Keep implementation tasks and history out of the design. For a managed project, the controller updates the existing project design and metadata directly, then commits and pushes those records.
 - Existing design in read-only planning: leave all files unchanged, restate the approved correction conversationally and retain the existing paths and agreed edits for execution synchronization. This does not authorize creating a design file.
 - Conversation-only design: restate the revised approved contract; do not create a document.
 

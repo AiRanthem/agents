@@ -7,4 +7,4 @@ description: Autonomously advance an explicitly requested managed-project scope 
 
 Resolve this entry to its physical repository path and read the complete [shared skill](../../../skills/advance-project/SKILL.md) plus its applicable references. The shared source is the business contract and the authoritative installed-skill path for delegated tasks; keep relative reference resolution anchored there. This entry supplies only Codex metadata and bindings.
 
-Before entering the shared controller, read [Codex autonomy bindings](../../AUTONOMY.md) and supply its role bindings, actual configuration evidence, permissions and [project entrypoint](../../project.py).
+Before entering the shared controller, read [Codex autonomy bindings](../../AUTONOMY.md) and supply its role bindings, actual configuration evidence, and permissions.

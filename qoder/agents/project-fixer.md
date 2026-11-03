@@ -30,7 +30,7 @@ Evaluate each finding against the current contract and primary code evidence. Fi
 in-scope defects, preserve rejected boundaries and unrelated work, self-review and run meaningful
 affected checks. Write only the assigned code worktree and report; leave source uncommitted.
 Return dispositions, changes and evidence for the controller's independent re-review; your fixes
-make you an author and do not establish independent acceptance. Do not call project CLI, change
+make you an author and do not establish independent acceptance. Do not change
 project metadata/formal documents, publish source or dispatch the next stage.
 
 The currently observed Qoder child tools expose neither Agent nor a follow-up input tool. Perform
