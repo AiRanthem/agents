@@ -1,0 +1,42 @@
+id: 6d2a7b77f80ec5cb519e56f22123c004
+kind: validation-waiver
+item: 1-gateway-wakeup-lifecycle
+report: workitems/1-gateway-wakeup-lifecycle/records/6d2a7b77f80ec5cb519e56f22123c004.md
+session: 01a19f4d-109d-7a61-8f31-6a91f8a58499
+created_at: '2026-11-03T02:52:00.435322+00:00'
+provenance: 用户要求实施所附计划：发布本轮一次恢复提交修订后登记 design-review 用户豁免，保留原v5真实独立审查身份及覆盖，不登记新独立Pass；随后明确使用自动推进模式按照计划进行。
+requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+spec_sha256: 8b3219ab51337b0a8757296e0fd6a03ef38444703dfb32c2e067a0b5011265d0
+version: 6
+base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
+dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+gate: design-review
+result: skipped
+source: 用户要求实施所附计划：发布本轮一次恢复提交修订后登记 design-review 用户豁免，保留原v5真实独立审查身份及覆盖，不登记新独立Pass；随后明确使用自动推进模式按照计划进行。
+project_root: /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup
+read_hashes:
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/.project/business-instructions.md: 52d2c484b8e4c9942db2ce2e99b2231af4efcc15a75c86344a915b0cc760ef16
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/.project/context.md: 5213b2756b794698262e097111cf2d49b7e5b920098c99bf27869424bbcbe633
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/.project/main-workspace.md: be7411f028c766be1764104540367f167afcff94277d0b5a11926d4ccf14b291
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/.project/project-instructions.md: a7c2c5c07ffc5121582efe793cc4613eb75d97d4cf01f6c45ada0002806f2a89
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/AGENTS.md: 7e4ed82f5cb7580ad7f8f520460e260e0baebe12069777f4acef7626d5e492b4
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle/context.md: db35b65ff8374760bee341146e5d250b99a13f7e3b1500771f6a0a12a5f15789
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle/decision.md: 69586060bb64dbb5108a53bc7b454be28ccaed760468aef36ebff729c605c128
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle/requirement.md: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle/spec.md: 8b3219ab51337b0a8757296e0fd6a03ef38444703dfb32c2e067a0b5011265d0
+  /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+  /AGENTS.md: null
+  /Users/sophon/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/.project/project.yaml: 634f4e85564df2833eb099b73170b2fa0bc30a09b26e33f141e66c93c568f0c4
+  /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+  /Users/sophon/Workspace/AGENTS.md: null
+  /Users/AGENTS.md: null
+  /Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/worktrees/AGENTS.md: null
+code_snapshot:
+  head: cfbd102bc05c6df663965c5e23463a0eafd34948
+  tree: fe082d6000dbe1ef3129fae620cfb4dbe56c5fea
+  dirty_digest: 566cffcd0a0de70c2d8b6cf210d461a0ae509076efc475b8acf65a14755b0268
+  clean: true

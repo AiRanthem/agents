@@ -5,7 +5,13 @@ storage:
   remote: origin
   url: git@github.com:AiRanthem/agents.git
   branch: projects/im-auto-wakeup
-repositories: []
+repositories:
+- id: agents
+  url: git@github.com:openkruise/agents.git
+  base_ref: refs/heads/master
+  base_remote: upstream
+  publish_remote: origin
+  publish_url: git@github.com:AiRanthem/agents.git
 backends:
   aone: null
 main_workspace:
@@ -14,3 +20,6 @@ main_workspace:
   repository:
     url: git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git
     ref: refs/heads/master
+worktrees:
+  base: project
+  path: worktrees
