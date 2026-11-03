@@ -1,0 +1,17 @@
+id: 1-feishu-wake-openclaw
+title: 支持通过飞书消息自动唤醒 OpenClaw
+kind: development
+status: new
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft
