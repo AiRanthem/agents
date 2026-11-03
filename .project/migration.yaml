@@ -12,4 +12,3 @@ generated_sha256:
   .project/recovery.md: 49875746c4b2c6cef6e586e14ed65b8ac06aaa53133c815c2e0d45f6c956fcfb
   .project/workflow.md: 224ad2d882d73f86eccaf90e5bfc0350be476511d880e2a31e88928b39f7f782
   AGENTS.md: a8d3943d5faf6786a1488bb6185b7bb2477d4dead34898dc40eb54bf33f636ad
-  workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
