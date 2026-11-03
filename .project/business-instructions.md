@@ -8,7 +8,7 @@
 
 ## IM 唤醒需求的共同约束
 
-工作项 2、3 分别记录 Webhook 唤醒和 WebSocket 唤醒，二者并列且无相互前置依赖。能力需要通用化，飞书与 OpenClaw 是首个验证场景。拆分依据及 Pause 期间的协议边界见 `evidence/im-wakeup-paths-and-capabilities.md`。
+工作项 2、3 分别记录 Webhook 唤醒和 WebSocket 唤醒，二者并列且无相互前置依赖。用户早期要求通用能力；2026-11-04 将工作项 2 明确为单独的飞书 IM Webhook，采用标准飞书事件订阅协议并提出使用 E2B 数据面 URL，不要求先建设多 IM 接入框架。此范围调整不自动扩展到工作项 3。拆分依据及 Pause 期间的协议边界见 `evidence/im-wakeup-paths-and-capabilities.md`。
 
 Webhook 工作项 2 按用户要求分成 Gateway 代码与 ACK 编排两个子任务，分别对应主工作区的 agents 和 ack-components；具体开发与发布分支尚未选定。WebSocket 工作项 3 的实现仓库与方式仍待明确。项目中的既有 agents 配置和工作项 1 不构成已交付前置能力的证据。
 
