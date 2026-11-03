@@ -12,7 +12,11 @@
 
 按用户要求，仅以实际 ack-components 的 Gateway 编排为配置依据，并匹配其镜像源码；没有使用 Agents 示例编排推断部署行为。主检出已刷新，组件与源码原文、渲染结果及分析见 [ACK Gateway 下线证据](../../evidence/ack-gateway-webhook-shutdown.md)。
 
-默认 drain=30 秒、preStop 调用 drain 后 sleep 30 秒、Pod 总 grace=90 秒。对应 Envoy 1.37.3 的 graceful drain 期间仍可接收连接；Gateway 退出代码只清理 peer/system 服务，没有跟踪已 ACK 的后台内存任务。即使每次唤醒固定 10 秒，也不能由当前机制推出“所有事件必然完成”。若要在正常下线排空这类任务，设计需增加进程级事件归属、停止接收及等待任务完成的衔接；不需要因此引入持久存储。未修改编排或业务源码，未进行线上 Pod 终止实验。
+默认 drain=30 秒、preStop 调用 drain 后 sleep 30 秒、Pod 总 grace=90 秒。对应 Envoy 1.37.3 的 graceful drain 期间仍可接收连接；Gateway 退出代码只清理 peer/system 服务，没有跟踪已 ACK 的后台内存任务。即使每次唤醒固定 10 秒，也不能由当前机制推出“所有事件必然完成”。用户已接受先停收、排空、再退出的方向，不需要因此引入持久存储。未修改编排或业务源码，未进行线上 Pod 终止实验。
+
+细化建议是由 preStop 先调用只在 Pod 内可达的业务 drain 接口，关闭新事件接收并等待进程持有的排队与执行中事件，再进入现有 Envoy drain + sleep，最后发送 TERM。业务排空建议最多 30 秒，空队列立即结束；本地调用最多 35 秒，加现有 curl 最多 5 秒及 sleep 30 秒，preStop 预算最多约 70 秒，90 秒总 grace 中保留约 20 秒给退出和调度开销。任务需要由进程持有，不能随 ACK 后的 stream 销毁取消；停收与任务登记必须形成同一个并发边界。
+
+进入排空后 readiness 返回失败，但保留内部路由就绪状态、路由同步和 peer/outbound 等任务依赖，liveness 继续正常。新 Webhook 返回 503，不确认接收；应用有效确认接收后，该事件才算成功交付，模型回答不在等待范围。具体事件终态、重试策略与应用确认协议仍属于整个 Webhook 设计的待决范围。详见下线证据中的建议细节；数值和管理接口尚非已实现能力。
 
 ## 交付链路证据
 
@@ -42,7 +46,7 @@
 ## 待决范围
 
 - 固定目标的身份与配置变更规则，以及关闭自动唤醒时新事件和积压事件的处理。
-- 内存容量、满载处理、短时重试、去重及正常下线排空规则，以及交付完成和应用业务执行的边界。
+- 内存容量、满载处理、短时重试、去重及正常下线排空时间预算，以及应用交付完成的具体判据。下线顺序已确认，不重复征询。
 - 首期事件范围、凭据与目标配置，以及 Gateway 内部的接收/任务生命周期归属。
 
 知识入口：[链路与能力分析](../../evidence/im-wakeup-paths-and-capabilities.md)、[飞书协议原理](../../evidence/feishu-event-transports.md)、[OpenClaw 接入机制](../../evidence/openclaw-feishu-im-mechanism.md)。

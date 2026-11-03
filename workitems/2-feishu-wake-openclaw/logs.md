@@ -8,3 +8,5 @@
 
 本轮核验实际 ack-components 编排、对应 Gateway 镜像源码及 Envoy 1.37.3 drain 语义，并用组件 configs/default.yaml 叠加 Chart 渲染 Gateway Deployment。结论及原始定位见 evidence/ack-gateway-webhook-shutdown.md（相对项目根）；未修改业务源码/编排，也未执行线上终止验证。
 
+用户随后接受正常下线的停收、排空、退出顺序。已补充 preStop 先排空业务再 drain Envoy 的建议，并检查接收与停收并发、stream 生命周期、readiness 与内部路由依赖、重复 hook 和终止预算。已刷新 agents 与 ack-components 主检出，相关 HEAD 未变；复核固定镜像源码和 Kubernetes hook 契约。尚未实现本地管理接口、任务管理器或编排变更，建议的 30 秒业务排空上限没有运行验证。
+
