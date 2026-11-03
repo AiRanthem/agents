@@ -4,7 +4,9 @@ Identity: **OKAWorkspace** (`oka-workspace`).
 
 Recovery reference: `git@gitlab.alibaba-inc.com:serverlessinfra/OKAWorkspace.git` at `refs/heads/master`.
 
-Local binding: `.project-local/main-workspace.json`.
+Local binding: `.project/main-workspace.json`.
+
+Original instructions: `/Users/sophon/Workspace/OKAWorkspace/AGENTS.md`. Repository locations: `.project/repositories.yaml`.
 
 ## Project-specific instructions and routes
 
