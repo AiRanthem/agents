@@ -59,7 +59,7 @@ OpenClaw 处理消息后主动调用飞书消息 API 回复用户，Webhook 的 
 | [21-webhook-gateway-code：Webhook 唤醒与优雅下线代码](../21-webhook-gateway-code/requirement.md) | agents 中的 Webhook 接收、唤醒、交付、内存任务归属和 60 秒业务排空能力 | 无新增项目依赖；继续收敛完整 Webhook 契约 |
 | [22-webhook-ack-orchestration：Webhook 唤醒 ACK 编排接入](../22-webhook-ack-orchestration/requirement.md) | 实际 ack-components 的镜像绑定、本地 drain 调用、原有连接 drain 和总终止预算 | 子任务 21 代码已交付；启用新 hook 前核验包含接口的镜像可用 |
 
-两个子任务覆盖本项代码与部署编排责任；编排子任务承担接入后的集成验证责任，父项汇总其实际结果。保留已有“代码合并”交付义务，不把子任务创建、设计批准、独立审查或记录推送视为交付。具体开发/发布分支、目标组件版本和部署验收环境尚未选定。当前拆分保存已确认契约与待决事项，尚无完整正式设计、独立审查或业务实现。
+两个子任务覆盖本项代码与部署编排责任；编排子任务承担接入后的集成验证责任，父项汇总其实际结果。保留已有“代码合并”交付义务，不把子任务创建、设计批准、独立审查或记录推送视为交付。具体开发/发布分支、目标组件版本和部署验收环境尚未选定。当前拆分保存已确认契约与待决事项，尚无完整正式设计或业务实现；独立审查的范围与结论另见 [审查记录](records/design-review-20261104.md)。
 
 分析依据：[两种 IM 唤醒的链路与能力](../../evidence/im-wakeup-paths-and-capabilities.md)。
 

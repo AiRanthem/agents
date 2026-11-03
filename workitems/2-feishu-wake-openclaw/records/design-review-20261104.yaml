@@ -1,0 +1,46 @@
+id: design-review-20261104
+kind: design-review
+item: 2-feishu-wake-openclaw
+date: '2026-11-04'
+report: workitems/2-feishu-wake-openclaw/records/design-review-20261104.md
+report_sha256: fcf599dc88564b5bb045a4e8b94d3f9943718912fd083a442c32051e56740600
+target_commit: 27e8ae89472e3844104ec75a18182091e3088c12
+reviewer:
+  canonical_name: /root/webhook_design_reviewer
+  configured_model: gpt-6.1-sol
+  configured_reasoning_effort: high
+  fork_turns: none
+  independent: true
+  prior_substantive_authorship: false
+authorization: 用户明确要求“让独立 reviewer 进行设计审查”。
+result: unable_to_conclude
+item_results:
+  2-feishu-wake-openclaw:
+    result: unable_to_conclude
+    essential_gaps: [G1, G2]
+  21-webhook-gateway-code:
+    result: unable_to_conclude
+    essential_gaps: [G1, G2]
+  22-webhook-ack-orchestration:
+    result: pass
+    scope: 当前编排语义契约；不证明前置代码或镜像交付。
+gaps:
+  G1:
+    kind: essential_contract_gap
+    impact: high
+    summary: 应用交付、有效接收确认及响应丢失后的责任尚未确定。
+    owners: [2-feishu-wake-openclaw, 21-webhook-gateway-code]
+  G2:
+    kind: essential_contract_gap
+    impact: high
+    summary: 接入配置、授权目标身份、变更和关闭开关后的事件处置尚未确定。
+    owners: [2-feishu-wake-openclaw, 21-webhook-gateway-code]
+source_targets:
+  agents_image_source: e55d70c7fc7d603e8a585918919788edd0374e31
+  ack_components: 02d1a5f3b1c7fe5478ea69e105eb9dddfada8934
+  openclaw: 0a0d601bf12dfea5e4c94c3e8cd6d823c405d9a0
+  envoy: v1.37.3
+candidate_changes: none
+official_implementable_recorded: false
+runtime_validation: not_performed
+delivery_established: false

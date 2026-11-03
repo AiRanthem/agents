@@ -18,3 +18,8 @@ design:
   file: spec.md
   version: 0
   state: draft
+  review:
+    result: pass
+    scope: 编排语义契约；实际变更仍依赖代码交付和匹配镜像。
+    record: ../2-feishu-wake-openclaw/records/design-review-20261104.yaml
+    target_commit: 27e8ae89472e3844104ec75a18182091e3088c12
