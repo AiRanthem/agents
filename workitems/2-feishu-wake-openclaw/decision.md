@@ -1,2 +1,7 @@
 # 当前决策
 
+- 用户要求同时支持 Webhook 和 WebSocket 两种 IM 唤醒方式。
+- 用户要求将能力做成通用能力，飞书和 OpenClaw 作为具体场景。
+- 2026-11-03，用户要求保存原理分析后，拆成 Webhook 唤醒与 WebSocket 唤醒两个并列需求。本项保留原 ID 并收敛为 Webhook 唤醒，同级新项 `3-websocket-wakeup` 承接 WebSocket 唤醒。
+- 上述决定是需求范围与拆分授权，不代表正式设计、可靠性等级、实施方案或代码交付的批准。
+

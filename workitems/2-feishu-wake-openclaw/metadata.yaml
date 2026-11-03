@@ -1,7 +1,8 @@
 id: 2-feishu-wake-openclaw
-title: 支持通过飞书消息自动唤醒 OpenClaw
+title: 基于 Webhook 事件的 Sandbox 自动唤醒
 kind: development
 status: new
+depends_on: []
 delivery:
   required:
   - merged

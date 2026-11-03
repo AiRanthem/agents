@@ -6,7 +6,9 @@ scope: 通用 IM 唤醒能力的协议研究；飞书为首个场景，不选定
 kind: search
 inputs:
   researched_on: '2026-11-03'
-  workitem: 2-feishu-wake-openclaw
+  workitems:
+  - 2-feishu-wake-openclaw
+  - 3-websocket-wakeup
   node_sdk_revision: b188be60134d409b61259546bcf69c731d2b0b7c
   node_sdk_package_version: 1.76.0
   runtime_validation: not_executed

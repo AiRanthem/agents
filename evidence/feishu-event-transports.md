@@ -1,6 +1,6 @@
 # 飞书 Webhook 与 WebSocket 事件接收原理
 
-调研日期：2026-11-03。关联工作项：`2-feishu-wake-openclaw`。本文记录平台契约、官方 SDK 实现及其对 Sandbox 唤醒的约束，不代表已批准的设计或运行验证。OpenClaw 自身的处理链路见 [OpenClaw 飞书 IM 接入机制](openclaw-feishu-im-mechanism.md)。
+调研日期：2026-11-03。关联工作项：`2-feishu-wake-openclaw`、`3-websocket-wakeup`。本文记录平台契约、官方 SDK 实现及其对 Sandbox 唤醒的约束，不代表已批准的设计或运行验证。OpenClaw 自身的处理链路见 [OpenClaw 飞书 IM 接入机制](openclaw-feishu-im-mechanism.md)，唤醒链路与能力分析见 [IM 唤醒能力边界](im-wakeup-paths-and-capabilities.md)。
 
 证据分为两类：飞书官方文档描述服务契约；官方 `larksuite/node-sdk` 源码固定在提交 [`b188be60134d409b61259546bcf69c731d2b0b7c`](https://github.com/larksuite/node-sdk/tree/b188be60134d409b61259546bcf69c731d2b0b7c)，其 `package.json` 标注版本 `1.76.0`。这不表示项目或实际 OpenClaw 已安装该版本。文档通过官方页面及搜索索引返回的正文核验，部分页面直接打开时没有可读正文；未使用第三方文章作为结论依据。
 

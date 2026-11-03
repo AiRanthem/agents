@@ -1,0 +1,19 @@
+id: 3-websocket-wakeup
+title: 基于 WebSocket 事件的 Sandbox 自动唤醒
+kind: development
+status: new
+split_from: 2-feishu-wake-openclaw
+depends_on: []
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft

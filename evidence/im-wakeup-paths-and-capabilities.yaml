@@ -1,0 +1,19 @@
+id: im-wakeup-paths-and-capabilities
+body: evidence/im-wakeup-paths-and-capabilities.md
+topic: Webhook 与 WebSocket IM 唤醒链路、休眠行为与能力边界
+summary: 两种唤醒链路、Pause 期间的失效与消息责任、所需能力、独立交付和共享边界。
+scope: 通用 IM 唤醒需求分析；飞书与 OpenClaw 为首个场景，未选定实现架构或仓库。
+kind: analysis
+inputs:
+  analyzed_on: '2026-11-03'
+  workitems:
+  - 2-feishu-wake-openclaw
+  - 3-websocket-wakeup
+  node_sdk_revision: b188be60134d409b61259546bcf69c731d2b0b7c
+  runtime_validation: not_executed
+sources:
+- path: evidence/feishu-event-transports.md
+- path: evidence/openclaw-feishu-im-mechanism.md
+- path: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/event-subscriptions
+- path: https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-
+- path: https://github.com/larksuite/node-sdk/tree/b188be60134d409b61259546bcf69c731d2b0b7c

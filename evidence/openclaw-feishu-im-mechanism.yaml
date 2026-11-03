@@ -3,15 +3,18 @@ body: evidence/openclaw-feishu-im-mechanism.md
 repository: agents
 topic: OpenClaw 飞书 IM 接入机制
 summary: 双传输、消息链路、持久化与鉴权机制，以及 Sandbox Pause 唤醒约束。
-scope: 2-feishu-wake-openclaw 的公开资料调研；agents 仅为项目索引关联，实施仓库待定。
+scope: Webhook 与 WebSocket 唤醒需求的公开资料调研；agents 仅为项目索引关联，实施仓库待定。
 kind: search
 inputs:
   researched_on: '2026-11-03'
-  workitem: 2-feishu-wake-openclaw
+  workitems:
+  - 2-feishu-wake-openclaw
+  - 3-websocket-wakeup
   openclaw_revision: main-unpinned-browser-snapshots
 sources:
 - path: evidence/feishu-event-transports.md
 - path: workitems/2-feishu-wake-openclaw/requirement.md
+  revision: 80a6955b54463e32276a9507ceb6b16335b3ea4b
   sha256: f2aca19479ddcce916e5c0a2c194637d95d99606f2ed3615b23ded685722b657
 - path: https://docs.openclaw.ai/channels/feishu
 - path: https://docs.openclaw.ai/channels/feishu/setup
