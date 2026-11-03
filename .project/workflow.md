@@ -1,13 +1,7 @@
-# Project workflow
+# 项目工作流
 
-If project scripts block or malfunction, use installed `manage-workitems/references/recovery.md` under "User-authorized manual recovery" for concrete approved state/file correction and script repair. Preserve truthful evidence, source, actual permissions and transaction integrity.
+阅读当前项目配置、业务指令及相关工作项，按用户请求和已有授权直接修改原文件。使用当前共享技能维护需求、设计、评审、实现、验收、交付和清理记录，保持稳定 ID、依赖关系和实际证据一致。
 
-Operate serially on this machine, completing or recovering each operation before the next. Use the project command entrypoint resolved by the root `AGENTS.md` and installed `manage-workitems/references/commands.md` for the begin/read/edit/finish/status workflow. The program returns the complete prose inputs and exact editable Markdown paths; it owns YAML, gates and Git/Aone publication. Use the current shared `references/workflow.md` for lifecycle evidence and authorization.
+设计与实现的结论关联实际范围及版本，保留作者、评审者和用户决定来源。人工验收记录用户实际接受的代码和设计；源码提交、合并、发布、部署及本地清理分别记录各自结果。交付后的缺陷通过独立工作项关联原交付记录。
 
-Follow the delivery requirements recorded in each work item.
-
-Explicit human acceptance of current code enters the `human-acceptance` checkpoint: preserve user-finalized code and design, reconcile remaining outdated design text and publish current final drafts and bound acceptance together. This accepted target then waits for actual delivery without further independent design/code review or design approval. Preserve the real user source, current snapshot and downstream specs; downstream design review resolves contradictions. User edits during this phase are final drafts and need no further review. Reuse the actual acceptance conclusion covering finalization for subsequent user edits; wait for it when absent. Preserve current input guards and publication recovery. A PR alone establishes no acceptance. Use installed `complete-workitem` for the comparison, registration and delivery contract.
-
-Creation ends at metadata and requirement skeletons. Design and independent design review require the user's requested scope. Implementation requires current approval/review or an explicit user-scoped design-review waiver, actual prerequisite delivery and recorded development preparation. A waiver never manufactures a review pass and is rechecked against current contract/base/dependencies. A post-delivery defect gets a separate linked fix item; retain the original item's verified delivery evidence. Keep code submission, actual delivery and local cleanup as separate authorized outcomes.
-
-The design owner obtains user confirmation before publishing the complete formal spec, reusing covering approval of an unchanged contract. Publication records that approval and its version binding for the authorized independent review. An oversized item includes its whole design, usable stages and DAG and selects `design-update --next-action split` before review. Current independent Pass routes to decomposition, with inherited child specs ready for their own review. Only demonstrated blocking gaps require supplementary child design; future refinement never reduces parent design rigor. For execution handoff, source replacement and internal resources, use the typed lifecycle contract, preserving actual prerequisite gates, exact source recovery and separately adopted collection policy.
+检查修改后的路径、引用和事实，提交本次项目记录变更并普通推送到 `.project/project.yaml` 配置的分支。保留无关本地改动；推送失败时保留已完成工作并报告失败原因。外部系统同步以实际返回结果为准，未确认结果保留为未决事实。

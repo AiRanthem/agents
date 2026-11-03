@@ -1,7 +1,7 @@
-# Recover this workspace
+# 恢复项目工作区
 
-Restore the dedicated branch `projects/oka-daily-open-source` from `git@github.com:AiRanthem/agents.git` and start the agent at this project's management root. Read its generated `AGENTS.md`. If shared skills are missing, install the dev-kit from `git@github.com:AiRanthem/agents.git` using its installation contract. Credentials and unpublished code are not restored by cloning project records.
+从 `git@github.com:AiRanthem/agents.git` 恢复专用分支 `projects/oka-daily-open-source`，在管理根目录阅读 `AGENTS.md`、当前配置、业务指令和相关工作项。共享技能缺失时按其安装契约安装。
 
-Use the project entrypoint resolved by the root `AGENTS.md` for `status` and follow its operation-specific continuation under installed `manage-workitems/references/commands.md`. Complete pending publication recovery before starting the next operation. Keep local operation and recovery records; any local session may resume the recorded operation with its actual inputs and contribution provenance. For a script defect, investigate and use "User-authorized manual recovery" in installed `manage-workitems/references/recovery.md` for a concrete approved repair.
+以当前文件、Git 状态和远端分支核对已保存及已发布的记录。直接修正已授权范围内的记录，提交相关文件并普通推送配置分支；失败时保留本地成果。记录真实审批、评审、交付和未确认的外部结果。
 
-Use `upgrade-project` for deterministic migration and generated instruction refresh. Project documents contain only current effective instructions and knowledge; Git retains prior versions. Preserve current approval, delivery and unresolved recovery credentials. Required original main-workspace instructions and code-worktree paths come from the program; read the originals before dependent work. Restore missing bindings, originals or unpublished code from their verified recorded locations.
+主工作区位置见 `.project/main-workspace.json`，业务操作先阅读原始指令。恢复项目记录不能恢复凭据或未发布源码；保全本地源码、报告、私密恢复数据和实际资产路径，依据已核验的记录定位缺失资产。按需使用 `upgrade-project` 更新项目结构和指令。
