@@ -1,7 +1,10 @@
 id: 2-feishu-wake-openclaw
 title: 基于 Webhook 事件的 Sandbox 自动唤醒
-kind: development
+kind: aggregate
 status: designing
+children:
+- 21-webhook-gateway-code
+- 22-webhook-ack-orchestration
 depends_on: []
 delivery:
   required:

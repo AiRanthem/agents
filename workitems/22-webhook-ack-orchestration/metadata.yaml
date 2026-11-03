@@ -1,0 +1,20 @@
+id: 22-webhook-ack-orchestration
+title: Webhook 唤醒 ACK 编排接入
+kind: development
+status: new
+split_from: 2-feishu-wake-openclaw
+depends_on:
+- 21-webhook-gateway-code
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft

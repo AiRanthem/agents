@@ -1,0 +1,19 @@
+id: 21-webhook-gateway-code
+title: Webhook 唤醒与优雅下线代码
+kind: development
+status: new
+split_from: 2-feishu-wake-openclaw
+depends_on: []
+delivery:
+  required:
+  - merged
+  status: pending
+documents:
+  requirement: requirement.md
+  context: context.md
+  decision: decision.md
+  logs: logs.md
+design:
+  file: spec.md
+  version: 0
+  state: draft
