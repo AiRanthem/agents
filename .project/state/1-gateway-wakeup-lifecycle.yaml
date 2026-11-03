@@ -1434,6 +1434,195 @@ workflow:
         /Users/sophon/AGENTS.md: null
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
+    implementation:
+      binding:
+        requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
+        spec_sha256: 8b3219ab51337b0a8757296e0fd6a03ef38444703dfb32c2e067a0b5011265d0
+        version: 6
+        base_commit: cfbd102bc05c6df663965c5e23463a0eafd34948
+        dependency_sha256: da24be588b41a0fddc8c47149e265c0bfcfe41de8130cd326eb7db50bbeba2bc
+        project_sha256: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+        decision_sha256: 69586060bb64dbb5108a53bc7b454be28ccaed760468aef36ebff729c605c128
+        code_snapshot:
+          head: cfbd102bc05c6df663965c5e23463a0eafd34948
+          tree: 0098acfa13e35e71684fda964f6228673092e78a
+          dirty_digest: 80b5d41b419a50f377fa35404112f73f8f112616350c20e3955b047d78a93b4c
+          clean: false
+      report:
+        body: '# 1-gateway-wakeup-lifecycle implementation
+
+
+          当前结果：实现完成，可交独立代码审查。Go 定向验收、全部指定范围的最终 race 包结果、静态检查与两项原生构建均有通过证据。真实 Envoy
+          协议运行因缺少执行环境未验证；尚未独立审查、人工验收或交付。
+
+
+          ## 指派与身份
+
+
+          - 一级阶段：`1-gateway-wakeup-lifecycle / implementation`，由项目主控直接指派。
+
+          - 一级作者真实环境身份：`CODEX_THREAD_ID=01a19f52-e765-7352-8226-3d3afa77f894`；未设置
+          `PROJECT_SESSION_ID`。工具实际观察，没有生成或替用主控身份。
+
+          - 顺序共同作者：`01a19f56-c9d7-7e52-8fb3-ac2a346a7b52`，负责第一顺序 core/API/Manager/Infra
+          与相应测试源码；其 published 作者登记后才编辑。后续 Gateway、整合和全部运行验证由一级作者持有。
+
+          - 尚无独立代码审查者；本报告及实现自审不能作为 independent Pass。v6 使用当前用户 design-review waiver，不捏造新的设计审查。
+
+          - installed advance-project 实体：`/Users/sophon/Workspace/skills/airan-dev-kit/skills/advance-project`，完整读取
+          SKILL、stage-executor、discussion-and-authorization、delegation-context，显式使用
+          implement-design 和 autonomous-stage 原文。
+
+
+          ## 契约与源码身份
+
+
+          - 管理根：`/Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source`。
+
+          - 当前完整批准契约：`workitems/1-gateway-wakeup-lifecycle/spec.md` v6，SHA256 `8b3219ab51337b0a8757296e0fd6a03ef38444703dfb32c2e067a0b5011265d0`。已完整读取
+          requirement/decision/context；context 中旧 v5 仅作导航。
+
+          - 唯一源码写入根：管理根下 `worktrees/1-gateway-wakeup-lifecycle`；分支 `feature/oka-daily-open-source/1-gateway-wakeup-lifecycle-da492871d798`。
+
+          - 集成基线与 HEAD：`cfbd102bc05c6df663965c5e23463a0eafd34948`；起始干净。源码保持未提交、未推送，没有项目
+          CLI 或管理 YAML/正式工作项文档写入。
+
+          - 最终完整 dirty 内容（26 文件）：[final-files.json](final-files.json)，指纹 `a322c8e165b49edc3c9d019109680fccff56164b08d63ffff2f21221deec7ddd`；[完整变更文件快照](final-files.tar.gz)、[已跟踪
+          diff](final.patch)。最终核验 source canonical path、HEAD、全部逐文件哈希与 v6 原件均未变化。
+
+          - 开始前原件哈希、作者、基线：[initial-identity.json](initial-identity.json)。完整 race 输入逐文件身份：[race-input-files.json](race-input-files.json)，内容指纹
+          `9d1c5f252c008f09fcca1d921a7aa5d5afc54dfce8c94bdf36ee5384b1984cf9`；配套 `.patch`
+          和 `.tar.gz` 保留已跟踪及未跟踪源文件。
+
+          - isolation resolve 实际读到 upstream=openkruise/agents、origin=AiRanthem/agents；旧脚本因无内部
+          GitLab remote 返回 1。主控确认本项目用户明确社区远端授权，无需增加 GitLab。全部任务路径分类 EXTERNAL，classify
+          返回 2 为正常分类。
+
+
+          ## 最终行为与证据入口
+
+
+          | 契约 | 实现与检查 |
+
+          | --- | --- |
+
+          | 中立共用核心、依赖方向 | `pkg/lifecycle/deadline` 负责期限/retention/floor/策略合并/交付身份/RV
+          条件局部 Patch，Manager 经可选 Infra 能力调用；Gateway 直接使用中立核心。共享核心不引入 Manager、E2B handler
+          或 controller features。 |
+
+          | 精确协议与持久化 | `pkg/servers/e2b/renewal.go` 使用 big.Rat 百分比向下取纳秒、正 H 至少 2ns、R
+          至少 2s 整秒、单值大小写无关 header，明确字段更新，400/409 映射。create 在默认 timeout 后解析，消费扩展后再执行其余
+          metadata 黑名单，系统 annotation 仍受保护。 |
+
+          | 新交付配置隔离 | create 的共用 modifier 清除旧 H 并重设本次 R；Claim 与 Clone 两个调用点都使用该 modifier。缺省关闭、预配置
+          R、never-timeout 保持无期限。 |
+
+          | 原子主动更新 | connect/timeout 配置与本次期限同一次受 RV 保护局部写入；不需改期也提交合法配置，显式 no-op 仍发送条件
+          Patch；冲突后只重新合并本次字段，400/409 不被 timeout 外层重映射。 |
+
+          | 恢复提交边界 | Resume 首次捕获旧交付身份并在刷新/重试/Ready 后核对。初次提交配置、paused=false 和最终期限；等待计入该期限，Ready
+          后不再补写，无操作标记。旧 /resume 同步。 |
+
+          | 自动续期 | 固定 t、policy 和 t+R 整秒目标；Running、未暂停/删除、严格剩余窗口，当前模式/retention，只延长；策略变化、身份替换和到期均不抢救或重放旧工作。
+          |
+
+          | 准入与流事件 | filter 捕获初始 namespace/name/UID/public ID；新请求、双向 Len>0 触发，仅读长度不持有
+          payload。请求半关闭仍可响应触发；响应结束/Destroy/StreamComplete 停止新触发。拒绝响应不触发。 |
+
+          | 唤醒独立性 | saved R 优先于 wake rule PauseTimeout，缺省该字段也可恢复；原始身份在路由可用后再核对。无合法续期策略保留旧
+          wake 行为，同时每次条件写核对当前 wake 资格。 |
+
+          | 资源上限 | 独立 client limiter 5 QPS / burst 5；实例最多 4 个续期工作，UID 合并、无等待队列；每项
+          2s / 最多 5 次条件写；有界冷却表，窗口外缓存检查不抑制后续合格活动。饱和不影响转发或唤醒额度。 |
+
+          | 停止与错误 | 初始化与停止同锁防止停止后发布新 worker，Stop 取消工作并等待有界任务；后台只持身份/时间/策略，不持流回调或 buffer。结构化诊断，不新加
+          Prometheus 指标。 |
+
+          | 提案 | `docs/proposals/traffic-renewal.md` 覆盖协议、事务、依赖、R 优先级、资源限制、兼容升级/回滚及尽力边界。
+          |
+
+
+          ## 验证与日志
+
+
+          所有命令唯一 owner 为一级作者；完整 cwd、argv、时间、退出码及日志索引见 [checks.jsonl](checks.jsonl)。源码被冻结后再顺序运行完整
+          race 检查。没有运行仓库 E2E。
+
+
+          - 定向验收 `directed-acceptance-3`：退出 0，覆盖核心、API、事件、续期服务、wake、客户端额度。[原始日志](directed-acceptance-3.log)
+
+          - 新增 handler 并发失效到 HTTP 409 实测通过，所在 `directed-new-boundaries` 命令整体退出 1，因为独立测试
+          fixture 用亚秒时间被 metav1 序列化截断为过期；该 fixture 随后改用稳定的未来期限。不得将整体退出 1 记为通过。[原始日志](directed-new-boundaries.log)
+
+          - `directed-final-boundaries`：退出 0，覆盖窗口前活动不抑制之后活动、4 工作合并/饱和、停止/初始化竞争、续期阻塞时真实本地
+          Waker 完成。[原始日志](directed-final-boundaries.log)
+
+          - 完整范围 race：`go test -mod=readonly -race -p 1 -count=1 ./pkg/lifecycle/deadline
+          ./pkg/pausedretention ./pkg/utils/timeout ./pkg/servers/e2b/... ./pkg/sandbox-manager/...
+          ./pkg/sandbox-gateway/...` 首轮整体退出 1，发现一处旧纳秒期望和两处缺公开 ID 的路由 fixture；没有 DATA
+          RACE 报告。[原始日志](affected-race.log)
+
+          - 仅修正/加强四个测试文件，生产源码自完整 race 开始后完全未变。deadline/filter/renewal 复跑完整 race 均通过；该复跑命令整体退出
+          1 是 E2B 旧断言修改时错用了 import 别名，已修正。[复跑原始日志](affected-race-corrections.log)
+
+          - E2B 再次完整 `go test -mod=readonly -race -p 1 -count=1 ./pkg/servers/e2b`
+          退出 0（包执行 104.795s）。[最终 E2B 日志](e2b-race-final.log)
+
+          - 复用首轮未受影响包的 `ok` 结果，结合上述最终完整包复跑，全部指定范围最终包结果通过。没有将任何退出 1 的整体命令标为成功；可按包核对
+          [verification-summary.json](verification-summary.json)。四个测试文件的差异与生产源码未变证据在
+          final-files.json 的 `changes_after_full_race` / `production_unchanged_after_full_race`。
+
+          - 静态检查退出 0：所有变更 Go 文件 `gofmt -l` 输出空，`git diff --check` 通过，中立 deadline 的
+          `go list -mod=readonly -deps` 闭包无 Manager、Servers、controller features。[日志](final-static.log)
+
+          - Manager 原生构建退出 0：`go build -mod=readonly -o /private/tmp/oka-gateway-implementation/sandbox-manager
+          ./cmd/sandbox-manager`。[日志](manager-build.log)
+
+          - Gateway 插件原生构建退出 0：`CGO_ENABLED=1 go build -mod=readonly -buildmode=c-shared
+          -trimpath ''-ldflags=-s -w'' -o /private/tmp/oka-gateway-implementation/sandbox-gateway.so
+          ./cmd/sandbox-gateway`。[日志](gateway-plugin-build-final.log)。初次命令因 shell
+          拆分 ldflags 退出 2，保留 `gateway-plugin-build.log`，修正 argv 后成功，无源码修改。
+
+          - 两构建均为 Darwin arm64 本机编译，没有声称 Linux 镜像或 Envoy 载入验证。[产物路径/大小/SHA256/file
+          类型](build-artifacts.json)
+
+          - 最终审计退出 0：26 文件全 EXTERNAL（分类脚本子进程返回 2 为预期），源码/契约身份与构建产物已核对。[日志](final-audit.log)
+
+          - 前两次定向失败完整保留：`directed-core-api.log`、`directed-acceptance-2.log`。已修复实际
+          create 扩展消费顺序、旧 helper 测试迁移、time.Location 断言及新增 fixture 接口类型，未隐藏初次失败。
+
+
+          ## 明确未执行与限制
+
+
+          - 真实 Envoy HTTP/SSE/WebSocket 协议运行未执行：当前 host Darwin arm64，PATH 与常见安装位置无
+          Envoy，亦无 Docker/Podman/Colima/Lima/nerdctl/Finch，详见 [runtime-inventory.json](runtime-inventory.json)。Go
+          callback 测试、token-bucket 测试和本地 Waker 测试不等于真实 Envoy 协议验证。
+
+          - 未部署到集群，未执行真实 Kubernetes apiserver/envtest 冲突验证；严格 RV 测试使用显式检查 patch 版本条件的存储
+          oracle，不能宣称真实集群实测。
+
+          - 协议行为原件已读取：[E2B OpenAPI](https://raw.githubusercontent.com/e2b-dev/E2B/main/spec/openapi.yml)
+          的 v1/v2 connect 与 timeout 相关段落；[Envoy upgrades](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/upgrades)
+          描述默认升级链传递数据。文档证据与本机协议运行分开。
+
+          - 未承诺每次流量阻止到期，未改变令牌/连接超时、手动暂停删除或控制器既有到期竞态。
+
+
+          ## 资源与后续
+
+
+          共同作者已结束，交接原件 [deadline-api.md](deadline-api.md) 与其文件身份索引保留。本轮所有验证/构建工具 session
+          均已返回实际退出码；没有本轮仍在运行的测试/构建。测试 fixture 随测试进程 teardown，没有创建实际集群资源。阶段目录保留日志、快照、构建产物和可复用
+          Go cache；没有其他外部资源或源代码提交。后续由主控登记实现结果并指派独立审查。
+
+          '
+        sha256: c02b911f4753cee687059066ad7ba17b4c3d99b1c2093055cc7d9d5d26ba3bf7
+      provenance: 实际implementation执行者01a19f52-e765-7352-8226-3d3afa77f894及已登记共同作者01a19f56-c9d7-7e52-8fb3-ac2a346a7b52；v6契约；源码base/head
+        cfbd102bc05c6df663965c5e23463a0eafd34948；26文件SHA256内容指纹a322c8e165b49edc3c9d019109680fccff56164b08d63ffff2f21221deec7ddd；报告和原始日志为真实实现自检，不是独立审查。
+      created_at: '2026-11-03T03:47:06.216622+00:00'
+      instruction_changes: {}
+      review_sha256: 74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b
   validation_waivers:
     design-review:
       id: 6d2a7b77f80ec5cb519e56f22123c004
