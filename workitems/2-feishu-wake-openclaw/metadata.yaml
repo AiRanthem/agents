@@ -21,5 +21,5 @@ design:
   state: draft
   review:
     result: unable_to_conclude
-    record: records/design-review-20261104.yaml
-    target_commit: 27e8ae89472e3844104ec75a18182091e3088c12
+    record: records/design-review-20261104-r2.yaml
+    target_commit: 5061001783fd3d9fd431c3e820f6862f7a5e4eb6

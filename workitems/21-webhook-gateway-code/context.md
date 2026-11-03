@@ -8,6 +8,8 @@
 
 源码入口为 `/Users/sophon/Workspace/OKAWorkspace/agents`，实施前读取原始 AGENTS.md 及内部/外部代码隔离规则；不能使用工作项 1 的未提交代码作为已交付能力。此前核验的 Gateway 镜像源码 `e55d70c7fc7d603e8a585918919788edd0374e31` 仅说明现有行为，不是已选实施基线。
 
-用户随后明确本项为独立的标准飞书 IM Webhook，并提出 E2B 数据面 URL。核验确认完整 URL 可复用 Host 寻址；现有 token/JWT 认证与飞书来源验证仍需在专用入口衔接，任务对象身份也不能仅依赖域名。应用接收确认收敛为标准 HTTP 200，不要求 OpenClaw 私有 durable 标记。详见 [入口核验](../../evidence/feishu-e2b-webhook-entry.md)。本轮变化尚未增量独立复核，原报告及其目标提交保持不变。
+用户随后明确本项为独立的标准飞书 IM Webhook，并提出 E2B 数据面 URL。核验确认完整 URL 可复用 Host 寻址；现有 token/JWT 认证与飞书来源验证仍需在专用入口衔接，任务对象身份也不能仅依赖域名。应用接收确认收敛为标准 HTTP 200，不要求 OpenClaw 私有 durable 标记。详见 [入口核验](../../evidence/feishu-e2b-webhook-entry.md)。
+
+按用户要求，原独立 reviewer 再次审查提交 `5061001783fd3d9fd431c3e820f6862f7a5e4eb6`，确认上述协议与寻址部分闭合，仍因 G1-R（ACK 后失败/响应丢失的有限处置）和 G2-R（入口配置/授权及启停变化）而 **Unable to conclude**。报告见 [第二轮复审](../2-feishu-wake-openclaw/records/design-review-20261104-r2.md)。复用原正常下线覆盖，现有适配器窄测试通过；不等于新功能已实施。原报告及其目标提交保持不变，未记 implementable。
 
 尚无分支、工作树、实现、人工验收、源码合并或镜像产物。子任务 22 依赖本项真实代码交付，编排启用还须核验镜像与接口匹配。

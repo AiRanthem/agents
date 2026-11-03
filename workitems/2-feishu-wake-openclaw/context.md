@@ -10,6 +10,10 @@
 
 ## 独立设计审查
 
+最新复审：用户要求“再次独立复审”后，原 reviewer `/root/webhook_design_reviewer` 独立评估提交 `5061001783fd3d9fd431c3e820f6862f7a5e4eb6`，未参与任何设计修订。[第二轮报告](records/design-review-20261104-r2.md) SHA-256 为 `ff935af58f61419fa14fd12d2fa1ed11524a39ef7880d7b626ceeb573c5cdfb9`。标准 HTTP 200、原始 body/签名头转交及 E2B URL 寻址已闭合；剩余 G1-R 是 ACK 后失败/响应丢失的有限处理责任，G2-R 是飞书入口配置/授权及启停变化语义。父项和 21 仍为 **Unable to conclude**，没有认定候选已选定错误实现；22 的编排契约继续 **Independent review passed**。保留正常下线、60/120 秒预算和交付依赖的原覆盖，新增现有适配器窄测试通过。未实施或开展真实集成验证，未写 implementable。
+
+以下保留首轮原始审查事实及其目标：
+
 2026-11-04，用户明确要求独立 reviewer。`/root/webhook_design_reviewer` 以 clean-context、指定 `gpt-6.1-sol / high` 审查项目提交 `27e8ae89472e3844104ec75a18182091e3088c12`，未参与设计编写或修订。原始 [审查报告](records/design-review-20261104.md) 原样保存，内容 SHA-256 为 `fcf599dc88564b5bb045a4e8b94d3f9943718912fd083a442c32051e56740600`。
 
 父项和子项 21 均为 **Unable to conclude**，必要缺口为 G1（应用交付/有效接收确认及响应丢失后的责任）与 G2（接入配置、授权目标身份及变更/关闭开关后的处置）；不是已证明的代码缺陷。子项 22 的当前编排语义契约为 **Independent review passed**，仍依赖子项 21 的真实代码交付与匹配镜像。正常下线的并发边界、60 秒绝对截止、120 秒预算及子任务依赖未发现阻塞缺陷。
@@ -20,7 +24,7 @@ Reviewer 独立检查了固定版本 Gateway/OpenClaw/Envoy 原文、实际 ACK 
 
 用户在独立审查后提出使用 E2B 数据面域名作为飞书请求地址，并明确标准飞书 IM 协议。源码核验确认 `https://<port>-<sandbox-id>.<e2b-domain>/<应用事件路径>` 可经已有 Host 解析与路由找到目标，不需要额外建设通用目标映射注册系统。前提是公网 DNS/HTTPS 入口实际通向 Gateway；本轮未执行现场连通或飞书配置验证。
 
-域名不含数据面 token 或 Kubernetes UID。已有 token/JWT 门禁不会自动认可飞书签名；飞书专用入口需要在 Sandbox 外取得来源验证配置，并保留任务的对象身份约束。正常事件的标准 HTTP 200 可作为应用接收确认，不要求 OpenClaw 私有 durable 标记。G1 的协议选择和 G2 的目标寻址据此收敛，响应丢失后的重试、凭据配置与开关变化仍需细化，尚无增量独立审查。事实、源码版本与官方协议见 [入口核验](../../evidence/feishu-e2b-webhook-entry.md)。
+域名不含数据面 token 或 Kubernetes UID。已有 token/JWT 门禁不会自动认可飞书签名；飞书专用入口需要在 Sandbox 外取得来源验证配置，并保留任务的对象身份约束。正常事件的标准 HTTP 200 可作为应用接收确认，不要求 OpenClaw 私有 durable 标记。第二轮独立复审确认 G1 的协议选择和 G2 的目标寻址已收敛，响应丢失后的有限处置、凭据配置与开关变化仍需细化。事实、源码版本与官方协议见 [入口核验](../../evidence/feishu-e2b-webhook-entry.md)。
 
 ## 当前下线核验
 

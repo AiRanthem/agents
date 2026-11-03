@@ -1,0 +1,59 @@
+id: design-review-20261104-r2
+kind: design-review
+item: 2-feishu-wake-openclaw
+date: '2026-11-04'
+report: workitems/2-feishu-wake-openclaw/records/design-review-20261104-r2.md
+report_sha256: ff935af58f61419fa14fd12d2fa1ed11524a39ef7880d7b626ceeb573c5cdfb9
+target_commit: 5061001783fd3d9fd431c3e820f6862f7a5e4eb6
+previous_review: design-review-20261104
+reviewer:
+  canonical_name: /root/webhook_design_reviewer
+  configured_model: gpt-6.1-sol
+  configured_reasoning_effort: high
+  initial_fork_turns: none
+  session_reused: true
+  independent: true
+  prior_substantive_authorship: false
+authorization: 用户明确要求“再次独立复审”。
+result: unable_to_conclude
+item_results:
+  2-feishu-wake-openclaw:
+    result: unable_to_conclude
+    essential_gaps: [G1-R, G2-R]
+  21-webhook-gateway-code:
+    result: unable_to_conclude
+    essential_gaps: [G1-R, G2-R]
+  22-webhook-ack-orchestration:
+    result: pass
+    scope: 当前编排语义契约及本轮变化的适用性；不证明前置代码或镜像交付。
+resolved_scope:
+  G1: 标准 HTTP 200 接收确认及原始 body/签名头转交。
+  G2: E2B URL 目标寻址和异步任务不得错投同名重建对象的约束。
+gaps:
+  G1-R:
+    kind: essential_contract_gap
+    impact: high
+    summary: ACK 后失败或响应丢失的有限处理责任、终态和任务存活边界未定。
+    owners: [2-feishu-wake-openclaw, 21-webhook-gateway-code]
+  G2-R:
+    kind: essential_contract_gap
+    impact: high
+    summary: 飞书入口的显式配置、授权绑定及配置/开关变更对新旧任务的语义未定。
+    owners: [2-feishu-wake-openclaw, 21-webhook-gateway-code]
+retained_coverage:
+  - 先登记后 ACK、内存任务独立于 HTTP stream、退出可丢失。
+  - 正常下线顺序、60 秒绝对截止、readiness 与内部路由分离。
+  - 120 秒编排预算、失败继续退出、代码和匹配镜像前置。
+source_targets:
+  agents_current: c7f1bf56966940fbfe2a73cd48b9a52c2b17de66
+  agents_image_source: e55d70c7fc7d603e8a585918919788edd0374e31
+  ack_components: 02d1a5f3b1c7fe5478ea69e105eb9dddfada8934
+  openclaw: 0a0d601bf12dfea5e4c94c3e8cd6d823c405d9a0
+  envoy: v1.37.3
+checks:
+  adapter_focused_tests: passed
+  original_ack_helm_render: reused_after_applicability_check
+candidate_changes: none
+official_implementable_recorded: false
+runtime_validation: not_performed
+delivery_established: false
