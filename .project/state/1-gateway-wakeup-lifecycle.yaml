@@ -10,7 +10,7 @@ development:
   publish_remote: origin
   publish_url: git@github.com:AiRanthem/agents.git
   branch_published: false
-  author_session: 01a19f52-e765-7352-8226-3d3afa77f894
+  author_session: 01a19f56-c9d7-7e52-8fb3-ac2a346a7b52
 workflow:
   design_authors:
   - 01a19b74-fe57-7cb3-9210-d1794ccbf164
@@ -1425,15 +1425,15 @@ workflow:
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/spec.md: 8b3219ab51337b0a8757296e0fd6a03ef38444703dfb32c2e067a0b5011265d0
         /Users/sophon/Workspace/OKAWorkspace/AGENTS.md: 69d4767dbcb1a3c1f7c4fc51f9f516380edc5f2d5d49cc8979abfd237435708d
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/1-gateway-wakeup-lifecycle/AGENTS.md: 90a5e92f197bab7f503a9a99687ec2f27ac1904f747b24877b5bf3dccf9f2fb1
+        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
+        /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
+        /Users/AGENTS.md: null
+        /Users/sophon/Workspace/AGENTS.md: null
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/1-gateway-wakeup-lifecycle/AGENTS.md: f507ebaf2055ac0bbab04384d84e6a472bb2a88c7d33416ae35de8d00b74207d
+        /AGENTS.md: null
+        /Users/sophon/AGENTS.md: null
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/workitems/AGENTS.md: null
         /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/AGENTS.md: null
-        /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
-        /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
-        /Users/sophon/AGENTS.md: null
-        /Users/AGENTS.md: null
-        /AGENTS.md: null
-        /Users/sophon/Workspace/AGENTS.md: null
   validation_waivers:
     design-review:
       id: 6d2a7b77f80ec5cb519e56f22123c004
@@ -1480,6 +1480,7 @@ workflow:
         clean: true
   code_authors:
   - 01a19f52-e765-7352-8226-3d3afa77f894
+  - 01a19f56-c9d7-7e52-8fb3-ac2a346a7b52
 design:
   approval:
     requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
