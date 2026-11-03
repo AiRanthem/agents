@@ -2,6 +2,8 @@
 
 调研日期：2026-11-03。关联需求：[飞书消息自动唤醒 OpenClaw](../workitems/2-feishu-wake-openclaw/requirement.md)。基于官方在线文档和 `openclaw/openclaw` 的 `main` 源码页面，尚未绑定实际部署版本或执行端到端验证。
 
+飞书平台的 Webhook/WebSocket 原理、确认与重试、官方 SDK 固定版本证据见 [飞书事件传输专题](feishu-event-transports.md)。
+
 ## 接入与消息处理
 
 OpenClaw 使用官方 `@openclaw/feishu` 频道插件，通过飞书应用机器人接收私聊和群聊事件。应用凭据为 `appId` / `appSecret`，支持国内飞书和国际 Lark。[官方接入说明](https://docs.openclaw.ai/channels/feishu)
@@ -35,7 +37,7 @@ OpenClaw 使用官方 `@openclaw/feishu` 频道插件，通过飞书应用机器
 
 去重包含事件和消息两层。除队列 `event_id` 外，完整文本事件的逻辑键还使用发送者、聊天、创建时间和内容摘要，字段不全时回退到 `message_id`；媒体另有处理。该机制保护已接收事件，不能保证断线期间未收到的消息会被补投。[去重实现](https://github.com/openclaw/openclaw/blob/main/extensions/feishu/src/dedupe-key.ts)
 
-飞书官方页面的搜索摘要列出以下约束；本次浏览工具无法读取这两篇正文，具体参数在设计采用前仍需复核：
+飞书平台约束已在 [事件传输专题](feishu-event-transports.md) 中结合官方页面索引返回的正文与固定 SDK 源码进一步核验。以下规则适用于订阅事件，卡片等同步交互回调具有不同语义：
 
 - 长连接仅支持企业自建应用；同应用最多 50 条连接，多客户端按集群方式随机单客户端接收，不广播。[长连接说明](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)
 - HTTP 事件须在三秒内返回 200，长连接 handler 须及时完成且不抛异常；失败重试间隔为 15 秒、5 分钟、1 小时、6 小时，最多四次。平台采用至少一次投递，成功接收也可能重复；v2 信封建议以 `event_id` 幂等。[事件订阅说明](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/event-subscriptions)

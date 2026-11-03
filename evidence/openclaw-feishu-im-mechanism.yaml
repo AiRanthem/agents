@@ -10,6 +10,7 @@ inputs:
   workitem: 2-feishu-wake-openclaw
   openclaw_revision: main-unpinned-browser-snapshots
 sources:
+- path: evidence/feishu-event-transports.md
 - path: workitems/2-feishu-wake-openclaw/requirement.md
   sha256: f2aca19479ddcce916e5c0a2c194637d95d99606f2ed3615b23ded685722b657
 - path: https://docs.openclaw.ai/channels/feishu

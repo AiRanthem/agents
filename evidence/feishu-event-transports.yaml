@@ -1,0 +1,20 @@
+id: feishu-event-transports
+body: evidence/feishu-event-transports.md
+topic: 飞书 Webhook 与 WebSocket 事件接收原理
+summary: 网络方向、Webhook 校验与加密、长连接建连及协议帧、ACK 和重试、幂等与离线边界，以及同步回调的区别。
+scope: 通用 IM 唤醒能力的协议研究；飞书为首个场景，不选定实现仓库或批准设计。
+kind: search
+inputs:
+  researched_on: '2026-11-03'
+  workitem: 2-feishu-wake-openclaw
+  node_sdk_revision: b188be60134d409b61259546bcf69c731d2b0b7c
+  node_sdk_package_version: 1.76.0
+  runtime_validation: not_executed
+sources:
+- path: evidence/openclaw-feishu-im-mechanism.md
+- path: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/event-subscriptions
+- path: https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-
+- path: https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks
+- path: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1
+- path: https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot
+- path: https://github.com/larksuite/node-sdk/tree/b188be60134d409b61259546bcf69c731d2b0b7c
