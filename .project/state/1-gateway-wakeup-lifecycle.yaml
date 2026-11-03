@@ -999,6 +999,13 @@ workflow:
       /Users/sophon/Workspace/OKAWorkspace/projects/AGENTS.md: null
       /Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/.project/project.yaml: 7787ef139345d72b22817b33e0fe58a12cd3ee5d099708dbd75d06da689c35a5
       /Users/AGENTS.md: null
+  lifecycle:
+    mode: autonomous
+    handoff:
+      recorded_by: 01a19f4d-109d-7a61-8f31-6a91f8a58499
+      source: 用户于本会话明确指示：使用自动推进模式按照计划进行；保留既有 worktree 和基线，源码未提交。
+      created_at: '2026-11-03T02:50:50.422438+00:00'
+  autonomy: {}
 design:
   approval:
     requirement_sha256: 1713ac56bf5ee08d334fabfd2461f8a5ecdb712c929403b8840811afc6336ee8
