@@ -1,7 +1,7 @@
 id: 1-gateway-wakeup-lifecycle
 title: 优化 sandbox-gateway 流量自动唤醒后的 shutdownTime/pauseTime 调整
 kind: development
-status: new
+status: developing
 repository: agents
 delivery:
   required:
