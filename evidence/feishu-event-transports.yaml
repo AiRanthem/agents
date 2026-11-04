@@ -1,12 +1,13 @@
 id: feishu-event-transports
 body: evidence/feishu-event-transports.md
 topic: 飞书 Webhook 与 WebSocket 事件接收原理
-summary: 原生实时消息事件接入仅 WebSocket 或 Webhook 二选一、无双投或自动切换；网络方向、鉴权、ACK、重试及旧连接全断后的休眠边界。
+summary: 原生实时消息事件接入二选一；纯 WebSocket 断线后用户仍可发消息，休眠接收端无法处理，重连由客户端执行，飞书不会反向建连唤醒，离线补投无完整保证。
 scope: 通用 IM 唤醒能力的协议研究；飞书为首个场景，不选定实现仓库或批准设计。
 kind: search
 inputs:
   researched_on: '2026-11-03'
   subscription_modes_verified_on: '2026-11-04'
+  pure_websocket_conclusions_verified_on: '2026-11-04'
   workitems:
   - 2-feishu-wake-openclaw
   - 3-websocket-wakeup

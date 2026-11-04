@@ -1,6 +1,6 @@
 # 飞书 Webhook 与 WebSocket 事件接收原理
 
-调研日期：2026-11-03；接入配置与断线行为补充核验：2026-11-04。关联工作项：`2-feishu-wake-openclaw`、`3-websocket-wakeup`。本文记录平台契约、官方 SDK 实现及其对 Sandbox 唤醒的约束，不代表已批准的设计或运行验证。OpenClaw 自身的处理链路见 [OpenClaw 飞书 IM 接入机制](openclaw-feishu-im-mechanism.md)，唤醒链路与能力分析见 [IM 唤醒能力边界](im-wakeup-paths-and-capabilities.md)。
+调研日期：2026-11-03；接入配置、纯 WebSocket 的断线行为与重连责任补充核验：2026-11-04。关联工作项：`2-feishu-wake-openclaw`、`3-websocket-wakeup`。本文记录平台契约、官方 SDK 实现及其对 Sandbox 唤醒的约束，不代表已批准的设计或运行验证。OpenClaw 自身的处理链路见 [OpenClaw 飞书 IM 接入机制](openclaw-feishu-im-mechanism.md)，唤醒链路与能力分析见 [IM 唤醒能力边界](im-wakeup-paths-and-capabilities.md)。
 
 证据分为两类：飞书官方文档描述服务契约；官方 `larksuite/node-sdk` 源码固定在提交 [`b188be60134d409b61259546bcf69c731d2b0b7c`](https://github.com/larksuite/node-sdk/tree/b188be60134d409b61259546bcf69c731d2b0b7c)，其 `package.json` 标注版本 `1.76.0`。这不表示项目或实际 OpenClaw 已安装该版本。文档通过官方页面及搜索索引返回的正文核验，部分页面直接打开时没有可读正文；未使用第三方文章作为结论依据。
 
@@ -182,6 +182,23 @@ SDK 通过 Protobuf `Frame` 编解码二进制消息；控制帧与数据帧由 
 | 仅 Webhook | 飞书仍可向接收 URL 发起新的 HTTP 请求，不依赖旧连接存活。请求是否触发 Sandbox 恢复取决于入口是否可达、通过鉴权并具备且开启唤醒能力；仅选择 Webhook 不保证自动唤醒或最终回复 |
 
 恢复 Sandbox、重新建连、收到事件和完成回复是不同结果。对完全离线期间的消息，当前官方资料不足以保证恢复后必然补齐，也不足以断言消息立即丢弃；平台有限失败重试不能替代离线保留承诺。以上为机制推论，尚未进行实际 Pause/Resume、断线补投或首条消息端到端验证。
+
+### 纯 WebSocket：机器人状态、用户发送与重连责任
+
+本结论限定为：机器人已正常发布且用户有权与其聊天；唯一的消息事件接收客户端运行在 Sandbox 中；Sandbox 休眠使 SDK 无法执行，且旧连接全部断开，没有其他在线接收器或独立唤醒信号。
+
+**用户仍能给机器人发消息，但休眠中的 OpenClaw 无法接收、处理或回复；飞书不会因为这条消息主动向 Sandbox 重建 WebSocket，也不会通过这条链路唤醒 Sandbox。**
+
+| 问题 | 结论与边界 |
+| --- | --- |
+| 飞书机器人是什么状态？ | 飞书中的应用与机器人身份仍然存在，WebSocket 断开本身不撤销发布状态或会话资格。失效的是 OpenClaw 的事件接收连接；“接收端离线”不代表官方承诺飞书客户端显示某个“离线”标签 |
+| 用户能否继续发送消息？ | 能；在原有权限与可见范围正常的前提下，用户仍可单聊发消息或在群内 @ 机器人。用户向飞书 IM 发消息不要求 OpenClaw 的接收连接此刻在线 |
+| 发送后会发生什么？ | 消息可以进入飞书会话，但此时没有可用连接将消息事件送达 Sandbox。只要 Sandbox 持续休眠，OpenClaw 就不能处理该消息或生成回复。会话中的发送成功不证明事件已送达 OpenClaw |
+| 飞书会因用户发消息而重建连接吗？ | 不会反向向 Sandbox 发起 WebSocket 建连。建连和自动重连由运行在开发者侧的 SDK 主动执行；SDK 随 Sandbox 休眠后无法执行重连 |
+
+前述用户发送与事件交付的区别，是根据官方消息事件链路得出的机制推论；客户端主动建连与重连则由固定提交的 SDK 源码直接核验。SDK 的 `pullConnectConfig` 获取连接地址，`connect` 创建 `new WebSocket(...)`，`reConnect` 调度客户端后续尝试。服务端提供连接参数不等于服务端向 Sandbox 发起新连接；事件超时重推也不等于重建 WebSocket。来源：[消息概述](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1)、[使用长连接接收事件](https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-)及[官方 SDK 建连与重连源码](https://github.com/larksuite/node-sdk/blob/b188be60134d409b61259546bcf69c731d2b0b7c/ws-client/index.ts#L268-L586)。
+
+如果 Sandbox 后来由其他方式恢复，需要 SDK 恢复执行并成功重连，才重新具备接收事件的条件。断线期间消息的补投仍适用上述未知边界，不能承诺恢复后必收，也不能断言断线时立即永久丢弃；本结论不建立实际恢复、补投或回复验证。
 
 ## 8. 验证边界与后续复用
 
