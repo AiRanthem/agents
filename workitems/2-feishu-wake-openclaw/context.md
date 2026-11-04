@@ -24,7 +24,9 @@ Reviewer 独立检查了固定版本 Gateway/OpenClaw/Envoy 原文、实际 ACK 
 
 ## 飞书专用入口澄清
 
-2026-11-04 用户追问 OpenClaw 如何存储和配置这些信息。已核对其默认 JSON5 文件 `~/.openclaw/openclaw.json`、`channels.feishu`/多账号配置和 SecretRef 读取方式；当前固定快照的 Webhook 模式要求 Verification Token 与 Encrypt Key 同时存在。公网 E2B URL 在飞书后台配置，本地事件路径归 OpenClaw。建议两侧共享专用入站验证 Secret，App Secret 另存供 OpenClaw 使用，因为 Kubernetes API 按整个 Secret 对象授权。仅在 Sandbox 内的配置不会自动供外部 Gateway 使用；该复用方式仍为建议。原文与范围见 [配置存储](../../evidence/openclaw-feishu-im-mechanism.md#配置存储与复用)。未读取真实凭据或修改运行配置。
+2026-11-04 用户追问 OpenClaw 如何存储和配置这些信息。已核对其默认 JSON5 文件 `~/.openclaw/openclaw.json`、`channels.feishu`/多账号配置和 SecretRef 读取方式；当前固定快照的 Webhook 模式要求 Verification Token 与 Encrypt Key 同时存在。公网 E2B URL 在飞书后台配置，本地事件路径归 OpenClaw。用户随后明确由运维直接配置 Kubernetes、不调整 OpenClaw，故保持应用现有配置方式；Gateway 专用 Secret 可由运维另存相同的入站验证值，不要求共享注入，也不复制 App Secret。仅在 Sandbox 内的配置不会自动供外部 Gateway 使用。原文与范围见 [配置存储](../../evidence/openclaw-feishu-im-mechanism.md#配置存储与复用)。未读取真实凭据或修改运行配置。
+
+用户另明确关闭入口只拒绝新事件，已接收任务继续原有唤醒和有限投递，不因关闭而取消；该行为与自动唤醒开关、修改绑定或密钥轮换分开。应用类型的提问用于明确企业来源约束，不改变 E2B 单目标寻址；用户当前要求解释换绑/轮换背景，尚未批准这些操作的策略。具体字段、权限范围与剩余变化语义仍待收敛，原独立审查目标保持不变。
 
 随后针对 Gateway 读取要求补查：已有 Sandbox informer/路由缓存，没有飞书 Secret 同步能力；实际 ACK 组件的独立 Gateway ServiceAccount 默认无 Secret 权限，已有可选 peer Secret get 也不覆盖本需求。建议补入口绑定、专用 Secret 同步和本地缓存，密钥不加入现有整对象 peer route 序列化；具体 API、授权范围及轮换协调仍待收敛。调查及代码/编排归属见 [Gateway 配置读取](../../evidence/feishu-webhook-config-and-retry.md#gateway-读取链路现状与所需能力)。本轮未新增业务批准、实现或独立审查。
 

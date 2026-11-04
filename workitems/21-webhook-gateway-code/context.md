@@ -1,5 +1,7 @@
 # 当前上下文
 
+用户最新已确定运维直接配置 Kubernetes、不调整 OpenClaw、关闭入口只拒绝新事件。已接收任务继续原有有限唤醒/投递，不因入口关闭而取消。Gateway 验证信息需外置并由运维维护一致性，不要求 OpenClaw 改为共享 Secret 注入。企业范围、修改绑定和轮换密钥仍处于背景解释阶段；见父项配置说明，未将建议登记为批准或新的独立通过。
+
 2026-11-04 按用户“等待最多60秒”和“拆成两个子任务，编排变更依赖代码交付”建立。完整背景与剩余契约见 [父项需求](../2-feishu-wake-openclaw/requirement.md)、[父项上下文](../2-feishu-wake-openclaw/context.md)；固定版本源码与实际 ACK 编排依据见 [下线核验](../../evidence/ack-gateway-webhook-shutdown.md)。
 
 本项承担整个 Webhook 能力的 Gateway 代码及内存任务排空，不只新增一个没有任务归属的停机接口。下线顺序和 60 秒业务上限已确认；父项其余 Webhook 契约仍需细化，没有完整 spec 可继承。

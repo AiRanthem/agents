@@ -17,15 +17,23 @@
 
 Gateway 不调用发送消息 API，入站验证不需要 App Secret。App ID/App Secret 继续由 OpenClaw 用于获取出站凭据和回复。依据：[飞书事件概述](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/event-subscriptions)、[消息事件与权限](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1)、[官方验签与解密说明](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks)。最后一个链接用于事件/回调共用的安全算法，不将同步 callback 的响应规则用于普通 IM 事件。
 
-## 推荐配置方式与授权语义（待选择）
+## 配置责任与入口关闭（部分已确认）
 
-建议由有权管理该 Sandbox 的主体在 Sandbox 配置中显式启用飞书入口，写入 App ID、端口/路径以及同 namespace 的 Secret 引用；Gateway 从 Sandbox 外读取验证信息。这个配置把“飞书来源合法”和“允许访问这个目标”连接起来。它是建议的新增配置能力，不是当前已经存在的 CRD 字段或 E2B API。
+用户已确定由运维直接配置 Kubernetes，不调整 OpenClaw。当前建议由运维在 Sandbox 配置中显式启用飞书入口，写入 App ID、端口/路径以及同 namespace 的 Secret 引用；Gateway 从 Sandbox 外读取验证信息。这个配置把“飞书来源合法”和“允许访问这个目标”连接起来。具体字段/API 尚待收敛，不是当前已经存在的 CRD 字段；本项不以增加 E2B 配置 API 为前提。
 
-建议关闭 Webhook 入口或变更其授权绑定时拒绝新事件并取消旧绑定未完成任务；关闭自动唤醒时停止发起后续恢复，已经 Running 的目标可按仍有效的入口配置接收消息。已经发出的恢复不作隐式回滚。更新生效以 Gateway 观察到配置为界，配置一致性/管理接口需在正式契约中明确。以上启停和更新语义尚未获得用户选择。
+用户已确定关闭 Webhook 入口只拒绝新事件：以 Gateway 观察到关闭配置为界，已登记并 ACK 的任务继续原有唤醒与有限投递，不因关闭入口而取消；正常下线的 60 秒截止及任务总期限仍有效。关闭入口不等于关闭全局自动唤醒，也不等于删除目标或修改授权绑定。后几种变化及它们与在途任务的交互仍需明确，不能沿用此前“关闭入口就取消旧任务”的建议。
 
 本轮限定读取的 Gateway/ACK 插件配置中未找到可直接复用的飞书凭据引用。`api/v1alpha1/securityprofile_types.go:622-671` 的 `AuditWebhook` 是出站审计目标，header 值为普通模板字符串，不能据此认定已有入站飞书验证配置。
 
-OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw.json`，敏感字段支持 SecretRef；详见 [OpenClaw 存储与配置](openclaw-feishu-im-mechanism.md#配置存储与复用)。建议将 Verification Token 与 Encrypt Key 放入专用入站验证 Secret，供 OpenClaw 和 Gateway 共用；App Secret 放入仅供 OpenClaw 使用的另一份 Secret。Kubernetes API 按整个 Secret 对象授权读取，不能靠 Gateway 只使用两个字段来隔离同一对象中的 App Secret。这是部署配置建议，尚未批准或实施。OpenClaw 自身配置不自动建立 Sandbox 外的目标授权绑定，也不自动把其 SecretRef 发布给 sandbox-gateway。
+OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw.json`，敏感字段支持 SecretRef；详见 [OpenClaw 存储与配置](openclaw-feishu-im-mechanism.md#配置存储与复用)。依用户“不调整”的决定，保持其现有配置存储和部署方式，撤回要求两侧共用注入 Secret 的建议。可由运维在 Gateway 专用 Secret 中另行配置与飞书/OpenClaw 一致的 Verification Token 与 Encrypt Key；不是生成另一套密钥，也不包含 App Secret。此方式需要运维保持值一致，不建立自动从 OpenClaw 导出或同步配置的能力。实际部署是否已启用标准 Webhook 及拥有必要验证信息仍待联调核验。
+
+## 应用场景、换绑与轮换的背景
+
+应用类型不改变 E2B URL 定位一个 Sandbox 的机制。询问应用场景的目的，是明确是否需要额外限制消息所属企业；仅凭 App ID 不能一般性地认定只有一个企业使用它。飞书商店应用可由多个企业安装；如同一个应用服务企业 A/B，而目标只允许 A 的事件，就需要明确企业范围。若允许该应用的消息都进入同一 Sandbox，则这是应用级授权范围，不需要按企业分配 Sandbox。用户尚未选择企业范围，不能把“企业自建单企业”或“允许所有企业”当作已批准条件。官方依据：[应用类型与能力](https://open.feishu.cn/document/home/app-types-introduction/robots-web-applications-and-mini-programs)。
+
+修改绑定指运维改动入口对应的 App ID、目标 Sandbox 或允许的端口/路径。例如消息已被接收且正在等待旧目标 A 恢复，随后入口切到 B，需要定义这条旧消息是否仍送 A；不应因重新读取最新配置而把已接收事件悄悄改投 B。Sandbox 改变意味着 E2B URL 也改变，不引入可随意重定向的通用注册表。仅关闭入口已有用户选择；换绑中的任务行为仍未选择。
+
+密钥轮换指更换入站 Verification Token/Encrypt Key，例如管理员重置或主动替换；它不是每次唤醒时的操作，也不是 OpenClaw 获取/刷新出站访问令牌。由于转交保留原始签名和密文，Gateway、飞书与 OpenClaw 的相关配置需匹配；若 OpenClaw 已改用新 Key，仍在队列中的旧密文可能无法通过验证/解密。当前不调整 OpenClaw，不要求自动轮换或双 Key 无缝切换。可考虑由运维停收并等在途任务结束后再变更配置，这是用于简化首期的建议，尚未登记为用户决定。共同安全算法见 [飞书校验与解密](https://open.feishu.cn/document/event-subscription-guide/callback-subscription/receive-and-handle-callbacks)。
 
 ## Gateway 读取链路：现状与所需能力
 
@@ -44,9 +52,9 @@ OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw
 2. 复用 Sandbox 监听解析入口绑定，补充引用 Secret 的同步与本地缓存，处理启动同步、更新、删除和引用变化。配置缺失、格式错误或尚未就绪时拒绝接收，不先 ACK 或触发恢复。更新以本实例观察到为界，不承诺各 Gateway 与 OpenClaw 原子切换。
 3. 飞书请求按 E2B Host 定位目标后，使用缓存验证来源、应用身份和端口/路径授权，通过后才登记内存任务及返回事件 ACK；每条请求无需同步访问 Kubernetes API。URL challenge 按标准飞书协议单独处理。
 4. 在实际 ACK 编排中为 Gateway 增加与所选读取方式匹配的 Secret 权限，并限制到需要的 namespace/对象。标准 RBAC 不能按 Secret 的 data 字段授权；缓存 label selector 也不是权限边界。若使用 resourceNames 限制 list/watch，客户端必须带匹配的 metadata.name field selector，不能直接用全量 informer。具体授权供给方式仍是配置设计的待定部分。
-5. OpenClaw 通过环境变量或文件引用同一份入站验证 Secret；需协调密钥轮换与应用重新加载。环境变量来自 Secret 时，运行中的容器不会随 Secret 更新自动取得新值，需要重启容器；采用文件也不能自动推断 OpenClaw 已重新加载。
+5. 保持 OpenClaw 现有配置方式，由运维维护 Gateway 验证信息与其一致；本项不改造 OpenClaw 配置注入或实现自动同步。若未来发生密钥变更，需要协调相关配置的生效；具体轮换方式仍未选择。
 
-代码读取/缓存能力归子项 21；实际 ACK 的权限配置归子项 22，继续依赖代码与匹配镜像交付。以上仅记录调查和建议，未修改 API、源码、RBAC 或运行配置，未建立新的用户批准或独立通过。
+代码读取/缓存能力归子项 21；实际 ACK 的权限配置归子项 22，继续依赖代码与匹配镜像交付。本记录包含上述明确标注的用户决定、源码事实及剩余建议；未修改 API、源码、RBAC 或运行配置，未建立新的独立通过。
 
 官方依据：[Secret 最小权限及读取后的保护](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)、[RBAC resourceNames 与 list/watch 限制](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources)、[Secret 环境变量更新语义](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/#define-container-environment-variables-using-secret-data)。
 
