@@ -1,0 +1,2513 @@
+id: im-platform-sandbox-sleep
+body: evidence/im-platform-sandbox-sleep.md
+topic: 15个IM平台在四类外部接入方式下的沙箱休眠、离线新消息与恢复行为
+summary: 21个所查插件接入场景及1个平台能力场景；纯出站客户端不能在全断休眠时自唤醒，Webhook新请求可条件触发外部恢复；补投由平台契约与插件恢复/过滤共同约束。
+kind: search
+inputs:
+  researched_on: '2026-11-04'
+  platform_count: 15
+  baseline_case_count: 22
+  implemented_case_count: 21
+  cases_by_protocol:
+    websocket: 8
+    webhook: 10
+    http_polling: 3
+    tcp_tls: 1
+  excluded:
+  - Signal
+  - iMessage
+  - sandbox_internal_SSE_RPC_stdio
+  - unreviewed_community_forks
+  runtime_validation: not_executed
+  installed_version_validation: not_executed
+  source_snapshots:
+    openclaw_common:
+      commit: f7257f2c66884611f4f4043367eada029b704918
+      package_version: 2026.10.10
+    openclaw_slack_whatsapp:
+      commit: 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be
+      tag: v2026.10.10
+    wechat_ilink:
+      commit: 874637a0dbc24050f72d1385add4fc6170a2d726
+      version: 2.4.10
+    qqbot_plugin:
+      commit: 89988812442583bf47c34b89f9abf5fd4b85df0b
+      version: 2.0.4
+    qqbot_sdk_repo_lock:
+      commit: ca55d9c395b582b7fcfad0ec27209c35dd04e0b3
+      version: 1.0.4
+      note: Plugin range ^1.0.4; repository lock is not included in the published-file allowlist, so installed resolution
+        is unknown.
+    dingtalk_connector:
+      commit: 88df00ee594072e9941ef3f71da90a37f3291ad3
+      version: 0.8.27
+    wecom_plugin:
+      commit: 2b8c84e696ec98c967ff95030270c6acb5c4b51d
+      version: 2026.10.19
+    baileys:
+      commit: 7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a
+      version: 7.0.0-rc14
+    mattermost_server:
+      commit: 69d345c93a527cc1361792cc967714fea9f99083
+    matrix_js_sdk:
+      tag: v43.0.0
+evidence_labels:
+  D: 平台公开文档契约
+  C: 所查固定源码或维护方实现说明
+  I: 统一前提下机制推论
+  U: 无公开保证或环境未知
+common_assumptions:
+- 机器人原本正常，权限/订阅/成员资格原本有效；所有必要接收进程在沙箱内并停止执行，所有旧连接已中断，没有其他在线接收客户端。
+- Pause可保留内存；进程重建/崩溃另行区分。T1已投未ACK与T2完全离线新事件不能混同。
+- 除Webhook明确外部可达唤醒入口分支外，无独立唤醒方。请求失败或超时不证明此前没有触发恢复；及时ACK/持久化不是唤醒曾发生的必要条件。
+- 身份存在、连接离线与UI在线状态分开；历史、平台事件队列、WS回放与本地已收队列分开。收到/ACK/唤醒/Agent执行/回复成功分开。
+investigation:
+- scope: feishu
+  author: /root/feishu_other_access_evidence
+  method: read_only_primary_docs_and_maintainer_source
+- scope: tencent
+  author: /root/verify_wechat_qq
+  method: read_only_primary_docs_and_maintainer_source
+- scope: enterprise
+  author: /root/verify_dingtalk_wecom
+  method: read_only_primary_docs_and_maintainer_source
+- scope: slack
+  author: /root/research_slack_sleep
+  method: read_only_primary_docs_and_maintainer_source
+- scope: community
+  author: /root/research_community_sleep
+  method: read_only_primary_docs_and_maintainer_source
+- scope: whatsapp
+  author: /root/research_whatsapp_sleep
+  method: read_only_primary_docs_and_maintainer_source
+- scope: polling
+  author: /root/verify_global_im
+  method: read_only_primary_docs_and_maintainer_source
+- scope: callbacks
+  author: /root/research_callbacks_sleep
+  method: read_only_primary_docs_and_maintainer_source
+- scope: irc
+  author: /root/audit_im_coverage
+  method: read_only_primary_docs_and_maintainer_source
+cross_validation:
+  status: completed_and_integrated
+  date: '2026-11-04'
+  method: second_batch_cross_assigned_primary_evidence_checks; aggregate review is scope/causality only
+  research_stream_count: 9
+  review_stream_count: 5
+  integrator: /root
+  reviewers:
+  - reviewer: /root/research_slack_sleep
+    scope:
+    - feishu
+    - dingtalk
+    - wecom
+    result: read_only_evidence_checked; material corrections integrated; explicit unknowns retained
+  - reviewer: /root/research_callbacks_sleep
+    scope:
+    - wechat_ilink
+    - qqbot
+    - telegram
+    - matrix
+    result: read_only_evidence_checked; material corrections integrated; explicit unknowns retained
+  - reviewer: /root/verify_dingtalk_wecom
+    scope:
+    - slack
+    - discord
+    - mattermost
+    - whatsapp
+    result: read_only_evidence_checked; material corrections integrated; explicit unknowns retained
+  - reviewer: /root/verify_wechat_qq
+    scope:
+    - msteams
+    - googlechat
+    - line
+    - irc
+    result: read_only_evidence_checked; material corrections integrated; explicit unknowns retained
+  - reviewer: /root/china_im_transports
+    scope:
+    - protocol_counts
+    - coverage
+    - cross_platform_causality
+    result: read_only_evidence_checked; material corrections integrated; explicit unknowns retained
+  material_corrections:
+  - QQ official short-disconnection Resume replay contract added; numerical TTL remains unknown. SDK checkpoint ordering remains
+    distinct from the stronger OpenClaw documentation claim.
+  - LINE fallback describes the complete classification predicate, including allowed unmatched errors; allowance does not
+    guarantee safety or delivery.
+  - Teams message-extension invoke retries remain separate from normal messages and the implemented adaptiveCard/action path.
+    Google Chat add-on app-command payload support narrowed to checked source.
+  - Mattermost described as bounded conditional server-source continuation, not a reliability SLA; checked plugin does not
+    use it. Discord clean close prevents old-session Resume.
+  - WhatsApp UK policy scope and append-only conditional reconnect filtering retained; local queues, platform queues, history
+    and protocol replay remain distinct.
+  runtime_validation: not_executed
+  note: This is research evidence validation, not a design/code approval or human acceptance result.
+rows:
+- id: feishu-websocket
+  platform: feishu
+  protocol: websocket
+  plugin: '@openclaw/feishu; openclaw/openclaw main SHA f7257f2c66884611f4f4043367eada029b704918 (read 2026-11-04); OpenClaw
+    docs require >=2026.5.29; deployed version unknown. Separate official Node SDK evidence is larksuite/node-sdk 1.76.0 at
+    b188be60134d409b61259546bcf69c731d2b0b7c.'
+  plugin_support: true
+  connection_initiator: Developer-side OpenClaw process creates SDK WSClient and starts it; SDK performs connection/reconnect.
+    Current OpenClaw main supervises after SDK terminal reconnect error by closing/recreating the client with exponential
+    delays 1s to 30s cap.
+  paused_state: With all old connections broken and Sandbox code not executing, no SDK heartbeat, handler, or reconnect executes.
+    App/bot/chat identity is not shown as removed; do not infer a UI online indicator. User can still send DM/group messages
+    assuming app visibility, permissions, and group membership remain. No reverse WS connection is initiated by Feishu on
+    the user's message.
+  user_send_dm: Yes, conditional on prior visibility and permissions; sending to Feishu chat is distinct from event delivery
+    to OpenClaw.
+  user_send_group: Yes, conditional on bot membership, visibility, and prior app permissions; receiving/processing may still
+    require mention and OpenClaw policy.
+  new_message_delivery: No reachable WS client while fully paused. Platform docs specify retry of failed event pushes, but
+    provide no located public guarantee for events generated while no client is online and never pushed to a client.
+  unacked_retry: 'D: A pushed event whose WS handler fails/throws or does not complete successfully within 3s is considered
+    failed; retry at 15s, 5m, 1h, 6h, maximum 4 retries after initial attempt. ACK success may still produce duplicates under
+    at-least-once delivery.'
+  offline_new_event_retention: 'U: No public guarantee located for server queue, retention duration, or catch-up/replay of
+    new events generated during total WS disconnection. This is not proof that no internal queue exists.'
+  resume_path: SDK reconnects/re-authenticates; current OpenClaw main adds an outer recreate loop after SDK terminal retry
+    exhaustion. No documented or source-observed offset/cursor resume contract for Feishu event WS. Only already-admitted
+    OpenClaw ingress records can be replayed by its own queue.
+  openclaw_catchup_filters: Current main durable ingress accepts im.message.receive_v1 only with stable event_id (plus drive.comment
+    event); durable admission precedes agent dispatch. Later parsing, self-bot suppression, message dedupe, DM pairing policy,
+    group allowlist and mention gates can suppress Agent work. Other event types lack same queue guarantee.
+  wake_inference: 'I: No automatic wake from WS while only receiver is paused; no new incoming HTTP request or independent
+    signal exists. It cannot auto-reply before process resumes and receives/processes an event.'
+  unknowns:
+  - Feishu server-side retention and replay behavior for events never delivered while no WS connection exists.
+  - Final status/queryability after the finite failed-delivery retry schedule expires.
+  - Target OpenClaw/plugin/SDK versions, actual bot UI status, and real resume-first-message behavior.
+  - No runtime or E2E test was executed.
+  evidence:
+  - source: S001
+    kind: D
+    locator: Event notification / failure retransmission; 3s and retry schedule
+    supports:
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S002
+    kind: D
+    locator: long connection setup and limitations
+    supports:
+    - connection_initiator
+    - unacked_retry
+  - source: S003
+    kind: C
+    locator: getFeishuWsReconnectDelayMs; monitorWebSocket
+    supports:
+    - connection_initiator
+    - resume_path
+  - source: S004
+    kind: C
+    locator: inspectFeishuIngressEnvelope; invokeWebhook admission
+    supports:
+    - openclaw_catchup_filters
+  - source: S005
+    kind: C
+    locator: Inbound durability; docs version floor
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S006
+    kind: C
+    locator: DM/group policies and mention requirement
+    supports:
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: 3s handler success window; failure retries at 15s, 5m, 1h, 6h, maximum 4 retries
+    scope: Feishu event push, WebSocket handler failure
+    source: S001
+  - claim: OpenClaw outer reconnect backoff begins at 1s and caps at 30s
+    scope: current main source only; not deployed-value evidence
+    source: S003
+- id: feishu-webhook
+  platform: feishu
+  protocol: webhook
+  plugin: '@openclaw/feishu; openclaw/openclaw main SHA f7257f2c66884611f4f4043367eada029b704918 (read 2026-11-04); OpenClaw
+    docs require >=2026.5.29; deployed version and route reachability unknown.'
+  plugin_support: true
+  connection_initiator: Feishu initiates HTTP POST to the configured event callback URL; current OpenClaw main registers a
+    Gateway HTTP route. No old WS connection is needed.
+  paused_state: Identity/chat remains subject to app configuration and permissions. User can still send DM/group messages.
+    Whether any process receives POST depends on endpoint reachability. H0 means no valid response, which does not establish
+    that no wake trigger happened; H1 means an externally reachable authorized endpoint with wake capability; H2 means endpoint
+    returned 200.
+  user_send_dm: Yes, conditional on prior visibility and permissions.
+  user_send_group: Yes, conditional on bot membership, visibility, and permissions; OpenClaw policy/mention rules still apply
+    after event receipt.
+  new_message_delivery: 'Feishu may POST to configured URL independent of the old WS connection. H0 only establishes no valid
+    response: a reachable wake front end could have triggered recovery before ACK failed, and Feishu can still retry. Failed
+    delivery retries are finite; no indefinite event retention guarantee located. H1 has an available wake-capable endpoint
+    by scenario assumption; wake trigger and event ACK/processing guarantees are separate.'
+  unacked_retry: 'D: HTTP callback must return HTTP 200 within 3s (TCP connect timeout 2s); failed push is retried at 15s,
+    5m, 1h, 6h, maximum 4 retries after initial attempt. At H2 200, platform sees transport success; later Agent failure is
+    not known to Feishu as an event delivery failure.'
+  offline_new_event_retention: 'U: Finite retry may apply to failed attempts that occur while paused, but no public guarantee
+    of indefinite retention or replay after retry exhaustion. Do not infer platform retention from OpenClaw chat history or
+    local queue.'
+  resume_path: If Sandbox later resumes, Gateway/plugin route starts again. There is no polling cursor for webhook mode. Current
+    OpenClaw main durably admits selected authenticated events before returning 200; its queue can retry pending/retryable
+    entries across Gateway restart, independently from Feishu retries.
+  openclaw_catchup_filters: Webhook verifies signature and timestamp; current setup docs state +/-1h timestamp tolerance and
+    24h replay guard. Only durable event types include im.message.receive_v1 with stable event_id; then message parsing, duplicate/self-bot
+    suppression, pairing/allowlist/mention gates apply. Successful HTTP 200 does not ensure Agent completion/reply.
+  wake_inference: 'I: Without a working external wake-capable ingress there is no automatic wake. With such an ingress (H1),
+    the request may trigger recovery; a 3s ACK, durable event admission, and business processing are separate outcomes and
+    are not prerequisites for the wake trigger. Even if ACK times out, Feishu may retry. H2 ACK does not guarantee reply and
+    downstream Agent failure is not a transport-level failure visible to Feishu.'
+  unknowns:
+  - Actual inbound URL reachability, authorization, and wake behavior in target environment.
+  - Feishu event retention after all finite retries fail, and whether later platform delivery occurs.
+  - Target OpenClaw/plugin version and runtime durable storage configuration.
+  - No runtime or E2E test was executed.
+  evidence:
+  - source: S001
+    kind: D
+    locator: Webhook event notification and failure retransmission
+    supports:
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S003
+    kind: C
+    locator: Webhook route, signature handling, durable 200 and 500 paths
+    supports:
+    - connection_initiator
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S004
+    kind: C
+    locator: durable event recognition and admission
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S005
+    kind: C
+    locator: Inbound durability; Webhook delivery window
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S006
+    kind: C
+    locator: DM/group policies and mention requirement
+    supports:
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: HTTP 200 within 3s; TCP connect timeout 2s; retry at 15s, 5m, 1h, 6h, maximum 4 retries
+    scope: Feishu event Webhook delivery
+    source: S001
+  - claim: Webhook signed timestamp tolerance +/-1h; replay guard 24h
+    scope: current OpenClaw Feishu webhook implementation docs; not Feishu platform retention
+    source: S005
+- id: wechat-ilink-http-polling
+  platform: wechat_ilink
+  protocol: http_polling
+  plugin: '@tencent-weixin/openclaw-weixin 2.4.10, current-main snapshot 874637a0dbc24050f72d1385add4fc6170a2d726'
+  plugin_support: true
+  connection_initiator: '[C] OpenClaw plugin POSTs /ilink/bot/getupdates with get_updates_buf; server holds request until
+    message/timeout. No platform-initiated reverse connection in this receive path.'
+  paused_state: '[I/U] Poll loop is not executing and no pending poll remains after all connections fail; local account/cursor
+    files may remain. Platform bot presence/UI state is undocumented.'
+  user_send_dm: '[U] Plugin supports direct chats, but no reviewed platform contract says whether messages are accepted/queued
+    while its receiver is offline; sending does not prove event delivery.'
+  user_send_group: N/A for the checked plugin; OpenClaw docs say direct chats only and do not advertise group capability.
+  new_message_delivery: '[C/U] No getUpdates request while paused. On restore, plugin sends its locally saved cursor. No public
+    guarantee found for fully-offline event retention, replay range, expiry, or complete catch-up.'
+  unacked_retry: '[C] No separate per-message ACK in the reviewed plugin receive path. Network/API poll failures retry after
+    2s, then back off 30s after 3 consecutive failures; that is poll-request retry, not event-redelivery contract. On success
+    the monitor saves a nonempty returned cursor before processing msgs.'
+  resume_path: '[C] Load {accountId}.sync.json (with compatibility/legacy fallbacks), then POST saved get_updates_buf; if
+    absent, send empty string. Cursor write is synchronous local file write.'
+  openclaw_catchup_filters: '[C] No explicit age cutoff found in monitor/processOneMessage path; create_time_ms is used for
+    timing/context. Authorization may still drop messages. Presence of cursor does not prove old messages are retained/replayed.'
+  wake_inference: '[I] HTTP polling is client-initiated; with the process stopped no long-poll or new request can wake it.
+    No separate external wake receiver is evidenced.'
+  unknowns:
+  - What the iLink server guarantees for cursor interpretation, offline queue retention, expiry, and replay after the client
+    resumes.
+  - Whether an offline direct message is accepted/queued by the platform; group support is not advertised by this plugin.
+  - Whether a new QR-bound token continues from an old local cursor; account save does not itself clear the cursor, while
+    explicit account clear does.
+  offline_new_event_retention: 'U: Server offline retention, cursor expiry and complete catch-up are not publicly guaranteed
+    by the reviewed client-based protocol reference.'
+  evidence:
+  - source: S007
+    kind: C
+    locator: How it works; direct chats only; external Tencent plugin
+    supports:
+    - plugin scope
+    - group N/A
+  - source: S008
+    kind: C
+    locator: Protocol reference explicitly says client-code-based and not full server contract
+    supports:
+    - server contract limit
+  - source: S009
+    kind: C
+    locator: getUpdates endpoint, request/response cursor and current client behavior
+    supports:
+    - poll protocol
+    - cursor semantics
+  - source: S010
+    kind: C
+    locator: load persisted cursor or start empty
+    supports:
+    - resume path
+  - source: S011
+    kind: C
+    locator: client long-poll call
+    supports:
+    - connection initiator
+  - source: S012
+    kind: C
+    locator: save response cursor before processing returned msgs
+    supports:
+    - checkpoint ordering
+    - unacked boundary
+  - source: S013
+    kind: C
+    locator: local account sync-file path
+    supports:
+    - local cursor persistence
+  - source: S014
+    kind: C
+    locator: -14 stale-token one-hour in-memory pause
+    supports:
+    - account session failure
+  numeric_claims:
+  - claim: Default long-poll timeout is 35,000ms; server can suggest a next timeout.
+    scope: Plugin source default, not platform retention or timeout SLA.
+    source: S015
+  - claim: Stale-token -14 pauses account API calls for one hour.
+    scope: Plugin behavior only; it does not re-login or describe server token validity.
+    source: S014
+  - claim: Three consecutive poll failures trigger a 30s backoff; earlier failures retry after 2s.
+    scope: Plugin poll loop retry, not platform event retry.
+    source: S015
+- id: qqbot-websocket
+  platform: qqbot
+  protocol: websocket
+  plugin: '@tencent-connect/openclaw-qqbot 2.0.4 at 89988812442583bf47c34b89f9abf5fd4b85df0b; package.json range ^1.0.4; repository
+    package-lock resolves @tencent-connect/qqbot-nodejs 1.0.4 at SDK commit ca55d9c395b582b7fcfad0ec27209c35dd04e0b3. package-lock
+    is excluded by plugin package file allowlist, so actual installed consumer dependency is unknown. SDK main 1.0.5 at 429a0f1b798f3b0fcef3679e207dbc0469a1df2d
+    checked as cross-check.'
+  plugin_support: true
+  connection_initiator: '[C] Client fetches access token and gateway URL, then initiates WebSocket. Heartbeats and op 7/9
+    reconnect handling run in client; server reconnect opcode is not a server-created connection to the stopped Sandbox.'
+  paused_state: '[I/U] WS and heartbeat stop when process stops; plugin account credentials and session.json may persist.
+    User-visible online/presence status is not established by reviewed sources.'
+  user_send_dm: '[U] Plugin/docs support QQ C2C, but no reviewed current platform contract guarantees acceptance/queuing during
+    receiver outage.'
+  user_send_group: '[U] Plugin/docs support QQ groups (normally @mention-controlled); offline acceptance/queuing is not documented.'
+  new_message_delivery: 'D/C: QQ official protocol describes replay of missed events after a short disconnection followed
+    by successful Resume; no numeric short-time bound is published. SDK restores sessionId/lastSeq and tries RESUME, or IDENTIFY
+    when absent/invalid. This is not a guarantee for arbitrary sandbox sleep durations.'
+  unacked_retry: 'C/U: SDK advances lastSeq and invokes session persistence before asynchronous DISPATCH callbacks; RESUME
+    includes that seq. This does not prove disk fsync or durable ingress completion. Platform replay boundaries remain unknown.
+    D: Official guidance recommends recording s after event handling; successful Resume replays subsequent events and ends
+    with RESUMED.'
+  resume_path: '[C] Plugin stores QQ session state in session.json using SDK kvSessionPersistence/FileKVStore. SDK restores
+    sessionId/lastSeq; HELLO leads to op 6 RESUME or op 2 IDENTIFY. INVALID_SESSION d=false clears session/refreshes token
+    and reconnects; d=true keeps resumable session. D: QQ official close-code table allows Resume after 4009, but invalid
+    session 4006 and invalid seq 4007 require Identify. These codes must not be interpreted using Discord semantics.'
+  openclaw_catchup_filters: 'C: SDK 1.0.4 advances lastSeq and invokes persistence before the unawaited message callback;
+    1.0.5 has the same ordering. OpenClaw documentation claims durable admission before sequence advancement, which is not
+    corroborated for this external plugin/SDK pair. This indicates a possible crash/restart handoff gap, not proven loss on
+    memory-preserving Pause. In-memory message-ID dedupe defaults to 5s; no message-age cutoff found in that filter.'
+  wake_inference: '[I] No WS listener/new connection exists while the client process is stopped; a new QQ message cannot itself
+    wake it.'
+  unknowns:
+  - Numeric QQ Resume-validity interval, buffer capacity and fully-offline backlog guarantees; event recovery after fresh
+    IDENTIFY.
+  - Offline user-send acceptance and bot UI presence.
+  - Whether the stronger OpenClaw documentation checkpoint guarantee applies to the actual installed plugin/SDK composition.
+  offline_new_event_retention: 'D/U: Official protocol describes conditional short-disconnection Resume replay after the supplied
+    seq. Numeric session TTL, buffer capacity and complete fully-offline replay guarantees remain unspecified.'
+  evidence:
+  - source: S016
+    kind: C
+    locator: currently describes WebSocket gateway and group/C2C, but omits webhook
+    supports:
+    - official-doc scope
+  - source: S017
+    kind: C
+    locator: plugin version 2.0.4 and SDK semver range
+    supports:
+    - plugin revision
+    - dependency range
+  - source: S018
+    kind: C
+    locator: repo lock resolves SDK 1.0.4; package is not an installed-version proof
+    supports:
+    - SDK source selection
+  - source: S019
+    kind: C
+    locator: sessionPersistence and bot.on(message) receive callback
+    supports:
+    - plugin receive entry
+    - session storage
+  - source: S020
+    kind: C
+    locator: SDK 1.0.4 sequence save before DISPATCH and non-awaited callbacks
+    supports:
+    - sequence ordering
+    - handoff boundary
+  - source: S021
+    kind: C
+    locator: SDK 1.0.4 RESUME/IDENTIFY and heartbeat
+    supports:
+    - resume path
+  - source: S022
+    kind: C
+    locator: SDK 1.0.5 handlePayload/notify cross-check, same sequence-before-callback ordering
+    supports:
+    - current SDK comparison
+  - source: S023
+    kind: C
+    locator: message-ID dedup window/default and ephemeral map
+    supports:
+    - catch-up filter
+  - source: S024
+    kind: C
+    locator: OpenClaw docs claim raw-event persistence before resume-seq advancement
+    supports:
+    - documented durability claim
+    - source mismatch
+  - source: S151
+    kind: D
+    locator: 恢复登录态 Session; WebSocket错误码; read via official HTML on 2026-11-04
+    supports:
+    - new_message_delivery
+    - offline_new_event_retention
+    - resume_path
+    - unacked_retry
+  numeric_claims:
+  - claim: Plugin repository lock resolves SDK version 1.0.4; manifest allows ^1.0.4.
+    scope: Checked plugin repository only; published package allowlist excludes lockfile and installed dependency is unknown.
+    source: S018
+  - claim: SDK messageFilter default dedup window is 5000ms; plugin invokes it with skipSelfEcho=false, leaving dedup enabled.
+    scope: SDK/plugin implementation; process-memory dedup, not replay retention.
+    source: S023
+- id: qqbot-webhook
+  platform: qqbot
+  protocol: webhook
+  plugin: '@tencent-connect/openclaw-qqbot 2.0.4 at 89988812442583bf47c34b89f9abf5fd4b85df0b; package-lock resolves QQ SDK
+    1.0.4 at ca55d9c395b582b7fcfad0ec27209c35dd04e0b3; installed dependency/account HTTP Callback configuration remain unverified.'
+  plugin_support: true
+  connection_initiator: '[C] QQ platform POSTs callback to configured HTTP route. Plugin adapter registers through OpenClaw
+    plugin webhook-ingress while Gateway is running; current fixed OpenClaw core snapshot exports the route helper.'
+  paused_state: '[I/U] Plugin route is part of OpenClaw Gateway and does not answer when that process is stopped. Adapter
+    fails to register when the host webhook-ingress helper is absent. Independent external receiver/wake responsibility is
+    a separate conditional branch.'
+  user_send_dm: '[U] QQ C2C is supported by the plugin, but offline platform acceptance/queue behavior was not found in reviewed
+    sources.'
+  user_send_group: '[U] QQ group chat is supported by plugin; offline acceptance/queue behavior was not found.'
+  new_message_delivery: 'H0 [U/I]: a timeout/failure does not prove no wake if an external receiver first got the POST and
+    triggered wake; with no external wake responsibility, the in-Gateway route cannot wake itself. H1 [I]: an independently
+    reachable authorized endpoint with wake capability may trigger wake, but endpoint custody/delivery must be supplied externally.
+    H2 [C/U]: SDK ACKs valid callbacks before async processing; subsequent errors are logged. No post-ACK redelivery contract
+    or SDK durable queue was found.'
+  unacked_retry: '[C/U] SDK comments say QQ may redeliver on callback timeout; no public retry count/backoff/window or full
+    offline callback retention guarantee found. This source comment is not a platform SLA.'
+  offline_new_event_retention: '[U] No platform guarantee found for events while callback endpoint is inaccessible. A separate
+    external endpoint could preserve/wake only if its own implementation provides that behavior.'
+  resume_path: '[C] Stateless callback; no WS RESUME. Valid dispatch returns HTTP 200 with op:12 after scheduling async processing.'
+  openclaw_catchup_filters: '[C] SDK message-ID dedup default 5s in process memory; no old-age cutoff found in this filter.
+    SDK webhook transport itself has no durable local queue or post-ACK error signal.'
+  wake_inference: 'H0: conditional on an external receiver triggering wake before HTTP failure/timeout; otherwise no. H1:
+    may wake only under stipulated active external wake responsibility. H2: wake may already have occurred despite an ACK
+    and later business failure. ACK status is independent from wake and final delivery.'
+  unknowns:
+  - Current per-account Open Platform HTTP Callback enablement and current platform callback retry/retention policy.
+  - Whether platform retries after successful ACK when external application processing later fails.
+  - Which external process, if any, owns wake, authorization, and durable payload custody in a real deployment.
+  - Offline user-send acceptance for C2C/group.
+  - Runtime compatibility/availability of the route helper and actual public reachability; static source only.
+  evidence:
+  - source: S016
+    kind: C
+    locator: currently documents WS, not webhook
+    supports:
+    - official-doc scope
+  - source: S025
+    kind: C
+    locator: plugin-maintainer docs describe WS/Webhook and HTTP Callback configuration
+    supports:
+    - plugin webhook support
+  - source: S026
+    kind: C
+    locator: actual plugin route registration; guard for unavailable ingress helper
+    supports:
+    - route lifecycle
+  - source: S027
+    kind: C
+    locator: fixed core exposes webhook target/plugin route registration helper
+    supports:
+    - host route API
+  - source: S028
+    kind: C
+    locator: dispatch is fire-and-forget; immediate HTTP 200/op:12; downstream errors logged
+    supports:
+    - ACK ordering
+    - H2 boundary
+  - source: S152
+    kind: D
+    locator: HTTP callback subscription and signature; no numeric retry contract found
+    supports:
+    - connection_initiator
+    - unacked_retry
+  - source: S153
+    kind: D
+    locator: op 12 means received HTTP callback data; not Agent completion
+    supports:
+    - unacked_retry
+    - resume_path
+- id: dingtalk-appbot-stream
+  platform: dingtalk
+  protocol: websocket
+  plugin: '@dingtalk-real-ai/dingtalk-connector 0.8.27 at 88df00ee594072e9941ef3f71da90a37f3291ad3; depends on dingtalk-stream
+    2.1.4'
+  plugin_support: true
+  connection_initiator: Connector client gets Stream endpoint/ticket over HTTPS, then opens WSS; after close/disconnect the
+    connector calls client.connect(). A server disconnect topic is a notice, not a server-created client connection.
+  paused_state: Application-bot identity remains configured at platform, but its Stream consumer is offline and cannot receive
+    or reconnect while the only client process is stopped. UI status is unverified.
+  user_send_dm: Platform docs say user can directly send a DM to the application bot; delivery while its consumer is offline
+    and platform acceptance/retention are not guaranteed by reviewed docs.
+  user_send_group: Platform docs say user must @ the application bot; delivery while its consumer is offline and platform
+    acceptance/retention are not guaranteed by reviewed docs.
+  new_message_delivery: Robot callback topic /v1.0/im/bot/messages/get is pushed only on the live Stream connection. No separate
+    offline queue guarantee found.
+  unacked_retry: Platform Stream FAQ says event subscriptions are re-pushed after missing ACK/timeout; non-event pushes including
+    robot callbacks are diagnostic ACK and robot messages are fire-and-forget, not re-pushed because of network timeout. Connector
+    ACKs robot callback immediately before parsing/processing.
+  offline_new_event_retention: No platform guarantee or retention interval found for fully offline robot messages.
+  resume_path: Client opens a new Stream connection; no offset/resume token found in plugin protocol use.
+  openclaw_catchup_filters: Connector process-memory dedupes protocol headers.messageId and business data.msgId; 5-minute
+    TTL. This is duplicate suppression, not a stale-message/backlog filter.
+  wake_inference: 'I: Pure WS-only consumer cannot be awakened by a platform callback over a fully broken connection; after
+    an external restore, the client reconnects. No runtime/E2E test.'
+  unknowns:
+  - Platform chat UI online indicator and acceptance while consumer offline.
+  - Offline event storage/replay.
+  - Whether current server has edge behavior beyond the documented Stream retry policy.
+  - Whether server health handling treats native WebSocket ping/pong like the protocol's separate SYSTEM ping topic.
+  evidence:
+  - source: S029
+    kind: D
+    locator: Robot receive; Stream vs HTTP; direct DM and @ in groups
+    supports:
+    - platform_modes
+    - user_send_dm
+    - user_send_group
+  - source: S030
+    kind: D
+    locator: Message types; callback/event/system topics; ACK behavior; ping/disconnect
+    supports:
+    - new_message_delivery
+    - unacked_retry
+    - connection_initiator
+  - source: S031
+    kind: D
+    locator: FAQ 5-6 and 9; HTTP remains supported, Stream endpoints
+    supports:
+    - platform_modes
+    - connection_initiator
+  - source: S032
+    kind: C
+    locator: L178-L200, L265-L360, L371-L492, L559-L603
+    supports:
+    - plugin_support
+    - heartbeat
+    - reconnect
+    - ACK
+    - dedup
+  - source: S033
+    kind: C
+    locator: L441-L529
+    supports:
+    - plugin_support
+    - mode_selection
+  - source: S034
+    kind: C
+    locator: L183-L290
+    supports:
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: Custom connector sends native WS ping every 10 seconds and detects no pong after 20 seconds.
+    scope: DingTalk connector source
+    source: S035
+  - claim: Connector message dedup TTL is 5 minutes.
+    scope: DingTalk connector in-process cache
+    source: S036
+- id: dingtalk-appbot-http
+  platform: dingtalk
+  protocol: webhook
+  plugin: '@dingtalk-real-ai/dingtalk-connector 0.8.27 at 88df00ee594072e9941ef3f71da90a37f3291ad3; no HTTP app-bot inbound
+    implementation found'
+  plugin_support: false
+  connection_initiator: 'D: Platform sends the application robot callback to the app''s configured HTTPS receiver. I: A separate
+    wake-capable receiver could see the request first; the plugin itself provides only Stream.'
+  paused_state: Application-bot identity remains configured; HTTP callback route availability depends on external receiver/wake
+    responsibility. No UI state claim.
+  user_send_dm: Platform docs support direct DM; offline acceptance/retention not documented.
+  user_send_group: Platform docs require @ in groups; offline acceptance/retention not documented.
+  new_message_delivery: Platform app-bot HTTP mode is supported, but the connector manifest/config/start path has no HTTP
+    message route. No exact HTTP app-bot failure retry policy found.
+  unacked_retry: Unknown for HTTP application robot. Do not reuse the Stream event-subscription retry rule or Stream fire-and-forget
+    statement as HTTP policy.
+  offline_new_event_retention: No public guarantee found for HTTP app-bot callback when receiver is unavailable.
+  resume_path: Not implemented by this connector; an external HTTP receiver would need its own behavior.
+  openclaw_catchup_filters: N/A for this connector mode.
+  wake_inference: 'I: H0 does not mean no wake occurred. If a still-reachable, authorized external endpoint triggers wake
+    before timeout, wake may begin even if the callback ACK fails. Without such a responsibility party, no receiver code runs.
+    No runtime/E2E test.'
+  unknowns:
+  - HTTP app-bot timeout/retry count, timing, and offline message retention.
+  - Actual external receiver/waker behavior.
+  evidence:
+  - source: S029
+    kind: D
+    locator: Robot receive, HTTP/Webhook mode and DM/group rules
+    supports:
+    - platform_modes
+    - user_send_dm
+    - user_send_group
+  - source: S037
+    kind: D
+    locator: Official entry redirects to robot-message-type; page body was not readable in browser during this check
+    supports:
+    - http_callback_protocol_entry
+  - source: S038
+    kind: C
+    locator: L24-L28, Stream-only description
+    supports:
+    - plugin_support
+  - source: S033
+    kind: C
+    locator: L441-L529, fixed stream startup; no HTTP route
+    supports:
+    - plugin_support
+- id: wecom-bot-ws
+  platform: wecom
+  protocol: websocket
+  plugin: '@wecom/wecom-openclaw-plugin 2026.10.19 at 2b8c84e696ec98c967ff95030270c6acb5c4b51d; SDK @wecom/aibot-node-sdk
+    1.0.6 at 80615b987ef69c6028ad764924609247c0725955'
+  plugin_support: true
+  connection_initiator: Bot WS client opens WSS, sends aibot_subscribe with botId/secret. On ordinary network loss the SDK
+    client reconnects and subscribes again. A new bot connection can make WeCom kick the old one via disconnected_event; that
+    event does not mean the server reconnects the client.
+  paused_state: Bot identity/credentials remain configured but no active Gateway consumer is present. UI online state and
+    offline callback retention are unknown.
+  user_send_dm: Official AI Bot docs support sending to Bot in single chat; whether the platform accepts or buffers while
+    all receiver clients are offline is not promised.
+  user_send_group: Official AI Bot docs support @Bot in group; whether the platform accepts or buffers while all receiver
+    clients are offline is not promised.
+  new_message_delivery: Platform pushes aibot_msg_callback on live WS; frame.headers.req_id ties the reply, body.msgid identifies
+    the callback.
+  unacked_retry: No bounded ordinary-message delivery retry/replay rule found for WS. Official 5-second reply deadlines apply
+    to enter_chat welcome and template-card click, not ordinary message callback. Ordinary reply permission is 24h; WS stream
+    update window is 10 min.
+  offline_new_event_retention: No ordinary message queue/retention/backfill commitment found.
+  resume_path: SDK opens a new WSS and repeats subscribe. No stream offset or resume cursor found.
+  openclaw_catchup_filters: No old-message age filter found in ordinary message prepare path; access policies and empty/malformed-message
+    filtering apply. WS process state is cleaned up; it is not durable offline inbox.
+  wake_inference: 'I: With only the in-sandbox WS client stopped and connection broken, no incoming frame can wake it. Client
+    reconnect occurs only when Gateway execution resumes. No runtime/E2E test.'
+  unknowns:
+  - Platform callback replay/retention after offline period.
+  - User-visible bot online status.
+  - Whether platform sometimes redelivers messages after reconnect beyond documented msgid duplicate semantics.
+  evidence:
+  - source: S039
+    kind: D
+    locator: '智能机器人长连接: 建连/订阅、接收消息回调、req_id/msgid、单连接、心跳、普通回复及事件响应期限'
+    supports:
+    - platform_mode
+    - user_send_dm
+    - user_send_group
+    - new_message_delivery
+    - reply_window
+    - heartbeat
+  - source: S040
+    kind: C
+    locator: L482-L590, Bot credentials and mode branch; Agent route registers separately
+    supports:
+    - plugin_support
+    - mode_selection
+  - source: S041
+    kind: C
+    locator: L917-L937, L993-L1005, L1073-L1102
+    supports:
+    - heartbeat
+    - reconnect
+    - disconnected_event
+    - catchup_filters
+  - source: S042
+    kind: C
+    locator: L44-L100, L230-L267, L318-L423, L441-L537
+    supports:
+    - heartbeat
+    - reconnect
+    - req_id
+    - reply_ack_timeout
+  numeric_claims:
+  - claim: Plugin config uses 30-second heartbeat, up to 10 network reconnects and 5 authentication retries.
+    scope: WeCom WS plugin
+    source: S043
+  - claim: SDK uses exponential reconnect starting at 1 second and capped at 30 seconds; heartbeat checks missed pongs; reply
+      ACK wait 5 seconds.
+    scope: WeCom SDK implementation
+    source: S044
+- id: wecom-bot-http-json
+  platform: wecom
+  protocol: webhook
+  plugin: '@wecom/wecom-openclaw-plugin 2026.10.19 at 2b8c84e696ec98c967ff95030270c6acb5c4b51d'
+  plugin_support: true
+  connection_initiator: WeCom sends encrypted JSON Bot callback POST to registered route. The plugin route is registered in
+    the Gateway runtime; it is not an independent receiver process.
+  paused_state: Platform Bot identity/config persists, but callback route is unavailable if its only Gateway process is stopped.
+    An actual external wake-capable ingress could receive a request first; this is conditional, not plugin-provided.
+  user_send_dm: Official AI Bot HTTP docs support direct DM; offline acceptance/retention not specified.
+  user_send_group: Official AI Bot HTTP docs support @ in groups; offline acceptance/retention not specified.
+  new_message_delivery: HTTP Bot callback contains encrypted JSON/msgid/response_url. Plugin places ordinary inbound message
+    in in-memory StreamStore and returns encrypted HTTP 200 placeholder; later platform stream_refresh requests carry response
+    progress.
+  unacked_retry: Official Bot HTTP material says duplicate callbacks may arise from network causes but gives no bounded ordinary
+    callback retry window/count. stream_refresh repeats until finish but is a response-fetch cycle, not an inbound message
+    retry.
+  offline_new_event_retention: No Bot HTTP callback offline retention guarantee found.
+  resume_path: No cursor/resume. StreamStore and msgid mapping are process-local Maps; loss of process state is not reconstructed
+    on restart. Missing stream refresh is answered finish=true.
+  openclaw_catchup_filters: HTTP handler filters missing sender/system sender/missing group chatid; msgid dedupe maps repeated
+    callbacks to existing active/stored stream. No old timestamp filter or durable catch-up found.
+  wake_inference: 'I: H0 response failure does not disprove that a wake-capable external ingress already triggered recovery.
+    H1 requires an actually available and authorized responsibility party. Without one, the in-Gateway route cannot execute
+    while Gateway is stopped. H2 200 placeholder acknowledges callback, not completed model reply.'
+  unknowns:
+  - Bot HTTP error/timeout retry schedule and offline message retention.
+  - Whether repeated stream_refresh attempts can wake an external entry in a particular deployment.
+  - Actual external ingress topology.
+  evidence:
+  - source: S045
+    kind: D
+    locator: '智能机器人接收消息: single/group callbacks, msgid duplicate note, stream_refresh up to 6 min'
+    supports:
+    - new_message_delivery
+    - user_send_dm
+    - user_send_group
+    - unacked_retry_scope
+  - source: S046
+    kind: C
+    locator: L136-L176, mode matrix and Bot HTTP configuration
+    supports:
+    - plugin_support
+    - mode_selection
+  - source: S047
+    kind: C
+    locator: L373-L491, JSON decrypt, dispatch, HTTP 200 encrypted response/error response
+    supports:
+    - new_message_delivery
+    - ack_semantics
+  - source: S048
+    kind: C
+    locator: L60-L170, in-memory message queue/placeholder; L182-L209, missing stream returns finish=true
+    supports:
+    - ack_semantics
+    - openclaw_catchup_filters
+  - source: S049
+    kind: C
+    locator: L21-L45, process-local Map stores and TTLs
+    supports:
+    - offline_new_event_retention
+    - resume_path
+  numeric_claims:
+  - claim: Bot HTTP stream-refresh waiting ceiling is 6 minutes from the user message.
+    scope: Platform stream-refresh response flow, not callback retry
+    source: S045
+  - claim: Plugin in-memory StreamStore TTL is 10 minutes and active reply URL TTL is 60 minutes.
+    scope: Process-local response state only, not platform offline message retention
+    source: S050
+- id: wecom-agent-http-xml
+  platform: wecom
+  protocol: webhook
+  plugin: '@wecom/wecom-openclaw-plugin 2026.10.19 at 2b8c84e696ec98c967ff95030270c6acb5c4b51d'
+  plugin_support: true
+  connection_initiator: WeCom pushes encrypted XML callback POST to the self-built application's configured URL. Agent route
+    is registered independently of Bot WS/HTTP selection.
+  paused_state: Corp application identity and configuration remain; whether users can send to this app under current app visibility/permission
+    and whether callback URL remains reachable are account/deployment-specific. No UI status claim.
+  user_send_dm: Conditional on the enterprise self-built app callback configuration and visibility; this is not WeCom AI Bot
+    DM. Exact user-facing interaction scope not verified.
+  user_send_group: Unknown for this Agent setup; do not transfer Bot group's @ semantics.
+  new_message_delivery: Agent callback route validates/decrypts XML then passes to handler. A received request can be processed
+    only if route/Gateway is available or an external authorized ingress wakes it.
+  unacked_retry: 'Official enterprise callback configuration: if no response within 5 seconds, server reconnects/reissues
+    up to 3 retries, only for network connection failure or request timeout. It says repeated failures can cause callbacks
+    to be discarded and does not guarantee 100% success. Plugin returns HTTP 200 success before asynchronous Agent processing.'
+  offline_new_event_retention: Retry policy covers failed/timeout callback attempts, not an unlimited offline event queue;
+    no longer retention/backfill window documented.
+  resume_path: HTTP platform retry on eligible failed request, otherwise no cursor/resume mechanism. Agent plugin duplicate
+    msgId cache is process-local 10 minutes.
+  openclaw_catchup_filters: Agent duplicate msgId inside 10-minute memory TTL is skipped but acknowledged; then message type/sender/event
+    filters apply after success response. No message-age/backlog filter found.
+  wake_inference: 'I: A callback that reached an authorized wake ingress may trigger recovery even if the 5-second deadline
+    is later missed and platform retries. If plugin has already returned success, downstream async failure is not visible
+    to platform callback retry logic. No runtime/E2E test.'
+  unknowns:
+  - Agent group interaction/message availability under tenant app configuration.
+  - Callback retry timing/spacing between its up-to-3 attempts.
+  - What platform-specific data reconciliation exists beyond HTTP callback retries.
+  evidence:
+  - source: S051
+    kind: D
+    locator: 官方回调配置; 5s deadline, up to 3 reissues for connection failure/timeout, may drop after repeated failure
+    supports:
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S046
+    kind: C
+    locator: L218-L280, Agent self-built app credentials and HTTP callback configuration
+    supports:
+    - plugin_support
+    - identity
+  - source: S040
+    kind: C
+    locator: L489-L534, Agent target registration before Bot branch; L538-L590, bot selection
+    supports:
+    - mode_selection
+    - plugin_support
+  - source: S052
+    kind: C
+    locator: L193-L280, XML decrypt and dispatch
+    supports:
+    - new_message_delivery
+    - identity
+  - source: S053
+    kind: C
+    locator: L35-L49 and L242-L292, 10-minute memory dedup; HTTP success before async process
+    supports:
+    - ack_semantics
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: Agent callback receiver timeout is 5 seconds and platform reissues at most 3 times on connection/network-request
+      timeout cases.
+    scope: Generic WeCom self-built application callback configuration; not Bot HTTP JSON
+    source: S051
+  - claim: Agent duplicate msgId memory TTL is 10 minutes.
+    scope: Current plugin process-local cache
+    source: S054
+- id: slack-socket
+  platform: slack
+  protocol: websocket
+  plugin: OpenClaw extensions/slack v2026.10.10; release commit 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be; @slack/bolt 5.1.0;
+    @slack/socket-mode 3.1.0
+  plugin_support: true
+  connection_initiator: '[D] OpenClaw client calls apps.connections.open with app-level token and opens returned WSS URL.
+    [C] SDK auto-reconnect and OpenClaw outer loop run only while process executes.'
+  paused_state: '[I] After all sockets break and the sole receiving process pauses, no Socket Mode connection remains; Slack
+    does not execute the client reconnection code or reverse-connect to start it. The app identity remains installed under
+    the stated preconditions; UI presence is separate and unknown.'
+  user_send_dm: '[I] User can send to an existing app DM under the task''s identity/permission assumptions; sending is independent
+    of the OpenClaw WebSocket.'
+  user_send_group: '[I] User can send in an existing channel under the task''s membership/permission assumptions; sending
+    is independent of the OpenClaw WebSocket.'
+  new_message_delivery: '[U] Slack''s public Socket Mode docs do not guarantee durable queuing of new events created while
+    there are zero active connections or specify retention after delivery failure.'
+  unacked_retry: '[D] envelope_id ACK is required and tells Slack whether to retry. [U] Generic Socket Mode docs do not give
+    exact deadline, retry count/cadence, or establish Delayed Events transport scope. [D] First-party Java SDK recommends
+    ACK within 3 seconds, which is an SDK guide recommendation, not the generic Socket Mode platform contract.'
+  offline_new_event_retention: '[U] No public guarantee found for the offline event retention interval; chat history and Events
+    API event delivery are separate.'
+  resume_path: '[C] After process recovery, SocketModeClient obtains a fresh apps.connections.open URL and connects a new
+    WSS session; inspected code has no resume token or event cursor.'
+  openclaw_catchup_filters: '[C] Slack ingress queues admitted events keyed by event_id; message/app_mention twins have logical-message
+    deduplication. No timestamp-age discard or automatic conversations.history startup catch-up was found in inspected path.'
+  wake_inference: '[I] Baseline Socket Mode cannot wake the paused Sandbox because client-initiated WSS reconnect code is
+    not running and there is no active receiver. No automatic OpenClaw reply is produced while paused.'
+  unknowns:
+  - '[U] Socket Mode server retry timing/count for an unacknowledged envelope.'
+  - '[U] Whether Slack Delayed Events applies to Socket Mode.'
+  - '[U] Slack user-visible bot presence while the socket is down.'
+  - '[U] Actual deployed OpenClaw version and Slack settings.'
+  evidence:
+  - source: S055
+    kind: D
+    locator: Call apps.connections.open; connect to WSS; refresh_requested; envelope ACK
+    supports:
+    - connection_initiator
+    - unacked_retry
+    - resume_path
+  - source: S056
+    kind: D
+    locator: EventsApiEnvelope acknowledgement recommendation
+    supports:
+    - unacked_retry
+  - source: S057
+    kind: C
+    locator: slackMode default, durable ingress startup, reconnect loop
+    supports:
+    - connection_initiator
+    - paused_state
+    - resume_path
+  - source: S058
+    kind: C
+    locator: resolveSlackEventId; onDurableAdmission; event.ack()
+    supports:
+    - unacked_retry
+    - openclaw_catchup_filters
+  - source: S059
+    kind: C
+    locator: start/reconnect obtains WSS URL; SocketModeClient event and ACK path
+    supports:
+    - connection_initiator
+    - resume_path
+  numeric_claims:
+  - claim: WSS approximate connection time example is 3600 seconds; connection URL refreshes periodically.
+    scope: Slack Socket Mode docs example, not a fixed lifetime guarantee.
+    source: S055
+  - claim: First-party Java SDK guide recommends event ACK within 3 seconds.
+    scope: SDK recommendation only; generic Socket Mode platform page has no numeric ACK timer.
+    source: S056
+  - claim: OpenClaw configures a 15 second client pong timeout; SDK heartbeat handling is implementation behavior.
+    scope: OpenClaw v2026.10.10 and resolved @slack/socket-mode 3.1.0.
+    source: S060
+- id: slack-http-events
+  platform: slack
+  protocol: webhook
+  plugin: OpenClaw extensions/slack v2026.10.10; release commit 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be; @slack/bolt 5.1.0;
+    @slack/web-api 8.2.0
+  plugin_support: true
+  connection_initiator: '[D] Slack sends HTTP POST to configured Request URL. [C] OpenClaw HTTP mode creates HTTPReceiver
+    with signing secret and waits for requests.'
+  paused_state: '[I] H0 failed response/timeout does not prove no wake: the request may have reached an external authorized
+    ingress and triggered recovery before the response failed. Without a live external wake-capable responsibility, a callback
+    handled only by the paused process cannot run.'
+  user_send_dm: '[I] User can send to existing app DM under task identity/permission assumptions; endpoint availability does
+    not control message composition.'
+  user_send_group: '[I] User can send in an existing channel under task membership/permission assumptions; endpoint availability
+    does not control message composition.'
+  new_message_delivery: '[D] HTTP callback requires valid 2xx within 3 seconds. Failures receive up to 3 retries (nearly immediately,
+    ~1 minute, ~5 minutes). Optional Delayed Events extends this with hourly attempts for up to 24 hours, best effort. [U]
+    No permanent storage guarantee.'
+  unacked_retry: '[D] HTTP non-2xx or timeout is considered failed delivery and participates in platform retries. x-slack-retry-num
+    and x-slack-retry-reason indicate retry metadata. [C] OpenClaw ACKs after local durable admission; duplicate retries can
+    dedupe by event_id.'
+  offline_new_event_retention: '[D] Default retries are limited; optional Delayed Events extends retries hourly up to 24 hours.
+    [U] Current docs do not guarantee retention after retry window or define exact interplay with subscription auto-disable.'
+  resume_path: '[D] No HTTP session resume; Slack retries failed callback attempts. [C] After restart, OpenClaw drains local
+    ingress records admitted before ACK if local state storage survives.'
+  openclaw_catchup_filters: '[C] Local ingress uses event_id and has retry/dead-letter handling; inspected Slack message path
+    did not show timestamp-age filtering or startup conversations.history catch-up.'
+  wake_inference: '[I] H0: failed/timeout response does not settle whether wake was triggered. H1: wake only if an actual
+    authorized reachable endpoint performs it; ACK does not prove Agent execution. H2: after successful ACK Slack regards
+    callback as delivered; local OpenClaw ingress handles later retryable processing failures.'
+  unknowns:
+  - '[U] Actual Request URL reachability, external wake responsibility, and authorization are uninspected.'
+  - '[U] Whether delayed event behavior survives app subscription disablement.'
+  - '[U] Actual deployed Slack application settings and OpenClaw release.'
+  evidence:
+  - source: S061
+    kind: D
+    locator: HTTP acknowledgement, retry schedule, failure limits, Delayed Events, presence
+    supports:
+    - new_message_delivery
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S062
+    kind: D
+    locator: Request URL, url_verification, callback handling
+    supports:
+    - connection_initiator
+  - source: S063
+    kind: D
+    locator: Delayed Events feature announcement, published 2026-02-05
+    supports:
+    - offline_new_event_retention
+  - source: S058
+    kind: C
+    locator: event_id queue identity; ACK after durable admission
+    supports:
+    - unacked_retry
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S064
+    kind: C
+    locator: local retry policy and dead-letter conditions
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S057
+    kind: C
+    locator: HTTP mode selection and HTTPReceiver setup
+    supports:
+    - connection_initiator
+  numeric_claims:
+  - claim: HTTP callback valid 2xx acknowledgement within 3 seconds.
+    scope: Slack Events API Request URL delivery contract.
+    source: S061
+  - claim: 'Up to 3 retries: nearly immediate, about 1 minute, about 5 minutes.'
+    scope: Regular inbound HTTP Events API failure retries.
+    source: S061
+  - claim: 'Delayed Events: hourly retries up to 24 hours after standard retries, best effort.'
+    scope: Opt-in feature announced 2026-02-05.
+    source: S063
+  - claim: More than 95% failed delivery attempts within 60 minutes can temporarily disable subscriptions; apps below 1,000
+      events/hour are exempt.
+    scope: Slack Events API failure limits; exact interaction with Delayed Events is not specified.
+    source: S061
+  - claim: OpenClaw local ingress dead-letter requires both at least 8 attempts and at least 24 hours record age; retry delay
+      starts around 1 second and caps at 3 minutes.
+    scope: OpenClaw core source snapshot, retryable local processing failures only.
+    source: S064
+  - claim: About 30 minutes and up to 10 retries refer to outbound Web API calls in current @slack/web-api docs, not inbound
+      Events API callbacks.
+    scope: Current Node SDK docs; OpenClaw release pins @slack/web-api 8.2.0.
+    source: S065
+- id: discord-gateway-websocket
+  platform: discord
+  protocol: websocket
+  plugin: '@openclaw/discord 2026.10.10 at OpenClaw commit f7257f2c66884611f4f4043367eada029b704918'
+  plugin_support: true
+  connection_initiator: '[C/I] OpenClaw client opens Discord Gateway WSS; it sends heartbeats while connected. With the only
+    client paused and old socket severed, Discord has no client connection to use for new event delivery and cannot open a
+    reverse WebSocket to the paused sandbox.'
+  paused_state: '[D] On abnormal TCP interruption, Discord may retain the old Gateway session for a few minutes; exact timeout
+    is not published. On clean close code 1000/1001, the session is invalidated and the bot appears offline. [I] User chat
+    messages remain independent platform messages if the user still has DM/channel access.'
+  user_send_dm: '[I] Yes, subject to normal DM access; bot Gateway availability does not control the user''s ability to post.'
+  user_send_group: '[I] Yes, subject to normal guild/channel membership and permissions. Gateway delivery of MESSAGE_CREATE
+    also requires DIRECT_MESSAGES or GUILD_MESSAGES intent as appropriate; message content fields require MESSAGE_CONTENT
+    privilege.'
+  new_message_delivery: '[D] Gateway events lost after the client''s last sequence can be replayed on successful Resume. [U]
+    No public guarantee found for replay after the Gateway session expires and the client does a fresh Identify; platform
+    chat history is separate.'
+  unacked_retry: '[D/C] Gateway resume is cursor-based: client tracks the latest Dispatch sequence and resumes with session_id
+    plus seq. This is not an Agent-answer acknowledgement. [C/I] GatewayPlugin updates its in-memory sequence before asynchronous
+    event dispatch; an event received but not durably admitted is not covered by a business-level ACK, and interruption timing
+    can matter.'
+  offline_new_event_retention: '[D] Discord says a disconnected session times out after a few minutes (no exact bound) and
+    successful Resume replays missed events. [U] No durable/unbounded Gateway event retention or fresh-Identify history catch-up
+    guarantee found.'
+  resume_path: '[D/C] In the same process, GatewayPlugin stores sessionId, resumeGatewayUrl and sequence in memory; it uses
+    Resume after recoverable closes / Reconnect opcode. Invalid Session with d=true may retry Resume; d=false resets state.
+    Close 4007 invalid sequence or 4009 timed out session requires a new session. [C] After three consecutive Resume failures
+    the plugin resets state and identifies. A new OpenClaw process does not load these fields from disk and starts with Identify.
+    Discord Gateway service-directed reconnect is distinct from OpenClaw process restart. C: GatewayPlugin.disconnect() closes
+    with 1000. Same-process Resume requires the old session still be valid and not have been cleanly closed; the actual sandbox
+    teardown path is unverified.'
+  openclaw_catchup_filters: '[C] MESSAGE_CREATE dispatch enters the same listener path whether it arrives during ordinary
+    operation or Gateway replay; no READY-only gate or blanket message-age discard was found in the receiver/ingress/preflight
+    paths inspected. Normal access and guild-mention policies still apply. Discord ingress prioritizes recent (last 15 minutes)
+    guild messages mentioning the bot, but that check only changes queue priority; it does not drop older events. Local durable
+    ingress protects only already received/admitted events.'
+  wake_inference: '[I] The disconnected client cannot wake while sandbox code is paused. If the same process resumes before
+    Discord expires its session, it may reconnect and process replayed events; after process restart or session expiry, old-message
+    recovery is not guaranteed. No runtime or E2E validation performed.'
+  unknowns:
+  - Exact Gateway resume retention time beyond the docs' approximate 'few minutes'.
+  - Whether the deployed bot has required intents and privileged-intent approval, and its actual channel/DM access.
+  - Whether deployment preserves the same OpenClaw process memory during pause or restarts the process.
+  - No guarantee found that fresh Identify automatically fetches ordinary messages sent during disconnection.
+  evidence:
+  - source: S068
+    kind: D
+    locator: Hello Event; Sending Heartbeats; Ready event; Handling a Disconnect; Initiating a Disconnect; Resuming; Preparing
+      to Resume; Gateway Intents
+    supports:
+    - heartbeat_interval
+    - session_id
+    - resume_gateway_url
+    - sequence replay
+    - few-minute session expiry
+    - close 1000/1001 offline
+    - fresh Identify after invalid session
+    - message intents
+  - source: S069
+    kind: D
+    locator: Gateway opcodes and close codes 4007 and 4009
+    supports:
+    - Reconnect and Invalid Session opcodes
+    - invalid sequence requires new session
+    - session timeout requires new session
+  - source: S070
+    kind: C
+    locator: name/version fields
+    supports:
+    - plugin package and inspected source version
+  - source: S071
+    kind: C
+    locator: GatewayPlugin.registerClient, connect, handleDispatch, getResumeState, resetSessionState, scheduleReconnect,
+      disconnect
+    supports:
+    - in-memory Resume fields
+    - Identify/Resume selection
+    - dispatch of MessageCreate
+    - Resume failure threshold
+    - close behavior
+  - source: S072
+    kind: C
+    locator: createDiscordIngressMonitor drain.prioritizePending and deliver
+    supports:
+    - 15-minute mention priority only
+    - durable admission of received raw message
+  - source: S073
+    kind: C
+    locator: DiscordMessageListener.handle
+    supports:
+    - MessageCreate listener awaits durable admission without age filter
+  - source: S074
+    kind: C
+    locator: preflightDiscordMessage
+    supports:
+    - normal access/mention policies
+    - no blanket message-age discard found in inspected preflight path
+  - source: S075
+    kind: D
+    locator: Opening Handshake; Client Requirements
+    supports:
+    - WebSocket handshake initiation direction
+  numeric_claims:
+  - claim: Gateway session after abrupt TCP interruption expires after 'a few minutes'; exact duration unspecified.
+    scope: Discord Gateway session retention, not chat-history retention.
+    source: S068
+  - claim: OpenClaw forces fresh Identify after 3 consecutive Resume failures; reconnect backoff is capped at 30 seconds and
+      attempts are capped at 50.
+    scope: Inspected OpenClaw Discord plugin source only; not a Discord platform retention limit.
+    source: S071
+  - claim: Recent guild MESSAGE_CREATE events (timestamp within 15 minutes) that mention the bot are prioritized in the local
+      pending ingress drain.
+    scope: OpenClaw queue ordering only; this does not filter/drop older messages or define Discord replay retention.
+    source: S072
+- id: mattermost-posted-websocket
+  platform: mattermost
+  protocol: websocket
+  plugin: '@openclaw/mattermost 2026.10.10 at OpenClaw commit f7257f2c66884611f4f4043367eada029b704918; server source inspected
+    at mattermost/mattermost master commit 69d345c93a527cc1361792cc967714fea9f99083'
+  plugin_support: true
+  connection_initiator: '[D/C] OpenClaw initiates GET /api/v4/websocket. Mattermost''s official API exposes connection_id
+    and sequence_number reconnect query parameters. The inspected OpenClaw plugin sends no query parameters; it authenticates
+    after upgrade with authentication_challenge.'
+  paused_state: '[I/C] Users can continue sending ordinary channel/DM posts if their own access is unchanged. [C] If Mattermost
+    has detected the old connection as inactive and retained its in-memory WebConn with a valid session, broadcasts can still
+    enqueue onto its send buffer; once full, the server removes that connection. Bot user identity persists. When all its
+    WebSockets are inactive and no cluster node has an active connection, server queues offline presence.'
+  user_send_dm: '[D/I] Yes, subject to normal DM access. OpenClaw documents DMs and group DMs; its default DM policy can still
+    deny processing or request pairing after delivery.'
+  user_send_group: '[D/I] Yes, subject to existing channel/private-channel membership and server permissions. Server delivery
+    event routing still applies user and channel eligibility.'
+  new_message_delivery: '[C] Conditional server-source capability: a compliant authenticated client with a still-valid session
+    can resume the same retained WebConn and receive events from deadQueue and pending send buffer. [U] No official API promise
+    of durable/unbounded event retention; memory loss, session invalidation, queue overflow, old connection still active,
+    reaping, restart or HA lookup failure may prevent it. [C] The inspected OpenClaw plugin does not invoke this resume path,
+    so it does not receive those offline events through its normal reconnect.'
+  unacked_retry: '[C/U] Server event sequences and client-supplied sequence_number support bounded reconnection replay in
+    inspected source. No event-level chat processing ACK is configured by OpenClaw; posted_ack is not set and is not an offline-retention
+    promise. Plugin durable ingress protects only events received by the plugin.'
+  offline_new_event_retention: '[C] In-memory WebConn send channel capacity is 256 WebSocketMessage entries; deadQueue is
+    a separate 128-entry ring of sequence-numbered WebSocketEvent frames already written toward the socket. Those counts include
+    event types beyond ordinary posts and are not message-count or TTL guarantees. Inactive cleanup checks lastUserActivityAt
+    against a 5-minute stale threshold on a 5-minute reaper tick; this is not a fixed five-minute period from disconnect.
+    [U] Actual time and HA/server behavior are deployment-dependent.'
+  resume_path: '[C] Mattermost server connectWebSocket reuses a connection only when the request has connection_id, the HTTP
+    Upgrade context has an authenticated user ID, and the same user/connection is still retained. It then uses sequence_number.
+    No separate feature flag appears in this inspected API execution path. [C] OpenClaw monitor constructs a bare /api/v4/websocket
+    URL and sends auth challenge after opening; its local sequence variable numbers outbound client actions, not server event
+    sequence. Even if the same OpenClaw process resumes, this plugin has no platform connection ID/event cursor to resume
+    with. A server restart removes in-memory queues; clustered retrieval is conditional and falls back as unreliable on lookup
+    failure.'
+  openclaw_catchup_filters: '[C] No general startup/reconnect history scan exists in the Mattermost monitor. Explicit read.ts
+    history tool fetches REST posts using before/after cursors only when invoked. monitor-thread-backfill can fetch bounded
+    earlier posts for context after a later thread message when thread history is cold, excludes the triggering post and checks
+    sender access; those older posts are context rather than individual missed event triggers. Flat DMs do not use thread
+    backfill by default.'
+  wake_inference: '[I] A paused sole client does not receive a reverse connection or auto-wake. After execution resumes, the
+    plugin reconnects as a fresh event listener and can process future live posted events. The platform could replay during
+    pause only if a custom client used the conditional resume protocol and server queue state remained; OpenClaw 2026.10.10
+    does not do that. No runtime or E2E validation performed.'
+  unknowns:
+  - Actual deployed Mattermost server commit/version and whether the inspected master implementation matches it.
+  - Whether the instance is HA, whether remote GetWSQueues succeeds, and whether old WebConn remains inactive in Hub when
+    OpenClaw reconnects.
+  - Exact offline retention from disconnect; server code uses last activity and periodic cleanup, not a disconnect-relative
+    TTL.
+  - Instance post-retention policy and bot token / channel membership status.
+  - No public platform documentation found that guarantees durable or unbounded WebSocket replay.
+  evidence:
+  - source: S076
+    kind: D
+    locator: GET /api/v4/websocket; query parameters connection_id and sequence_number; authentication section
+    supports:
+    - real-time WebSocket endpoint
+    - published reconnect parameters
+    - authentication methods
+  - source: S077
+    kind: D
+    locator: 'WebSocket section: authentication_challenge, action seq and seq_reply'
+    supports:
+    - client action sequence is distinct from event resume cursor
+  - source: S078
+    kind: D
+    locator: channel support, native slash commands, threading and sessions, DM policy
+    supports:
+    - bot token + WebSocket support
+    - DM/group/channel types
+    - HTTP slash callbacks are separate
+    - cold thread context backfill behavior
+  - source: S079
+    kind: C
+    locator: name/version fields
+    supports:
+    - plugin package and inspected source version
+  - source: S080
+    kind: C
+    locator: 'monitorMattermostProvider: WebSocket URL construction, action sequence and runWithReconnect'
+    supports:
+    - bare websocket URL
+    - new connection reconnect
+    - action sequence is local request counter
+  - source: S081
+    kind: C
+    locator: 'createMattermostConnectOnce: new WebSocket, authentication_challenge, posted dispatch'
+    supports:
+    - post-upgrade authentication
+    - no connection_id/sequence_number
+    - ordinary posted events
+    - no client replay request
+  - source: S082
+    kind: C
+    locator: createMattermostPostHandler and recoverThread invocation
+    supports:
+    - live post handling
+    - thread context backfill is invoked for thread turns
+  - source: S083
+    kind: C
+    locator: fetchEntries and createMattermostThreadBackfill
+    supports:
+    - bounded context-only thread history fetch
+    - excludes triggering post
+    - sender access checks
+  - source: S084
+    kind: C
+    locator: readMattermostMessages
+    supports:
+    - explicit REST history read via before/after cursors
+  - source: S085
+    kind: C
+    locator: connectWebSocket
+    supports:
+    - connection_id/sequence_number parsing
+    - fresh-ID fallback when no upgrade-authenticated user
+    - PopulateWebConnConfig resume path
+  - source: S086
+    kind: C
+    locator: deadQueueSize/sendQueueSize, PopulateWebConnConfig, ShouldSendEvent, writePump, addToDeadQueue, drainDeadQueue,
+      _hasMsgLoss
+    supports:
+    - in-memory bounded queues
+    - sequence replay
+    - fresh connection after missed queue loss
+  - source: S087
+    kind: C
+    locator: broadcastToConn, Hub.Unregister, CheckConn, RemoveInactiveConnections, Hub.Start
+    supports:
+    - inactive connection broadcasts queued
+    - offline presence update
+    - same-connection lookup
+    - inactive reaper
+    - cluster recovery branch
+  - source: S075
+    kind: D
+    locator: Opening Handshake; Client Requirements
+    supports:
+    - WebSocket handshake initiation direction
+  numeric_claims:
+  - claim: Mattermost server deadQueueSize = 128 sequence-numbered WebSocketEvent slots.
+    scope: Inspected server commit only; recently written event ring, not offline chat-message count or TTL.
+    source: S086
+  - claim: Mattermost server sendQueueSize = 256 WebSocketMessage buffer slots.
+    scope: Inspected server commit only; inactive retained WebConn can receive broadcasts until buffer overflow/removal; not
+      a post-count guarantee.
+    source: S086
+  - claim: Server WebSocket ping interval = 60 seconds and pong wait = 100 seconds.
+    scope: Inspected Mattermost server source; detection timing varies with transport closure and proxy behavior.
+    source: S086
+  - claim: Inactive connection reaper runs every 5 minutes and removes inactive connections whose lastUserActivityAt is more
+      than 5 minutes old.
+    scope: Inspected server implementation; this is activity-based eligibility plus periodic scan, not a fixed TTL from socket
+      disconnect.
+    source: S087
+  - claim: Thread backfill limits a request to at most 200 posts and uses a 5-second timeout.
+    scope: OpenClaw thread-context recovery only; not general message replay or event retention.
+    source: S083
+- id: whatsapp-web-baileys-ws
+  platform: whatsapp
+  protocol: websocket
+  plugin: OpenClaw @openclaw/whatsapp@2026.10.10 (source tag v2026.10.10, commit 7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be)
+    with Baileys 7.0.0-rc14 (tag commit 7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a)
+  plugin_support: true
+  connection_initiator: 'C: Gateway/Baileys client creates a WebSocket to wss://web.whatsapp.com/ws/chat and calls connect();
+    I: after all old sockets are gone, WhatsApp cannot create a new inbound TCP/WebSocket connection to the paused Sandbox
+    through this client channel. The Gateway must execute again to connect.'
+  paused_state: 'I: while Sandbox execution is paused, the Gateway heartbeat, socket monitor, reconnect loop, inbound listeners,
+    and Agent do not execute. Persisted linked-device credentials may remain, but do not prove an active connection or reception.
+    D: linked devices connect independently and do not require the primary phone to stay online; primary-phone inactivity
+    over 14 days logs linked devices out, and linked-device inactivity over 30 days causes automatic disconnect. Whether WhatsApp
+    considers a disconnected Baileys session active is U.'
+  user_send_dm: 'D/I: Assuming account and sender permissions remain valid, user can submit a DM. Offline reception by this
+    device is separate. The reviewed UK policy allows temporary retention of still-undelivered encrypted messages for up to
+    30 days, without a Baileys-device replay SLA.'
+  user_send_group: 'D/I: assuming group membership and send permissions remain valid, a user can submit a group message. The
+    same platform retention caveat applies. Group double-check semantics indicate all group members received the message and
+    do not identify this specific linked device.'
+  new_message_delivery: 'D/U: Under the reviewed UK policy, still-undelivered encrypted messages may be temporarily retained
+    up to 30 days and deleted after delivery or expiry. A double gray check can mean recipient phone or another linked device
+    received it; group checks aggregate members. None identifies this Baileys instance or proves local admission/Agent work.
+    Per-companion queueing and replay completeness are unknown.'
+  unacked_retry: 'U: no public WhatsApp/Baileys contract found for server retry count, retry duration, or exact replay behavior
+    for an event not ACKed by this companion. C: when Baileys handles an inbound message, it sends a delivery receipt before
+    emitting messages.upsert; it attempts NACK only if an exception happens before the ack. Thus a platform delivery mark/receipt
+    can precede OpenClaw durable admission.'
+  offline_new_event_retention: 'D/U: The reviewed UK privacy-policy revision effective 2026-03-26 says still-undelivered encrypted
+    messages may be retained up to 30 days, then deleted. This is a regional policy statement, not a per-companion replay
+    SLA or an OpenClaw reply window. Other-device delivery does not prove this Baileys instance received the event.'
+  resume_path: 'I/C: an external mechanism first resumes the Sandbox; OpenClaw then creates/monitors a client WebSocket using
+    saved linked-device auth. Baileys handles offline_preview by sending offline_batch count=100, processes offline nodes,
+    and marks pending notifications received when the offline batch is complete. Offline messages can be emitted as messages.upsert
+    type append. Baileys also has a separate messaging-history.set event; OpenClaw config sets syncFullHistory=false and its
+    WhatsApp inbound listener listens to messages.upsert only. None of these sources establishes a retention SLA or complete
+    replay.'
+  openclaw_catchup_filters: 'C: only notify/append upserts enter this handler. Age filtering applies only to append. Normal
+    startup/non-qualified reconnect drops append messages older than connectedAt minus 60 seconds; stale appends may be marked
+    read and completed without Agent dispatch. A maximum 20-minute append catch-up window is conditionally supplied only when
+    openedAfterRecentInbound is true; this requires reconnectAttempts>0 and a recent lastHandledInboundAt in the same controller.
+    A fresh controller/start has no such in-memory inbound and uses the 60-second guard. After the reconnect window, append
+    handling returns to startup-style age filtering. Notify bypasses this stale-append filter. Accepted inbound is journaled
+    in an account-scoped queue under stateDir and deduped by remoteJid/message id; completed IDs have a 7-day/5000-entry retention.
+    Queue admission failures after [0,100,300] delay retries are logged and dropped.'
+  wake_inference: 'I: no automatic Sandbox wake is provided by this standard WS mode. While the sole receiver is paused and
+    the prior connection is gone, no executing client exists to receive the message or reconnect. An independent external
+    wake mechanism must resume the Sandbox before the Gateway can attempt reconnection. Even after resume, platform retention
+    and Baileys offline catch-up do not bypass OpenClaw''s append filters or guarantee Agent reply.'
+  unknowns:
+  - Actual Sandbox OpenClaw/plugin/Baileys versions and runtime configuration are not provided; this report pins source for
+    analysis only.
+  - Actual WA Web protocol version negotiated at runtime is unknown because the pinned OpenClaw code fetches the latest Baileys
+    version dynamically.
+  - WhatsApp/Baileys server retry and replay semantics for an unacknowledged event, including per-linked-device queue lifetime
+    and completeness, are not publicly guaranteed by the sources inspected.
+  - Whether another linked device received a message, whether that affects a particular Baileys companion's offline backlog,
+    and how WhatsApp applies its 30-day undelivered-message rule across devices are unknown.
+  - Whether the linked device is automatically considered inactive while Sandbox is paused, and whether the primary phone
+    is used often enough to satisfy the 14-day rule, are environment-dependent and unverified.
+  - Whether the Gateway resumes the existing controller or starts a fresh process affects the conditional 20-minute reconnect
+    window; stateDir persistence affects local durable replay.
+  - Actual sender allowlists, DM/group admission rules, Agent execution, and final reply are unverified. No runtime/E2E test
+    was performed.
+  evidence:
+  - source: S088
+    kind: D
+    locator: Effective March 26, 2026; User Content > Your Messages (paragraphs 66-68); Retention of Your Information (paragraphs
+      905-925)
+    supports:
+    - offline_new_event_retention
+    - new_message_delivery
+    - user_send_dm
+    - user_send_group
+  - source: S089
+    kind: D
+    locator: About linked devices; independent devices, phone not required to stay online, 14-day primary-phone condition,
+      30-day linked-device inactivity condition, up to four linked devices
+    supports:
+    - paused_state
+    - new_message_delivery
+    - numeric_claims
+  - source: S090
+    kind: D
+    locator: How to check read receipts; sent/delivered/read check marks and group delivered condition
+    supports:
+    - new_message_delivery
+    - unacked_retry
+    - user_send_group
+  - source: S091
+    kind: D
+    locator: About message history on linked devices; recent history copy, not all chats/messages sync, Desktop syncs more
+      than Web
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S092
+    kind: C
+    locator: L1-L15; plugin version and Baileys dependency
+    supports:
+    - plugin
+    - plugin_support
+  - source: S093
+    kind: C
+    locator: L212-L225, L288-L308; persisted auth, runtime Baileys version lookup, syncFullHistory=false, socket configuration
+    supports:
+    - plugin
+    - resume_path
+    - paused_state
+  - source: S094
+    kind: C
+    locator: L136-L138, L694-L724, L737-L762, L1006-L1048; client socket, keepalive, logout, offline batch
+    supports:
+    - connection_initiator
+    - paused_state
+    - resume_path
+    - unacked_retry
+  - source: S095
+    kind: C
+    locator: L1738-L1783, L1989-L2000; delivery receipt precedes upsert, offline append and NACK path
+    supports:
+    - unacked_retry
+    - new_message_delivery
+    - resume_path
+  - source: S096
+    kind: C
+    locator: L25-L37, L63-L71; separate history and upsert event types
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S097
+    kind: C
+    locator: L115-L183, L261-L272, L531-L569; 20-minute cap, conditional append window, restart policy stop states
+    supports:
+    - openclaw_catchup_filters
+    - resume_path
+  - source: S098
+    kind: C
+    locator: L500-L509, L585-L608; in-memory recent inbound and catch-up eligibility
+    supports:
+    - openclaw_catchup_filters
+  - source: S099
+    kind: C
+    locator: L209-L224, L446-L470, L488-L564, L651-L658; append-only age guard, stale completion, admission retry/drop, messages.upsert-only
+      listener
+    supports:
+    - openclaw_catchup_filters
+    - resume_path
+    - unacked_retry
+  - source: S100
+    kind: C
+    locator: L51-L80, L132-L160; account-scoped stateDir queue and completed-entry retention
+    supports:
+    - openclaw_catchup_filters
+    - resume_path
+  numeric_claims:
+  - claim: Undelivered encrypted WhatsApp messages are retained for up to 30 days and then deleted if still undelivered.
+    scope: WhatsApp Privacy Policy general service wording; maximum retention, not delivery SLA or Baileys per-device replay
+      guarantee.
+    source: S088
+    policy_scope: Reviewed UK privacy-policy revision; not a linked-device replay SLA.
+  - claim: Up to four linked devices; primary phone unused more than 14 days logs linked devices out; linked device inactive
+      30 days is automatically disconnected.
+    scope: WhatsApp Help Center linked-device behavior; WebSocket heartbeat's activity classification is unspecified.
+    source: S089
+    policy_scope: Reviewed UK privacy-policy revision; not a linked-device replay SLA.
+  - claim: OpenClaw keepalive override 25s and connect timeout 60s; Baileys defaults are 30s and 20s.
+    scope: Pinned source behavior; actual deployed values can be configuration-dependent.
+    source: S101
+    policy_scope: Reviewed UK privacy-policy revision; not a linked-device replay SLA.
+  - claim: 'OpenClaw reconnect defaults: initial delay 2s, max delay 30s, factor 1.8, jitter 0.25, up to 12 attempts.'
+    scope: Pinned OpenClaw source; retries require an executing Gateway and do not run while Sandbox is paused.
+    source: S102
+    policy_scope: Reviewed UK privacy-policy revision; not a linked-device replay SLA.
+  - claim: Reconnect catch-up window is capped at 20 minutes and applies only to reconnects opened after recent inbound; otherwise
+      append guard is 60 seconds relative to connection start.
+    scope: Pinned OpenClaw code; not a universal max age for all WhatsApp messages and not a 20-minute delivery guarantee.
+    source: S103
+  - claim: Local completed inbound-ID retention is 7 days with a 5000-entry cap.
+    scope: Pinned OpenClaw account-scoped durable queue; covers events admitted locally, not messages missed while paused.
+    source: S104
+  policy_scope: All 30-day undelivered-message policy statements in this row refer to the reviewed UK privacy-policy revision
+    effective 2026-03-26. They are not global/per-companion replay guarantees. Device inactivity limits are separate FAQ rules.
+- id: telegram-http-polling
+  platform: telegram
+  protocol: http_polling
+  plugin: '@openclaw/telegram bundled with OpenClaw; source baseline f7257f2c66884611f4f4043367eada029b704918'
+  plugin_support: true
+  connection_initiator: OpenClaw bot client repeatedly issues HTTPS getUpdates long-poll requests; Telegram does not issue
+    a new connection into a stopped poller.
+  paused_state: Bot identity and chat remain; users can send to the bot in permitted DM/groups. No Sandbox poll runs. Telegram
+    states pending Updates are stored until received but not kept longer than 24 hours.
+  user_send_dm: Yes, subject to normal Telegram bot/chat rules; sending does not mean the stopped bot processed it.
+  user_send_group: Yes, if bot remains in the group and privacy/permissions/update filters make the message visible to the
+    bot.
+  new_message_delivery: T2 produces no request to the stopped Sandbox. Updates still pending on Telegram may be fetched after
+    recovery, subject to the 24-hour maximum, offset and update visibility.
+  unacked_retry: getUpdates returns earliest unconfirmed updates; an update is confirmed when a later getUpdates call uses
+    offset greater than its update_id. Without advancing offset it remains eligible for redelivery until expiration or explicit
+    drop.
+  offline_new_event_retention: 'D: at most 24 hours, not a guarantee of exactly 24 hours or complete delivery under all conditions.
+    No published universal queue capacity guarantee found.'
+  resume_path: 'C: OpenClaw durable ingress appends raw update before scheduling persistence of the restart offset. Restore
+    actively resumes polling from persisted cursor; already-admitted local ingress is replayed separately. Offset write scheduling/commit
+    race can cause duplicate fetch after crash. Ordinary polling startup calls deleteWebhook({drop_pending_updates:false}),
+    so clearing the webhook does not drop pending updates.'
+  openclaw_catchup_filters: OpenClaw docs document stale-legacy-import rejection for legacy spool entries older than 24h (migration-only);
+    replacing a known bot clears old local ingress rows. Fixed source shows ordinary polling startup passes drop_pending_updates:false.
+    Group privacy/filter settings still apply. Local durable queue dedupe is bounded, not exactly-once.
+  wake_inference: 'No automatic wake under the no-external-wake premise: stopped client cannot issue another long-poll request;
+    an external mechanism must resume Sandbox. After resume, recovery is active client polling.'
+  unknowns:
+  - No platform guarantee for the exact survival time of each update beyond the stated 24h maximum, queue capacity, or delivery
+    ordering through all failures.
+  - Exact installed OpenClaw version/config and state-directory persistence are unknown.
+  - Per-bot group privacy, membership, allowed_updates and account policy are not verified.
+  evidence:
+  - source: S105
+    kind: D
+    locator: Getting updates; getUpdates offset semantics; updates retention paragraph
+    supports:
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S106
+    kind: D
+    locator: deleteWebhook drop_pending_updates parameter; setWebhook has same parameter
+    supports:
+    - openclaw_catchup_filters
+  - source: S107
+    kind: C
+    locator: Polling startup deleteWebhook passes drop_pending_updates:false
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S108
+    kind: C
+    locator: Long polling and webhooks; Ingress acknowledgment boundary; Replay limits
+    supports:
+    - plugin
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S109
+    kind: C
+    locator: Transport classes and retention; local queue boundary (foundation.md)
+    supports:
+    - resume_path
+  numeric_claims:
+  - claim: Telegram pending Updates are retained no longer than 24 hours
+    scope: Bot API updates, both receive modes; maximum, not guaranteed duration
+    source: S105
+  - claim: OpenClaw legacy spool import rejects entries older than 24 hours as stale-legacy-import
+    scope: migration/import path only, not ordinary platform backlog
+    source: S110
+- id: telegram-webhook
+  platform: telegram
+  protocol: webhook
+  plugin: '@openclaw/telegram bundled with OpenClaw; source baseline f7257f2c66884611f4f4043367eada029b704918'
+  plugin_support: true
+  connection_initiator: Telegram sends HTTPS POST to the registered webhook URL. The endpoint/operator must keep a reachable
+    authorized ingress; Telegram does not guarantee it can start an arbitrary stopped Sandbox.
+  paused_state: 'Bot identity remains and users can send. Endpoint failure/timeout/non-success prevents successful HTTP acknowledgment
+    but does not establish that no external wake action happened: an ingress may trigger resume before later timing out or
+    failing. Whether any such wake owner exists is deployment-specific. After successful 2xx acknowledgment, Telegram considers
+    delivery accepted regardless of later agent execution.'
+  user_send_dm: Yes, subject to normal Telegram bot/chat rules; endpoint reachability and processing are separate.
+  user_send_group: Yes, if bot remains in group and privacy/permissions/update filters make the message visible.
+  new_message_delivery: Telegram may retry failed webhook delivery, with no general guarantee of retry window/count. A webhook
+    request may trigger resume before HTTP acknowledgment; ACK success/failure alone cannot establish whether a wake action
+    occurred. H2 is local OpenClaw queue responsibility after platform ACK.
+  unacked_retry: Telegram retries unsuccessful webhook deliveries; Retry-After response header can configure delay. Public
+    docs do not specify general attempt count/backoff/total retry duration. Bot API changelog says HTTP 410 for all requests
+    continuously for >23 hours can cause webhook auto-removal.
+  offline_new_event_retention: Bot API update retention is at most 24 hours. For webhook failures, this is not a guarantee
+    every update retries for the entire period.
+  resume_path: OpenClaw re-registers the configured URL at webhook startup; its setWebhook call omits drop_pending_updates.
+    On a failed delivery Telegram may retry while the update remains pending. OpenClaw validates request, durably enqueues,
+    then returns HTTP 200; downstream agent adoption is a separate stage. A separate ingress could trigger resume before this
+    ACK path completes.
+  openclaw_catchup_filters: Explicit setWebhook/deleteWebhook drop_pending_updates=true drops all pending updates. Fixed OpenClaw
+    source calls setWebhook without that parameter and transport docs describe durable queue ACK; no per-start unconditional
+    drop is established. OpenClaw legacy-import stale filter and identity-change queue reset apply as scoped in polling row.
+  wake_inference: 'Conditional: webhook provides an external request opportunity; Sandbox can be resumed only if a reachable
+    external ingress is assigned that responsibility. With no such wake owner, the paused in-Sandbox receiver cannot resume
+    itself. HTTP ACK success/failure alone neither proves nor disproves that resume was triggered. After successful ACK, downstream
+    failure needs local queue recovery.'
+  unknowns:
+  - Telegram webhook retry count, cadence/backoff without Retry-After, and total retry duration are not publicly specified
+    in the sources checked.
+  - H1 endpoint wake implementation and availability are deployment-specific and not tested.
+  - A successful 2xx generated by an intermediary does not prove OpenClaw durable adoption; endpoint owner must define ACK
+    boundary.
+  evidence:
+  - source: S105
+    kind: D
+    locator: Getting updates retention; setWebhook/deleteWebhook drop_pending_updates; WebhookInfo pending_update_count and
+      last_error fields
+    supports:
+    - offline_new_event_retention
+    - openclaw_catchup_filters
+  - source: S111
+    kind: D
+    locator: Webhook delivery overview
+    supports:
+    - connection_initiator
+  - source: S112
+    kind: D
+    locator: Webhook failure Retry-After; 410 removal after continuous 23h failures
+    supports:
+    - unacked_retry
+  - source: S113
+    kind: C
+    locator: setWebhook registers URL without drop_pending_updates
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S108
+    kind: C
+    locator: Webhook setup/registration and Ingress acknowledgment boundary
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: Pending Telegram updates are retained no longer than 24 hours
+    scope: Bot API updates; does not set webhook-specific retry schedule
+    source: S105
+  - claim: Persistent HTTP 410 for more than 23 hours may cause webhook auto-removal
+    scope: Telegram Bot API webhook registration
+    source: S112
+- id: matrix-http-sync
+  platform: matrix
+  protocol: http_polling
+  plugin: '@openclaw/matrix version 2026.10.10 at OpenClaw commit f7257f2c66884611f4f4043367eada029b704918; matrix-js-sdk
+    43.0.0'
+  plugin_support: true
+  connection_initiator: Matrix SDK client actively issues HTTP /sync requests with a since token and optional timeout; the
+    homeserver holds the request while waiting. No homeserver-initiated connection into the stopped Sandbox.
+  paused_state: Matrix account and room memberships remain unless separately changed; users can send events in rooms where
+    permitted. With no running client, no sync occurs. Room events are homeserver history subject to homeserver/room retention
+    and access policy; do not infer indefinite storage.
+  user_send_dm: Yes, if users remain able to message the account/room; account being offline does not itself imply the event
+    cannot be sent.
+  user_send_group: Yes, if membership/room permissions permit; visibility to the bot is still constrained by room membership
+    and history visibility.
+  new_message_delivery: No request reaches the stopped client. After restore, events may appear in incremental /sync from
+    saved next_batch, subject to homeserver history and limited-timeline behavior. On first sync without a saved cursor, OpenClaw
+    marks events whose origin_server_ts predates startup as historical (or, absent a timestamp, unsigned.age > 0); these are
+    persisted as intentional non-deliveries and not dispatched.
+  unacked_retry: Matrix /sync uses since from earlier next_batch; continuing from that token requests incremental state. OpenClaw
+    docs state it durably spools inbound events before advancing sync cursor, allowing unadopted local entries to replay after
+    restart. Matrix room-event ACK is not a generic webhook retry concept; sync cursor/replay and durable local queue are
+    distinct.
+  offline_new_event_retention: No universal duration established. Room DAG events remain queryable subject to homeserver retention,
+    room visibility and federation; server can return limited timeline for large intervals.
+  resume_path: SDK resumes active /sync using stored next_batch/cursor; OpenClaw appends inbound events to shared SQLite ingress
+    spool before cursor advancement. On restored client, normal sync event listeners feed new visible events.
+  openclaw_catchup_filters: At fixed source, first-sync events predating plugin startup are marked historical using origin_server_ts
+    (or unsigned.age when timestamp is absent), persisted, and skipped by ingress delivery; this is event-level filtering,
+    not unconditional dropping of the entire initial sync session. Matrix SDK 43.0.0 handles limited timelines by resetting
+    live timeline and setting pagination token. Explicit paginateEventTimeline performs /messages pagination; OpenClaw admitSync
+    only consumes /sync timeline events and does not call that API, so automatic sync recovery does not fill gaps. Event IDs
+    deduplicate sync replay within a finite replay window.
+  wake_inference: 'No automatic wake under premise: /sync is a client-originated HTTP long poll and client process is stopped.
+    Recovery is initiated by Sandbox/SDK only after an external resume.'
+  unknowns:
+  - Homeserver event retention, purge policy, sync response/timeline limits and federation delay are deployment-specific.
+  - Manual/other-call-site pagination remains possible; this finding is limited to the automatic OpenClaw sync ingress path
+    at the fixed snapshot.
+  - Installed plugin revision, cursor persistence health and E2EE device/key state are unknown.
+  - Presence/UI online state during pause is not inferred or tested.
+  evidence:
+  - source: S114
+    kind: D
+    locator: 'HTTP long polling: client sends request, server delays response, client re-requests'
+    supports:
+    - connection_initiator
+    - wake_inference
+  - source: S115
+    kind: D
+    locator: GET /sync; since/next_batch/timeout; limited timeline and gap pagination via /messages
+    supports:
+    - new_message_delivery
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S116
+    kind: C
+    locator: historical ingress events are not dispatched
+    supports:
+    - openclaw_catchup_filters
+  - source: S117
+    kind: C
+    locator: admitSync event-level no-cursor startup-time filter and timeline admission
+    supports:
+    - openclaw_catchup_filters
+  - source: S118
+    kind: C
+    locator: cached sync replay with saved cursor and cursor advance after admission
+    supports:
+    - resume_path
+  - source: S119
+    kind: C
+    locator: limited timeline resets live timeline and sets pagination token
+    supports:
+    - openclaw_catchup_filters
+  - source: S120
+    kind: C
+    locator: explicit paginateEventTimeline uses /messages API
+    supports:
+    - openclaw_catchup_filters
+  - source: S121
+    kind: C
+    locator: README Quickstart; startClient, ClientEvent.sync, RoomEvent.Timeline
+    supports:
+    - connection_initiator
+    - resume_path
+- id: msteams-webhook
+  platform: msteams
+  protocol: webhook
+  plugin: 'C: bundled OpenClaw msteams plugin at pinned source commit; actual installed version unknown.'
+  plugin_support: true
+  connection_initiator: 'D: Bot Framework Service sends HTTP POST activities to the registered bot messaging endpoint.'
+  paused_state: 'I: the paused process cannot handle callbacks; app identity/existing conversations may persist.'
+  user_send_dm: 'D/C: users can send to an installed bot DM; OpenClaw admission depends on account and DM policy (pairing
+    by default).'
+  user_send_group: 'D/C: users can send in bot-installed groups/channels; OpenClaw defaults to @mention required and applies
+    access policy.'
+  new_message_delivery: 'D: HTTP POST activity. C: default OpenClaw route /api/messages; durable ingress accepts message and
+    adaptiveCard/action invoke.'
+  unacked_retry: 'U: normal Teams message retry count, interval, total window not found. D: Teams client retries composeExtensions/submitAction
+    twice when its 5-second deadline is missed; not generic to ordinary message/other invokes.'
+  offline_new_event_retention: 'U: exact Teams callback retention/replay while endpoint is offline not found; chat history
+    is not callback replay evidence.'
+  resume_path: 'C/I: listener resumes and drains previously admitted local events; inspected ingress does not fetch chat history
+    or use a startup cursor.'
+  openclaw_catchup_filters: 'C: activity.id dedupe and conversation.id lane; only type message and invoke named adaptiveCard/action
+    are durable. Typing/reaction/other invoke use other paths. No age filter found. D/C: Teams agent slash commands are targeted
+    ordinary message activities, but actual manifest exposure is unknown. composeExtensions/submitAction is a distinct invoke
+    and is not in this durable allowlist; its special timeout is not ordinary-message policy.'
+  wake_inference: 'I: actual wake depends on a working external wake responsibility actor receiving and executing the request,
+    not ACK/persistence. HTTP success is not Agent completion.'
+  unknowns:
+  - Ordinary Teams message HTTP deadline and unacknowledged retry count/interval/window.
+  - Retry/timeout contracts for invoke types other than composeExtensions/submitAction, typing and other activity types.
+  - Actual app installation, tenant/access settings, online UI state, external wake actor, installed OpenClaw revision.
+  evidence:
+  - source: S122
+    kind: D
+    locator: HTTP Details; inbound POST/200 and 15 seconds on most channels
+    supports:
+    - connection_initiator
+    - new_http_timeout
+    - success_ack
+  - source: S123
+    kind: D
+    locator: composeExtensions/submitAction response deadline and client retry
+    supports:
+    - new_http_timeout
+    - unacked_retry
+  - source: S124
+    kind: C
+    locator: dmPolicy, requireMention, endpoint/account configuration
+    supports:
+    - platform_identity
+    - user_send_dm
+    - user_send_group
+  - source: S125
+    kind: C
+    locator: isDispatchableActivity, activity.id/conversation.id, createMSTeamsIngress.accept
+    supports:
+    - new_message_delivery
+    - success_ack
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S126
+    kind: C
+    locator: message durable accept; card.action response; cardActionMessage/cardActionError
+    supports:
+    - success_ack
+    - failure_ack
+    - h2
+  - source: S127
+    kind: C
+    locator: message, invoke, reaction and conversationUpdate branches
+    supports:
+    - openclaw_catchup_filters
+    - h2
+  - source: S155
+    kind: D
+    locator: Slash commands as targeted normal message activities
+    supports:
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: HTTP 200 within 15 seconds; late request gets 504
+    scope: General Bot Framework docs say most channels; not a Teams-specific ordinary-message guarantee
+    source: S122
+  - claim: 5-second response deadline followed by two client retries
+    scope: composeExtensions/submitAction only
+    source: S123
+- id: googlechat-webhook
+  platform: googlechat
+  protocol: webhook
+  plugin: 'C: official @openclaw/googlechat plugin at pinned source commit; current docs say HTTP endpoint only/no Pub/Sub;
+    installed revision unknown.'
+  plugin_support: true
+  connection_initiator: 'D: Google Chat sends HTTPS interaction requests to configured endpoint. OpenClaw plugin does not
+    use WebSocket or Workspace Events Pub/Sub.'
+  paused_state: 'I: existing app identity may remain, but callback handler cannot run in paused process.'
+  user_send_dm: 'D: message trigger includes a direct message to the Chat app. C: actual app visibility/access is configuration-dependent.'
+  user_send_group: 'D/C: Users can send in an installed app space subject to permissions and trigger configuration. Legacy
+    slash commands are MESSAGE; modern add-on appCommandPayload is not mapped to a durable turn by the checked plugin. Do
+    not assume all app-command formats are supported.'
+  new_message_delivery: 'D: configured HTTPS endpoint receives interaction event. C: default OpenClaw path /googlechat; HTTP
+    only/no Pub/Sub.'
+  unacked_retry: 'D: timeout, temporary network failure or non-2xx may be retried a few times within a few minutes, not guaranteed.
+    Invalid response payload after successful request does not retry. Exact count/interval/window unpublished.'
+  offline_new_event_retention: 'U: event retention/replay after retry attempts stop not found; Chat history and separate Workspace
+    Events API do not prove this HTTP plugin receives backlog.'
+  resume_path: 'C/I: endpoint resumes and local queue drains already accepted messages. No Workspace Events/Pub/Sub subscription
+    or startup history catch-up found.'
+  openclaw_catchup_filters: 'C: durable ingress accepts MESSAGE only; message.name is event identity and space.name the lane.
+    Other interactions do not create durable message turns. No timestamp-age filter found. C: Add-on chat.messagePayload maps
+    to MESSAGE. chat.appCommandPayload is absent from normalizer and durable classifier; unsupported action format cannot
+    be assumed recoverable.'
+  wake_inference: 'I: wake depends on an actually working external wake responsibility actor. HTTP 200/durable marker acknowledges
+    admission, not Agent completion.'
+  unknowns:
+  - Exact platform retry count, interval and total retry window.
+  - Retention/replay after unacknowledged HTTP attempts cease.
+  - Actual Cloud app visibility, installation/space membership, endpoint and installed plugin version.
+  evidence:
+  - source: S128
+    kind: D
+    locator: 30-second synchronous response, async empty response, Handle HTTP call retries
+    supports:
+    - new_http_timeout
+    - success_ack
+    - unacked_retry
+    - h0
+    - h2
+  - source: S129
+    kind: D
+    locator: Workspace Events API subscription/query model, separate from interaction webhook
+    supports:
+    - connection_initiator
+    - offline_new_event_retention
+    - resume_path
+  - source: S130
+    kind: C
+    locator: HTTP endpoint only/no Pub/Sub and setup
+    supports:
+    - connection_initiator
+    - new_message_delivery
+    - resume_path
+  - source: S131
+    kind: C
+    locator: ingress.receive; durable marker; 400/503/200 response
+    supports:
+    - success_ack
+    - failure_ack
+    - h2
+  - source: S132
+    kind: C
+    locator: MESSAGE-only admission and message/space identity
+    supports:
+    - openclaw_catchup_filters
+    - resume_path
+    - h2
+  - source: S154
+    kind: C
+    locator: parseGoogleChatInboundPayload; messagePayload/buttonClickedPayload only, no appCommandPayload mapping
+    supports:
+    - user_send_group
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: Synchronous interaction response within 30 seconds
+    scope: Google Chat interaction response; async work acknowledges with empty JSON
+    source: S128
+  - claim: A few retries within a few minutes, not guaranteed
+    scope: HTTPS timeout, temporary network failure or non-2xx; exact numbers unpublished
+    source: S128
+- id: line-webhook
+  platform: line
+  protocol: webhook
+  plugin: 'C: official @openclaw/line plugin at pinned source commit; installed revision unknown.'
+  plugin_support: true
+  connection_initiator: 'D: LINE Platform POSTs events to the registered webhook URL. OpenClaw is an inbound HTTP receiver.'
+  paused_state: 'I: account and chats may remain, but paused process cannot verify, queue, reply or run recovery code.'
+  user_send_dm: 'D/C: user can DM a LINE OA they have added; OpenClaw DM default policy is pairing.'
+  user_send_group: 'D/C: group/multi-person message events are available when OA is a member; OpenClaw group default is allowlist.'
+  new_message_delivery: 'D: LINE sends webhook events for one-to-one, group and multi-person message events to configured
+    URL. C: default OpenClaw path /line/webhook.'
+  unacked_retry: 'D: redelivery disabled by default; requires Use webhook and Webhook redelivery. If enabled, non-2xx webhook
+    is sent a predefined number of times and interval, both undisclosed/subject to change. Best-effort, not guaranteed, may
+    be disabled; after unspecified period retries stop and operator is notified.'
+  offline_new_event_retention: 'U: exact redelivery window unpublished. If off/stopped/exhausted there is no guarantee of
+    text recovery; LINE says no API retrieves text again after webhook receipt.'
+  resume_path: 'C/I: Gateway reopens HTTP route and drains already accepted local events. New POST or platform retry can be
+    received if delivered; no chat-text history backfill found.'
+  openclaw_catchup_filters: 'C: message event dedupe uses LINE message ID; other events use webhookEventId. Standby batch
+    can be ACKed without queue. Platform redelivery may duplicate and reorder. No age-based ingress rejection found.'
+  wake_inference: 'I: wake requires a working external wake responsibility actor. HTTP ACK/durable admission and Agent reply
+    are separate outcomes.'
+  unknowns:
+  - Actual channel Use webhook and Webhook redelivery settings.
+  - Platform retry count, interval, total window, and actual channel standby mode.
+  - Installed OpenClaw revision and push fallback credentials/quota/availability.
+  reply_recovery: 'D/C: Reply token is single-use, normally within 1 minute of webhook receipt. Redelivery allows 1 minute
+    from redelivery unless already used or event age exceeds 20 minutes. Fallback predicate: when HTTP status is recognized,
+    only 4xx except 408 allows. Otherwise AbortError/recognized ambiguous network errors deny, recognized pre-connect allows,
+    and all remaining cases allow except exact TypeError("fetch failed"). Partial delivery separately denies fallback. Predicate
+    allowance does not prove safety or delivery. Attempt consumes local token slot even if fallback fails; push is not guaranteed.'
+  evidence:
+  - source: S133
+    kind: D
+    locator: event types, redelivery enable/conditions/limitations, duplicate/out-of-order and text retrieval
+    supports:
+    - new_message_delivery
+    - unacked_retry
+    - offline_new_event_retention
+    - reply_token
+  - source: S134
+    kind: D
+    locator: request_timeout classification at 2 seconds
+    supports:
+    - new_http_timeout
+  - source: S135
+    kind: D
+    locator: redelivery stops after unspecified period
+    supports:
+    - unacked_retry
+    - offline_new_event_retention
+  - source: S136
+    kind: D
+    locator: Send reply message / Reply token rules
+    supports:
+    - reply_token
+  - source: S137
+    kind: C
+    locator: durable ingress, standby behavior, local retry/dedupe and platform redelivery setting
+    supports:
+    - success_ack
+    - h2
+    - resume_path
+    - openclaw_catchup_filters
+    - user_send_dm
+    - user_send_group
+  - source: S138
+    kind: C
+    locator: signature, body-read guard, queue-before-200, persistence 500
+    supports:
+    - new_message_delivery
+    - success_ack
+    - failure_ack
+  - source: S139
+    kind: C
+    locator: durable local spool
+    supports:
+    - h2
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S140
+    kind: C
+    locator: canFallbackAfterLineReplyFailure and reply-token attempt handling
+    supports:
+    - reply_token
+    - first_message_after_recovery
+  numeric_claims:
+  - claim: No response within 2 seconds is classified request_timeout
+    scope: LINE webhook error statistics diagnostic, not a broader SLA
+    source: S134
+  - claim: Redelivery default off; count and interval undisclosed
+    scope: Requires Use webhook and Webhook redelivery; best-effort only
+    source: S133
+  - claim: Reply token single-use, normally 1 minute; redelivery exception and 20-minute event age limit
+    scope: LINE reply token; subject to change and not guaranteed after long pause
+    source: S136
+  - claim: Local retry starts at 1 second, doubles, about 2 minutes cumulative; dead-letter after 8th failed attempt
+    scope: OpenClaw LINE local queue, not LINE Platform redelivery
+    source: S137
+  - claim: Internal OpenClaw request-body timeout is 5 seconds
+    scope: Pre-auth body read guard; not LINE platform callback timeout
+    source: S138
+- id: irc-tcp-tls
+  platform: irc
+  protocol: tcp_tls
+  plugin: '@openclaw/irc@2026.10.10; source commit f7257f2c66884611f4f4043367eada029b704918 (not installed-runtime proof)'
+  plugin_support: true
+  connection_initiator: 'OpenClaw IRC plugin initiates an outbound connection to configured server host:port: tls.connect
+    when tls=true, net.connect otherwise. The client does not expose a listener for an IRC server to initiate a replacement
+    connection.'
+  paused_state: After T1 socket closure, the server removes that client session/nick/channel membership when it learns the
+    connection closed; if the path is a silent failure, server PING/PONG detection is implementation-timed. RFCs do not specify
+    a universal timeout. No OpenClaw code executes while Sandbox is suspended.
+  user_send_dm: If server currently treats the target nickname as unused, RFC 2812 specifies 401 ERR_NOSUCHNICK. Before it
+    detects the dead session, the nick may still appear online and a PRIVMSG may be routed to an unresponsive connection.
+    IRC baseline does not guarantee an offline mailbox or later delivery; NickServ nick registration alone is not message
+    storage.
+  user_send_group: If sender remains in the channel and its modes permit sending, PRIVMSG to the channel fans out to current
+    members. Bot removed from channel after disconnect gets no event; sender may send successfully and other members receive
+    it. 404 ERR_CANNOTSENDTOCHAN means sender/channel permission restriction, not that the bot is absent. If channel empties
+    or network services persist it, exact behavior is network-specific.
+  new_message_delivery: No new connection/wake request reaches the sleeping plugin through baseline IRC. Direct messages to
+    an unused nick fail under the standard 401 condition; messages to a still-populated channel may be delivered only to the
+    current members. Channel and user send acceptance are not an OpenClaw delivery acknowledgment.
+  unacked_retry: OpenClaw documents that an IRC PRIVMSG already accepted into its durable ingress queue remains pending/retryable
+    across Gateway restart and is serialized per peer/channel. This local accept-to-dispatch queue does not include messages
+    never received while disconnected. IRC has no replayable delivery ID; local event ID is scoped to one TCP connection epoch.
+  offline_new_event_retention: No general IRC server offline-message retention/replay guarantee. IRCv3 CHATHISTORY is optional,
+    capability-negotiated and only returns data still available from a server or bouncer; it is WIP. External bouncer/network-services
+    behavior is outside the baseline and unspecified.
+  resume_path: On process resumption after close detection, monitorIrcProvider schedules a client-side reconnect using exponential
+    backoff (initial 1s, max 30s, factor 2, 20% jitter; reset after 60s stable). A new connection sends optional PASS then
+    NICK/USER; after 001 it sends configured NickServ commands and re-JOINs configured channels. Timers and monitor require
+    Sandbox execution.
+  openclaw_catchup_filters: Inspected client.ts/config-schema.ts implement no IRCv3 CAP/CHATHISTORY or SASL AUTHENTICATE flow.
+    IRC ingress generates local:<epoch>:<sequence> only after receiving PRIVMSG. Channel events queued before disconnect can
+    replay; monitor.ts drops old-epoch DMs because nick ownership can change. No platform-history catch-up path was found
+    in the inspected plugin.
+  wake_inference: 'No automatic wake: the plugin is the outbound TCP/TLS client, while suspended code cannot process IRC input
+    or initiate a new socket. An external mechanism must resume Sandbox; only then can OpenClaw observe/discover disconnection
+    and reconnect. Optional external bouncer/history services can change retention but are not baseline wake channels.'
+  unknowns:
+  - Actual server's detection interval and timeout, and whether it observes clean close or only a silent network failure.
+  - Whether NickServ or network services reserve/reclaim the nick or implement private-message buffering.
+  - Whether a specific IRC network supports CHATHISTORY, and its stored history window, privacy rules, and availability.
+  - Whether actual configured server permits PASS/NickServ login or requires unsupported SASL; no network was specified.
+  - Whether a specific channel persists when empty, its modes, and whether sender may post during T2.
+  - No live connection or runtime/E2E behavior was tested; package source snapshot is not proof of deployed plugin version.
+  evidence:
+  - source: S141
+    kind: C
+    locator: connectIrcClient; socket creation; socket 'connect' registration; 001 handling; tryRecoverNickCollision; IRC_LIVENESS_TIMEOUT_MS/livenessTimer
+    supports:
+    - connection_initiator
+    - paused_state
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S142
+    kind: C
+    locator: monitorIrcProvider dispatch stale-DM check; scheduleReconnect; connect; onDisconnect; onPrivmsg
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+    - wake_inference
+  - source: S143
+    kind: C
+    locator: IRC_RECONNECT_BACKOFF; IRC_RECONNECT_STABLE_MS; createIrcReconnectBackoff
+    supports:
+    - resume_path
+  - source: S144
+    kind: C
+    locator: createIrcIngressMonitor; openConnection; accept; local event ID construction
+    supports:
+    - unacked_retry
+    - openclaw_catchup_filters
+  - source: S145
+    kind: C
+    locator: IrcAccountSchemaBase; NickServ and connection options; no SASL/history fields
+    supports:
+    - resume_path
+    - openclaw_catchup_filters
+  - source: S146
+    kind: C
+    locator: Inbound durability; Connection settings; dropped network path watchdog
+    supports:
+    - paused_state
+    - unacked_retry
+    - offline_new_event_retention
+    - resume_path
+  - source: S147
+    kind: C
+    locator: package name/version
+    supports:
+    - plugin
+  - source: S148
+    kind: D
+    locator: §3.1 connection registration; §3.3.1 PRIVMSG; §3.7.2 PING; §5.2 numerics 401, 404, 433, 436; Informational memo
+    supports:
+    - paused_state
+    - user_send_dm
+    - user_send_group
+    - new_message_delivery
+  - source: S149
+    kind: D
+    locator: §1.3 channels/JOIN; §3.2.2 channel fan-out; §4.1.6 QUIT; §4.2.1 JOIN; §8.1 TCP; §8.4 liveness; §8.7 disconnect;
+      Experimental protocol
+    supports:
+    - paused_state
+    - user_send_group
+    - new_message_delivery
+  - source: S150
+    kind: D
+    locator: Introduction and Implementation; server or bouncer history only if still available; draft/chathistory negotiation;
+      work-in-progress status
+    supports:
+    - offline_new_event_retention
+    - openclaw_catchup_filters
+  numeric_claims:
+  - claim: 401 ERR_NOSUCHNICK means the nickname parameter is currently unused.
+    scope: IRC RFC 2812 base behavior when the server currently treats the target nick as unused; no assurance about delayed
+      failure or network-specific services.
+    source: S148
+  - claim: 404 ERR_CANNOTSENDTOCHAN concerns sender restrictions such as +n/+m/ban; it does not mean the bot is offline.
+    scope: IRC RFC 2812 base numeric semantics.
+    source: S148
+  - claim: OpenClaw IRC plugin sends PING after 120 seconds of receive silence and destroys the socket after 240 seconds of
+      silence.
+    scope: OpenClaw source commit f7257f2c66884611f4f4043367eada029b704918; plugin watchdog, not universal IRC server timeout.
+    source: S141
+  - claim: OpenClaw reconnect backoff starts at 1000ms, maxes at 30000ms, factor 2 with 0.2 jitter and resets after 60000ms
+      stable connection.
+    scope: OpenClaw source commit f7257f2c66884611f4f4043367eada029b704918; actual delay is jittered and only scheduled while
+      process executes.
+    source: S143
+conditional_variants:
+- id: slack-relay-conditional
+  platform: slack
+  protocol: websocket
+  plugin: OpenClaw extensions/slack relay mode v2026.10.10; relay server implementation not reviewed
+  plugin_support: true
+  connection_initiator: '[C] OpenClaw Gateway initiates a WebSocket connection to configured relay URL. Conditional separate
+    Slack socket owner is external to the Gateway.'
+  paused_state: '[I/U] If an independent active router owns Slack Socket Mode, Slack may continue delivering there while Gateway
+    sleeps. Whether router remains alive is an external condition.'
+  user_send_dm: '[I] User can send under the same existing identity and permission assumptions.'
+  user_send_group: '[I] User can send under the same existing channel membership and permission assumptions.'
+  new_message_delivery: '[U] Router persistence and redelivery during Gateway pause are not established by inspected OpenClaw
+    plugin source.'
+  unacked_retry: '[C] OpenClaw plugin ACKs relay delivery_id after local durable admission. [U] Router retry semantics while
+    Gateway is disconnected are unknown.'
+  offline_new_event_retention: '[U] Relay server event retention is unknown; do not infer it from Slack chat history or OpenClaw
+    ingress.'
+  resume_path: '[C] Gateway reconnects to relay WebSocket after restore. [U] Whether relay replays offline frames depends
+    on unreviewed router implementation.'
+  openclaw_catchup_filters: '[C] Relay events enter OpenClaw local durable ingress; local processing retries apply after admission.'
+  wake_inference: '[I/U] Relay changes the baseline only if there is an active authorized external receiver that actually
+    performs wake responsibility. Router-as-receiver alone does not prove wake or durable forwarding.'
+  unknowns:
+  - '[U] Relay router source/configuration, event retention, delivery ACK protocol and retry policy.'
+  - '[U] Whether router has an actual authorized wake path.'
+  evidence:
+  - source: S066
+    kind: C
+    locator: 'Slack transport docs: relay mode'
+    supports:
+    - connection_initiator
+  - source: S067
+    kind: C
+    locator: Relay WebSocket client/reconnect/dispatch
+    supports:
+    - connection_initiator
+    - resume_path
+  - source: S058
+    kind: C
+    locator: acceptRelayEvent; local durable admission before relay ACK
+    supports:
+    - unacked_retry
+    - openclaw_catchup_filters
+sources:
+- id: S001
+  url: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/event-subscriptions
+- id: S002
+  url: https://open.feishu.cn/document/ukTMukTMukTM/uYDNxYjL2QTM24iN0EjN/event-subscription-configure-
+- id: S003
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/feishu/src/monitor.transport.ts
+- id: S004
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/feishu/src/feishu-ingress.ts
+- id: S005
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/feishu/setup.md
+- id: S006
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/feishu/access-control.md
+- id: S007
+  url: https://docs.openclaw.ai/channels/wechat
+- id: S008
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/docs/protocol.md#L5-L24
+- id: S009
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/docs/protocol.md#L130-L179
+- id: S010
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/monitor/monitor.ts#L70-L82
+- id: S011
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/monitor/monitor.ts#L94-L103
+- id: S012
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/monitor/monitor.ts#L152-L183
+- id: S013
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/storage/sync-buf.ts#L12-L18
+- id: S014
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/api/session-guard.ts#L3-L17
+- id: S015
+  url: https://github.com/Tencent/openclaw-weixin/blob/874637a0dbc24050f72d1385add4fc6170a2d726/src/monitor/monitor.ts#L13-L16
+- id: S016
+  url: https://docs.openclaw.ai/channels/qqbot
+- id: S017
+  url: https://github.com/tencent-connect/openclaw-qqbot/blob/89988812442583bf47c34b89f9abf5fd4b85df0b/package.json#L1-L60
+- id: S018
+  url: https://github.com/tencent-connect/openclaw-qqbot/blob/89988812442583bf47c34b89f9abf5fd4b85df0b/package-lock.json
+- id: S019
+  url: https://github.com/tencent-connect/openclaw-qqbot/blob/89988812442583bf47c34b89f9abf5fd4b85df0b/src/gateway/qqbot-gateway.ts#L102-L163
+- id: S020
+  url: https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/gateway/gateway-connection.ts#L203-L245
+- id: S021
+  url: https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/gateway/gateway-connection.ts#L300-L335
+- id: S022
+  url: https://github.com/tencent-connect/qqbot-nodejs/blob/429a0f1b798f3b0fcef3679e207dbc0469a1df2d/src/protocol/gateway/gateway-connection.ts#L344-L410
+- id: S023
+  url: https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/middleware/message-filter.ts#L22-L80
+- id: S024
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/qqbot.md#L49-L53
+- id: S025
+  url: https://github.com/tencent-connect/openclaw-qqbot/blob/89988812442583bf47c34b89f9abf5fd4b85df0b/README.md#L510-L545
+- id: S026
+  url: https://github.com/tencent-connect/openclaw-qqbot/blob/89988812442583bf47c34b89f9abf5fd4b85df0b/src/adapter/webhook.ts#L34-L95
+- id: S027
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/src/plugin-sdk/webhook-ingress.ts#L44-L60
+- id: S028
+  url: https://github.com/tencent-connect/qqbot-nodejs/blob/ca55d9c395b582b7fcfad0ec27209c35dd04e0b3/src/protocol/transport/webhook.ts#L142-L159
+- id: S029
+  url: https://opensource.dingtalk.com/developerpedia/docs/learn/bot/appbot/receive/
+- id: S030
+  url: https://opensource.dingtalk.com/developerpedia/docs/learn/stream/protocol/
+- id: S031
+  url: https://opensource.dingtalk.com/developerpedia/docs/learn/stream/faq/
+- id: S032
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/src/core/connection.ts
+- id: S033
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/src/channel.ts
+- id: S034
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/src/utils/utils-legacy.ts
+- id: S035
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/src/core/connection.ts#L60-L67
+- id: S036
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/src/utils/utils-legacy.ts#L183-L205
+- id: S037
+  url: https://open.dingtalk.com/document/orgapp/receive-message
+- id: S038
+  url: https://github.com/DingTalk-Real-AI/dingtalk-openclaw-connector/blob/88df00ee594072e9941ef3f71da90a37f3291ad3/openclaw.plugin.json
+- id: S039
+  url: https://developer.work.weixin.qq.com/document/path/101463
+- id: S040
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/channel.ts
+- id: S041
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/monitor.ts
+- id: S042
+  url: https://github.com/WecomTeam/aibot-node-sdk/blob/80615b987ef69c6028ad764924609247c0725955/src/ws.ts
+- id: S043
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/const.ts#L34-L47
+- id: S044
+  url: https://github.com/WecomTeam/aibot-node-sdk/blob/80615b987ef69c6028ad764924609247c0725955/src/ws.ts#L44-L69
+- id: S045
+  url: https://developer.work.weixin.qq.com/document/path/100719
+- id: S046
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/README.zh.md
+- id: S047
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/webhook/handler.ts
+- id: S048
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/webhook/monitor.ts
+- id: S049
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/webhook/state.ts
+- id: S050
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/webhook/state.ts#L21-L27
+- id: S051
+  url: https://developer.work.weixin.qq.com/document/path/90930
+- id: S052
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/agent/webhook.ts
+- id: S053
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/agent/handler.ts
+- id: S054
+  url: https://github.com/WecomTeam/wecom-openclaw-plugin/blob/2b8c84e696ec98c967ff95030270c6acb5c4b51d/src/agent/handler.ts#L35-L49
+- id: S055
+  url: https://docs.slack.dev/apis/events-api/using-socket-mode/
+- id: S056
+  url: https://docs.slack.dev/tools/java-slack-sdk/guides/socket-mode/
+- id: S057
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/slack/src/monitor/provider.ts
+- id: S058
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/slack/src/monitor/ingress.ts
+- id: S059
+  url: https://github.com/slackapi/node-slack-sdk/blob/a98047a7f27149812664c78e2dccfe4155b0e145/packages/socket-mode/src/SocketModeClient.ts
+- id: S060
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/slack/src/monitor/provider-support.ts
+- id: S061
+  url: https://docs.slack.dev/apis/events-api/
+- id: S062
+  url: https://docs.slack.dev/apis/events-api/using-http-request-urls/
+- id: S063
+  url: https://docs.slack.dev/changelog/2026/02/05/retry-events-feature/
+- id: S064
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/src/channels/message/ingress-retry-policy.ts
+- id: S065
+  url: https://docs.slack.dev/tools/node-slack-sdk/web-api/
+- id: S066
+  url: https://docs.openclaw.ai/channels/slack/transports
+- id: S067
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/slack/src/monitor/relay-source.ts
+- id: S068
+  url: https://docs.discord.com/developers/events/gateway
+- id: S069
+  url: https://docs.discord.com/developers/topics/opcodes-and-status-codes
+- id: S070
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/discord/package.json
+- id: S071
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/discord/src/internal/gateway.ts
+- id: S072
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/discord/src/monitor/ingress.ts
+- id: S073
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/discord/src/monitor/listeners.ts
+- id: S074
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/discord/src/monitor/message-handler.preflight.ts
+- id: S075
+  url: https://www.rfc-editor.org/rfc/rfc6455.html
+- id: S076
+  url: https://docs.mattermost.com/api/reference/connect-web-socket
+- id: S077
+  url: https://docs.mattermost.com/api/reference/mattermost-api
+- id: S078
+  url: https://docs.openclaw.ai/channels/mattermost
+- id: S079
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/package.json
+- id: S080
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/src/mattermost/monitor.ts
+- id: S081
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/src/mattermost/monitor-websocket.ts
+- id: S082
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/src/mattermost/monitor-posts.ts
+- id: S083
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/src/mattermost/monitor-thread-backfill.ts
+- id: S084
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/mattermost/src/mattermost/read.ts
+- id: S085
+  url: https://github.com/mattermost/mattermost/blob/69d345c93a527cc1361792cc967714fea9f99083/server/channels/api4/websocket.go
+- id: S086
+  url: https://github.com/mattermost/mattermost/blob/69d345c93a527cc1361792cc967714fea9f99083/server/channels/app/platform/web_conn.go
+- id: S087
+  url: https://github.com/mattermost/mattermost/blob/69d345c93a527cc1361792cc967714fea9f99083/server/channels/app/platform/web_hub.go
+- id: S088
+  url: https://www.whatsapp.com/legal/privacy-policy-uk/revisions/20260326
+- id: S089
+  url: https://faq.whatsapp.com/378279804439436/
+- id: S090
+  url: https://faq.whatsapp.com/665923838265756/
+- id: S091
+  url: https://faq.whatsapp.com/653480766448040/
+- id: S092
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/package.json
+- id: S093
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/session.ts
+- id: S094
+  url: https://github.com/WhiskeySockets/Baileys/blob/7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a/src/Socket/socket.ts
+- id: S095
+  url: https://github.com/WhiskeySockets/Baileys/blob/7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a/src/Socket/messages-recv.ts
+- id: S096
+  url: https://github.com/WhiskeySockets/Baileys/blob/7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a/src/Types/Events.ts
+- id: S097
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/auto-reply/monitor.ts
+- id: S098
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/connection-controller.ts
+- id: S099
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/inbound/message-delivery.ts
+- id: S100
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/inbound/durable-receive.ts
+- id: S101
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/socket-timing.ts#L37-L41
+- id: S102
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/reconnect.ts#L13-L40
+- id: S103
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/auto-reply/monitor.ts#L115-L183
+- id: S104
+  url: https://github.com/openclaw/openclaw/blob/7dc3350cb9f08fcf9a0af5c4845a20d5b2f1a8be/extensions/whatsapp/src/inbound/durable-receive.ts#L132-L160
+- id: S105
+  url: https://core.telegram.org/bots/api#getting-updates
+- id: S106
+  url: https://core.telegram.org/bots/api#deletewebhook
+- id: S107
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/telegram/src/polling-session.ts#L258-L264
+- id: S108
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/telegram/transports.md
+- id: S109
+  url: https://github.com/openclaw/openclaw/blob/main/docs/plugins/sdk-channel-plugins/durable-ingress.md
+- id: S110
+  url: https://github.com/openclaw/openclaw/blob/v2026.10.10/docs/channels/telegram/transports.md
+- id: S111
+  url: https://core.telegram.org/bots/webhooks
+- id: S112
+  url: https://core.telegram.org/bots/api-changelog
+- id: S113
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/telegram/src/webhook.ts#L461-L470
+- id: S114
+  url: https://www.rfc-editor.org/rfc/rfc6202.html#section-2.1
+- id: S115
+  url: https://spec.matrix.org/v1.19/client-server-api/#get_matrixclientv3sync
+- id: S116
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/matrix/src/matrix/monitor/ingress.ts#L81-L99
+- id: S117
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/matrix/src/matrix/monitor/ingress.ts#L115-L148
+- id: S118
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/matrix/src/matrix/client/file-sync-store.ts#L107-L160
+- id: S119
+  url: https://github.com/matrix-org/matrix-js-sdk/blob/v43.0.0/src/sync.ts#L1358-L1407
+- id: S120
+  url: https://github.com/matrix-org/matrix-js-sdk/blob/v43.0.0/src/client.ts#L5275-L5323
+- id: S121
+  url: https://github.com/matrix-org/matrix-js-sdk
+- id: S122
+  url: https://learn.microsoft.com/en-us/azure/bot-service/bot-builder-basics?view=azure-bot-service-4.0
+- id: S123
+  url: https://learn.microsoft.com/en-us/microsoftteams/platform/messaging-extensions/how-to/action-commands/respond-to-task-module-submit?tabs=dotnet%2Cdotnet-1
+- id: S124
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/msteams/configuration.md
+- id: S125
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/msteams/src/msteams-ingress.ts
+- id: S126
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/msteams/src/monitor.ts
+- id: S127
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/msteams/src/monitor-handler.ts
+- id: S128
+  url: https://developers.google.com/workspace/chat/receive-respond-interactions
+- id: S129
+  url: https://developers.google.com/workspace/chat/events-overview
+- id: S130
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/googlechat.md
+- id: S131
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/googlechat/src/monitor-webhook.ts
+- id: S132
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/googlechat/src/monitor-ingress.ts
+- id: S133
+  url: https://developers.line.biz/en/docs/messaging-api/receiving-messages/
+- id: S134
+  url: https://developers.line.biz/en/docs/messaging-api/check-webhook-error-statistics/
+- id: S135
+  url: https://developers.line.biz/en/docs/partner-docs/error-notification/
+- id: S136
+  url: https://developers.line.biz/en/reference/messaging-api/nojs/
+- id: S137
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/line.md
+- id: S138
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/line/src/webhook-node.ts
+- id: S139
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/line/src/webhook-spool.ts
+- id: S140
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/line/src/auto-reply-delivery.ts
+- id: S141
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/client.ts
+- id: S142
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/monitor.ts
+- id: S143
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/reconnect-backoff.ts
+- id: S144
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/irc-ingress.ts
+- id: S145
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/config-schema.ts
+- id: S146
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/channels/irc.md
+- id: S147
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/package.json
+- id: S148
+  url: https://datatracker.ietf.org/doc/html/rfc2812
+- id: S149
+  url: https://datatracker.ietf.org/doc/html/rfc1459
+- id: S150
+  url: https://ircv3.net/specs/extensions/chathistory
+- id: S151
+  url: https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/websocket.html
+- id: S152
+  url: https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/webhook.html
+- id: S153
+  url: https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/payload.html
+- id: S154
+  url: https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/googlechat/src/monitor-event.ts
+- id: S155
+  url: https://learn.microsoft.com/en-us/microsoftteams/platform/teams-sdk/essentials/on-activity/overview
