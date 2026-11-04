@@ -9,7 +9,7 @@
 | 完整 E2B Webhook URL | 目标 Sandbox public ID、应用端口和事件路径；Gateway 解析 ID 后从已有路由取得对象 UID，不要求用户手工提供 UID。 |
 | 飞书 App ID | 校验事件所属应用，并与获准访问的目标入口绑定；App ID 不是秘密。 |
 | Verification Token | 飞书应用“事件与回调 → 加密策略”中的验证信息；用于对应协议校验及 URL challenge。只需配置秘密引用，不把值写入项目记录。 |
-| Encrypt Key | 若飞书开启加密，Gateway 需要相同 Key 验签/解密检查；原始请求转交给应用，应用也需兼容相同加密策略。推荐开启，但不是本轮已经批准的强制要求。 |
+| Encrypt Key | 飞书协议层按加密策略使用；本项目所查 OpenClaw `0a0d601` 的 Webhook 模式要求同时配置 Encrypt Key 和 Verification Token，接入该实现时必须具备。Gateway 使用对应 Key 验签/解密检查，原始请求转交给应用；实际部署版本仍待核对。 |
 | 显式启用及允许范围 | 只授权该应用向指定 Sandbox 的端口/路径投递，普通数据面认证继续按原规则；按订阅配置允许 IM 消息事件。 |
 | 企业范围（按需） | 若同一个应用服务多个企业，需要明确允许的 tenant_key，避免仅凭共享应用身份跨企业投递；企业自建单租户场景可直接绑定对应企业。 |
 
@@ -24,6 +24,8 @@ Gateway 不调用发送消息 API，入站验证不需要 App Secret。App ID/Ap
 建议关闭 Webhook 入口或变更其授权绑定时拒绝新事件并取消旧绑定未完成任务；关闭自动唤醒时停止发起后续恢复，已经 Running 的目标可按仍有效的入口配置接收消息。已经发出的恢复不作隐式回滚。更新生效以 Gateway 观察到配置为界，配置一致性/管理接口需在正式契约中明确。以上启停和更新语义尚未获得用户选择。
 
 本轮限定读取的 Gateway/ACK 插件配置中未找到可直接复用的飞书凭据引用。`api/v1alpha1/securityprofile_types.go:622-671` 的 `AuditWebhook` 是出站审计目标，header 值为普通模板字符串，不能据此认定已有入站飞书验证配置。
+
+OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw.json`，敏感字段支持 SecretRef；详见 [OpenClaw 存储与配置](openclaw-feishu-im-mechanism.md#配置存储与复用)。可以由同一个外部 Secret 分别给 OpenClaw 和 Gateway 提供所需字段，避免用户维护两份验证密钥；这是部署配置建议，尚未批准或实施。OpenClaw 自身配置不自动建立 Sandbox 外的目标授权绑定，也不自动把其 SecretRef 发布给 sandbox-gateway。
 
 ## 当前默认等待的实际含义
 

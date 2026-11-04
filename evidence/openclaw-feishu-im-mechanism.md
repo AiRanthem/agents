@@ -44,6 +44,19 @@ OpenClaw 使用官方 `@openclaw/feishu` 频道插件，通过飞书应用机器
 
 当前 OpenClaw Webhook 配置要求 `verificationToken` 和 `encryptKey`，校验请求签名及时间戳，允许的时钟偏差为一小时。转发时修改原始 body 会影响签名，长时间排队后原样重放可能超时；后续需明确外部接收层与 OpenClaw 的鉴权边界。[Schema](https://github.com/openclaw/openclaw/blob/main/extensions/feishu/src/config-schema.ts)、[验签代码](https://github.com/openclaw/openclaw/blob/main/extensions/feishu/src/monitor.transport.ts)
 
+## 配置存储与复用
+
+2026-11-04 补查：使用当前官方配置文档及此前固定源码 `0a0d601bf12dfea5e4c94c3e8cd6d823c405d9a0`，不读取用户真实配置或秘密，也不代表已核验实际部署版本。
+
+- 默认配置文件为 `~/.openclaw/openclaw.json`，支持 JSON5；`OPENCLAW_CONFIG_PATH` 可指定其他文件，默认状态目录也可由 `OPENCLAW_STATE_DIR` 更改。来源：[官方配置文档](https://docs.openclaw.ai/gateway/configuration)、固定源码 `src/config/paths.ts:212-245`。
+- 飞书配置归属 `channels.feishu`；单账号可直接配置 `appId`、`appSecret`、`verificationToken`、`encryptKey`、`enabled`、`connectionMode`、`webhookPath`，多账号使用 `channels.feishu.accounts.<accountId>`，账号配置继承顶层值。来源：[固定 Schema](https://github.com/openclaw/openclaw/blob/0a0d601bf12dfea5e4c94c3e8cd6d823c405d9a0/extensions/feishu/src/config-schema.ts#L264-L310) 与 `accounts.ts:138-213`。
+- `appSecret`、`verificationToken`、`encryptKey` 支持直接字符串或 SecretRef。引用形如 `{ source: "env", provider: "default", id: "FEISHU_ENCRYPT_KEY" }`，由运行进程解析。SecretRef 支持 env/file/exec/store；OpenClaw 的 SecretRef 不是 Kubernetes Secret 对象，二者需要通过环境变量、挂载文件等部署机制连接。直接字符串仍可用，不能把使用 JSON 配置等同于自动加密保存。来源：[SecretRef 契约](https://docs.openclaw.ai/gateway/secrets/secretref-contract)、`config-schema.ts:272-275,291-294` 及 `accounts.ts:82-133`。
+- 当前官方配置入口包括 `openclaw channels login --channel feishu` 向导、Control UI 的 Config 页面、`openclaw config set` 或直接编辑配置文件。向导负责基础账号配置；Webhook 模式、验证信息和路径按频道配置补齐。来源：[设置向导](https://docs.openclaw.ai/channels/feishu/setup)、[配置编辑方式](https://docs.openclaw.ai/gateway/configuration#editing-config)。
+- 传输缺省为 `websocket`。选择 `webhook` 后，所查 Schema 和启动代码要求同时具备 `verificationToken`、`encryptKey`，缺失不能正常启动该模式；这比“飞书平台允许只做 token 校验”的协议能力更具体。默认路径 `/feishu/events`，注册到 OpenClaw 自身 Gateway，默认端口 18789。来源：`config-schema.ts:327-375`、`monitor.transport.ts:538-552,616-636`、`webhook-path.ts:2`。实际端口和旧安装的 legacy listener 需按目标版本配置读取。
+- 完整公网 E2B URL、飞书事件订阅和消息权限在飞书应用后台配置。OpenClaw 的 `webhookPath` 只定义本地 HTTP 接收路径；`dmPolicy`、`allowFrom`、`groupPolicy` 等控制应用收到事件后的用户/群访问，不授予外部 Gateway 唤醒任意 Sandbox 的权限。
+
+对当前设计的推论：如果配置文件和环境变量只存在于 Sandbox 内，Sandbox 暂停时不能依赖向 OpenClaw 进程查询来获得验证信息。可由一份外部 Secret 作为共同来源：OpenClaw 注入其需要的凭据，Gateway 取得入站验证所需的 App ID/Verification Token/Encrypt Key 及目标绑定，不取得发送回复用的 App Secret。复用凭据来源不等于直接读取 OpenClaw 的全部私有配置；实际投影/同步方式仍需选择，尚未实现。
+
 ## 对 Sandbox Pause 唤醒的约束
 
 根据上述机制可推得：**产生唤醒信号的接收入口必须在目标 Sandbox Pause 时仍能接收事件。**

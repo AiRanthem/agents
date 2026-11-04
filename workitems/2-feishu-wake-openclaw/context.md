@@ -24,6 +24,8 @@ Reviewer 独立检查了固定版本 Gateway/OpenClaw/Envoy 原文、实际 ACK 
 
 ## 飞书专用入口澄清
 
+2026-11-04 用户追问 OpenClaw 如何存储和配置这些信息。已核对其默认 JSON5 文件 `~/.openclaw/openclaw.json`、`channels.feishu`/多账号配置和 SecretRef 读取方式；当前固定快照的 Webhook 模式要求 Verification Token 与 Encrypt Key 同时存在。公网 E2B URL 在飞书后台配置，本地事件路径归 OpenClaw。可用同一外部 Secret 向两侧投影各自需要的字段，但仅在 Sandbox 内的配置不会自动供外部 Gateway 使用；该复用方式仍为建议。原文与范围见 [配置存储](../../evidence/openclaw-feishu-im-mechanism.md#配置存储与复用)。未读取真实凭据或修改运行配置。
+
 用户在独立审查后提出使用 E2B 数据面域名作为飞书请求地址，并明确标准飞书 IM 协议。源码核验确认 `https://<port>-<sandbox-id>.<e2b-domain>/<应用事件路径>` 可经已有 Host 解析与路由找到目标，不需要额外建设通用目标映射注册系统。前提是公网 DNS/HTTPS 入口实际通向 Gateway；本轮未执行现场连通或飞书配置验证。
 
 域名不含数据面 token 或 Kubernetes UID。已有 token/JWT 门禁不会自动认可飞书签名；飞书专用入口需要在 Sandbox 外取得来源验证配置，并保留任务的对象身份约束。正常事件的标准 HTTP 200 可作为应用接收确认，不要求 OpenClaw 私有 durable 标记。第二轮独立复审确认 G1 的协议选择和 G2 的目标寻址已收敛；随后用户确定失败有限重试和放弃，凭据配置与开关变化仍在说明与选择阶段。事实、源码版本与官方协议见 [入口核验](../../evidence/feishu-e2b-webhook-entry.md)。
