@@ -25,7 +25,30 @@ Gateway 不调用发送消息 API，入站验证不需要 App Secret。App ID/Ap
 
 本轮限定读取的 Gateway/ACK 插件配置中未找到可直接复用的飞书凭据引用。`api/v1alpha1/securityprofile_types.go:622-671` 的 `AuditWebhook` 是出站审计目标，header 值为普通模板字符串，不能据此认定已有入站飞书验证配置。
 
-OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw.json`，敏感字段支持 SecretRef；详见 [OpenClaw 存储与配置](openclaw-feishu-im-mechanism.md#配置存储与复用)。可以由同一个外部 Secret 分别给 OpenClaw 和 Gateway 提供所需字段，避免用户维护两份验证密钥；这是部署配置建议，尚未批准或实施。OpenClaw 自身配置不自动建立 Sandbox 外的目标授权绑定，也不自动把其 SecretRef 发布给 sandbox-gateway。
+OpenClaw 已有 `channels.feishu` 配置，默认保存在 `~/.openclaw/openclaw.json`，敏感字段支持 SecretRef；详见 [OpenClaw 存储与配置](openclaw-feishu-im-mechanism.md#配置存储与复用)。建议将 Verification Token 与 Encrypt Key 放入专用入站验证 Secret，供 OpenClaw 和 Gateway 共用；App Secret 放入仅供 OpenClaw 使用的另一份 Secret。Kubernetes API 按整个 Secret 对象授权读取，不能靠 Gateway 只使用两个字段来隔离同一对象中的 App Secret。这是部署配置建议，尚未批准或实施。OpenClaw 自身配置不自动建立 Sandbox 外的目标授权绑定，也不自动把其 SecretRef 发布给 sandbox-gateway。
+
+## Gateway 读取链路：现状与所需能力
+
+2026-11-04 针对用户“Gateway 读取这些配置需要做些什么”补查。agents 主检出为 `c7f1bf56966940fbfe2a73cd48b9a52c2b17de66`，实际 ACK `main/v0.6.14-release.1` 的 Gateway 镜像对应源码 `e55d70c7fc7d603e8a585918919788edd0374e31`。ack-components 刷新至 `3ec66bb0a7b037844111c9db84668b327e06e16`，该组件目录相对此前 `02d1a5f3b1c7fe5478ea69e105eb9dddfada8934` 无差异；未读取集群现场或真实 Secret。
+
+现有能力与缺口：
+
+- Gateway 已有 Kubernetes 客户端、Sandbox informer 和路由缓存；`pkg/sandbox-gateway/controller/gateway_controller.go:116-182,203-221` 仅配置 Sandbox 缓存与事件处理，尚无飞书配置或 Secret informer。
+- `pkg/peersecurity/load.go:31-37,87-100` 的 peer 凭据读取是启动时按名称直接 Get，不能视为已有业务 Secret 更新监听。
+- 实际 Chart 的 `templates/sandbox-gateway.yaml:40` 使用独立 `-gateway` ServiceAccount，`templates/rbac.yaml:71-102` 未授予 Secret 权限。`templates/peer-rbac.yaml` 仅在可选 peer 开关开启时授予固定 namespace、指定名称的 Secret get；`values.yaml:25-26` 两个开关默认 false，`configs/default.yaml` 未覆盖。Manager 的 Secret 权限不会自动赋予 Gateway。
+- `pkg/proxy/routes.go:39-43,69-80` 会将整个 `sandboxroute.Route` 序列化给 peer refresh。新增飞书密钥应保存在独立的进程内缓存，不加入这个同步对象或日志；路由只关联必要的非秘密配置与引用。
+
+据此，建议新增以下能力，准确字段/API 与授权范围仍待收敛：
+
+1. 由有权管理 Sandbox 的主体提交入口启用、App ID、允许的端口/路径和同 namespace 的专用 Secret 引用。配置保存在 Sandbox 外，暂停期间即可读取；不依赖访问 OpenClaw 进程或解析其任意 env/file/exec SecretRef。
+2. 复用 Sandbox 监听解析入口绑定，补充引用 Secret 的同步与本地缓存，处理启动同步、更新、删除和引用变化。配置缺失、格式错误或尚未就绪时拒绝接收，不先 ACK 或触发恢复。更新以本实例观察到为界，不承诺各 Gateway 与 OpenClaw 原子切换。
+3. 飞书请求按 E2B Host 定位目标后，使用缓存验证来源、应用身份和端口/路径授权，通过后才登记内存任务及返回事件 ACK；每条请求无需同步访问 Kubernetes API。URL challenge 按标准飞书协议单独处理。
+4. 在实际 ACK 编排中为 Gateway 增加与所选读取方式匹配的 Secret 权限，并限制到需要的 namespace/对象。标准 RBAC 不能按 Secret 的 data 字段授权；缓存 label selector 也不是权限边界。若使用 resourceNames 限制 list/watch，客户端必须带匹配的 metadata.name field selector，不能直接用全量 informer。具体授权供给方式仍是配置设计的待定部分。
+5. OpenClaw 通过环境变量或文件引用同一份入站验证 Secret；需协调密钥轮换与应用重新加载。环境变量来自 Secret 时，运行中的容器不会随 Secret 更新自动取得新值，需要重启容器；采用文件也不能自动推断 OpenClaw 已重新加载。
+
+代码读取/缓存能力归子项 21；实际 ACK 的权限配置归子项 22，继续依赖代码与匹配镜像交付。以上仅记录调查和建议，未修改 API、源码、RBAC 或运行配置，未建立新的用户批准或独立通过。
+
+官方依据：[Secret 最小权限及读取后的保护](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)、[RBAC resourceNames 与 list/watch 限制](https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources)、[Secret 环境变量更新语义](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/#define-container-environment-variables-using-secret-data)。
 
 ## 当前默认等待的实际含义
 

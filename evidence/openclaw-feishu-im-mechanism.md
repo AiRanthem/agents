@@ -55,7 +55,7 @@ OpenClaw 使用官方 `@openclaw/feishu` 频道插件，通过飞书应用机器
 - 传输缺省为 `websocket`。选择 `webhook` 后，所查 Schema 和启动代码要求同时具备 `verificationToken`、`encryptKey`，缺失不能正常启动该模式；这比“飞书平台允许只做 token 校验”的协议能力更具体。默认路径 `/feishu/events`，注册到 OpenClaw 自身 Gateway，默认端口 18789。来源：`config-schema.ts:327-375`、`monitor.transport.ts:538-552,616-636`、`webhook-path.ts:2`。实际端口和旧安装的 legacy listener 需按目标版本配置读取。
 - 完整公网 E2B URL、飞书事件订阅和消息权限在飞书应用后台配置。OpenClaw 的 `webhookPath` 只定义本地 HTTP 接收路径；`dmPolicy`、`allowFrom`、`groupPolicy` 等控制应用收到事件后的用户/群访问，不授予外部 Gateway 唤醒任意 Sandbox 的权限。
 
-对当前设计的推论：如果配置文件和环境变量只存在于 Sandbox 内，Sandbox 暂停时不能依赖向 OpenClaw 进程查询来获得验证信息。可由一份外部 Secret 作为共同来源：OpenClaw 注入其需要的凭据，Gateway 取得入站验证所需的 App ID/Verification Token/Encrypt Key 及目标绑定，不取得发送回复用的 App Secret。复用凭据来源不等于直接读取 OpenClaw 的全部私有配置；实际投影/同步方式仍需选择，尚未实现。
+对当前设计的推论：如果配置文件和环境变量只存在于 Sandbox 内，Sandbox 暂停时不能依赖向 OpenClaw 进程查询来获得验证信息。建议以专用入站验证 Secret 共同提供 Verification Token/Encrypt Key，App ID 与目标绑定另行配置；发送回复用的 App Secret 放入仅供 OpenClaw 使用的另一份 Secret。Gateway 经 Kubernetes API 读取 Secret 时会获得整个对象，不能靠“只使用部分字段”隔离同一对象内的 App Secret。复用凭据来源不等于直接读取 OpenClaw 的全部私有配置；实际投影/同步与权限供给方式仍需选择，尚未实现。读取能力、实际 ACK 权限缺口和更新约束见 [Gateway 配置读取](feishu-webhook-config-and-retry.md#gateway-读取链路现状与所需能力)。
 
 ## 对 Sandbox Pause 唤醒的约束
 
