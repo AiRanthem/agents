@@ -1,6 +1,6 @@
 ---
 name: review-implementation
-description: Independently assess an implementation against its approved contract and final code evidence in single-agent or multi-agent mode. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and cover correctness, quality, security and tests.
+description: Independently assess an implementation against its approved contract and final code evidence with a complete lead review and optional additional multi-agent review. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and cover correctness, quality, security and tests.
 ---
 
 # Native entry

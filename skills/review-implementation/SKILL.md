@@ -1,6 +1,6 @@
 ---
 name: review-implementation
-description: Independently assess an implementation against its approved contract and final code evidence in single-agent or multi-agent mode. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and cover correctness, quality, security and tests.
+description: Independently assess an implementation against its approved contract and final code evidence with a complete lead review and optional additional multi-agent review. Use when explicitly requested or delegated by an authorized project workflow. Keep source read-only and cover correctness, quality, security and tests.
 ---
 
 # Review Implementation
@@ -11,7 +11,7 @@ Assess complete, correct and maintainable behavior against the confirmed design 
 
 Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and the complete [review standard](references/review-standard.md). First gather the shared original context and prepare a review plan covering the relevant dimensions without forming code findings or a verdict. Before assessment or reviewer dispatch, apply the [mode contract](references/review-standard.md#resolve-review-mode): honor the explicit mode supplied by the user or caller; ask once on direct invocation with no choice, or return a delegated missing-mode decision to the caller.
 
-In `multi-agent`, dispatch multiple read-only reviewers by the plan from eligible shared original context before assessing code yourself or sharing reviewer conclusions. After the assigned reviews finish, personally inspect critical changed behavior and surrounding code, assess test oracles and omissions, validate candidates and synthesize the report, even when reviewers return no findings. In `single-agent`, perform the planned assessment in place and report. Preserve the resolved mode for re-review.
+In either mode, personally perform the complete planned assessment across all review dimensions. `multi-agent` adds targeted reviews: after planning, dispatch multiple read-only reviewers from eligible shared original context before assessing code yourself or sharing reviewer conclusions, then perform your full review while they assess their assigned aspects. Once your assessment and all required assignments finish, validate candidates and synthesize your own conclusions with the reviewers' reports. In `single-agent`, report your complete assessment directly. Preserve the resolved mode for re-review.
 
 ## Select the operating context
 
