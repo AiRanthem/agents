@@ -1,7 +1,7 @@
 id: 3-websocket-wakeup
 title: 基于 WebSocket 事件的 Sandbox 自动唤醒
 kind: development
-status: new
+status: designing
 split_from: 2-feishu-wake-openclaw
 depends_on: []
 delivery:
