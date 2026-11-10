@@ -12,6 +12,12 @@
 
 用户同日确认自动唤醒开启时允许合法消息恢复手动 Pause 的 Sandbox；关闭自动唤醒时不因新消息恢复已暂停目标。用户另行决定依赖 IM 平台自身的权限控制，不增加外部发送者/群聊唤醒白名单，也不复制应用的业务访问规则。平台来源认证、账号绑定和目标唤醒授权仍须在恢复前校验；应用收到后继续原有业务访问逻辑，可能忽略或拒绝已经触发恢复的消息。
 
+用户已选择首期交付统一接收/唤醒/交付框架及飞书适配，其他平台后续扩展；对运维维护外部接入配置或应用启动后自行注册，要求先对比操作流程，尚未选择。
+
+本轮固定版本源码核验发现：OpenClaw `f7257f2c66884611f4f4043367eada029b704918` 的 [channel inbound SDK](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-inbound.md) 提供进程内接入与分发方法，尚未在本轮核读范围内找到外部服务可直接使用的通用跨频道 HTTP 注入入口。应用适配仍需保留实际频道的解析及业务访问逻辑，并由同一宿主运行时生成 [channel ingress](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-ingress.md) 证据，不能将外部事件字段或序列化的旧证据直接当作业务授权。
+
+同一快照的飞书回复走消息 API；WhatsApp/Baileys 与 IRC 的现有回复路径依赖活动连接。统一方案需在设计中定义应用与外部会话持有方的回复/必要操作边界，不能假设仅转交原始事件后所有应用都可自行完成原回复路径。来源为 `extensions/feishu/src/message-send.ts`、`extensions/whatsapp/src/inbound/socket-session.ts` 与 `extensions/irc/src/monitor.ts`。本轮由子代理提取三类证据，主代理直接核读关键 SDK 契约及会话代码后综合；未运行 SDK、真实账号或 Pause/Resume 验证，不建立独立设计审查。
+
 当前完成协议研究、机制分析及上述部分设计决策，处于设计探索，无完整正式 spec、独立审查、实施代码或运行验证。后续在已有设计探索授权内细化 requirement.md 的待决事项；实施仓库仍未选定。设计版本仍为 0，不将部分决策登记为完整设计批准。
 
 知识入口：[链路与能力分析](../../evidence/im-wakeup-paths-and-capabilities.md)、[飞书协议原理](../../evidence/feishu-event-transports.md)、[OpenClaw 接入机制](../../evidence/openclaw-feishu-im-mechanism.md)。
