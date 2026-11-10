@@ -1,16 +1,19 @@
 # E2B #1083、#1084、#1085 兼容修复
 
+当前业务设计为 v6。2026-11-10，用户在 receiving-code-review 中明确回复「同意」，批准保留旧快照 ID、稳定错误文本、新游标方向校验与历史 token 兼容，以及 template 参数拒绝 tag、去空白和转小写。独立评审状态为 review-pending；本次批准不替代独立评审。
+
 ## Why：消除合法请求的错误结果与静默语义偏差
 
 三项问题均影响官方 E2B SDK 的正常调用：列表查询可能错误返回空集，暂停/快照可能保存了调用者要求排除的内存，命名查询可能返回未经筛选的全集。对无法履行的请求必须明确拒绝，不能返回误导性的成功。
 
-用户已确认三项均需修复，并在后续会话中逐项确认了当前范围：完整修复 Sandbox 列表；Pause 暂时不支持单次 memory 选择，任何显式 `memory` 都返回 400；Snapshot 通过 body `memory` 或持久化内容扩展头选择内容，支持命名快照与同名替换，`names` 始终为数组。本节记录当前生效的完整范围；历史设计中的“拒绝 name”“`memory:true` 返回 400”等表述已被后续决定取代。
+用户已确认三项均需修复，并在后续会话中逐项确认了当前范围：完整修复 Sandbox 列表；Pause 暂时不支持单次 memory 选择，任何显式 `memory` 都返回 400；Snapshot 通过 body `memory` 或持久化内容扩展头选择内容，支持命名快照且保留各次创建的 ID，`names` 始终为数组。快照名称解析与对象保留分别处理，后续同名创建不会删除旧对象。
 
 ## 基线与边界
 
 - 源码基线：`openkruise/agents` 的 `upstream/master@fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。原设计点名的 `2b06e110` 与该基线之间 `pkg/servers/e2b`、分页与 checkpoint 相关路径无变化，设计适用性已单独评估。
 - 协议依据：E2B OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082`；问题中的 SDK 为 e2b 2.56.0。
-- E2B API 层负责参数、验证、错误与返回形状；协议兼容编排（如同名替换顺序）留在 API 层。存储格式限制（如 label value 规则）由其 Infra 实现入口校验并返回领域错误，API 层只做状态码映射。
+- 本轮修正的评估目标为 PR #1103 head `e2dd1348883435758c12315b55e43f89f1b0344f`，PR 比较基线为 `0179aad20a43aad1fa6627c2a818372eb4e3f202`。实际本地工作树身份及组合目标验证见 `context.md`；原始开发基线继续保留其历史来源。
+- E2B API 层负责参数、验证、错误与返回形状；快照名称解析留在 API 层。存储格式限制（如 label value 规则）由其 Infra 实现入口校验并返回领域错误，API 层负责状态码与稳定协议消息的映射。
 - 既有认证、租户可见性、资源归属、Sandbox ID、资源查找错误、暂停保留期限、快照超时/清理语义保持不变。原生与定制路由的同一操作行为一致。
 - 设计描述不构成源码实施授权；源码工作按用户授权范围与主工作区业务约束执行，实际评审与验收分别记录。
 
@@ -22,7 +25,7 @@
 | --- | --- |
 | 省略 `order` | 按启动时间降序，新 Sandbox 在前。 |
 | `order=asc` / `order=desc` | 按指定方向排序；空值或其他值返回 400。 |
-| `template=<ID或别名>` | 与 Sandbox 解析出的模板身份（中性 Infra 的 `GetTemplate()`）精确匹配，和其他条件取交集；合法但不存在的模板得到空数组。当前服务将 SandboxSet 名称同时作为模板 ID 与别名，不引入新的别名注册体系；API 层不叠加池名等其他标签匹配，以保持 Infra 接口中立。空值返回 400。 |
+| `template=<ID或别名>` | 查询值先去除首尾空白并转为小写，再与 Sandbox 解析出的模板身份（中性 Infra 的 `GetTemplate()`）精确匹配，和其他条件取交集；合法但不存在的模板得到空数组。包含 `:` 的 tag 形式以及归一化后为空的值返回 400。当前服务将 SandboxSet 名称同时作为模板 ID 与别名，不引入新的别名注册体系；API 层不叠加池名等其他标签匹配。 |
 | `startedAfter=<RFC3339时间>` | 仅返回启动时间大于或等于给定时刻的 Sandbox；支持合法时区偏移及小数秒，按时间点而非字符串比较；空值或无效格式返回 400。 |
 
 查询参数按单值解析：`order`、`template`、`startedAfter` 以及既有的 `limit`、`nextToken` 在空值或重复提供时返回 400，避免同一请求出现多个互相冲突的语义。`state` 与 `metadata` 沿用既有解析方式（`state` 逗号分隔、`metadata` 组合键），未知参数仍按 metadata 处理。显式 `metadata` 内名为 `order`、`template` 或 `startedAfter` 的普通业务键仍按 metadata 处理，不与顶层保留参数混淆。
@@ -31,7 +34,7 @@
 
 排序和游标使用同一时间顺序；同一启动时刻按稳定的 Sandbox ID 决定次序。相同查询与方向、数据集未变化时，连续翻页不得丢失或重复同一时刻的对象；最后一页不返回下一页 token，空列表返回 `[]`。筛选先于分页。
 
-`nextToken` 是不透明的续页位置：stable cursor 编码排序键与唯一键，旧版裸排序键 token 继续可读，续页比较服从当前排序方向；不承诺跨排序/筛选变更或跨版本恢复一次旧遍历。并发增删下沿用既有非快照式分页，不保证跨请求数据集冻结。
+`nextToken` 是不透明的续页位置：新 stable cursor 编码排序键、唯一键与排序方向；token 携带的方向与当前请求不一致时返回 400，省略 `order` 按默认降序校验。历史裸排序键和不含方向的 stable cursor 继续可读，按当前请求方向解释，不补猜历史方向。因此历史 token 不能检测跨方向误用，也不承诺跨排序/筛选变更或跨版本恢复一次旧遍历。并发增删下沿用既有非快照式分页，不保证跨请求数据集冻结。
 
 共享分页能力的其他调用者保持既有默认升序，特别是快照列表不因 Sandbox 默认降序而被反转。
 
@@ -87,30 +90,22 @@ body `memory` 与有效扩展头同时出现时，扩展头优先：只要头解
 创建 JSON 的 `name` 是本版本支持的快照别名：
 
 - `name` 为 `null` 或空串视为未命名；非空时作为别名写入 Checkpoint label `agents.kruise.io/checkpoint-alias`（Infra 的中性 `Alias` 概念，不进入 Checkpoint CRD spec）。
-- 别名格式属于存储限制：`sandboxcr.CreateCheckpoint` 入口按 Kubernetes label value 规则校验，非法时返回领域错误 `ErrorBadRequest`，API 层映射为 400，消息包含 `invalid checkpoint alias`。API 层不做格式校验，未来其他 Infra 后端可放宽。
-- 别名的作用域是「同一 owner（API key）+ team namespace」：顺序替换完成后，同一 owner 的同一别名只保留一个 Succeeded checkpoint；同 team 的不同 owner 可各自持有同名别名，互不替换、互不删除。同一 owner 的并发重复由下述收敛规则消除。
-- 该作用域与 `GET /snapshots?name=` 的 user 级可见性、以及 Checkpoint 删除的 owner 校验一致：别名收敛不放宽任何既有资源归属边界。恢复链路按 namespace 与 checkpointID 查找 Checkpoint，不受别名作用域影响。
+- 别名格式属于存储限制：`sandboxcr.CreateCheckpoint` 入口按 Kubernetes label value 规则校验，非法时返回领域错误 `ErrorBadRequest`，API 层保留 400 映射并返回稳定的 `Invalid snapshot name`；原始后端错误只写内部日志。其他 checkpoint 创建失败仍保留既有状态分类，对外使用稳定的 `Failed to create snapshot`。API 层不做格式校验，未来其他 Infra 后端可放宽。
+- 别名查询的作用域是「同一 owner（API key）+ team namespace」。同一 owner 可保留多个同名 Succeeded checkpoint，按 name 查询只返回最新可见的一条；其他 owner 的同名对象不可见。每次创建返回本次创建的 ID，不以另一个并发请求的 ID 替换。
+- 恢复链路按 namespace 与 checkpointID 查找 Checkpoint，不受别名查询影响；显式删除继续遵循既有 owner 校验。
 
-同名替换（E2B：新的 build 分配到已有 template）由 API 层编排，顺序固定为“先建、成功后再收敛别名”：
+命名创建直接调用既有 `CreateCheckpoint`，成功后返回本次 `snapshotID`。创建阶段不列举同名对象或执行别名清理，失败（含别名非法、后端失败、等待超时）也不会删除既有快照。已返回的 ID 不因后续同名创建而失效；显式删除、TTL 和其他既有生命周期清理仍可使其失效。
 
-1. 直接调用 `CreateCheckpoint` 创建新 checkpoint，不在创建前读取或删除旧对象；失败（含别名非法、后端失败、等待超时）时不产生任何删除副作用，旧快照保持原样。
-2. 创建成功后，按别名列出同 namespace 下该 owner 当前 Succeeded 的 checkpoint（owner 作用域，保留 user 过滤），并按 Checkpoint 创建时间（固定宽度 UTC 纳秒串）与对象名组成确定的全序，选出最新者。
-3. 若本次新建的是最新者，删除其余所有同别名 Succeeded checkpoint；若本次新建的不是最新者（并发中已被更新的请求取代），删除本次新建的 checkpoint，并在 201 响应中返回当前最新者的 `snapshotID`。删除仍经既有 owner 校验，不引入跨 owner 的删除授权旁路。删除失败只记录日志，不影响 201，也不把已成功的创建标记为失败；后续同名创建会继续清理残留。
+名称查询依赖 Checkpoint 的创建时间：创建时把本地时钟以 RFC3339 纳秒精度写入 annotation `agents.kruise.io/checkpoint-creation-timestamp`，`AsCheckpointInfo` 输出固定宽度 UTC 纳秒时间戳，字典序等于时间序；存量对象缺失该 annotation 时回退到秒级 `metadata.creationTimestamp`。同一时间用对象名打破平局。跨副本时钟偏差或创建延迟可能使排序与真实完成先后不一致。
 
-不变量：收敛必须以非空 owner 为前提。owner 为空时跳过收敛并记录日志，不得因空值退化为跨 owner 的列举与删除。
-
-该顺序保证创建失败不会丢失既有快照，并让同一 owner 的并发同名创建收敛到同一个最新对象。收敛依赖 Checkpoint 的创建时间：创建时把本地时钟以 RFC3339 纳秒精度写入 Checkpoint annotation `agents.kruise.io/checkpoint-creation-timestamp`，`AsCheckpointInfo` 统一输出固定宽度 UTC 纳秒时间戳，字典序等于时间序，避免同一秒内的并发创建退化为按随机名称决定胜者；存量对象缺失该 annotation 时回退到秒级 `metadata.creationTimestamp`，排序精度降级但结果确定。已知限制：记录时间来自创建副本的本地时钟且早于 API 创建完成，跨副本时钟偏差或创建延迟可能使排序与真实先后不一致，此时可能保留较旧者。
-
-收敛是尽力而为：它只读取一次本副本可见的 Succeeded 集合，不重试、不做后台补偿、不使用 `APIReader` 列举、不引入分布式锁。列举或删除失败只记录日志，不影响 201；多副本或 watch 滞后下，重复对象可能残留到下一次同名创建才被清理。带 `name` 的查询始终返回可见集合中最新的一条，因此对外解析结果稳定；不带 `name` 的列表在收敛完成前可能短暂出现两条。
-
-仍存在的竞态：较早的请求先返回 201 后，较新的请求仍可能删除它，因此并发同名创建中已经返回的 `snapshotID` 可能随后失效，这是“不保留旧 build”语义的固有取舍。删除使用与请求上下文解耦的有限超时，客户端断开不影响清理。
+known-limit: 名称查询只读取本副本 informer 可见的 Succeeded 集合，因此在 watch 滞后期间，各副本可能返回不同的最新对象；历史快照持续占用存储，直到显式删除或既有生命周期清理。若未来需要线性一致的别名解析，应单独设计带版本校验的绑定，不恢复基于缓存列表的对象删除。
 
 `GET /snapshots` 的 `name` 查询参数按别名精确过滤：
 
 - 空值按未提供处理；重复值沿用既有快照列表解析（取第一个）。
 - 查询保持 user 级 owner 过滤，不因 name 过滤绕过资源归属。
 - 命中多条时返回创建时间最新的一条（分页器按创建时间升序排序后取末元素）；带 name 时忽略 `limit`/`nextToken` 的分页效果（非法 `limit` 仍按参数错误返回 400），结果恒为 0 或 1 条且不返回 nextToken。
-- 创建进行中、新对象尚未 Succeeded 时，查询返回旧快照而不是空结果；创建成功且收敛完成前可能短暂看到新旧两条，收敛后只剩一条。快照排序键为固定宽度 UTC 纳秒时间戳，同一时刻的对象由名称决定次序。
+- 创建进行中或新对象尚未进入本副本可见的 Succeeded 集合时，查询仍可返回旧快照；新对象可见后重新选择最新者。不带 name 的列表可返回全部保留的同名对象。
 
 ### 响应
 
@@ -125,23 +120,25 @@ body `memory` 与有效扩展头同时出现时，扩展头优先：只要头解
 5. Pause 的 `memory:true` 与 `memory:false` 都返回 400，且调用前后的 Sandbox 暂停状态、timeout、annotation 和持久化策略均不变化；省略 memory、`{}`、空 body 保持原流程。
 6. Pause 请求体为 `{}garbage` 或 `{} {"memory":false}` 时返回 400 且不暂停；尾随空白仍被接受。
 7. `memory:false` 创建快照时该 checkpoint 仅保存文件系统，源策略不变；`memory:true` 保存 memory+filesystem；有效内容头优先于 body。
-8. 带合法 `name` 创建返回 `names:[name]`，同一 owner 的同名旧 Succeeded 快照在新快照成功后按“最新者胜出”被删除；创建失败时旧快照保留；其他 owner 的同名快照不受影响。同一 owner 的两个并发同名创建在收敛成功时至多保留一个 Succeeded checkpoint；被更新请求取代的一方删除自己的 checkpoint，并以最新者的 `snapshotID` 返回。`GET /snapshots?name=` 在收敛完成前仍能解析到可用快照。
-9. 非法 `name` 由后端存储规则拒绝并映射为 400，且不创建 Checkpoint、不删除旧快照；`name:null` 与 `name:""` 创建未命名快照。
+8. 同一 owner 的多次同名创建分别返回本次新建的 ID，全部既有对象保持存在；创建失败不影响旧对象，其他 owner 的同名快照不受影响。`GET /snapshots?name=` 返回该 owner 最新可见的一条，不带 name 的列表可见多条。
+9. 非法 `name` 由后端存储规则拒绝并映射为 400 `Invalid snapshot name`，响应不含 Checkpoint/Kubernetes 校验细节，且不创建 Checkpoint、不删除旧快照；`name:null` 与 `name:""` 创建未命名快照。
 10. 不带 `name` 的创建与列表响应在 JSON 上都是数组类型的 `names`，空数组不会变成 `null`；带 `name` 的列表只返回该 user 可见的最新一条。
+11. 升序和降序新游标在同方向可续页，在相反方向（含省略 order 的默认降序）返回 400；历史裸 token 与无方向 stable cursor 在两种方向均继续可读。
+12. `template=base:latest` 与纯空白 template 返回 400；`template=%20TEST-Template%20` 归一化为 `test-template` 后能命中该模板。
 
 ## 非目标与取舍
 
-不增加内存快照能力承诺、单次 filesystem-only 暂停、tag/build 版本历史、按 name 的独立 get/delete 端点、connect 的模式选择、全局分页新协议、Checkpoint CRD 字段、存储后端、监控指标或与三个 Issue 无关的 metadata 修复。命名快照复用 Checkpoint label 与既有 Succeeded 列表能力，不新增别名注册中心或分布式锁，并发收敛依赖 Checkpoint 创建时间排序。替换不保留旧 build，旧对象删除后其 SandboxTemplate 按既有 ownerRef GC 清理。别名唯一性不跨 owner，因此不引入 team 级删除授权旁路；SandboxSet `templateRef` 的模板身份不一致与快照恢复 Sandbox 的模板身份均由既有写入方决定，本轮不修复。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。
+不增加内存快照能力承诺、单次 filesystem-only 暂停、tag/build 版本 API、按 name 的独立 get/delete 端点、connect 的模式选择、全局分页新协议、Checkpoint CRD 字段、存储后端、监控指标或无关 metadata 修复。命名快照复用 label 与既有 Succeeded 列表能力，保留各次创建的对象，不新增别名注册中心或分布式锁。SandboxSet `templateRef` 的模板身份不一致与快照恢复 Sandbox 的模板身份仍由既有写入方决定。不修改源策略继承、直接 Checkpoint CR 或其他 API 的能力约束。
 
 本设计不承诺运行环境已经验证，也不将设计完成等同于独立评审、实现、人工验收或上游 Issue 关闭。
 
 ## 主要证据
 
-- `pkg/servers/e2b/list.go`：列表参数解析与筛选、Sandbox 排序键、快照列表与 name 收敛。
+- `pkg/servers/e2b/list.go`：列表参数解析与筛选、Sandbox 排序键、快照名称的最新可见者查询。
 - `pkg/utils/pagination/pagination.go`：方向感知的 cursor 比较与分页。
 - `pkg/servers/e2b/sandbox.go`：模板身份与启动时间来源；`pkg/servers/e2b/templates.go`：模板 ID/别名。
 - `pkg/servers/e2b/pause_resume.go`：暂停流程与可选请求体解析；`pkg/sandbox-manager/infra/interface.go`：现有 PauseOptions 不含单次持久化内容。
-- `pkg/servers/e2b/snapshot.go`、`pkg/servers/e2b/models/sandbox.go`、`pkg/servers/e2b/models/extensions.go`：快照请求模型、扩展头与别名替换编排。
+- `pkg/servers/e2b/snapshot.go`、`pkg/servers/e2b/models/sandbox.go`、`pkg/servers/e2b/models/extensions.go`：快照创建、稳定错误映射、请求模型与扩展头。
 - `pkg/sandbox-manager/infra/sandboxcr/clone.go`：checkpoint 创建、别名校验与 label 写入、固定宽度创建时间戳；`pkg/sandbox-manager/infra/sandboxcr/infra.go`：按别名选择 Succeeded checkpoint。
 - `api/v1alpha1/labels.go`：`CheckpointLabelAlias`；`api/v1alpha1/annotations.go`：`AnnotationCheckpointCreationTime`；`api/v1alpha1/checkpoint_types.go`：KeepRunning 默认行为。
 - https://github.com/e2b-dev/E2B/blob/b52cd30c14bf7038ba5bfbd15456b1dabe567082/spec/openapi.yml ：`SandboxPauseRequest`、`SandboxSnapshotRequest`、`GET /v2/sandboxes` 与 `/snapshots`。

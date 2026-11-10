@@ -1,50 +1,44 @@
 # 当前上下文
 
-本总项管理 E2B 兼容性。用户于 2026-10-20 要求先讨论每项解决必要性，确认后再设计；项目记录存储于 GitHub `AiRanthem/agents` 的 `projects/e2b-compatibility` 分支。
+## 当前合同与用户批准
 
-## 当前合同与批准
+本项解决 E2B #1083、#1084、#1085。当前合同为 `requirement.md` 与 `spec.md` v6。用户于 2026-11-10 在本会话的 receiving-code-review 评估后回复「同意」，批准保留旧快照 ID、稳定错误消息、新游标方向校验并兼容历史 token，以及 template 拒绝 tag、去空白和转小写。实际来源会话为 `01a1c4bb-498d-7843-8186-cebf503116cf`；批准目标哈希记录在 `.project/state/1-e2b-compatibility.yaml`。
 
-用户要求解决 #1083、#1084、#1085，并在必要性讨论后确认三项均需修复。此后用户逐项确认了扩展范围：Pause 禁止显式 memory；Snapshot 的 memory 映射与持久化内容头优先；本版本支持命名快照、同名替换与按 name 过滤。2026-10-21，用户要求同步设计文档并按计划实施，把替换语义定为“先建、成功后按最新者收敛”。
+本轮对收到的五项反馈均按已批准目标完成修正。当前设计和实现的独立评审均 pending；历史 v2/v4/v5 的审批、评审及复用记录保持原目标，不作为 v6 的独立通过结论。
 
-2026-10-22，独立实现评审（multi-agent，会话 `3387366e-d695-4926-9dea-fc31e52a5491`）判定实现与 v4 文本冲突：别名收敛按 owner 作用域执行，而 v4 要求 team 作用域。用户裁决采用 **owner 作用域并修订契约**；同时确认 `template` 筛选以中性 Infra 的 `GetTemplate()` 为准、不在 API 层叠加池名匹配，SandboxSet `spec.templateRef` 造成的模板身份不一致判定为 SandboxSet 侧缺陷并已提上游 Issue #1102，由快照恢复的 Sandbox 的模板身份记录为已接受限制。
+## 当前源码与 PR 身份
 
-当前业务合同为 `spec.md` v5 与 `requirement.md`，批准来源会话 `3387366e-d695-4926-9dea-fc31e52a5491`，实际用户批准来源及其原始目标哈希保存在 `.project/state/1-e2b-compatibility.yaml`。2026-11-03 的管理说明升级仅替换 spec 首部的工作方式文字，业务设计不变；原审批与评审证据保留各自原始目标，不重写为新的评审结论。v4 及更早的批准与独立评审报告保留在 `records/`，其合同绑定已被 v5 取代。
+- 源码仓库 `openkruise/agents`；本地工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`。
+- 本轮开始时本地 HEAD 为 `0a80aa84992283deddf7bfb93e66fffe1d059e60`，工作树干净。该本地提交历史与远端 PR 不同；本轮保持历史和分支不变，只留下修正的未提交文件。
+- 上游 [PR #1103](https://github.com/openkruise/agents/pull/1103) 当前检查为 OPEN、非草稿、未合入；head `e2dd1348883435758c12315b55e43f89f1b0344f`，比较基线 `0179aad20a43aad1fa6627c2a818372eb4e3f202`，正文关联三个 Issue。`merged` 交付义务仍为 pending。
+- 本轮修改 6 个源码/测试文件，+102/-190；相对本地 HEAD 的完整 binary diff SHA256 为 `c7250b84ade4d9a08071b385b05c2ec6246fcef1228528ac644bc9ce4a73ba22`。
+- 已用独立临时 index 将该补丁干净应用到 PR head，得到组合 tree `5be6bb8a35694f90afd6847c0d33577cc4684d05`。相对上述 PR 比较基线的完整交付差异为 21 文件、+1237/-156，`git diff --check` 通过。未修改实际 index，也未为源码创建提交或推送。
 
-## 当前实现状态
+## 本轮行为与反馈处置
 
-以下实现、PR 和验证状态来自既有记录；2026-11-03 的管理说明升级未重新核验源码、远端 PR 或运行环境。
+- P1：移除 `reconcileSnapshotAlias` 及其删除辅助流程。命名创建保留所有旧对象，返回本次创建 ID；name 查询仍只返回该 owner 最新可见的一条。旧 owner 非空守卫的待补项随整条自动删除流程移除而不再适用。
+- P2：保留 Infra 名称校验与类型化 400 映射；对外返回 `Invalid snapshot name`，其他后端创建失败返回 `Failed to create snapshot`，原始错误继续内部记录。既有授权后资源诊断后缀不变。
+- 游标：新 stable token 带 `descending`，API 在完成参数解析后核对方向，包含省略 order 的默认降序。历史裸 key 和无方向 stable cursor 继续按当前请求方向处理。快照列表保持升序，其他既有分页调用者不变。
+- template：归一化首尾空白和大小写，含 tag 分隔符或归一化后为空时 400；仍通过中性 `GetTemplate()` 匹配，不引入池名旁路。
 
-源码仓库 `openkruise/agents`，工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`，基线 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
+## 验证与原始证据
 
-已按用户明确授权将 21 个文件（+1315/-137）提交为 `f448ab3d53573ddef69049011a51497bb8d3b310`（含 Signed-off-by），推送到 GitHub fork `AiRanthem/agents` 的 `fix/e2b-1083-1085-261020` 分支，并核验远端 OID 与本地一致。该提交相对父提交的 diff sha256 为 `c263c6aff74963ed54c498cfab35cab888154ffd9cbd91c18536f8643f070eaf`，与原暂存实现一致；发布后工作树干净。覆盖：列表保留参数与方向感知分页；Pause 可选 body 与 memory 拒绝；Snapshot memory 映射、别名 label、owner 作用域同名替换、name 过滤与数组型 `names`；Infra 的中性 `Alias` 与高精度创建时间 annotation；cache 的 label 过滤。
+原始输出与一次性快照保存在主工作区 `local-storage/e2b-review-261110/`，不作为正式源码或独立评审报告。
 
-上游 PR：https://github.com/openkruise/agents/pull/1103 ，目标 `openkruise/agents:master`，正文包含 `Fixes #1083`、`Fixes #1084`、`Fixes #1085`。本会话最新查询为 OPEN、非草稿、可合并、尚未合入，head 为上述源码提交。尚未证明 `merged` 交付义务完成。
+- 工作树：`go test ./pkg/utils/pagination ./pkg/servers/e2b -run '^(TestPaginator.*|TestDecodeCursorToken|TestValidateCursorOrder|TestParseListSandboxesReservedParams|TestListSandboxes_Pagination.*|TestCreateSnapshot|TestListSnapshots)$' -count=1`。分页包通过；E2B 包在清理已失效的测试 import 后通过，原始日志 `focused-tests.log`。首次尝试被 Go 缓存写权限阻止，提权执行成功。
+- 组合 PR tree：从 `5be6bb8a...` 导出 `pr-target/` 后，以上两个包与同一筛选集全部通过，日志 `pr-target-tests.log`。该快照保留远端已有的其他测试和基线差异，因此验证覆盖实际 PR 组合目标。
+- 回归有效性：只读 Go overlay 分别将 snapshot/list 实现切回 PR head，保留新断言。旧实现产生预期的断言失败：旧对象被删、返回其他请求的 ID、错误细节透传，以及 tag/纯空白/大小写/方向校验缺失。日志 `snapshot-baseline-regression.log` 与 `list-baseline-regression.log`；没有编译失败代替行为失败。
+- `gofmt`、工作树及组合 PR 的 `git diff --check` 通过。没有更改 API 类型或生成文件，无需新增生成步骤。未运行真实集群、多副本或 E2E；已有远端 CI 只覆盖修正前 head，不能覆盖当前未提交修正。
 
-契约修订（v5）后的既有待补记录如下；本会话只提交既有实现，未执行这些修复，也未将用户人工验收表述当作这些源码差异已经消失的证据：
+## 历史人工验收与交付
 
-- `reconcileSnapshotAlias` 增加 owner 非空守卫：owner 为空时跳过收敛并记日志，避免空值退化为跨 owner 的列举与删除。
-- 列表 `template` 筛选补正例测试（现仅有“未知模板返回空集”的反例，无法区分恒假实现）。
-- 可选测试盲点：`name` 与非法 `limit` 组合、superseded 用例断言本次新建对象确已删除、同 key 排序 oracle 与名称顺序解耦。
+2026-10-22 用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交、推送和创建上游 PR。既有源码提交 `f448ab3d53573ddef69049011a51497bb8d3b310` 已按该授权提交至 fork `AiRanthem/agents` 并建立 PR #1103；这些是历史交付和人工结论，不自动覆盖当前 v6 修正。原始开发基线为 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
 
-评审阶段验证：针对性 `go test`（`pkg/servers/e2b`、`pkg/servers/e2b/models`、`pkg/utils/pagination`、`pkg/cache`、`pkg/sandbox-manager/infra/sandboxcr`）通过；`go test -race ./pkg/servers/e2b -run '^TestCreateSnapshot$' -count=3` 通过；`git diff --check` 无输出。未运行 E2E，未做多副本或真实集群验证。
+SandboxSet `spec.templateRef` 模板身份问题已按独立授权提交 [Issue #1102](https://github.com/openkruise/agents/issues/1102)，本轮不修改该问题。PR 评论线程未回复、未 resolve；源码未提交或推送，未部署、关闭 Issue、清理工作树或标记交付完成。
 
-本会话提交前新增验证：E2B 列表、Pause、Snapshot、模型扩展头、分页定向测试通过，日志 `/tmp/e2b-item1-pr-tests.log`；cache Checkpoint 列举及 Infra Succeeded Checkpoint 筛选定向测试通过，日志 `/tmp/e2b-item1-pr-infra-tests.log`。后者曾受到生成脚本临时 vendor 清理干扰，待生成结束后以 `-mod=mod` 重跑通过。`make generate manifests` 成功且未产生额外源码差异，日志 `/tmp/e2b-item1-pr-generate.log`；gofmt、`git diff --check` 通过；与最新 `upstream/master@a4df9e5498d2a9ba7d34bf87820a48b48680cebf` 的 merge-tree 检查无冲突。未在本会话执行 E2E 或核验 CI 通过；推送钩子返回 `No data need to be scanned`，不作为有效泄漏扫描通过证据。
+## 保留的边界与待核对事实
 
-## 人工验收与后续事实
-
-2026-10-22，用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交与创建上游 PR。该人工结论按原始来源保留，与独立评审及实际交付分别记录；本次管理说明升级未重新验证源码或外部 PR 状态。
-
-当前记录仍缺少针对 v5 修订后目标的独立实现评审结果。历史评审保持其原始目标，不将旧合同评审或提交前测试描述为当前独立评审通过。后续工作按用户授权及当前源码事实进行。
-
-- 源码已按单独授权提交、推送并创建 PR #1103；PR 尚未合入，未执行 Issue 关闭、部署、清理或将工作项标记为完成。
-- 已按用户授权向上游 `openkruise/agents` 提交 SandboxSet `spec.templateRef` 模板身份与 E2B TemplateID 不一致的 Issue：https://github.com/openkruise/agents/issues/1102（bug 标签，核对基线 `master@fd2bea719`）；该授权仅覆盖创建该 Issue，不覆盖源码提交、PR 或关闭既有 Issue。
-- 已知残余：同一 owner 的并发同名创建在多副本或 informer 滞后下可能残留重复对象，由后续同名创建清理；跨 owner 同名共存是契约预期；较早返回的 `snapshotID` 可能被较新请求删除。`CheckpointInfo.CreationTimestamp` 为固定宽度 UTC 纳秒串，存量对象缺失 annotation 时降级为秒级精度。
-
-## 主要来源
-
-- https://github.com/openkruise/agents/issues/1083
-- https://github.com/openkruise/agents/issues/1084
-- https://github.com/openkruise/agents/issues/1085
-- https://github.com/openkruise/agents/pull/1103
-- https://github.com/e2b-dev/E2B/blob/b52cd30c14bf7038ba5bfbd15456b1dabe567082/spec/openapi.yml
-- https://help.aliyun.com/zh/cs/user-guide/clone-agent-sandbox-using-checkpoint
+- 名称查询为 informer 可见集合上的最终一致；跨副本时钟偏差或创建延迟可能影响最新者排序。旧快照继续占用存储，直到显式删除或既有生命周期清理。
+- 历史无方向 token 无法检测跨方向误用；保留兼容，不宣称历史跨版本遍历一致。
+- SandboxSet templateRef 和从快照恢复的模板身份限制保持不变。
+- 既有 Pause 源码允许 `memory:true`，而 v5 原批准文档要求任何显式 memory 均 400。该差异在本轮评估前已存在，相关后续批准来源尚未核对；本轮反馈及用户确认没有覆盖 Pause，故保留其源码和原审批文本，不把当前代码反推成新的用户批准。

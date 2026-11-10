@@ -16,6 +16,7 @@ workflow:
   - bfa1920e-2676-4e3a-a8d9-70c449134a7b
   - e933eec0-f2b0-46e5-8b79-c2eef79d1b20
   - 3387366e-d695-4926-9dea-fc31e52a5491
+  - 01a1c4bb-498d-7843-8186-cebf503116cf
   design_basis:
     review:
       id: 96344c83b286eb313d760a9349ea99a4
@@ -890,7 +891,7 @@ workflow:
     basis_review: 96344c83b286eb313d760a9349ea99a4
     basis_sha256: 85825846bc83b54cb7e387a6cfb98acc1b3bc5da169771e2bef3e32b6d9f22d8
 design:
-  approval:
+  previous_approval:
     requirement_sha256: 675a6318cc86f9440b9537247ccf28d685e618776a4f4d093f3e4018d88f30c0
     spec_sha256: 773c6bb3c5a55db6415cdcecab7f7ca65a3f77aeb470ca1fdab5c69bc3d430bf
     version: 5
@@ -899,3 +900,44 @@ design:
       owner 作用域、收敛 best-effort、创建时间 annotation 存储契约、template 身份限制与 label key 更正
     session: 3387366e-d695-4926-9dea-fc31e52a5491
     recorded_by: 3387366e-d695-4926-9dea-fc31e52a5491
+  approval:
+    requirement_sha256: e278038ab095b4a34d4f362bc9de2a46b7530934034833696471b4a37924d76a
+    spec_sha256: fe31e037e64fa09624c52b67b644abb712916cc6171bc539cfdfff9132674c86
+    version: 6
+    kind: user
+    source: 2026-11-10 当前会话 receiving-code-review 完整评估后，用户回复“同意”，批准保留旧快照 ID、稳定错误消息、新游标方向校验并兼容历史 token、template 拒绝 tag 及归一化；其余继承原批准范围
+    session: 01a1c4bb-498d-7843-8186-cebf503116cf
+    recorded_by: 01a1c4bb-498d-7843-8186-cebf503116cf
+review_corrections:
+  date: '2026-11-10'
+  contract_version: 6
+  author_session: 01a1c4bb-498d-7843-8186-cebf503116cf
+  status: ready_for_independent_review
+  independent_review: pending
+  target:
+    pull_request: https://github.com/openkruise/agents/pull/1103
+    pr_head: e2dd1348883435758c12315b55e43f89f1b0344f
+    pr_base: 0179aad20a43aad1fa6627c2a818372eb4e3f202
+    local_head: 0a80aa84992283deddf7bfb93e66fffe1d059e60
+    source_state: uncommitted
+    correction_diff_sha256: c7250b84ade4d9a08071b385b05c2ec6246fcef1228528ac644bc9ce4a73ba22
+    virtual_pr_tree: 5be6bb8a35694f90afd6847c0d33577cc4684d05
+  accepted_targets:
+  - preserve_old_snapshot_ids
+  - isolate_backend_errors
+  - validate_new_cursor_order_keep_legacy_tokens
+  - reject_template_tags
+  - normalize_template_filter
+  verification:
+    focused_tests: passed
+    virtual_pr_focused_tests: passed
+    baseline_regression_assertions: failed_as_expected
+    formatting_and_diff_check: passed
+    evidence_directory: /Users/sophon/Workspace/OKAWorkspace/local-storage/e2b-review-261110
+    e2e: not_run
+    multi_replica_runtime: not_run
+  external_actions:
+    source_commit: not_performed
+    source_push: not_performed
+    replies: not_performed
+    thread_resolution: not_performed

@@ -2,7 +2,7 @@
 
 ## 生效的范围与来源
 
-日期：2026-10-22。当前完整合同为 `spec.md` v5 与同步后的 `requirement.md`；对应批准与目标信息保存在当前状态记录中。
+日期：2026-11-10。当前完整合同为 `spec.md` v6 与同步后的 `requirement.md`；对应批准与目标信息保存在当前状态记录中。
 
 用户决策来源：
 
@@ -15,27 +15,24 @@
 
 源码基线：`openkruise/agents@fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`；协议基线：E2B OpenAPI `b52cd30c14bf7038ba5bfbd15456b1dabe567082`。
 
+2026-11-10，当前会话用户在完整反馈评估后明确回复「同意」，批准：保留各次同名创建的快照 ID、停止自动删除旧对象；名称查询只选择该 owner 最新可见者并接受最终一致和存储增长；非法名称对外返回稳定的 `Invalid snapshot name`，原始后端错误只写日志；新游标校验排序方向，历史无方向 token 继续兼容；template 拒绝 tag、去首尾空白并转小写。该决定覆盖下文相应旧替换与分页语义，不改变 Pause 的既有批准来源。历史源码提交、人工验收和独立评审仍按各自原始目标保留。
+
 ## 当前行为
 
-- #1083：`GET /v2/sandboxes` 的 `order`、`template`、`startedAfter` 为保留参数且不进入 metadata；默认降序、显式升序；`limit`、`nextToken`、`order`、`template`、`startedAfter` 空值或重复值 400；按领取时间（固定宽度 UTC 纳秒）加 Sandbox ID 稳定分页；筛选先于分页；共享分页器的其他调用者保持默认升序。`template` 与 Sandbox 解析出的模板身份（`GetTemplate()`）精确匹配；已接受限制：SandboxSet 使用 `spec.templateRef` 时该身份是被引用的 SandboxTemplate 名而非 SandboxSet 名，由快照恢复的 Sandbox 其身份是内部 Checkpoint/SandboxTemplate 名，两种情况下按 SandboxSet 名或 snapshotID/别名查询都得到空数组。
+- #1083：列表保留参数、默认降序、显式升序、固定宽度领取时间与 ID 稳定分页、先筛选后分页及单值校验保持不变。template 去首尾空白并转小写后与 `GetTemplate()` 精确匹配，纯空白及含 `:` 的 tag 形式 400。新游标包含方向，不匹配当前 order（省略为降序）时 400；历史裸 token 与无方向 stable cursor 按当前方向解释。SandboxSet `templateRef` 及快照恢复身份限制保持不变。
 - #1084：Pause 请求体可为空或恰好一个 JSON 对象；任何显式 `memory` 返回 400；非法 JSON、非对象或尾随内容返回 400，且不触发暂停或写入；空 body、空白、`null`、`{}` 保持原流程；404/409/500 分类不变。
 - #1085 memory：body `memory` 映射到本次持久化内容（`true` → memory+filesystem，`false` → filesystem，省略不修改）；持久化内容扩展头优先，多值合并去重；`names` 始终为数组。
-- #1085 name：`name:null`/`""` 视为未命名；非空写入 Checkpoint label `agents.kruise.io/checkpoint-alias`；格式由 `sandboxcr.CreateCheckpoint` 按 label value 规则校验并映射为 400；别名作用域为「同一 owner（API key）+ team namespace」；同名替换为“先建、成功后收敛别名”：按创建时间（annotation `agents.kruise.io/checkpoint-creation-timestamp`，RFC3339 纳秒；缺失时回退秒级 `metadata.creationTimestamp`）与对象名选最新者，最新者删除其余对象，被取代者删除自身并返回最新者 ID；列举与删除均保留 owner 过滤，不引入跨 owner 删除授权旁路；契约要求 owner 为空时跳过收敛并记日志（现有实现尚无该守卫，属待补项）；删除失败只记录日志，不回滚已成功的创建；`GET /snapshots?name=` user 级过滤并返回最新一条，忽略 `limit`/`nextToken` 的分页效果但非法 `limit` 仍为 400。
-- 分层：E2B 协议语义与替换编排留在 API 层；存储格式约束在 Infra 入口校验并返回领域错误；API 层只做状态码映射；模板身份等中性能力由 Infra 提供，API 层不叠加后端标签匹配。
+- #1085 name：`name:null`/`""` 视为未命名；非空写入 label。Infra 按存储规则校验，API 返回 400 `Invalid snapshot name` 并内部记录原始错误。同名创建保留所有对象并返回本次 ID；GET 按 owner + namespace 过滤，以创建时间及对象名选最新可见的一条。创建阶段不再按缓存列表进行自动删除，因此旧收敛的 owner 空值守卫不再需要。显式删除权限不变；name 查询仍忽略分页效果但非法 limit 返回 400。
+- 分层：E2B 协议语义与名称解析留在 API 层；存储格式约束在 Infra 入口校验并返回领域错误；API 层映射状态码与稳定协议消息；模板身份等中性能力由 Infra 提供，API 层不叠加后端标签匹配。
 
-## 替换顺序与列表语义
+## 对象保留与名称查询
 
-替换不在创建前读取或删除旧对象，因此任何创建失败、别名非法、等待超时都不会丢失既有快照。创建成功后按别名列举同 namespace 下该 owner 的 Succeeded checkpoint，按 Checkpoint 创建时间（`AsCheckpointInfo` 输出固定宽度 UTC 纳秒串，字典序等于时间序）与对象名组成确定的全序：
-
-- 本次新建的是最新者：删除其余同别名对象，返回本次 `snapshotID`。
-- 本次新建的不是最新者：删除本次新建对象，返回最新者的 `snapshotID`，避免把已被取代的对象 ID 当作有效结果。
-
-这样同一 owner 的并发同名创建收敛到唯一最新对象，而不是留下多条记录；顺序替换仍是新对象替换旧对象。收敛是尽力而为：只读取一次本副本 informer 可见的集合，不重试、不做后台补偿、不使用 `APIReader` 列举、不引入分布式锁，因此多副本或 watch 滞后下重复对象可能残留到下一次同名创建才被清理；带 `name` 的列表始终返回可见集合中最新一条，对外解析结果稳定，不带 `name` 的列表在收敛完成前可能短暂出现两条。仍存在的竞态是：较早的请求先返回 201 后，较新的请求仍可能删除它，已经返回的 `snapshotID` 可能随后失效，这是不保留旧 build 的固有取舍。删除使用与请求解耦的 5 秒超时，失败只记录日志，由后续替换清理。
+名称更新与快照对象保留分别处理：创建请求只创建本次对象，不列举或删除旧对象；成功返回本次 ID。查询 name 时按固定宽度 UTC 纳秒创建时间和对象名选择该 owner 最新可见的一条；无 name 的列表可以返回多条同名对象。已返回的 ID 只受显式删除和既有生命周期影响。接受 informer 滞后造成的最终一致、跨副本时钟偏差及历史对象的存储成本；未来若需要强一致别名应单独设计版本化绑定。
 
 ## 其他边界
 
 项目文档发布仅覆盖管理记录。源码操作沿用用户对相应范围的既有授权，源码提交、推送、PR、Issue、部署、人工验收和交付分别记录实际结果；当前已记录的源码发布证据见 `context.md`。
 
-`spec.md` v5 相对 v4 包含别名作用域、并发收敛保证、新增存储 annotation 和模板身份限制的材料性变更；其批准来源为上文 2026-10-22 用户决定。既有独立评审保留原始评估版本，不自动覆盖后续变更。
+`spec.md` v6 的材料性修订依据 2026-11-10 当前会话的「同意」。既有独立评审保留原始评估版本，不自动覆盖 v6；当前独立评审待完成。
 
 用户已另行授权向上游 `openkruise/agents` 提交 SandboxSet `spec.templateRef` 模板身份与 E2B TemplateID 不一致的 Issue；该授权仅覆盖创建该 Issue，不覆盖源码提交、PR 或关闭既有 Issue。

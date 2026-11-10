@@ -14,8 +14,8 @@ documents:
   spec: spec.md
 design:
   file: spec.md
-  version: 5
+  version: 6
   state: review-pending
-  author_session: 3387366e-d695-4926-9dea-fc31e52a5491
+  author_session: 01a1c4bb-498d-7843-8186-cebf503116cf
 repository: agents
 cleanup: pending
