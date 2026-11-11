@@ -1,5 +1,5 @@
 id: 2-sandboxset-create-consistency
-status: developing
+status: awaiting_delivery
 recorded_at: '2026-11-11'
 recorded_by: Codex
 design:
@@ -17,24 +17,30 @@ design:
     spec_sha256: d2e50ca6a0b1c4561d38477f30a65838302572f629b30fd5e238eef75b0ca49a
     source_baseline: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
 development:
-  status: ready-for-review
+  status: implemented
   repository: agents
   branch: fix/sandboxset-cache-wait-261111
   worktree: worktrees/2-sandboxset-create-consistency
   baseline_commit: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
-  implementation_commit: null
+  implementation_commit: d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037
   verification: passed
-  independent_review: pending
+  independent_review: not-performed
+  human_review: passed
   evidence: workitems/2-sandboxset-create-consistency/context.md
 acceptance:
-  status: not-started
-  accepted_by: null
-  evidence: null
+  status: accepted
+  accepted_by: user
+  scope: human-code-review
+  evidence: workitems/2-sandboxset-create-consistency/decision.md
 delivery:
-  status: not-started
-  requirements_confirmed: false
-  source_pushed: false
-  pull_request: null
+  status: pull-request-open
+  requirements_confirmed: true
+  required: [source-push, pull-request]
+  source_pushed: true
+  pull_request: https://github.com/openkruise/agents/pull/1207
+  source_remote: airanthem
+  source_commit: d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037
+  ci: in-progress
   merged: false
   deployed: false
   e2e_verified: false

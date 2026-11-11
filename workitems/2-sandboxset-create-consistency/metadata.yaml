@@ -1,7 +1,7 @@
 id: 2-sandboxset-create-consistency
 title: 修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态
 kind: bug
-status: developing
+status: awaiting_delivery
 repository: agents
 created_at: '2026-11-11'
 recorded_by: Codex
@@ -35,18 +35,25 @@ design:
     input_spec_sha256: 70cb9eee36a6db9a56b57554d1556303573bd9cb933055d4d4ca90904776cd46
     spec_sha256: d2e50ca6a0b1c4561d38477f30a65838302572f629b30fd5e238eef75b0ca49a
     source_baseline: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
-  next_action: independent-implementation-review
+  next_action: track-upstream-pull-request
 development:
-  status: ready-for-review
+  status: implemented
   repository: agents
   branch: fix/sandboxset-cache-wait-261111
   worktree: worktrees/2-sandboxset-create-consistency
   baseline_commit: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
-  implementation_commit: null
+  implementation_commit: d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037
   verification: passed
-  independent_review: pending
+  independent_review: not-performed
+  human_review: passed
+acceptance:
+  status: accepted
+  source: decision.md
+  scope: human-code-review
 delivery:
-  required: []
-  status: not-started
-  requirements_confirmed: false
+  required: [source-push, pull-request]
+  status: pull-request-open
+  requirements_confirmed: true
+  source_pushed: true
+  pull_request: https://github.com/openkruise/agents/pull/1207
 cleanup: not-applicable

@@ -10,4 +10,4 @@
 
 迁移目标：`/Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle`；代码工作树位于目标项目的 `worktrees/1-gateway-wakeup-lifecycle`。迁移前记录可从本项目提交 `4939ae96e463dbf8064a752cc32853fb85a2034a` 恢复。
 
-当前工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。用户已批准并要求实施每次查询最多 5 秒的纯 informer 等待；v1 独立设计审查通过，设计状态为 `implementable`。实现已在隔离 worktree 完成，源码保持未提交，待独立实现审查；实际验证及源码身份见[工作项上下文](../workitems/2-sandboxset-create-consistency/context.md)。人工验收、源码发布与线上验证尚未发生。
+当前工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。v1 设计与实现已完成，用户明确表示人工审查通过。最终源码已提交、推送，并创建 [PR #1207](https://github.com/openkruise/agents/pull/1207)，当前未合并、CI 运行中；实际验证、人工结论及源码身份见[工作项上下文](../workitems/2-sandboxset-create-consistency/context.md)。未进行线上部署或运行时验收。
