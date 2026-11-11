@@ -44,7 +44,7 @@ delivery:
   source_commit: 441ac6702e53b37ed9acb611ace8b1147dafbdb5
   ci: unit-tests-passed
   coverage_upload: passed
-  patch_coverage: pending
+  patch_coverage: 100%
   merged: false
   deployed: false
   e2e_verified: false

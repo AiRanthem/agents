@@ -121,4 +121,4 @@
 
 远端 [CI 单测 job](https://github.com/openkruise/agents/actions/runs/42992257580/job/130427716743) 已通过，覆盖率上传也成功。单测步骤 09:06:07–09:27:52 UTC，耗时 21 分 45 秒；上一轮同一步骤为 20 分 27 秒。实际日志的 cache 包耗时为 15.040s，09:11:11 UTC 已通过；耗时较长的 E2B 包为 262.892s、sandboxcr 包为 151.387s。当前结果不支持新增测试卡死，不能仅凭总耗时断定改坏。全量步骤还包含编译和其他包执行，未将全部时长归因于某个包。
 
-完整 CI 日志为 `/Users/sophon/Workspace/OKAWorkspace/local-storage/sandboxset-create-consistency/unit-441ac6702.log`，cache 包结果在第 23676 行。本地函数语句 100% 与 Codecov patch 行覆盖率分别记录；远端 Codecov 评论暂仍绑定旧 head `d1c59b668`，新 patch 报告待生成。按用户最新收尾要求，不再等待整套 CI。
+完整 CI 日志为 `/Users/sophon/Workspace/OKAWorkspace/local-storage/sandboxset-create-consistency/unit-441ac6702.log`，cache 包结果在第 23676 行。本地函数语句 100% 与 Codecov patch 行覆盖率分别记录；最终回读远端 Codecov 已绑定新 head `441ac6702`，确认所有新增可覆盖行全部覆盖，`codecov/patch` 为 SUCCESS，项目整体覆盖率为 84.83%。覆盖率补充闭环；按用户最新要求，不再等待其他 CI。
