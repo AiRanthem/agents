@@ -12,4 +12,4 @@
 
 已完成工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。用户明确要求登记完成，[PR #1207](https://github.com/openkruise/agents/pull/1207) 已于 2026-11-11 合入 master，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`。源码交付、人工结论与未进行的部署/现场验证分别保留，详见[工作项上下文](../workitems/2-sandboxset-create-consistency/context.md)。
 
-当前工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。作为工作项 2 交付后的独立缺陷登记，`fixes` 关联工作项 2。已记录 master/PR 的 CI 耗时对照及单用例 A/B 证据；目标是保持生产合同和必要覆盖、以简洁代码恢复单测效率，另开独立 PR。当前仅完成新工作项登记，正式设计、修复实现及新 PR 尚未开始。
+当前工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。`fixes` 关联工作项 2。已完成测试层修复与验证，并创建独立 [PR #1208](https://github.com/openkruise/agents/pull/1208)，提交为 `24e5feb24b8fe1ca4e76b4ff879c4252010d37ee`；生产合同与实现保持不变。固定增加 5 秒的用例恢复为 0.05 秒，五个受影响包的本地 race 检查通过；新 CI 单测步骤耗时 14分44秒，单测、lint 与覆盖率门禁通过，详见[验证记录](../workitems/3-sandboxset-test-latency/context.md)。当前待审查和人工验收，未合并或部署。

@@ -4,7 +4,7 @@
 
 本项 `3-sandboxset-test-latency` 为单测耗时回归的独立缺陷，`fixes` 关联已完成的 `2-sandboxset-create-consistency`。原 PR #1207 已于 `2026-11-11T09:45:12Z` 合入上游 master，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`，本轮直接回读 GitHub 与 `git ls-remote upstream refs/heads/master` 确认。
 
-当前没有本项开发分支或 worktree；正式设计、修复实现和新 PR 尚未开始。合并提交只是登记时的上游快照，创建分支前仍须重新执行项目规定的 fetch 和基线核验。原工作项 worktree 干净并保留，未在其中继续修复。
+用户在登记后再次要求修复，本项源码已实现、验证并创建独立 [PR #1208](https://github.com/openkruise/agents/pull/1208)，当前待审查和人工验收。开发位置和基线见下节。原工作项 worktree 干净并保留，未在其中继续修复。
 
 ## CI 耗时对照
 
@@ -53,4 +53,50 @@
 - `pkg/cache/cachetest/cachetest.go`：复用 fake client 的测试 cache 工厂；`pkg/cache/controllers/test_helpers.go` 提供 MockManager 和 wait simulation。
 - `pkg/servers/e2b/core_test.go`、`pkg/sandbox-manager/infra/sandboxcr/infra_test.go`：上层测试初始化；`pkg/cache/cache_test.go` 有会触发未命中等待的既有用例。
 
-本轮登记原工作项完成及本项需求，没有源码写入或新增实现验证。此前修复调查仍处于读取上下文阶段，已有修复请求和另提 PR 的要求作为本项后续任务保留；不把调查方向登记为已批准设计或已实施修复。
+上述为登记时的原始性能证据，保留其实际输入。当前测试修复与验证如下；未将调查方向登记为已批准的正式设计。
+
+## 实现身份与边界（2026-11-11）
+
+- 实现者：本次 Codex 主会话。依据 `requirement.md` 的测试提速目标及工作项 2 既有生产合同，选择测试内部实现，没有新的生产设计、兼容逻辑或独立设计审批。
+- 在原源码主检出保持 `develop`、成功 `git pull --ff-only` 后刷新上游；`git fetch upstream master` 成功，从当时最新的 `91274e22331bd620ce2c0173f1f97cc28d80bf4f` 建立 `fix/sandboxset-test-latency-261111`，初始 HEAD 与该提交一致。发布前再次 fetch，基线未变。
+- Worktree：`/Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/3-sandboxset-test-latency`。
+- 最终提交：`24e5feb24b8fe1ca4e76b4ff879c4252010d37ee`，已 sign-off、普通推送到 `airanthem`（`AiRanthem/agents`）；远端分支与本地 SHA 匹配，工作树干净。
+- 完整差异为 10 个测试/测试支持文件、96 行新增和 16 行删除。核心是 `pkg/cache/cachetest/cachetest.go` 及同目录新回归测试；其余为现有测试的类型适配或明确选择真实 Cache。没有无关源码改动。
+
+工厂现在返回嵌入真实 `*cache.Cache` 的 `cachetest.Cache`。fake client 写入本就立即可见，fake provider 的 SandboxSet 查询按原名称索引和 namespace 读取一次，保留缺失、取消和读取错误语义；其他方法及 wait tasks 沿用嵌入的真实 Cache。真实 informer 等待由现有内部测试继续验证，旧的多模板查询测试显式调用嵌入 Cache 并用 `synctest` 覆盖未命中。
+
+没有改动生产 `pkg/cache/cache.go`、Provider 接口、5 秒窗口、CI workflow、Makefile 或覆盖率阈值。所有 `cachetest` 导入都来自测试文件；测试替身的已知上限及如何测试真实传播等待在相邻 `known-limit:` 注释中说明。
+
+## 最终验证及效率
+
+以下均在新 worktree、现有 Go 1.26.3 工具链运行，`-mod=readonly`；结果绑定上述最终提交。首次批量回归遇到一个显式接受 `*cache.Cache` 的测试回调编译失败；改为传入嵌入 Cache 后，只重跑受影响 Infra 包，其他已通过结果仍有效。
+
+| 包 | 旧 PR CI（race、包串行） | 本次本地 race 验证 | 本次新 PR CI |
+| --- | ---: | ---: | ---: |
+| cache | 15.040s | 5.167s | 4.334s |
+| sandbox-manager | 21.145s | 14.725s | 14.078s |
+| sandboxcr | 151.387s | 45.501s | 46.212s |
+| e2b | 262.892s | 113.689s | 112.572s |
+| sandboxclaim/core | 8.508s | 3.994s | 3.018s |
+
+不同机器的数据不是同机基准；各包已回到接近合入前 master 的执行水平。同一既有缺失模板用例本地实测从 5.05s 恢复为 0.05s，保留原 HTTP 400 及 quota 未调用断言。
+
+实际命令与范围：
+
+- `go test -mod=readonly -race -p 1 ./pkg/cache ./pkg/sandbox-manager ./pkg/sandbox-manager/infra/sandboxcr ./pkg/servers/e2b ./pkg/controller/sandboxclaim/core -count=1`：cache、Manager、E2B、sandboxclaim/core 均通过；Infra 最初的类型编译问题已修正。
+- `go test -mod=readonly -race ./pkg/sandbox-manager/infra/sandboxcr -count=1`：修正后的完整 Infra 包通过（45.501s），无遗留失败。
+- `go test -mod=readonly ./pkg/sandbox-gateway/filter ./pkg/sandbox-gateway/wake ./pkg/cache/cachetest -run '^$' -count=1` 及 `go test -mod=readonly ./pkg/controller/sandboxclaim ./pkg/utils/csiutils -run '^$' -count=1`：其余工厂消费者编译通过。这些是编译检查，不冒充行为测试。
+- `go test -mod=readonly -race ./pkg/cache/cachetest -count=5 -coverprofile=.../latency-fix-helper.cover`：通过（2.999s），测试支持包语句覆盖率 77.8%。新回归用例在虚拟时间中断言 fake 命中、缺失和取消均不消耗传播等待时间。
+- `go test -mod=readonly ./pkg/cache -run '^TestPickSandboxSet' -coverprofile=.../latency-fix-real-cache.cover -count=1`：通过（0.870s），真实 `PickSandboxSet` 函数语句覆盖率仍为 100.0%。
+- 使用一次性 Go overlay 将 fake provider 恢复为直接调用慢的真实查询，再运行 `TestSandboxSetLookupDoesNotWait`：按预期因消耗 10 秒虚拟时间而失败（实际墙钟约 0.56s）。该负例证明新测试能抓住耗时回归，未修改仓库源码。
+- `gofmt`、`git diff --check`、完整 diff 和文件分类检查通过；无生成文件或依赖变动。
+
+以上完整输出保存在前述 `local-storage/sandboxset-create-consistency/` 下：`latency-fix-tests.log`、`latency-fix-infra.log`、`latency-fix-missing-template.jsonl`、`latency-fix-helper.cover`、`latency-fix-real-cache.cover`、`latency-fix-negative.log`。合并这些真实执行结果，不重复运行已稳定且输入未变的检查。
+
+## 发布与剩余边界
+
+已创建 [PR #1208](https://github.com/openkruise/agents/pull/1208)，回读确认 head 为 `24e5feb24b8fe1ca4e76b4ff879c4252010d37ee`、base 为 `master`，改动范围仅上述 10 个文件。新 [CI 单测 job](https://github.com/openkruise/agents/actions/runs/43018062168/job/130514022236) 已完成并通过，单测步骤为 `2026-11-11T12:10:46Z–12:25:30Z`，耗时 14分44秒，低于旧 PR 的 21分45秒；各包 CI 实测见上表。这是两次 CI 的观察值，完整步骤还包含编译/runner 波动，不将全部总时长差异归因于固定等待。
+
+最终回读单测、lint、CodeQL 等检查均成功，Codecov patch 为 81.81818%、项目覆盖率为 84.95%，覆盖率门禁通过。按用户简洁优先的要求，不为其余两行未覆盖错误分支追加测试或追逐硬性 100%。CI 原始日志为前述目录下的 `latency-fix-ci.log`。
+
+PR 仍 OPEN，Tide 等待上游审批；未执行独立实现审查、人工验收、合并、部署或本地清理，未运行本地 E2E。保留工作树供后续审查，工作项 3 不登记为人工验收通过或完成。

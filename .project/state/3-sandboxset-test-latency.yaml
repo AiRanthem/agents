@@ -1,5 +1,5 @@
 id: 3-sandboxset-test-latency
-status: planned
+status: developing
 recorded_at: '2026-11-11'
 recorded_by: Codex
 depends_on:
@@ -7,29 +7,39 @@ depends_on:
 fixes:
 - 2-sandboxset-create-consistency
 design:
-  state: not-started
+  state: requirements-defined
   file: null
+  contract: workitems/3-sandboxset-test-latency/requirement.md
 development:
-  status: not-started
+  status: ready-for-review
   repository: agents
-  branch: null
-  worktree: null
-  baseline_commit: null
-  implementation_commit: null
-  verification: not-run
+  branch: fix/sandboxset-test-latency-261111
+  worktree: worktrees/3-sandboxset-test-latency
+  baseline_commit: 91274e22331bd620ce2c0173f1f97cc28d80bf4f
+  implementation_commit: 24e5feb24b8fe1ca4e76b4ff879c4252010d37ee
+  verification: passed
+  independent_review: not-performed
+  evidence: workitems/3-sandboxset-test-latency/context.md
 acceptance:
   status: not-started
 delivery:
-  status: not-started
+  status: pull-request-open
   requirements_confirmed: true
   required: [source-push, separate-upstream-pull-request]
-  source_pushed: false
-  pull_request: null
+  source_pushed: true
+  source_remote: airanthem
+  source_commit: 24e5feb24b8fe1ca4e76b4ff879c4252010d37ee
+  pull_request: https://github.com/openkruise/agents/pull/1208
+  ci: checks-passed
+  ci_unit_duration_seconds: 884
+  ci_unit_job: https://github.com/openkruise/agents/actions/runs/43018062168/job/130514022236
+  patch_coverage: 81.81818%
+  merge_gate: pending
   merged: false
   deployed: false
   e2e_verified: false
 cleanup:
-  status: not-applicable
+  status: retained
 external_sync:
   status: not-configured
   backend: null
