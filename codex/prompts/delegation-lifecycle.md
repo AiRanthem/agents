@@ -4,4 +4,4 @@ Return one compact handoff: input/output identities, key facts and original loca
 
 Close completed threads when supported, preserving results first. At capacity, reclaim completed threads or reuse a suitable executor within its scope and role; otherwise continue useful work or wait for relevant running work. Report a blocked required gate when eligible direct work is exhausted. Do not retry spawning without changed capacity. Use event-driven waiting within progress-update requirements; a timeout alone creates no new task or polling need.
 
-Briefly report dispatched/reassigned tasks, specified model/effort and the reason for the choice. Do not inspect subagent runtime settings or claim capabilities that did not run.
+Briefly report dispatched/reassigned tasks and why they were delegated. Do not inspect subagent runtime settings or claim capabilities that did not run.
