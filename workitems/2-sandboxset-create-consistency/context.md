@@ -53,8 +53,8 @@
 
 - 源码仓库：OpenKruise Agents；主检出保持干净的 `develop`。本轮成功 `git pull --ff-only` 后主检出仍为 `7b86412bf14373963c648a7ceed91d91b5c02ceb`。
 - 本轮核验 upstream 地址、成功 `git fetch upstream master`，从 `3d9af5799d873e278cbfcb8871a0d0a3ec726447` 创建分支 `fix/sandboxset-cache-wait-261111`，初始 HEAD 与基线一致；后续 `git ls-remote upstream refs/heads/master` 核验仍相同。
-- 实际 worktree：`/Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/2-sandboxset-create-consistency`。当前 HEAD 为 `d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037`，工作树干净。
-- 相对基线的完整差异为 `pkg/cache/cache.go`、`pkg/cache/cache_internal_test.go`、`pkg/sandbox-manager/infra/sandboxcr/claim_test.go`，共 3 个文件、223 行新增及 10 行删除。没有排除的无关源码改动。
+- 实际 worktree：`/Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/2-sandboxset-create-consistency`。当前 HEAD 为 `441ac6702e53b37ed9acb611ace8b1147dafbdb5`，工作树干净。
+- 相对基线的完整差异为 `pkg/cache/cache.go`、`pkg/cache/cache_internal_test.go`、`pkg/sandbox-manager/infra/sandboxcr/claim_test.go`，共 3 个文件、240 行新增及 10 行删除。没有排除的无关源码改动。
 - `PickSandboxSet` 改为每次调用独立的 100ms 轮询和 5 秒窗口；首次立即查询，仅空结果重查，命中返回、父 context 结束或读取错误退出。窗口结束再作一次同步缓存检查以覆盖末次 tick 后到达的对象，不创建新窗口。自身窗口耗尽保持原未找到错误；读取错误与父 context 原因保留。
 - 去除此方法的 singleflight 包装；其他方法、namespace/名称索引/informer selector 配置、上层接口与错误映射均未修改。查询没有 APIReader、隐式回源、资源写入或缓存对象修改。
 - 仍覆盖原先完整设计审查的源码基线，设计合同及相关依赖未变，没有被上游变化失效的设计覆盖。本段为实现适用性核对，不冒充新独立 Pass。
@@ -64,7 +64,7 @@
 | 文件 | SHA-256 |
 | --- | --- |
 | `pkg/cache/cache.go` | `235103a54f7616bcf4a36f16a15c056e208df470261575a5e6b9abedca0d55eb` |
-| `pkg/cache/cache_internal_test.go` | `9a17e919216ee97b573ffd36907b35f2a11b55b6937562ba46d7d77e05552064` |
+| `pkg/cache/cache_internal_test.go` | `bf58557e4cc28be7b108683cc46215d5aaff2a514e40adcbc94d7a35e01ce5f0` |
 | `pkg/sandbox-manager/infra/sandboxcr/claim_test.go` | `0cba816488a69152c1e009f9373b8619f2b8d9cbf6e42a5b027fdb954f412cb1` |
 
 ## 实现验证
@@ -102,3 +102,19 @@
 源码已 sign-off 提交并普通推送，`git ls-remote airanthem refs/heads/fix/sandboxset-cache-wait-261111` 与本地提交均为 `d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037`。GitHub 连接器创建 PR 返回集成权限不足 403，随后使用已登录的 GitHub CLI 成功创建 [PR #1207](https://github.com/openkruise/agents/pull/1207)。创建后经连接器及 CLI 回读确认：OPEN、非草稿、base 为 `openkruise/agents:master`、head 为 `AiRanthem:fix/sandboxset-cache-wait-261111` 且 SHA 匹配，完整差异仅三个文件。
 
 回读时 PR 可合并，CI 和 Tide 仍在运行/等待，未把这一状态写成已通过、已合并或 E2E 已验证。未手动请求 reviewer、未合并、未部署、未清理 worktree。
+
+## 覆盖率补充（2026-11-11）
+
+用户要求“CI显示单测覆盖率不够，帮我补到100%，以最少的代码”。实际 CI 的单测已通过，失败项为 Codecov patch：`d1c59b668` 的新增代码行覆盖率 69.23077%，8 行缺失或部分覆盖，全部位于 `pkg/cache/cache.go`。本次目标为 PR 新增代码 100%，不扩展为全仓库覆盖率改造。
+
+只修改已有 `pkg/cache/cache_internal_test.go`，21 行新增、4 行删除（净增 17 行）：复用表驱动用例补充已结束的 context、最终缓存检查失败和取消，控制原末尾可见用例走最终检查成功分支。每例仍检查错误原因、结果、虚拟耗时与 APIReader 零调用；未修改生产代码、公开合同、覆盖率配置或阈值。人工审查结论继续绑定此前 `d1c59b668`，本次测试补充来自新的用户授权，不虚构新的人工结论。
+
+在源码 worktree 实际验证：
+
+- `go test -mod=readonly ./pkg/cache -run '^TestPickSandboxSet' -coverprofile=/private/tmp/sandboxset-after.cover -count=1`：通过（0.952s）。
+- `go tool cover -func=/private/tmp/sandboxset-after.cover`：`PickSandboxSet` 为 100.0%；逐块核验该函数 23 个 instrumented blocks、29 条语句全部命中。
+- 原始覆盖率文件另存为 `/Users/sophon/Workspace/OKAWorkspace/local-storage/sandboxset-create-consistency/lookup-441ac6702.cover`。
+- `go test -mod=readonly -race ./pkg/cache -run '^TestPickSandboxSet' -count=10`：通过（2.922s）。
+- `gofmt`、`git diff --check` 及文件分类检查通过。源码仅测试变更，其余仍有效的回归覆盖保留。
+
+补充提交 `441ac6702e53b37ed9acb611ace8b1147dafbdb5` 已普通推送到原 fork 分支，PR head 回读匹配，新的 CI 单测正在运行。本地函数语句 100% 与 Codecov patch 行覆盖率分别记录，远端报告待回读。
