@@ -1,0 +1,39 @@
+id: 2-sandboxset-create-consistency
+status: designing
+recorded_at: '2026-11-11'
+recorded_by: Codex
+design:
+  version: 1
+  state: review-pending
+  spec_sha256: 70cb9eee36a6db9a56b57554d1556303573bd9cb933055d4d4ca90904776cd46
+  user_approved: true
+  approval_source: workitems/2-sandboxset-create-consistency/decision.md
+  independent_review:
+    status: not-run
+    reviewer: null
+    report: null
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  implementation_commit: null
+  verification: not-run
+acceptance:
+  status: not-started
+  accepted_by: null
+  evidence: null
+delivery:
+  status: not-started
+  requirements_confirmed: false
+  source_pushed: false
+  pull_request: null
+  merged: false
+  deployed: false
+  e2e_verified: false
+cleanup:
+  status: not-applicable
+external_sync:
+  status: not-configured
+  backend: null
