@@ -10,7 +10,7 @@
 
 同日用户先选择“最小修复”，随后逐项明确了扩展后的当前范围：Pause 本轮暂时禁止指定 memory，任何显式 `memory` 都返回 400；Snapshot 的 body `memory` 绑定到本次持久化内容（`true` 等价 memory+filesystem，`false` 等价 filesystem，持久化内容扩展头优先）；支持快照 `name`、Infra 侧格式校验、列表按 name 过滤，`names` 始终为数组。
 
-Pause 必须拒绝首个 JSON 对象之后仍有内容的请求体，避免显式 memory 请求被静默忽略。2026-11-10，用户在 receiving-code-review 中回复「同意」，批准修订同名快照保留、错误隔离、游标方向和 template 输入行为，完整目标见 `spec.md` v6。
+Pause 必须拒绝首个 JSON 对象之后仍有内容的请求体，避免显式 memory 请求被静默忽略。2026-11-10，用户在 receiving-code-review 中回复「同意」，批准修订同名快照保留、错误隔离、游标方向和 template 输入行为，完整目标见 `spec.md` v6。2026-11-11，用户审查未提交变更后选择「保留现在的做法」，批准省略 `order` 时沿用 `nextToken` 携带的排序方向，完整目标见 `spec.md` v7。
 
 ### #1083：Sandbox 列表筛选与排序
 
@@ -18,7 +18,7 @@ Pause 必须拒绝首个 JSON 对象之后仍有内容的请求体，避免显�
 
 修复 `GET /v2/sandboxes` 将 `order`、`template`、`startedAfter` 当作 metadata 的错误。按模板 ID 或现有别名筛选；按 RFC3339 时间筛选在给定时刻及之后启动的 Sandbox；支持 `asc`/`desc` 且默认 `desc`；分页游标与排序方向一致；不支持的参数值返回 400。保留相关既有 metadata 与其他列表功能。查询参数按单值解析，空值或重复值返回 400。
 
-template 查询去除首尾空白并转小写，归一化为空或包含 tag 分隔符 `:` 时返回 400。新 stable cursor 携带方向，与请求方向不符返回 400；历史裸 token 和无方向 stable cursor 按当前请求方向继续兼容。
+template 查询去除首尾空白并转小写，归一化为空或包含 tag 分隔符 `:` 时返回 400。新 stable cursor 携带方向，显式 `order` 与请求方向不符返回 400；省略 `order` 时沿用 token 携带的方向；历史裸 token 和无方向 stable cursor 按当前请求方向继续兼容。
 
 ### #1084：Pause memory
 
@@ -41,7 +41,7 @@ template 查询去除首尾空白并转小写，归一化为空或包含 tag 分
 - `memory:false` 快照仅保存文件系统，`memory:true` 保存 memory+filesystem，有效持久化内容扩展头优先于 body，均不修改源 Sandbox 的长期策略。
 - 合法 `name` 创建返回本次 ID 与 `names:[name]`；同名旧对象在新快照创建成功或失败后均保持存在，不因同名创建使先前 ID 失效；`GET /snapshots?name=` 按 user 可见范围返回最新可见的一条。
 - 非法名称返回稳定 400 消息，响应不透传 Checkpoint/Kubernetes 校验细节；原始错误保留在内部日志。
-- 新游标方向不符返回 400，历史两种无方向 token 继续兼容；带 tag 或纯空白 template 返回 400，带大小写与首尾空白的 template 可归一化后命中。
+- 显式 `order` 与新游标方向不符返回 400，省略 `order` 时沿用新游标方向，历史两种无方向 token 继续兼容；带 tag 或纯空白 template 返回 400，带大小写与首尾空白的 template 可归一化后命中。
 - 创建与列表的 `names` 是 JSON 数组而非 `null`；参数错误属于客户端错误；既有认证、资源归属、租户可见性、共享分页的其他调用和相关生命周期行为不退化。
 - 请求字段、边界和兼容限制的完整候选见 `spec.md`；完整设计仍以当前审批版本为准。
 

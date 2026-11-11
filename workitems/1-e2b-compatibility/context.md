@@ -2,7 +2,7 @@
 
 ## 当前合同与用户批准
 
-本项解决 E2B #1083、#1084、#1085。当前合同为 `requirement.md` 与 `spec.md` v6。用户于 2026-11-10 在本会话的 receiving-code-review 评估后回复「同意」，批准保留旧快照 ID、稳定错误消息、新游标方向校验并兼容历史 token，以及 template 拒绝 tag、去空白和转小写。实际来源会话为 `01a1c4bb-498d-7843-8186-cebf503116cf`；批准目标哈希记录在 `.project/state/1-e2b-compatibility.yaml`。
+本项解决 E2B #1083、#1084、#1085。当前合同为 `requirement.md` 与 `spec.md` v7。用户于 2026-11-10 在本会话的 receiving-code-review 评估后回复「同意」，批准保留旧快照 ID、稳定错误消息、新游标方向校验并兼容历史 token，以及 template 拒绝 tag、去空白和转小写；2026-11-11，用户在本会话审查未提交变更后选择「保留现在的做法」，批准省略 `order` 时沿用 `nextToken` 携带的方向，v6 的默认降序校验据此失效。实际来源会话为 `01a1c4bb-498d-7843-8186-cebf503116cf`；批准目标哈希记录在 `.project/state/1-e2b-compatibility.yaml`。
 
 本轮对收到的五项反馈均按已批准目标完成修正。当前设计和实现的独立评审均 pending；历史 v2/v4/v5 的审批、评审及复用记录保持原目标，不作为 v6 的独立通过结论。
 
@@ -18,7 +18,7 @@
 
 - P1：移除 `reconcileSnapshotAlias` 及其删除辅助流程。命名创建保留所有旧对象，返回本次创建 ID；name 查询仍只返回该 owner 最新可见的一条。旧 owner 非空守卫的待补项随整条自动删除流程移除而不再适用。
 - P2：保留 Infra 名称校验与类型化 400 映射；对外返回 `Invalid snapshot name`，其他后端创建失败返回 `Failed to create snapshot`，原始错误继续内部记录。既有授权后资源诊断后缀不变。
-- 游标：新 stable token 带 `descending`，API 在完成参数解析后核对方向，包含省略 order 的默认降序。历史裸 key 和无方向 stable cursor 继续按当前请求方向处理。快照列表保持升序，其他既有分页调用者不变。
+- 游标：新 stable token 带 `descending`；显式 `order` 与 token 方向不符返回 400，省略 `order` 时沿用 token 方向，token 无方向时默认降序。历史裸 key 和无方向 stable cursor 继续按当前请求方向处理。快照列表保持升序，其他既有分页调用者不变。
 - template：归一化首尾空白和大小写，含 tag 分隔符或归一化后为空时 400；仍通过中性 `GetTemplate()` 匹配，不引入池名旁路。
 
 ## 验证与原始证据

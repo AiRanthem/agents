@@ -14,7 +14,7 @@ documents:
   spec: spec.md
 design:
   file: spec.md
-  version: 6
+  version: 7
   state: review-pending
   author_session: 01a1c4bb-498d-7843-8186-cebf503116cf
 repository: agents
