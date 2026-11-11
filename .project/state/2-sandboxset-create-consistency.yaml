@@ -1,5 +1,5 @@
 id: 2-sandboxset-create-consistency
-status: awaiting_delivery
+status: done
 recorded_at: '2026-11-11'
 recorded_by: Codex
 design:
@@ -33,9 +33,16 @@ acceptance:
   accepted_by: user
   scope: human-code-review
   accepted_commit: d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037
+  completion:
+    status: accepted
+    accepted_by: user
+    source: 登记原先工作项完成，然后单开工作项修复单测耗时问题
+    recorded_at: '2026-11-11'
+    head_commit: 441ac6702e53b37ed9acb611ace8b1147dafbdb5
+    merge_commit: 91274e22331bd620ce2c0173f1f97cc28d80bf4f
   evidence: workitems/2-sandboxset-create-consistency/decision.md
 delivery:
-  status: pull-request-open
+  status: delivered
   requirements_confirmed: true
   required: [source-push, pull-request]
   source_pushed: true
@@ -45,11 +52,17 @@ delivery:
   ci: unit-tests-passed
   coverage_upload: passed
   patch_coverage: 100%
-  merged: false
+  merged: true
+  merged_at: '2026-11-11T09:45:12Z'
+  merge_commit: 91274e22331bd620ce2c0173f1f97cc28d80bf4f
+  merge_evidence: https://github.com/openkruise/agents/pull/1207
   deployed: false
   e2e_verified: false
 cleanup:
-  status: not-applicable
+  status: retained
+  reason: 本次未请求清理；保留干净 worktree 供交付取证和后续问题定位
+followups:
+- 3-sandboxset-test-latency
 external_sync:
   status: not-configured
   backend: null

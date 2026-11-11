@@ -1,0 +1,35 @@
+id: 3-sandboxset-test-latency
+status: planned
+recorded_at: '2026-11-11'
+recorded_by: Codex
+depends_on:
+- 2-sandboxset-create-consistency
+fixes:
+- 2-sandboxset-create-consistency
+design:
+  state: not-started
+  file: null
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  implementation_commit: null
+  verification: not-run
+acceptance:
+  status: not-started
+delivery:
+  status: not-started
+  requirements_confirmed: true
+  required: [source-push, separate-upstream-pull-request]
+  source_pushed: false
+  pull_request: null
+  merged: false
+  deployed: false
+  e2e_verified: false
+cleanup:
+  status: not-applicable
+external_sync:
+  status: not-configured
+  backend: null

@@ -35,4 +35,8 @@
 
 同日用户要求实现，并在只读计划确认后明确要求“Implement the plan.”。实现已在隔离 worktree 完成，验证结果见 [context.md](context.md)。
 
-用户随后明确表示“人工审查通过，帮我创建 PR”，接受当前代码审查结果并授权源码提交、推送及 PR。人工审查后的源码提交 `d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037` 已推送至 GitHub fork，并创建 [openkruise/agents PR #1207](https://github.com/openkruise/agents/pull/1207)，目标为 `master`。用户随后要求以最少代码将新增代码覆盖率补到 100%，仅补充测试的提交 `441ac6702e53b37ed9acb611ace8b1147dafbdb5` 已更新该 PR，验证见 `context.md`。本次交付要求为源码 push 与 PR 创建；未执行合并、部署或线上运行时验收。人工结论与未执行的 AI 独立实现审查分别记录，项目记录继续普通推送。
+用户随后明确表示“人工审查通过，帮我创建 PR”，接受当前代码审查结果并授权源码提交、推送及 PR。人工审查后的源码提交 `d1c59b668ccff1ea9ae03e7dcc016ccaaf0d4037` 已推送至 GitHub fork，并创建 [openkruise/agents PR #1207](https://github.com/openkruise/agents/pull/1207)，目标为 `master`。仅补充测试的提交 `441ac6702e53b37ed9acb611ace8b1147dafbdb5` 随后更新该 PR，单测及 patch 覆盖率均已通过，验证见 `context.md`。
+
+PR 已于 2026-11-11 合入 master，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`。用户明确要求“登记原先工作项完成”，据此将本项登记为 `done`，原设计和源码交付历史保留。部署、现场验证及本地清理未执行，人工结论与未执行的 AI 独立实现审查分别记录。
+
+已确认的单测耗时回归转入独立缺陷 [3-sandboxset-test-latency](../3-sandboxset-test-latency/requirement.md)，通过 `fixes` 关联本项，另开 PR 修复，不改写本项已完成的交付事实。

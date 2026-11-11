@@ -1,0 +1,38 @@
+id: 3-sandboxset-test-latency
+title: 修复 SandboxSet 有限等待引入的单测耗时回归
+kind: bug
+status: planned
+repository: agents
+created_at: '2026-11-11'
+recorded_by: Codex
+depends_on:
+- 2-sandboxset-create-consistency
+split_from: null
+fixes:
+- 2-sandboxset-create-consistency
+archived: false
+documents:
+  requirement: requirement.md
+  decision: decision.md
+  context: context.md
+design:
+  file: null
+  state: not-started
+  next_action: develop-test-latency-fix
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  implementation_commit: null
+  verification: not-run
+acceptance:
+  status: not-started
+delivery:
+  required: [source-push, separate-upstream-pull-request]
+  requirements_confirmed: true
+  status: not-started
+  source_pushed: false
+  pull_request: null
+cleanup: not-applicable

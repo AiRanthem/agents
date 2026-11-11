@@ -2,7 +2,7 @@
 
 ## 设计及阶段
 
-正式设计为 `spec.md` v1，用户已批准，并于 2026-11-11 通过完整独立设计审查，状态为 `implementable`，见 [records/design-review.md](records/design-review.md)。实现完成后，用户明确表示“人工审查通过，帮我创建 PR”。当前源码已提交、推送并创建 PR #1207；AI 独立实现审查未执行，人工结论单独记录。设计正文未改，尚未进行现场运行时复现。
+正式设计为 `spec.md` v1，用户已批准，并于 2026-11-11 通过完整独立设计审查，状态为 `implementable`，见 [records/design-review.md](records/design-review.md)。实现完成后，用户明确表示人工审查通过。PR #1207 已合入 master，用户明确要求登记原工作项完成，本项状态为 `done`；AI 独立实现审查未执行，原人工审查和本次完成决定分别保留。设计正文未改，尚未进行现场运行时复现。单测耗时回归另记为 [3-sandboxset-test-latency](../3-sandboxset-test-latency/requirement.md)。
 
 编号 `1-gateway-wakeup-lifecycle` 已发布后迁出本项目，保留其编号，本项使用此前未占用的 `2-sandboxset-create-consistency`。这是针对用户报告的问题建立的独立缺陷工作项；尚未确定对应的原始交付工作项，故 `fixes` 保持空列表，不推测关联。
 
@@ -45,7 +45,7 @@
 
 设计独立评审已通过，当前状态为 `implementable`。实现与人工审查依据见下节。fake client 测试不能证明真实 informer 传播延迟；人工代码审查通过不代表线上运行时验收。
 
-源码 push 和 PR 创建已获授权并完成，当前 PR 未合并，部署和运行时 E2E 结果尚未发生。项目配置没有外部同步后端，不创建或发送外部系统工作项与消息。
+源码 push、PR 创建及上游合并均已完成，部署和现场运行时验证尚未发生。项目配置没有外部同步后端，不创建或发送外部系统工作项与消息。
 
 ## 实现身份与行为（2026-11-11）
 
@@ -122,3 +122,11 @@
 远端 [CI 单测 job](https://github.com/openkruise/agents/actions/runs/42992257580/job/130427716743) 已通过，覆盖率上传也成功。单测步骤 09:06:07–09:27:52 UTC，耗时 21 分 45 秒；上一轮同一步骤为 20 分 27 秒。实际日志的 cache 包耗时为 15.040s，09:11:11 UTC 已通过；耗时较长的 E2B 包为 262.892s、sandboxcr 包为 151.387s。当前结果不支持新增测试卡死，不能仅凭总耗时断定改坏。全量步骤还包含编译和其他包执行，未将全部时长归因于某个包。
 
 完整 CI 日志为 `/Users/sophon/Workspace/OKAWorkspace/local-storage/sandboxset-create-consistency/unit-441ac6702.log`，cache 包结果在第 23676 行。本地函数语句 100% 与 Codecov patch 行覆盖率分别记录；最终回读远端 Codecov 已绑定新 head `441ac6702`，确认所有新增可覆盖行全部覆盖，`codecov/patch` 为 SUCCESS，项目整体覆盖率为 84.83%。覆盖率补充闭环；按用户最新要求，不再等待其他 CI。
+
+## 完成交付与缺陷交接（2026-11-11）
+
+用户要求登记本项完成。GitHub 回读确认 [PR #1207](https://github.com/openkruise/agents/pull/1207) 已于 `2026-11-11T09:45:12Z` 合入 `openkruise/agents:master`，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`；`git ls-remote upstream refs/heads/master` 同时核验上游引用为该提交。源码 push、PR、合并均有实际证据，本项据用户决定登记 `done`，不将其推导为生产部署或现场验收。
+
+与真正的合入前 master 对照后，确认本 PR 新增等待导致既有单测反复实际等待 5 秒，形成测试耗时回归。该问题不是新增覆盖率用例卡死，完整基线、每包耗时、A/B 证据及用户的简洁优先约束转入独立缺陷工作项 [3-sandboxset-test-latency](../3-sandboxset-test-latency/context.md)。本项交付历史保留，后续修复另提 PR。
+
+本轮仅更新项目记录，未修改业务源码。原开发 worktree 干净并保留；未执行清理或删除分支。
