@@ -10,7 +10,7 @@
 
 - 源码仓库 `openkruise/agents`；本地工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`。
 - 本轮开始时本地 HEAD 为 `0a80aa84992283deddf7bfb93e66fffe1d059e60`，工作树干净，其父基线与远端 PR head `e2dd13488` 不同（本地少 11 个上游提交）。2026-11-11 用户批准方案 B 后，本地分支以 `e2dd13488` 为起点重放本轮修正为单个提交 `dbe379eed`，旧提交备份在本地分支 `backup/e2b-1083-1085-261020-pre-rebase`。
-- 上游 [PR #1103](https://github.com/openkruise/agents/pull/1103) 当前检查为 OPEN、非草稿、未合入；head `e2dd1348883435758c12315b55e43f89f1b0344f`，比较基线 `0179aad20a43aad1fa6627c2a818372eb4e3f202`，正文关联三个 Issue。`merged` 交付义务仍为 pending。
+- 上游 [PR #1103](https://github.com/openkruise/agents/pull/1103) 当前检查为 OPEN、未合入；head `b7f572d270532a2b3f3b62894aa4a25c2af463cc`，比较基线 `0179aad20a43aad1fa6627c2a818372eb4e3f202`，正文关联三个 Issue。`merged` 交付义务仍为 pending。
 - 本轮修改 6 个源码/测试文件，+208/-192；`dbe379eed` 相对 `e2dd13488` 的完整 binary diff SHA256 为 `29144f4cdba9b562858ce15fc946ff6f0ec210fbe71cadd354aea02583212aa1`。
 - 早前用独立临时 index 将该补丁应用到当时的 PR head，得到组合 tree `5be6bb8a35694f90afd6847c0d33577cc4684d05`；该快照对应修正前的中间状态，已被提交 `dbe379eed`（tree `1ac5cb364566c9555dbdaee2a1e1792171ca0cbb`）取代。2026-11-11 本轮修正提交为 `dbe379eed` 并快进推送到 `airanthem/fix/e2b-1083-1085-261020`（`e2dd13488..dbe379eed`），PR #1103 前进一个提交。
 
@@ -29,7 +29,19 @@
 - 工作树（修正前中间状态）：`go test ./pkg/utils/pagination ./pkg/servers/e2b -run '^(TestPaginator.*|TestDecodeCursorToken|TestValidateCursorOrder|TestParseListSandboxesReservedParams|TestListSandboxes_Pagination.*|TestCreateSnapshot|TestListSnapshots)$' -count=1`。分页包通过；E2B 包在清理已失效的测试 import 后通过，原始日志 `focused-tests.log`。首次尝试被 Go 缓存写权限阻止，提权执行成功。
 - 组合 PR tree：从 `5be6bb8a...` 导出 `pr-target/` 后，以上两个包与同一筛选集全部通过，日志 `pr-target-tests.log`。该快照保留远端已有的其他测试和基线差异，因此验证覆盖实际 PR 组合目标。
 - 回归有效性：只读 Go overlay 分别将 snapshot/list 实现切回 PR head，保留新断言。旧实现产生预期的断言失败：旧对象被删、返回其他请求的 ID、错误细节透传，以及 tag/纯空白/大小写/方向校验缺失。日志 `snapshot-baseline-regression.log` 与 `list-baseline-regression.log`；没有编译失败代替行为失败。
-- `gofmt`、工作树及组合 PR 的 `git diff --check` 通过。没有更改 API 类型或生成文件，无需新增生成步骤。未运行真实集群、多副本或 E2E；已有远端 CI 只覆盖修正前 head，不能覆盖当前未提交修正。
+- `gofmt`、工作树及组合 PR 的 `git diff --check` 通过。没有更改 API 类型或生成文件，无需新增生成步骤。本地未运行真实集群、多副本或 E2E；`dbe379eed` 的远端 CI 除 unit-tests 外，其余已完成检查通过，具体失败与本次修复见下节。
+
+## 2026-11-11 CI 测试夹具修复
+
+用户在当前会话听取修复范围后明确要求「帮我修一下然后推」，授权修复共享测试夹具并推送现有 PR 分支。本次不修订 E2B 业务合同，也不建立新的人工验收或独立评审结论。
+
+- 原始失败：[unit-tests / run 42977409919](https://github.com/openkruise/agents/actions/runs/42977409919/job/130379604409)，目标 `dbe379eed`。`TestConnectSandboxConcurrentPausedTimeouts/manual_pause` 在 CI 合并目标的 `pause_resume_test.go:967` 断言失败：预期 900 秒，最终只保留 300 秒；日志显示长截止时间写成功约 6 毫秒后被短截止时间覆盖。
+- 根因：`cachetest.NewTestCache` 安装的 `ResourceVersionInterceptorFuncs` 在普通 Update 前替换旧对象的 resourceVersion，允许过期数据覆盖较新写入。该夹具已存在于上游基线；不涉及 Status().Update 或 Patch 的拦截。
+- 修复：移除拦截器及其唯一注册点，恢复 fake client 原生冲突检测；增加确定性回归，断言旧副本的 300 秒更新返回 Conflict，存储中的 900 秒截止时间保持不变。无需修改调用方 helper。
+- 源码提交 `b7f572d270532a2b3f3b62894aa4a25c2af463cc` 已带 Signed-off-by 提交并普通推送到 `airanthem/fix/e2b-1083-1085-261020`；`git ls-remote` 与 PR head 均回读确认。相对 `dbe379eed` 修改 3 个文件，+54/-55，binary diff SHA256 为 `37377df53508afb71833678eb31e6432bc552dee236a73904e5864eb8c15dc62`。
+- 本机 Go `1.26.3`：确定性回归在旧夹具下产生预期行为断言失败，在修复后通过；`go test -race ./pkg/servers/e2b -run '^TestConnectSandboxConcurrentPausedTimeouts$' -count=30` 通过（50.213s）；10 个直接使用共享夹具的测试包以 `go test -race -p 1 ... -count=1` 全部通过，包清单见状态文件；gofmt 与 diff 检查通过。
+- 原始日志：`/Users/sophon/Workspace/OKAWorkspace/local-storage/e2b-ci-261111/` 下的 `regression-before.log`、`regression-after.log`、`concurrent-connect-race-30.log`、`affected-packages-race.log`。
+- 新的远端 [CI / run 42988417061](https://github.com/openkruise/agents/actions/runs/42988417061) 已触发，unit-tests 正在运行；本地通过不替代远端 CI 通过。PR 仍未合入，独立评审和本轮人工验收未执行。
 
 ## 历史人工验收与交付
 

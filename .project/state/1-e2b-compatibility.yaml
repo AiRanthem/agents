@@ -941,3 +941,48 @@ review_corrections:
     source_push: not_performed
     replies: not_performed
     thread_resolution: not_performed
+ci_repair:
+  date: '2026-11-11'
+  authorization: 当前会话用户在听取测试夹具修复范围后要求「帮我修一下然后推」
+  implementation_author: Codex main agent in current conversation
+  status: source_pushed_ci_running
+  baseline_commit: dbe379eedb99da884e50dbc7a6295c4d2ff4f1cd
+  source_commit: b7f572d270532a2b3f3b62894aa4a25c2af463cc
+  source_diff_sha256: 37377df53508afb71833678eb31e6432bc552dee236a73904e5864eb8c15dc62
+  pull_request: https://github.com/openkruise/agents/pull/1103
+  failed_job: https://github.com/openkruise/agents/actions/runs/42977409919/job/130379604409
+  cause: 测试夹具普通 Update 自动刷新 resourceVersion，允许旧对象覆盖并发写入的长截止时间
+  correction: 移除拦截器并增加过期更新必须返回 Conflict 且保留较新截止时间的确定性回归
+  verification:
+    go_version: go1.26.3
+    baseline_regression: failed_as_expected
+    repaired_regression: passed
+    concurrent_connect_race_count: 30
+    concurrent_connect_race: passed
+    affected_packages_race: passed
+    affected_packages:
+    - ./pkg/cache
+    - ./pkg/cache/cachetest
+    - ./pkg/controller/sandboxclaim
+    - ./pkg/controller/sandboxclaim/core
+    - ./pkg/sandbox-gateway/filter
+    - ./pkg/sandbox-gateway/wake
+    - ./pkg/sandbox-manager
+    - ./pkg/sandbox-manager/infra/sandboxcr
+    - ./pkg/servers/e2b
+    - ./pkg/utils/csiutils
+    affected_packages_command: go test -race -p 1 <affected_packages> -count=1
+    formatting_and_diff_check: passed
+    evidence_directory: /Users/sophon/Workspace/OKAWorkspace/local-storage/e2b-ci-261111
+  source_push:
+    remote: airanthem
+    branch: fix/e2b-1083-1085-261020
+    result: passed
+    remote_head_verified: b7f572d270532a2b3f3b62894aa4a25c2af463cc
+  remote_ci:
+    url: https://github.com/openkruise/agents/actions/runs/42988417061
+    unit_tests_job: https://github.com/openkruise/agents/actions/runs/42988417061/job/130415048886
+    status: in_progress
+  independent_review: not_run
+  human_acceptance: not_recorded
+  merged: false
