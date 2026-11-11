@@ -1,5 +1,5 @@
 id: 2-sandboxset-create-consistency
-status: ready
+status: developing
 recorded_at: '2026-11-11'
 recorded_by: Codex
 design:
@@ -17,13 +17,15 @@ design:
     spec_sha256: d2e50ca6a0b1c4561d38477f30a65838302572f629b30fd5e238eef75b0ca49a
     source_baseline: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
 development:
-  status: not-started
+  status: ready-for-review
   repository: agents
-  branch: null
-  worktree: null
-  baseline_commit: null
+  branch: fix/sandboxset-cache-wait-261111
+  worktree: worktrees/2-sandboxset-create-consistency
+  baseline_commit: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
   implementation_commit: null
-  verification: not-run
+  verification: passed
+  independent_review: pending
+  evidence: workitems/2-sandboxset-create-consistency/context.md
 acceptance:
   status: not-started
   accepted_by: null

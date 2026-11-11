@@ -1,7 +1,7 @@
 id: 2-sandboxset-create-consistency
 title: 修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态
 kind: bug
-status: ready
+status: developing
 repository: agents
 created_at: '2026-11-11'
 recorded_by: Codex
@@ -35,9 +35,16 @@ design:
     input_spec_sha256: 70cb9eee36a6db9a56b57554d1556303573bd9cb933055d4d4ca90904776cd46
     spec_sha256: d2e50ca6a0b1c4561d38477f30a65838302572f629b30fd5e238eef75b0ca49a
     source_baseline: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
-  next_action: await-implementation-authorization
+  next_action: independent-implementation-review
 development:
-  status: not-started
+  status: ready-for-review
+  repository: agents
+  branch: fix/sandboxset-cache-wait-261111
+  worktree: worktrees/2-sandboxset-create-consistency
+  baseline_commit: 3d9af5799d873e278cbfcb8871a0d0a3ec726447
+  implementation_commit: null
+  verification: passed
+  independent_review: pending
 delivery:
   required: []
   status: not-started
