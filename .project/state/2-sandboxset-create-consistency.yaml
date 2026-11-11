@@ -42,7 +42,9 @@ delivery:
   pull_request: https://github.com/openkruise/agents/pull/1207
   source_remote: airanthem
   source_commit: 441ac6702e53b37ed9acb611ace8b1147dafbdb5
-  ci: in-progress
+  ci: unit-tests-passed
+  coverage_upload: passed
+  patch_coverage: pending
   merged: false
   deployed: false
   e2e_verified: false
