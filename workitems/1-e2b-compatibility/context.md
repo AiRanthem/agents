@@ -9,10 +9,10 @@
 ## 当前源码与 PR 身份
 
 - 源码仓库 `openkruise/agents`；本地工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`。
-- 本轮开始时本地 HEAD 为 `0a80aa84992283deddf7bfb93e66fffe1d059e60`，工作树干净。该本地提交历史与远端 PR 不同；本轮保持历史和分支不变，只留下修正的未提交文件。
+- 本轮开始时本地 HEAD 为 `0a80aa84992283deddf7bfb93e66fffe1d059e60`，工作树干净，其父基线与远端 PR head `e2dd13488` 不同（本地少 11 个上游提交）。2026-11-11 用户批准方案 B 后，本地分支以 `e2dd13488` 为起点重放本轮修正为单个提交 `dbe379eed`，旧提交备份在本地分支 `backup/e2b-1083-1085-261020-pre-rebase`。
 - 上游 [PR #1103](https://github.com/openkruise/agents/pull/1103) 当前检查为 OPEN、非草稿、未合入；head `e2dd1348883435758c12315b55e43f89f1b0344f`，比较基线 `0179aad20a43aad1fa6627c2a818372eb4e3f202`，正文关联三个 Issue。`merged` 交付义务仍为 pending。
-- 本轮修改 6 个源码/测试文件，+102/-190；相对本地 HEAD 的完整 binary diff SHA256 为 `c7250b84ade4d9a08071b385b05c2ec6246fcef1228528ac644bc9ce4a73ba22`。
-- 已用独立临时 index 将该补丁干净应用到 PR head，得到组合 tree `5be6bb8a35694f90afd6847c0d33577cc4684d05`。相对上述 PR 比较基线的完整交付差异为 21 文件、+1237/-156，`git diff --check` 通过。未修改实际 index，也未为源码创建提交或推送。
+- 本轮修改 6 个源码/测试文件，+208/-192；`dbe379eed` 相对 `e2dd13488` 的完整 binary diff SHA256 为 `29144f4cdba9b562858ce15fc946ff6f0ec210fbe71cadd354aea02583212aa1`。
+- 早前用独立临时 index 将该补丁应用到当时的 PR head，得到组合 tree `5be6bb8a35694f90afd6847c0d33577cc4684d05`；该快照对应修正前的中间状态，已被提交 `dbe379eed`（tree `1ac5cb364566c9555dbdaee2a1e1792171ca0cbb`）取代。2026-11-11 本轮修正提交为 `dbe379eed` 并快进推送到 `airanthem/fix/e2b-1083-1085-261020`（`e2dd13488..dbe379eed`），PR #1103 前进一个提交。
 
 ## 本轮行为与反馈处置
 
@@ -25,7 +25,8 @@
 
 原始输出与一次性快照保存在主工作区 `local-storage/e2b-review-261110/`，不作为正式源码或独立评审报告。
 
-- 工作树：`go test ./pkg/utils/pagination ./pkg/servers/e2b -run '^(TestPaginator.*|TestDecodeCursorToken|TestValidateCursorOrder|TestParseListSandboxesReservedParams|TestListSandboxes_Pagination.*|TestCreateSnapshot|TestListSnapshots)$' -count=1`。分页包通过；E2B 包在清理已失效的测试 import 后通过，原始日志 `focused-tests.log`。首次尝试被 Go 缓存写权限阻止，提权执行成功。
+- 重放后验证（`dbe379eed`）：`go build ./pkg/servers/... ./pkg/utils/pagination/...`、`go vet`、`gofmt -l` 均通过；`go test ./pkg/utils/pagination ./pkg/servers/e2b -count=1` 通过（0.7s / 97.5s）。
+- 工作树（修正前中间状态）：`go test ./pkg/utils/pagination ./pkg/servers/e2b -run '^(TestPaginator.*|TestDecodeCursorToken|TestValidateCursorOrder|TestParseListSandboxesReservedParams|TestListSandboxes_Pagination.*|TestCreateSnapshot|TestListSnapshots)$' -count=1`。分页包通过；E2B 包在清理已失效的测试 import 后通过，原始日志 `focused-tests.log`。首次尝试被 Go 缓存写权限阻止，提权执行成功。
 - 组合 PR tree：从 `5be6bb8a...` 导出 `pr-target/` 后，以上两个包与同一筛选集全部通过，日志 `pr-target-tests.log`。该快照保留远端已有的其他测试和基线差异，因此验证覆盖实际 PR 组合目标。
 - 回归有效性：只读 Go overlay 分别将 snapshot/list 实现切回 PR head，保留新断言。旧实现产生预期的断言失败：旧对象被删、返回其他请求的 ID、错误细节透传，以及 tag/纯空白/大小写/方向校验缺失。日志 `snapshot-baseline-regression.log` 与 `list-baseline-regression.log`；没有编译失败代替行为失败。
 - `gofmt`、工作树及组合 PR 的 `git diff --check` 通过。没有更改 API 类型或生成文件，无需新增生成步骤。未运行真实集群、多副本或 E2E；已有远端 CI 只覆盖修正前 head，不能覆盖当前未提交修正。
@@ -34,7 +35,7 @@
 
 2026-10-22 用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交、推送和创建上游 PR。既有源码提交 `f448ab3d53573ddef69049011a51497bb8d3b310` 已按该授权提交至 fork `AiRanthem/agents` 并建立 PR #1103；这些是历史交付和人工结论，不自动覆盖当前 v6 修正。原始开发基线为 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
 
-SandboxSet `spec.templateRef` 模板身份问题已按独立授权提交 [Issue #1102](https://github.com/openkruise/agents/issues/1102)，本轮不修改该问题。PR 评论线程未回复、未 resolve；源码未提交或推送，未部署、关闭 Issue、清理工作树或标记交付完成。
+SandboxSet `spec.templateRef` 模板身份问题已按独立授权提交 [Issue #1102](https://github.com/openkruise/agents/issues/1102)，本轮不修改该问题。PR 评论线程未回复、未 resolve；本轮修正已提交并推送（见上），但未部署、未关闭 Issue、未清理工作树，也未标记交付完成。
 
 ## 保留的边界与待核对事实
 
