@@ -1,6 +1,6 @@
 ---
 title: 独立 SandboxSet 缓存未命中的有限等待
-design_status: review-pending
+design_status: implementable
 version: 1
 ---
 

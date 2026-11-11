@@ -10,4 +10,4 @@
 
 迁移目标：`/Users/sophon/Workspace/OKAWorkspace/projects/im-auto-wakeup/workitems/1-gateway-wakeup-lifecycle`；代码工作树位于目标项目的 `worktrees/1-gateway-wakeup-lifecycle`。迁移前记录可从本项目提交 `4939ae96e463dbf8064a752cc32853fb85a2034a` 恢复。
 
-当前工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。用户已确认在 cache 层进行每次查询最多 5 秒的纯 informer 等待，仅覆盖内嵌模板的 SandboxSet；正式设计待独立评审，实现未开始。
+当前工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。用户已确认在 cache 层进行每次查询最多 5 秒的纯 informer 等待，仅覆盖内嵌模板的 SandboxSet；v1 已于 2026-11-11 通过独立设计审查，状态为 `implementable`，见[审查报告](../workitems/2-sandboxset-create-consistency/records/design-review.md)。业务实现未获授权或开始。
