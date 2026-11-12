@@ -1,7 +1,7 @@
 id: 3-sandboxset-test-latency
 title: 修复 SandboxSet 有限等待引入的单测耗时回归
 kind: bug
-status: developing
+status: done
 repository: agents
 created_at: '2026-11-11'
 recorded_by: Codex
@@ -18,9 +18,9 @@ documents:
 design:
   file: null
   state: requirements-defined
-  next_action: implementation-review-and-human-acceptance
+  next_action: none
 development:
-  status: ready-for-review
+  status: implemented
   repository: agents
   branch: fix/sandboxset-test-latency-261111
   worktree: worktrees/3-sandboxset-test-latency
@@ -29,11 +29,20 @@ development:
   verification: passed
   independent_review: not-performed
 acceptance:
-  status: not-started
+  status: accepted
+  accepted_by: user
+  scope: workitem-completion
+  source: decision.md
+  recorded_at: '2026-11-12'
+  accepted_commit: 24e5feb24b8fe1ca4e76b4ff879c4252010d37ee
+  merge_commit: 2a13009e64e44da79a2b5b4de3eb3262fd6e6294
 delivery:
   required: [source-push, separate-upstream-pull-request]
   requirements_confirmed: true
-  status: pull-request-open
+  status: delivered
   source_pushed: true
   pull_request: https://github.com/openkruise/agents/pull/1208
+  merged: true
+  merged_at: '2026-11-12T03:00:13Z'
+  merge_commit: 2a13009e64e44da79a2b5b4de3eb3262fd6e6294
 cleanup: retained

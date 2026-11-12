@@ -1,6 +1,6 @@
 id: 3-sandboxset-test-latency
-status: developing
-recorded_at: '2026-11-11'
+status: done
+recorded_at: '2026-11-12'
 recorded_by: Codex
 depends_on:
 - 2-sandboxset-create-consistency
@@ -11,7 +11,7 @@ design:
   file: null
   contract: workitems/3-sandboxset-test-latency/requirement.md
 development:
-  status: ready-for-review
+  status: implemented
   repository: agents
   branch: fix/sandboxset-test-latency-261111
   worktree: worktrees/3-sandboxset-test-latency
@@ -21,9 +21,16 @@ development:
   independent_review: not-performed
   evidence: workitems/3-sandboxset-test-latency/context.md
 acceptance:
-  status: not-started
+  status: accepted
+  accepted_by: user
+  scope: workitem-completion
+  source: PR 合入了，关闭工作项
+  recorded_at: '2026-11-12'
+  accepted_commit: 24e5feb24b8fe1ca4e76b4ff879c4252010d37ee
+  merge_commit: 2a13009e64e44da79a2b5b4de3eb3262fd6e6294
+  evidence: workitems/3-sandboxset-test-latency/decision.md
 delivery:
-  status: pull-request-open
+  status: delivered
   requirements_confirmed: true
   required: [source-push, separate-upstream-pull-request]
   source_pushed: true
@@ -34,12 +41,16 @@ delivery:
   ci_unit_duration_seconds: 884
   ci_unit_job: https://github.com/openkruise/agents/actions/runs/43018062168/job/130514022236
   patch_coverage: 81.81818%
-  merge_gate: pending
-  merged: false
+  merge_gate: satisfied
+  merged: true
+  merged_at: '2026-11-12T03:00:13Z'
+  merge_commit: 2a13009e64e44da79a2b5b4de3eb3262fd6e6294
+  merge_evidence: https://github.com/openkruise/agents/pull/1208
   deployed: false
   e2e_verified: false
 cleanup:
   status: retained
+  reason: 本次仅关闭工作项，未请求清理；干净 worktree 保留
 external_sync:
   status: not-configured
   backend: null

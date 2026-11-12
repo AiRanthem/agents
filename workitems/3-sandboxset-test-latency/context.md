@@ -4,7 +4,7 @@
 
 本项 `3-sandboxset-test-latency` 为单测耗时回归的独立缺陷，`fixes` 关联已完成的 `2-sandboxset-create-consistency`。原 PR #1207 已于 `2026-11-11T09:45:12Z` 合入上游 master，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`，本轮直接回读 GitHub 与 `git ls-remote upstream refs/heads/master` 确认。
 
-用户在登记后再次要求修复，本项源码已实现、验证并创建独立 [PR #1208](https://github.com/openkruise/agents/pull/1208)，当前待审查和人工验收。开发位置和基线见下节。原工作项 worktree 干净并保留，未在其中继续修复。
+本项源码已实现、验证并经独立 [PR #1208](https://github.com/openkruise/agents/pull/1208) 合入 master。2026-11-12 用户明确要求关闭工作项，本项登记为 `done`，完成与合并证据见末节。开发位置和基线见下节。原工作项 worktree 干净并保留，未在其中继续修复。
 
 ## CI 耗时对照
 
@@ -99,4 +99,10 @@
 
 最终回读单测、lint、CodeQL 等检查均成功，Codecov patch 为 81.81818%、项目覆盖率为 84.95%，覆盖率门禁通过。按用户简洁优先的要求，不为其余两行未覆盖错误分支追加测试或追逐硬性 100%。CI 原始日志为前述目录下的 `latency-fix-ci.log`。
 
-PR 仍 OPEN，Tide 等待上游审批；未执行独立实现审查、人工验收、合并、部署或本地清理，未运行本地 E2E。保留工作树供后续审查，工作项 3 不登记为人工验收通过或完成。
+上述 CI 与覆盖率结果绑定最终源码提交 `24e5feb24b8fe1ca4e76b4ff879c4252010d37ee`。后续上游合并与用户完成决定如下；未执行 AI 独立实现审查、部署或本地清理，未运行本地 E2E。
+
+## 完成与合并核验（2026-11-12）
+
+用户原文：“PR 合入了，关闭工作项”。直接回读 GitHub 确认 PR #1208 为 MERGED，合并时间 `2026-11-12T03:00:13Z`，目标为 `master`，最终 head 仍为已验证的 `24e5feb24b8fe1ca4e76b4ff879c4252010d37ee`，合并提交为 `2a13009e64e44da79a2b5b4de3eb3262fd6e6294`。同时执行 `git ls-remote upstream refs/heads/master`，上游引用与该合并提交相同。
+
+生产合同未变、单测效率恢复、本地及 CI 验证、独立 PR 与源码交付证据均保留；依据用户的实际关闭决定，本项登记 `done`。用户完成决定与未执行的 AI 独立审查分别记录，不将交付推导为生产部署或现场验证。当前 worktree 干净，未进行源码修改、清理或分支删除。
