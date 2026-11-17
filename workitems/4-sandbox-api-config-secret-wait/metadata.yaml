@@ -12,6 +12,7 @@ archived: false
 documents:
   requirement: requirement.md
   context: context.md
+  decisions: decision.md
 design:
   file: null
   state: exploring
