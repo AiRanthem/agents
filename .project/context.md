@@ -13,3 +13,5 @@
 已完成工作项：[2-sandboxset-create-consistency（修复独立 SandboxSet 创建后 E2B create 的缓存同步竞态）](../workitems/2-sandboxset-create-consistency/requirement.md)。用户明确要求登记完成，[PR #1207](https://github.com/openkruise/agents/pull/1207) 已于 2026-11-11 合入 master，合并提交为 `91274e22331bd620ce2c0173f1f97cc28d80bf4f`。源码交付、人工结论与未进行的部署/现场验证分别保留，详见[工作项上下文](../workitems/2-sandboxset-create-consistency/context.md)。
 
 已完成工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。`fixes` 关联工作项 2。独立 [PR #1208](https://github.com/openkruise/agents/pull/1208) 已于 2026-11-12 合入 master，合并提交为 `2a13009e64e44da79a2b5b4de3eb3262fd6e6294`；用户明确要求关闭工作项，据此登记 `done`。生产合同与实现保持不变，CI 单测步骤由 21分45秒降至 14分44秒，单测、lint 与覆盖率门禁通过，详见[验证与交付记录](../workitems/3-sandboxset-test-latency/context.md)。未执行部署或本地清理。
+
+待处理工作项：[4-sandbox-api-config-secret-wait（sandbox-api 启动时等待缺失的配置 Secret）](../workitems/4-sandbox-api-config-secret-wait/requirement.md)。用户希望配置 Secret 暂不存在时等待其就绪，尽量利用 startup probe 的启动窗口；超时由外部探针控制，进程不感知。2026-11-17 仅登记需求，尚未设计、实现或验证。

@@ -1,0 +1,32 @@
+id: 4-sandbox-api-config-secret-wait
+title: sandbox-api 启动时等待缺失的配置 Secret
+kind: bug
+status: pending
+repository: agents
+created_at: '2026-11-17'
+recorded_by: Codex
+depends_on: []
+split_from: null
+fixes: []
+archived: false
+documents:
+  requirement: requirement.md
+  context: context.md
+design:
+  file: null
+  state: not-started
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  verification: not-performed
+  independent_review: not-performed
+acceptance:
+  status: not-performed
+delivery:
+  requirements_confirmed: false
+  required: []
+  status: not-started
+cleanup: not-applicable
