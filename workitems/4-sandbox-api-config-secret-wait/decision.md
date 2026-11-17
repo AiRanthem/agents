@@ -25,4 +25,4 @@
 
 此前用户“确认”批准设计内容及文档落位，不包含后续阶段授权。2026-11-17，用户在新的审查会话中显式调用 `$review-design workitems/4-sandbox-api-config-secret-wait` 并提供技能入口，另行授权本轮独立设计审查。本次审查者为 Codex（本次独立审查会话，主 agent `/root`），未参与该设计任何版本的实质编写或修订；同名 agent 路径不代表同一作者会话。审查证据及结论见 [records/design-review.md](records/design-review.md)。
 
-本轮仅审查及维护项目记录，没有实现、源码发布、部署、现场验收或清理授权。原用户批准继续覆盖未改变的合同；设计批准、独立审查与后续人工实现验收分别记录。
+上述独立审查会话仅审查及维护项目记录。随后用户调用 `$implement-design workitems/4-sandbox-api-config-secret-wait`，并在只读实施方案完成、切换 Agent 模式后明确要求“Implement the plan.”，授权按获批 v1 合同及实施方案进行本地源码实现与验证。源码保持未提交；独立代码审查、人工验收、源码发布、部署和清理分别记录实际授权及结果。原设计批准继续覆盖未改变的合同。

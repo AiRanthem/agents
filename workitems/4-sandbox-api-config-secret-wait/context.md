@@ -44,7 +44,7 @@
 
 ## 工作边界
 
-完整 Why/What 已由用户确认并写入设计 v1，本次显式授权的独立设计审查通过，当前为 `implementable`。实现、人工验收与源码交付均未进行，没有创建开发分支或源码 worktree。后续如开展代码开发，须另有实现授权，并按 `.project/business-instructions.md` 成功刷新并核验最新 `upstream/master` 后建立隔离分支，记录并核验基线。
+完整 Why/What 已由用户确认，设计 v1 独立审查通过。随后用户明确授权实施方案执行，已在隔离源码工作树实现并进行验证。源码保持未提交；独立代码审查、人工验收与源码交付尚未进行。当前源码身份与验证见下方实现记录。
 
 项目未配置 Aone 后端，本次不进行外部系统同步。
 
@@ -54,3 +54,16 @@
 - 结论为 **Independent review passed**，没有阻塞发现或必要证据缺口。覆盖开关适用范围、真实探针端口、API/Envoy 准入与健康例外、独立配置观察、后台及 peer 生命周期、取消与失败、默认行为及运行后热更新兼容。主审完成全部判断；受派 agent 仅补充后台/peer 生命周期源码事实，不充当额外独立审查者。
 - 设计正文逐字保持不变，仅将 front matter 状态登记为 `implementable`；需求仅同步交付阶段说明，用户合同与验收目标不变。上下文中的 Helm 模板证据归属按本次源码结果纠正，不形成产品决定或新设计版本。
 - 实际执行源码刷新、远端基线及关键文件差异核验，并读取现有测试断言。没有执行 Go 测试、运行时复现、集群或 E2E；设计审查不证明新模式已经工作，现场逐容器探针和具体发布系统仍未核验。
+
+## 2026-11-17 实现与验证
+
+- 授权：用户对只读实施方案明确要求“Implement the plan.”；实现者为本会话 Codex 主 agent。设计 v1 正文与其批准的取舍保持不变。
+- 主检出保持 `develop`，成功执行 `git pull --ff-only` 和 `git fetch upstream master`。`upstream` URL 与远端 `refs/heads/master` 核验通过；新工作树初始 HEAD 与刷新后的基线均为 `18096feb1d1089499b1227a3e60dc25476ae072d`，与设计审查基线一致，没有失效的设计假设。
+- 源码位置：`worktrees/4-sandbox-api-config-secret-wait`，分支 `feat/ready-before-config-261117`。本项全部为社区文件，未修改主检出、内部代码或部署编排；源码尚未提交、推送或创建 PR。
+- 实现：启动开关仅与非空 Secret 引用组合生效；Controller 分离配置观察启动与首次确认等待；Manager 可单独启动固定安全配置保护的 proxy 监听，原 `Run` 复用监听并保留运行时及后台任务前提。API 鉴权前的独立 middleware 和 proxy 的中立准入回调共同限制业务，控制面健康/观测沿原入口豁免。配置及运行时完成后一次性激活，终止状态不可逆；部分启动由启动执行者有界清理，只停止已启动的 key worker，quota worker 排空支持退出 context。
+- 受影响包完整 race 检查通过：在上述源码工作树执行 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/configreload ./pkg/servers/e2b/... ./pkg/sandbox-manager ./pkg/sandbox-manager/quota ./pkg/proxy -count=1`，9 个包均成功。启动、API 分类、Envoy ImmediateResponse 的首轮窄测试也通过。
+- 最终重复检查通过：同一工作树执行 `go test -race -p 1 ./pkg/servers/e2b ./pkg/sandbox-manager ./pkg/sandbox-manager/quota ./pkg/proxy -run 'TestReadyBeforeConfig|TestControllerStartupWaitsForInitialSandboxRoutes|TestAntiDriftStopContextBudget|TestSandboxManagerRun' -count=10 -timeout=180s`，4 个包均成功，覆盖新增场景和真实初始路由同步边界、终止及配额排空预算。`gofmt -l` 无输出，源码及项目 `git diff --check` 通过。
+- 最终源码身份：HEAD 仍为初始基线 `18096feb1d1089499b1227a3e60dc25476ae072d`；`git diff --binary | shasum -a 256` 为 `a51ea8ff29aab5e9993d985e57d315217eebdeb9634d4e8ac8857335cbd8fa9c`。12 个已跟踪文件有本项修改，无源码未跟踪文件及无关改动。涉及命令入口、E2B 启动与路由、Manager 启动、quota 停止、proxy 准入及相关测试和配置 Secret proposal。源码分支未发布，后续审查须保留此工作树或建立可复现快照。
+- 构建 `go build -o /tmp/oka-ready-before-config-sandbox-manager ./cmd/sandbox-manager` 成功；直接运行该二进制 `--help` 被本机以退出码 137 终止，无输出，提权重复结果一致。`codesign --verify --verbose` 验证有效，尚不能确认该输出路径的系统终止原因。
+- 随后在最终源码工作树运行 `go run ./cmd/sandbox-manager --help` 成功（启用 pipefail 并筛选帮助输出），确认 `--ready-before-config` 及其 Secret 适用范围已注册，默认关闭。Go 临时构建路径下的 CLI 启动验证有效；上述独立输出路径的异常没有被归因为代码缺陷，也没有执行普通业务启动或部署。
+- 独立代码审查未执行。没有执行真实 Envoy、双容器 Ready、滚动替换、具体发布系统、集群 E2E、部署或人工验收。本机无可用 Envoy/容器运行设施，协议单测不能代替这些现场结果。

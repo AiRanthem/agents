@@ -1,7 +1,7 @@
 id: 4-sandbox-api-config-secret-wait
 title: sandbox-api 等待配置时避免阻塞发布
 kind: bug
-status: ready
+status: developing
 repository: agents
 created_at: '2026-11-17'
 recorded_by: Codex
@@ -41,14 +41,14 @@ design:
     spec_sha256: cd20e6999ea8e7c89b5210a48493bd3f94bb79d07530f365b53fc01447e8af03
     requirement_sha256: 2877329af629aa4ca10efbb5aaf635ed9c9111cad75b625babd4f40e82bc0c47
     source_baseline: 18096feb1d1089499b1227a3e60dc25476ae072d
-  next_action: await-implementation-authorization
+  next_action: await-code-review
 development:
-  status: not-started
+  status: implemented
   repository: agents
-  branch: null
-  worktree: null
-  baseline_commit: null
-  verification: not-performed
+  branch: feat/ready-before-config-261117
+  worktree: worktrees/4-sandbox-api-config-secret-wait
+  baseline_commit: 18096feb1d1089499b1227a3e60dc25476ae072d
+  verification: passed-local-race-and-build
   independent_review: not-performed
 acceptance:
   status: not-performed
