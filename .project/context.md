@@ -14,4 +14,4 @@
 
 已完成工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。`fixes` 关联工作项 2。独立 [PR #1208](https://github.com/openkruise/agents/pull/1208) 已于 2026-11-12 合入 master，合并提交为 `2a13009e64e44da79a2b5b4de3eb3262fd6e6294`；用户明确要求关闭工作项，据此登记 `done`。生产合同与实现保持不变，CI 单测步骤由 21分45秒降至 14分44秒，单测、lint 与覆盖率门禁通过，详见[验证与交付记录](../workitems/3-sandboxset-test-latency/context.md)。未执行部署或本地清理。
 
-设计探索中的工作项：[4-sandbox-api-config-secret-wait（sandbox-api 等待配置时避免阻塞发布）](../workitems/4-sandbox-api-config-secret-wait/requirement.md)。2026-11-17，用户更正问题为等待配置时 Pod `0/2 Ready`，导致部分发布系统卡住；随后明确选择通过启动开关允许 Pod 先 Ready、配置完成前业务返回 `503`，已说明会接入流量且可能推进滚动替换。开关默认值和完整生命周期合同尚待最终确认。既有等待路径的局部测试通过，未验证本项修订后的发布目标；尚未批准完整设计、实现或评审。
+待独立设计评审的工作项：[4-sandbox-api-config-secret-wait（sandbox-api 等待配置时避免阻塞发布）](../workitems/4-sandbox-api-config-secret-wait/requirement.md)。2026-11-17，用户确认[设计 v1](../workitems/4-sandbox-api-config-secret-wait/spec.md)：`--ready-before-config` 默认 `false`，仅在有配置 Secret 引用时生效；开启后 Pod 可先 Ready，业务在配置及后续初始化完成前返回 `503`。用户已确认接入流量、推进滚动替换及配置等待不再受 startup probe 限时的取舍。状态为 `review-pending`，独立评审尚未请求执行；新模式未实现，未进行部署、现场验证或人工验收。

@@ -11,11 +11,28 @@ fixes: []
 archived: false
 documents:
   requirement: requirement.md
+  spec: spec.md
   context: context.md
-  decisions: decision.md
+  decision: decision.md
 design:
-  file: null
-  state: exploring
+  file: spec.md
+  version: 1
+  state: review-pending
+  registered_sha256: a88d7fb92211cecb7cb76ba3ef3cc0a5fdedf09e726896d04d7d776565710767
+  requirement_sha256: db65ddd1b63840acc9fef3364c82af287ebf5c72a86329ee14d7ce452e72d7a7
+  authors:
+  - Codex（本会话主 agent /root，设计作者）
+  source_baseline: d764256be82aa790582b4ce4af98997a5958a30a
+  user_approval:
+    status: approved
+    source: decision.md
+    recorded_at: '2026-11-17'
+    quote: 确认
+  review:
+    status: pending
+    authorization: not-requested
+    reviewer: null
+  next_action: design-review
 development:
   status: not-started
   repository: agents
