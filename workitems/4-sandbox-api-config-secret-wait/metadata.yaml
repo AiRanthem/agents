@@ -1,7 +1,7 @@
 id: 4-sandbox-api-config-secret-wait
-title: sandbox-api 启动时等待缺失的配置 Secret
+title: sandbox-api 等待配置时避免阻塞发布
 kind: bug
-status: pending
+status: designing
 repository: agents
 created_at: '2026-11-17'
 recorded_by: Codex
@@ -14,7 +14,7 @@ documents:
   context: context.md
 design:
   file: null
-  state: not-started
+  state: exploring
 development:
   status: not-started
   repository: agents

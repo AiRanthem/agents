@@ -14,4 +14,4 @@
 
 已完成工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。`fixes` 关联工作项 2。独立 [PR #1208](https://github.com/openkruise/agents/pull/1208) 已于 2026-11-12 合入 master，合并提交为 `2a13009e64e44da79a2b5b4de3eb3262fd6e6294`；用户明确要求关闭工作项，据此登记 `done`。生产合同与实现保持不变，CI 单测步骤由 21分45秒降至 14分44秒，单测、lint 与覆盖率门禁通过，详见[验证与交付记录](../workitems/3-sandboxset-test-latency/context.md)。未执行部署或本地清理。
 
-待处理工作项：[4-sandbox-api-config-secret-wait（sandbox-api 启动时等待缺失的配置 Secret）](../workitems/4-sandbox-api-config-secret-wait/requirement.md)。用户希望配置 Secret 暂不存在时等待其就绪，尽量利用 startup probe 的启动窗口；超时由外部探针控制，进程不感知。2026-11-17 仅登记需求，尚未设计、实现或验证。
+设计探索中的工作项：[4-sandbox-api-config-secret-wait（sandbox-api 等待配置时避免阻塞发布）](../workitems/4-sandbox-api-config-secret-wait/requirement.md)。2026-11-17，用户更正问题为等待配置时 Pod `0/2 Ready`，导致部分发布系统卡住。当前等待能力已由源码证实；缺配置时的发布完成、Pod Ready、业务准入和滚动更新语义尚待确认。既有等待路径的局部测试通过，未验证本项修订后的发布目标；尚未批准完整设计、实现或评审。
