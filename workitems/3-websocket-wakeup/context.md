@@ -4,9 +4,11 @@
 
 `3-websocket-wakeup`（基于 WebSocket 事件的 Sandbox 自动唤醒）与 `2-feishu-wake-openclaw`（Webhook 唤醒）并列，无相互前置依赖；`split_from` 仅记录来源。
 
-2026-11-17，用户对设计作者会话集中呈现的完整首期契约及 `workitems/3-websocket-wakeup/spec.md` 正式落位回答“确认”。当前唯一正式设计为 [spec.md](spec.md)，版本 1、`implementable`。实质作者会话为 `01a1bf6f-56d9-78a3-b359-c34f9bbaab3f`；用户决定的具体来源见 [decision.md](decision.md)。同日，独立会话 `01a1e84a-3acc-7e12-9870-7ff4bcdff90d` 完成完整设计审查并通过，见 [审查报告](records/design-review-20261117.md)。正文未作实质修订。
+当前唯一正式设计为 [spec.md](spec.md)，版本 2、`implementable`。2026-11-17 用户批准 v1，实质作者会话为 `01a1bf6f-56d9-78a3-b359-c34f9bbaab3f`；独立会话 `01a1e84a-3acc-7e12-9870-7ff4bcdff90d` 随后完成 v1 [独立审查](records/design-review-20261117.md)。同日用户补充 Golang 包／Builder／Start 与宿主可迁移性，由当前主代理落实为 v2；按用户明确授权完成 [v2 自审](records/design-self-review-20261117-v2.md) 后保持 `implementable`，本次独立增量审查为 `skipped_by_user`。用户决定的具体来源见 [decision.md](decision.md)，原独立 Pass 不扩展为 v2 的独立评审结论。
 
 契约采用暂停边界外接收、平台适配器和统一唤醒核心，首期交付公共框架与飞书／OpenClaw 适配。账号／接入固定绑定一个已有 Sandbox，一个 Sandbox 可有多个绑定；应用允许调整为内部事件接入。运维配置及凭据可恢复，消息只在外部接收器内存暂存，进程退出可以丢失已确认消息。
+
+外部接收服务以自包含、可插拔的 Golang 包交付；宿主通过 Builder 装配并构造实例，调用 `Start` 后由服务自主维护连接和任务，宿主接入启停即可。可放置于单独容器、Gateway 容器、AdvancedTrafficManagement 等位置，具体选址留在实施准备；切换宿主不改变核心流程、单活、暂停边界或既定授权／可靠性约束。
 
 首期同账号单活、受控重启，旧实例是否停止尚不确定时不自动接管。完整业务事件在内存接纳后按平台协议确认；恢复和交付固定到原实例身份，不能转向同名重建对象。内部入口返回 HTTP `202` 和相同交付 ID，表示原生队列接纳；Agent 处理及回复另外观察。恢复、容量和消息期限有限，应用交付临时失败最多再重试 5 次。停用后旧消息按原目标有限处理，换绑不迁移旧消息。详细行为、配置内容和验收均以正式设计为准。
 
@@ -22,9 +24,11 @@
 
 此前证据提取由 `im_adapter_evidence` 协助，主代理直接核读关键 SDK 契约和源码后承担设计判断。这些工作不是独立设计评审；未运行 SDK、真实账号或 Pause／Resume 验证。
 
+v2 自审另行核读飞书官方 Go SDK 固定提交 `a3550335752a9af4662314e5838138562f04aa70` 的 `ws/client_lifecycle.go`、`ws/client_message.go` 与 `event/dispatcher/dispatcher.go`：具备可由调用方控制的启动／关闭生命周期，完整业务事件处理后按 handler 结果确认，dispatcher 保留原始请求载荷。该静态证据支持 Go 包方案的可行性，不等于已选定实际依赖版本或完成运行验证；详见 v2 自审报告。此前 Node SDK 证据仍用于协议分析，不要求 Go 接收服务依赖 Node 进程。
+
 ## 后续边界
 
-设计已获用户批准并通过父项独立评审。A 公共接收／唤醒能力与 B 应用适配共同约束事件和回执，C 集成依赖 A、B 的实际交付；完整依赖和验收见正式设计。设计记录的后续分解方向为 `split`，在相应授权内分解；本次未创建子项，父项 Pass 不替代子项独立评审。
+v1 已获用户批准并通过父项独立评审，v2 新增服务形态按用户授权自审通过，当前可实施状态依据这两部分实际证据及明确例外。A 公共接收／唤醒能力与 B 应用适配共同约束事件和回执，C 集成依赖 A、B 的实际交付；完整依赖和验收见正式设计。设计记录的后续分解方向为 `split`，在相应授权内分解；本次未创建子项，父项状态不替代子项独立评审。
 
 本轮直接重读固定版本飞书 SDK、OpenClaw ingress／monitor／回复源码及 Agents `cfbd102` 的 Wake／Resume 路径，确认契约具有实现路径。现有 Agents 接口的前置 UID 检查不能独自覆盖刷新、重试写入和最终交付，A 必须实现已批准的全程原实例约束；外部接收模式与内部 HTTP 入口仍由 B 新增。以上是原设计已明确的实施责任，不是新增产品决定。未执行真实消息或 Pause／Resume 验证。
 

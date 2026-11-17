@@ -25,3 +25,9 @@
 仅将 spec frontmatter 与 metadata 登记为 `implementable` 并同步当前记录，设计正文不变、版本仍为 1；保留原作者及用户批准来源。未实施、分解、发布源码、部署或进行真实链路验证，代码合并交付仍为 pending。
 
 评审登记检查通过：YAML、设计正文与输入逐字一致、SHA-256、状态／版本／交付字段、8 份 Markdown 的围栏及 15 个本地链接；`git diff --check` 通过。
+
+2026-11-17，用户补充服务须以自包含、可插拔的 Golang 包交付，Builder 构造后调用 Start 即可运行，可按需承载于单独容器、Gateway 容器、AdvancedTrafficManagement 等宿主。已同步需求、正式设计、交付责任和项目上下文，版本升为 2。用户随后明确本次补充自审通过即可 implementable、不返回独立审查阶段。
+
+当前主代理完成变更及交互边界自审，核读飞书官方 Go SDK 的生命周期、确认和原始载荷处理路径，未发现阻塞；按用户授权保持 `implementable`，新增独立审查标记为 `skipped_by_user`。v1 原独立报告原样保留，本次自审不冒充独立 Pass。详见 `records/design-self-review-20261117-v2.md`。未启动源码实现、部署或运行验证。
+
+v2 登记检查通过：YAML、版本／状态／自审／用户例外、SHA-256、六个既有契约章节和 v1 原报告逐字一致、11 份 Markdown 围栏及 21 个本地链接，`git diff --check` 通过。

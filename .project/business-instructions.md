@@ -10,7 +10,7 @@
 
 工作项 2、3 分别记录 Webhook 唤醒和 WebSocket 唤醒，二者并列且无相互前置依赖。用户早期要求通用能力；2026-11-04 将工作项 2 明确为单独的飞书 IM Webhook，采用标准飞书事件订阅协议并提出使用 E2B 数据面 URL，不要求先建设多 IM 接入框架。此范围调整不自动扩展到工作项 3。拆分依据及 Pause 期间的协议边界见 `evidence/im-wakeup-paths-and-capabilities.md`。
 
-Webhook 工作项 2 按用户要求分成 Gateway 代码与 ACK 编排两个子任务，分别对应主工作区的 agents 和 ack-components；具体开发与发布分支尚未选定。WebSocket 工作项 3 的实现仓库与方式仍待明确。项目中的既有 agents 配置和工作项 1 不构成已交付前置能力的证据。
+Webhook 工作项 2 按用户要求分成 Gateway 代码与 ACK 编排两个子任务，分别对应主工作区的 agents 和 ack-components；具体开发与发布分支尚未选定。WebSocket 工作项 3 由用户确定以自包含、可插拔的 Golang 服务包经 Builder／Start 接入，可迁移到单独容器、Gateway 容器、AdvancedTrafficManagement 等宿主，实现仓库与首期宿主仍待明确。项目中的既有 agents 配置和工作项 1 不构成已交付前置能力的证据。
 
 2026-11-03，用户明确工作项 2 无需强可靠：Gateway 内存接收即可，接收 Gateway 退出造成事件丢失可以接受。该决定替代此前持久化接收的解释。用户要求以所有唤醒固定耗时 10 秒为分析假设，核对实际 ack-components 编排与对应 Gateway 退出机制，不使用 Agents 源码仓的示例编排代替。此选择不扩展到工作项 3，也不代表完整设计或业务实施授权。
 

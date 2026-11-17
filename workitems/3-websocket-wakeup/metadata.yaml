@@ -15,19 +15,28 @@ documents:
   logs: logs.md
 design:
   file: spec.md
-  version: 1
+  version: 2
   state: implementable
   next_action: split
-  registered_sha256: 2d45b38f3f5a55fd959fa4b024af92f79aaa9b613d1c09dbcc1a56a993fd18db
+  registered_sha256: e5c9963afe5db515ebf73d4b13f78d40a3f7aa647fc93e83f24c2e0123b5c183
   author_session: 01a1bf6f-56d9-78a3-b359-c34f9bbaab3f
   authors:
-  - Codex 主代理（本会话）
+  - Codex 主代理（v1，01a1bf6f-56d9-78a3-b359-c34f9bbaab3f）
+  - 用户（v2 服务包形态决定）
+  - Codex 主代理（v2 落位，01a1e84a-3acc-7e12-9870-7ff4bcdff90d）
   approval:
     actor: user
     date: '2026-11-17'
     source: decision.md
     statement: 确认
     scope: 完整首期设计契约及 spec.md 正式落位
+    version: 1
+    supplements:
+    - version: 2
+      actor: user
+      date: '2026-11-17'
+      source: decision.md
+      scope: 自包含可插拔 Golang 包、Builder 构造／Start 运行及宿主可迁移性
   review:
     result: pass
     date: '2026-11-17'
@@ -38,3 +47,21 @@ design:
     target_commit: 7ceca3385618090fd712fbea7634049559baca4c
     target_spec_sha256: f6a66f09211952aa566bed2a01bffd43c7547d15618e43c2bd0fbe3fe364a64a
     scope: 完整首期契约及 A/B/C 交付边界；正文未修订，仅登记评审与状态。
+    target_version: 1
+  self_review:
+    result: pass
+    target_version: 2
+    date: '2026-11-17'
+    reviewer_session: 01a1e84a-3acc-7e12-9870-7ff4bcdff90d
+    independent: false
+    record: records/design-self-review-20261117-v2.md
+    target_spec_sha256: e5c9963afe5db515ebf73d4b13f78d40a3f7aa647fc93e83f24c2e0123b5c183
+    scope: v2 服务包形态与生命周期、宿主可迁移性及既有契约交互
+  independent_review_exception:
+    result: skipped_by_user
+    target_version: 2
+    actor: user
+    date: '2026-11-17'
+    source: decision.md
+    statement: 这部分你自审一下没问题就可以 implementable，不需要回到独立审查阶段
+    scope: 本次 v2 补充；不扩展到后续代码评审或其他设计变更
