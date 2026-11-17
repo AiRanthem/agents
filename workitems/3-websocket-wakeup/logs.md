@@ -19,3 +19,9 @@
 本次仅维护项目记录，不执行独立评审、分解、源码实现、部署或真实消息／Pause／Resume 验证。交付部分及依赖已写入设计，后续分解方向为 `split`，父项独立评审仍待执行。
 
 文档检查通过：YAML 可解析，批准日期／来源、v1 与 `review-pending` 状态一致，登记的 SHA-256 与正式设计内容一致；交付仍为 pending，依赖关系未改变。6 份 Markdown 的 12 个本地链接、空白及代码围栏检查通过，`git diff --check` 通过。以上均为项目记录检查，不构成运行验证或独立评审。
+
+2026-11-17，用户明确调用 `review-design`。独立会话 `01a1e84a-3acc-7e12-9870-7ff4bcdff90d` 对项目提交 `7ceca3385618090fd712fbea7634049559baca4c` 的完整设计 v1 进行首次独立审查，结论为 Independent review passed。已读取原始需求／批准和固定版本源码，覆盖接收／确认、原实例与授权、应用接纳／去重／回复、期限／超限、启停／换绑及 A/B/C 依赖。报告见 `records/design-review-20261117.md`。
+
+仅将 spec frontmatter 与 metadata 登记为 `implementable` 并同步当前记录，设计正文不变、版本仍为 1；保留原作者及用户批准来源。未实施、分解、发布源码、部署或进行真实链路验证，代码合并交付仍为 pending。
+
+评审登记检查通过：YAML、设计正文与输入逐字一致、SHA-256、状态／版本／交付字段、8 份 Markdown 的围栏及 15 个本地链接；`git diff --check` 通过。

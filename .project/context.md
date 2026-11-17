@@ -4,9 +4,9 @@
 
 - 工作项 1：Gateway 流量自动唤醒后的 shutdownTime/pauseTime 调整及流量续期，从 oka-daily-open-source 迁入，保留既有开发状态、设计与审查证据。
 - 工作项 2：基于 Webhook 事件的 Sandbox 自动唤醒，保留既有 ID `2-feishu-wake-openclaw`，汇总两个子任务：`21-webhook-gateway-code` 负责 Gateway 代码，`22-webhook-ack-orchestration` 负责 ACK 编排，后者依赖前者代码交付。
-- 工作项 3：基于 WebSocket 事件的 Sandbox 自动唤醒，ID 为 `3-websocket-wakeup`；用户于 2026-11-17 确认完整首期契约，正式设计 v1 待独立评审。
+- 工作项 3：基于 WebSocket 事件的 Sandbox 自动唤醒，ID 为 `3-websocket-wakeup`；用户于 2026-11-17 确认完整首期契约，同日正式设计 v1 通过独立评审，登记为 `implementable`，待相应授权下分解。
 
-工作项 2、3 为并列需求，无相互前置依赖。用户已要求设计探索、两种方式都支持，并于 2026-11-03 要求保存原理分析和拆分需求。工作项 2 当前收敛为单独的飞书 IM Webhook 功能，采用标准飞书协议及 Gateway 内存接收；用户提出使用 E2B 数据面 URL 作为飞书请求地址。工作项 2 尚无完整正式 spec；工作项 3 已形成用户批准的正式设计 v1，待独立评审。两项尚无业务实现。2026-11-04 按用户要求再次独立复审提交 `5061001`：标准 HTTP 200 协议、原始载荷转交及 E2B 寻址已收敛；父项 2 与代码子项 21 因 ACK 后失败处置、入口配置/授权及启停变化语义未定，仍为 Unable to conclude；编排子项 22 继续 Independent review passed。新报告见 `workitems/2-feishu-wake-openclaw/records/design-review-20261104-r2.md`，前次原始报告保持不变。适配器窄测试通过，未执行新功能或真实集成验证。这些记录不建立代码、镜像或编排交付。
+工作项 2、3 为并列需求，无相互前置依赖。用户已要求设计探索、两种方式都支持，并于 2026-11-03 要求保存原理分析和拆分需求。工作项 2 当前收敛为单独的飞书 IM Webhook 功能，采用标准飞书协议及 Gateway 内存接收；用户提出使用 E2B 数据面 URL 作为飞书请求地址。工作项 2 尚无完整正式 spec；工作项 3 的正式设计 v1 已获用户批准并通过独立评审。两项尚无业务实现。2026-11-04 按用户要求再次独立复审提交 `5061001`：标准 HTTP 200 协议、原始载荷转交及 E2B 寻址已收敛；父项 2 与代码子项 21 因 ACK 后失败处置、入口配置/授权及启停变化语义未定，仍为 Unable to conclude；编排子项 22 继续 Independent review passed。新报告见 `workitems/2-feishu-wake-openclaw/records/design-review-20261104-r2.md`，前次原始报告保持不变。适配器窄测试通过，未执行新功能或真实集成验证。这些记录不建立代码、镜像或编排交付。
 
 Webhook 采用 Gateway 内存接收后确认、异步恢复与交付，用户接受该 Gateway 退出后事件丢失。首期每个接入绑定一个已有 Sandbox，自动唤醒开关开启时允许手动 Pause 后唤醒。2026-11-04，用户确认正常下线的细化方案，并指定业务排空最多等待 60 秒，排空后再执行原有 Envoy drain。编排按本地调用 65 秒、Envoy 调用 5 秒、连接等待 30 秒及退出余量 20 秒核算，目标总 grace 为 120 秒。实际 ack-components 编排仍是此前核验的 90 秒；项目记录不是编排变更。证据与当前约定见 `evidence/ack-gateway-webhook-shutdown.md`。Webhook 的选择不自动成为 WebSocket 的已批准契约。
 
@@ -30,4 +30,4 @@ Webhook 采用 Gateway 内存接收后确认、异步恢复与交付，用户接
 
 2026-11-13，用户要求停用消息处理采用最简单方式。主代理据此选定停收新消息，已接收消息按原目标继续既定的有限唤醒和交付，不增加清空队列或专门取消流程；进程退出仍适用已接受的消息丢失边界。换绑先结束旧绑定再新建，旧消息不迁移到新目标。
 
-2026-11-17，用户对完整首期候选及正式落位请求回答“确认”，工作项 3 形成 [正式设计 v1](../workitems/3-websocket-wakeup/spec.md)，状态为 `review-pending`。完整契约补齐同账号单活／受控重启、目标不可复用实例身份、内部事件入口和 HTTP `202` 接纳回执、有限容量／期限与失败处理。交付划分为公共能力、应用适配和依赖前两者的集成，后续分解方向为 `split`；当前尚无独立评审、分解、源码实施或真实集成结果，代码合并义务仍待完成。
+2026-11-17，用户对完整首期候选及正式落位请求回答“确认”，工作项 3 形成 [正式设计 v1](../workitems/3-websocket-wakeup/spec.md)。完整契约补齐同账号单活／受控重启、目标不可复用实例身份、内部事件入口和 HTTP `202` 接纳回执、有限容量／期限与失败处理。同日按用户要求完成首次独立设计评审，结论为 Independent review passed，登记为 `implementable`，设计正文不变，见 [审查报告](../workitems/3-websocket-wakeup/records/design-review-20261117.md)。交付划分为公共能力、应用适配和依赖前两者的集成，后续分解方向为 `split`；当前尚无分解、源码实施或真实集成结果，代码合并义务仍待完成。

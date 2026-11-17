@@ -1,5 +1,5 @@
 ---
-design_status: review-pending
+design_status: implementable
 ---
 
 # 基于 WebSocket 事件的 Sandbox 自动唤醒

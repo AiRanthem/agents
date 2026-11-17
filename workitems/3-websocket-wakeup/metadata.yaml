@@ -16,9 +16,9 @@ documents:
 design:
   file: spec.md
   version: 1
-  state: review-pending
+  state: implementable
   next_action: split
-  registered_sha256: f6a66f09211952aa566bed2a01bffd43c7547d15618e43c2bd0fbe3fe364a64a
+  registered_sha256: 2d45b38f3f5a55fd959fa4b024af92f79aaa9b613d1c09dbcc1a56a993fd18db
   author_session: 01a1bf6f-56d9-78a3-b359-c34f9bbaab3f
   authors:
   - Codex 主代理（本会话）
@@ -28,3 +28,13 @@ design:
     source: decision.md
     statement: 确认
     scope: 完整首期设计契约及 spec.md 正式落位
+  review:
+    result: pass
+    date: '2026-11-17'
+    reviewer: Codex 主代理 /root
+    reviewer_session: 01a1e84a-3acc-7e12-9870-7ff4bcdff90d
+    independent: true
+    record: records/design-review-20261117.md
+    target_commit: 7ceca3385618090fd712fbea7634049559baca4c
+    target_spec_sha256: f6a66f09211952aa566bed2a01bffd43c7547d15618e43c2bd0fbe3fe364a64a
+    scope: 完整首期契约及 A/B/C 交付边界；正文未修订，仅登记评审与状态。
