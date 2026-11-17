@@ -1,6 +1,6 @@
 ---
 title: sandbox-api 配置等待与提前 Ready 启动模式
-design_status: review-pending
+design_status: implementable
 version: 1
 ---
 

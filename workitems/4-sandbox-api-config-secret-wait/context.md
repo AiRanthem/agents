@@ -6,16 +6,16 @@
 - 用户随后明确更正：“需求表达错误，现在等待的时候会出现 0/2 ready ，导致一些发布系统会卡住”。当前问题以该更正为准；不再将缺少配置时立即 crash 作为事实。
 - 原先的“进程不感知 startup probe 超时”约束没有被明确撤回。后续提前 Ready 的批准不授权进程自行读取探针配置或推算等待期限。
 - 用户随后明确选择“Pod 先变成 2/2 Ready，配置完成前业务返回 503（会接入流量，也可能推进滚动替换）”，并补充“这个需要一个开关控制启动时的行为”。这些新增决定见 [decision.md](decision.md)。
-- 用户对随后提交的完整开关合同及设计路径回复“确认”。设计 v1 已据此写入 [spec.md](spec.md)，状态 `review-pending`，作者为 Codex 主会话 `/root`。
+- 用户对随后提交的完整开关合同及设计路径回复“确认”。设计 v1 已据此写入 [spec.md](spec.md)，作者为前序设计会话的 Codex 主 agent `/root`。本次另行获准的独立审查已通过，当前状态 `implementable`，正文合同不变。
 - 本项使用未占用编号 `4`，与既有 SandboxSet 工作项无已知依赖或缺陷修复关系。
 
 ## 当前源码证据
 
-- 已成功更新源码主检出 `develop` 至 `8f02008e8a2a5560fb607a70afc3520d55c636e9`，并刷新 `upstream/master` 至 `d764256be82aa790582b4ce4af98997a5958a30a`。本轮设计取证未创建源码分支或 worktree。
+- 设计 v1 取证时，源码主检出 `develop` 为 `8f02008e8a2a5560fb607a70afc3520d55c636e9`，`upstream/master` 为 `d764256be82aa790582b4ce4af98997a5958a30a`。本次审查已再次成功执行 `git pull --ff-only`，主检出仍为上述干净的 `develop`；`git fetch upstream master` 与 `git ls-remote upstream refs/heads/master` 核验的上游为 `18096feb1d1089499b1227a3e60dc25476ae072d`。新上游仅修改 `pkg/identity/jwtissuer`，没有改变本设计的配置观察、API、Manager 和 proxy 启动接口。本项尚未创建源码分支或 worktree。
 - `cmd/sandbox-manager/secretconfig.go` 将非空 `--secret-config` 接入 `configreload.RunWatcher`；`pkg/configreload/controller.go` 使用按 namespace/name 限定的独立 informer。初始配置没有确认前，`Dispatcher.Initialized()` 不会释放启动等待；配置形状无效时等待更新，观察器故障会继续重试。
 - `pkg/servers/e2b/core.go` 的 `Init` 等待初始配置，之后 `startComponents` 才运行 Manager、业务 HTTP 和可选独立 metrics/health 监听。`pkg/sandbox-manager/core.go` 在 `Run` 中启动 proxy，`pkg/proxy/server.go` 才绑定路由刷新与 ext-proc 监听。因此配置等待能阻止这些后续监听启动。
 - `config/sandbox-manager/deployment.yaml` 的测试编排为双容器：controller 的 startup/readiness 检查端口 7789，envoy-proxy 检查端口 7788。按 `config/AGENTS.md`，它仅是 E2E 测试编排，不能据此确认现场两个容器的探针，也不能证明现场 `0/2` 的逐容器原因。
-- 开源 Helm 模板 `deploy/sandbox-manager/templates/deployment.yaml` 同样使用 controller 的 7789 和 Envoy 的 7788；现有 legacy TCP 探针入口不能仅靠提前启动独立 metrics/health 监听就满足。
+- 内部 `develop` 的 Helm 模板 `deploy/sandbox-manager/templates/deployment.yaml` 同样使用 controller 的 7789 和 Envoy 的 7788；该目录不存在于本次核验的开源 `upstream/master`，不能称为开源交付证据。本次审查据上游 `config/sandbox-manager/deployment.yaml` 核对这一探针组合；两者都不能代替现场编排取证。现有 legacy TCP 探针入口不能仅靠提前启动独立 metrics/health 监听就满足。
 - 官方 Kubernetes 合同中，startup probe 成功前不会运行 readiness probe；Ready 还影响 Service 流量接入。仅提前开放健康端口而继续保持未 Ready，不能满足发布系统等待 Ready 的条件。来源：[Pod lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#container-probes)。
 - 历史上 PR #857 使用一次性 Secret Get；[PR #1177](https://github.com/openkruise/agents/pull/1177) 的上游提交 `4331416b2266acb4dd062995d55b8adb02be78fd` 引入当前观察与初始化门禁，内部对应提交 `989514c4cdcd68b2be908d2eb9a882374a243db5` 已包含在本地 `ack-sandbox-api-v0.6.14-release.2` 源码标签。该历史不是当前运行镜像或现场发布状态的证据。
 - `pkg/proxy/ext_proc.go` 已通过 Envoy ImmediateResponse 返回 HTTP 错误；新模式需要确保待配置请求在这一入口也得到 `503`，不能只保护直连 E2B HTTP。现有健康/观测例外必须限定到控制面端点，不能凭 Sandbox 业务路径也叫 `/health` 就放行。
@@ -24,7 +24,7 @@
 
 ## 已执行的局部检查
 
-以下检查由 Codex 主 agent 在上述干净的 `develop` 主检出执行，均通过。相关生产文件与已刷新上游相同；E2B 测试文件有一处既有缓存辅助函数类型差异，未涉及本次选定测试。
+以下为前序设计会话记录的检查，由当时的 Codex 主 agent 在上述干净的 `develop` 主检出执行并记录通过。本轮审查未重跑，也未将缺少原始输出的历史断言作为新模式的运行验证。相关生产文件与已刷新上游相同；E2B 测试文件有一处既有缓存辅助函数类型差异，未涉及当时选定测试。
 
 - `go test ./pkg/configreload -run 'Test(DispatcherConvergence|SecretReconcilerPreservesState|WatcherReconcileLogs|RunWatcherRetriesUntilCanceled)$' -count=1`：通过，覆盖现有配置确认、删除后状态保留、实际观察器 reconcile 和重试取消。
 - `go test ./pkg/servers/e2b -run 'Test(ConfigurationStartsBeforeInitWait|ConfigurationSourceExitsBeforeInitialization|ControllerSignalDuringStartupExitsCleanly|AwaitStartup)$' -count=1`：通过，覆盖配置门禁与启动取消。
@@ -44,6 +44,13 @@
 
 ## 工作边界
 
-完整 Why/What 已由用户确认并写入设计 v1，当前为 `review-pending`。独立评审尚未请求执行；实现、人工验收与源码交付均未进行，没有创建开发分支或源码 worktree。后续如开展代码开发，须按 `.project/business-instructions.md` 成功刷新并核验最新 `upstream/master` 后建立隔离分支，记录并核验基线。
+完整 Why/What 已由用户确认并写入设计 v1，本次显式授权的独立设计审查通过，当前为 `implementable`。实现、人工验收与源码交付均未进行，没有创建开发分支或源码 worktree。后续如开展代码开发，须另有实现授权，并按 `.project/business-instructions.md` 成功刷新并核验最新 `upstream/master` 后建立隔离分支，记录并核验基线。
 
 项目未配置 Aone 后端，本次不进行外部系统同步。
+
+## 2026-11-17 独立设计审查
+
+- 用户显式调用 `$review-design workitems/4-sandbox-api-config-secret-wait`。审查者为本次独立审查会话的 Codex 主 agent `/root`，没有参与该设计任何版本的实质编写或修订。完整报告见 [records/design-review.md](records/design-review.md)。
+- 结论为 **Independent review passed**，没有阻塞发现或必要证据缺口。覆盖开关适用范围、真实探针端口、API/Envoy 准入与健康例外、独立配置观察、后台及 peer 生命周期、取消与失败、默认行为及运行后热更新兼容。主审完成全部判断；受派 agent 仅补充后台/peer 生命周期源码事实，不充当额外独立审查者。
+- 设计正文逐字保持不变，仅将 front matter 状态登记为 `implementable`；需求仅同步交付阶段说明，用户合同与验收目标不变。上下文中的 Helm 模板证据归属按本次源码结果纠正，不形成产品决定或新设计版本。
+- 实际执行源码刷新、远端基线及关键文件差异核验，并读取现有测试断言。没有执行 Go 测试、运行时复现、集群或 E2E；设计审查不证明新模式已经工作，现场逐容器探针和具体发布系统仍未核验。
