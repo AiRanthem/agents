@@ -15,5 +15,16 @@ documents:
   logs: logs.md
 design:
   file: spec.md
-  version: 0
-  state: draft
+  version: 1
+  state: review-pending
+  next_action: split
+  registered_sha256: f6a66f09211952aa566bed2a01bffd43c7547d15618e43c2bd0fbe3fe364a64a
+  author_session: 01a1bf6f-56d9-78a3-b359-c34f9bbaab3f
+  authors:
+  - Codex 主代理（本会话）
+  approval:
+    actor: user
+    date: '2026-11-17'
+    source: decision.md
+    statement: 确认
+    scope: 完整首期设计契约及 spec.md 正式落位

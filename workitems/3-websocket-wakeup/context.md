@@ -1,25 +1,31 @@
 # 当前上下文
 
-`3-websocket-wakeup`（基于 WebSocket 事件的 Sandbox 自动唤醒）与 `2-feishu-wake-openclaw`（Webhook 唤醒）为同级需求，无相互前置依赖。`split_from` 仅记录原需求来源。
+## 当前契约与授权
 
-用户明确两种方式都要、能力需要通用化，并于 2026-11-03 要求保存原理分析后拆为两个并列需求。飞书与 OpenClaw 是首个场景。2026-11-09，用户进一步要求统一方案应对所有 IM，并确认休眠期间由暂停边界外仍运行的组件承担消息感知与目标 Sandbox 关联责任。
+`3-websocket-wakeup`（基于 WebSocket 事件的 Sandbox 自动唤醒）与 `2-feishu-wake-openclaw`（Webhook 唤醒）并列，无相互前置依赖；`split_from` 仅记录来源。
 
-用户已选择允许调整应用接入方式，沿“外部接收组件 + 各 IM 适配器 + 统一唤醒核心”继续设计：外部组件持续维护连接，应用通过内部接口接收事件。平台不保证额外客户端广播消费或无限离线补投；消费所有权、运维配置结构、凭据更新及应用交付协议仍待明确。统一方案覆盖目标不等于所有平台已有实现或通过运行验证。
+2026-11-17，用户对本会话集中呈现的完整首期契约及 `workitems/3-websocket-wakeup/spec.md` 正式落位回答“确认”。当前唯一正式设计为 [spec.md](spec.md)，版本 1、`review-pending`。作者为 Codex 主代理（本会话）；用户决定的具体来源见 [decision.md](decision.md)。
 
-用户另行确认本项采用内存暂存并按平台协议确认，再唤醒和交付；恢复后首次交付失败最多再重试 5 次，仍失败记日志放弃；接收进程退出时已确认但未交付的内存消息可能丢失，可以接受。缓存容量/期限、内部应用接收确认和恢复失败边界尚未收敛。
+契约采用暂停边界外接收、平台适配器和统一唤醒核心，首期交付公共框架与飞书／OpenClaw 适配。账号／接入固定绑定一个已有 Sandbox，一个 Sandbox 可有多个绑定；应用允许调整为内部事件接入。运维配置及凭据可恢复，消息只在外部接收器内存暂存，进程退出可以丢失已确认消息。
 
-2026-11-10，用户确定一对一绑定：每个平台账号/接入绑定一个已有 Sandbox，其用户及群聊消息交给同一目标；不按用户或群聊分流到不同 Sandbox。一个 Sandbox 可接入多个 IM 账号/接入。这解决了目标映射粒度选择，具体绑定配置、授权和变更语义仍待设计明确。
+首期同账号单活、受控重启，旧实例是否停止尚不确定时不自动接管。完整业务事件在内存接纳后按平台协议确认；恢复和交付固定到原实例身份，不能转向同名重建对象。内部入口返回 HTTP `202` 和相同交付 ID，表示原生队列接纳；Agent 处理及回复另外观察。恢复、容量和消息期限有限，应用交付临时失败最多再重试 5 次。停用后旧消息按原目标有限处理，换绑不迁移旧消息。详细行为、配置内容和验收均以正式设计为准。
 
-用户同日确认自动唤醒开启时允许合法消息恢复手动 Pause 的 Sandbox；关闭自动唤醒时不因新消息恢复已暂停目标。用户另行决定依赖 IM 平台自身的权限控制，不增加外部发送者/群聊唤醒白名单，也不复制应用的业务访问规则。平台来源认证、账号绑定和目标唤醒授权仍须在恢复前校验；应用收到后继续原有业务访问逻辑，可能忽略或拒绝已经触发恢复的消息。
+## 固定版本证据
 
-用户已选择首期交付统一接收/唤醒/交付框架及飞书适配，其他平台后续扩展；对比操作流程后，已选择由运维在沙箱外维护账号、接收凭据引用、固定目标与应用事件入口，应用不自行注册或持续续租。绑定和凭据是外部可恢复配置，与内存暂存的消息分开；外部接收方重启后不能依赖暂停中的应用重新提供接入信息。
+以下是此前设计探索期间的静态源码证据，本次正式落位没有重新查询实际部署版本或执行运行验证。
 
-2026-11-13，用户将停用消息处理方式授权按最简单方案决定。主代理选择停收新消息，已接收消息沿原目标继续既定的有限唤醒和交付，不新增队列清空或专门取消流程；因此停用后旧消息仍可能恢复原 Sandbox，身份与授权检查仍须通过。进程退出仍适用已接受的内存消息丢失边界，应用已接收的工作不回滚。换绑先结束旧绑定再新建，旧消息不迁移到新目标。
+- 飞书官方 Node SDK `b188be60134d409b61259546bcf69c731d2b0b7c`（`@larksuiteoapi/node-sdk` 1.76.0）的 [WebSocket 事件处理](https://github.com/larksuite/node-sdk/blob/b188be60134d409b61259546bcf69c731d2b0b7c/ws-client/index.ts) 在分片重组得到完整事件后等待事件分发入口返回，再发送业务确认。外部接收层可在内存准入后及时返回；不能将分片缓存当作消息持久队列，也不能遗漏接纳处理入口而仍成功确认。
+- OpenClaw `f7257f2c66884611f4f4043367eada029b704918` 的 [channel inbound SDK](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-inbound.md) 提供进程内方法，核读范围内未发现可直接使用的通用跨频道外部 HTTP 注入入口。薄适配入口需要新增；应用仍须使用实际频道和同一宿主运行时生成 [channel ingress](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-ingress.md) 证据，不能将外部 JSON 或旧宿主证据直接当作业务授权。
+- 同一 OpenClaw 快照的 [飞书 ingress](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/feishu/src/feishu-ingress.ts) 已使用原生事件 ID 入队及去重；[durable ingress 契约](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-plugins/durable-ingress.md) 区分接纳和执行完成，去重保留受 TTL 与容量限制。复用应用已有队列不改变外部接收器仅内存的选择，不形成永久或全局恰好一次保证。
+- 同一快照的 [飞书回复](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/feishu/src/message-send.ts) 使用消息 API；[WhatsApp socket 会话](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/whatsapp/src/inbound/socket-session.ts) 和 [IRC monitor](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/extensions/irc/src/monitor.ts) 的现有回复路径依赖活动连接。后续这些平台的适配必须覆盖外部会话上的回复／必要操作，首期不实现它们。
+- 设计探索所查 Agents 固定基线为 `cfbd102bc05c6df663965c5e23463a0eafd34948`。原 Gateway 唤醒调用按 namespace/name 查找，不能据此认定本设计要求的原实例身份约束已贯穿恢复写入与交付。`worktrees/1-gateway-wakeup-lifecycle` 中既有未提交代码也不是本项已交付前置能力；本次未修改该源码工作树。
 
-本轮固定版本源码核验发现：OpenClaw `f7257f2c66884611f4f4043367eada029b704918` 的 [channel inbound SDK](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-inbound.md) 提供进程内接入与分发方法，尚未在本轮核读范围内找到外部服务可直接使用的通用跨频道 HTTP 注入入口。应用适配仍需保留实际频道的解析及业务访问逻辑，并由同一宿主运行时生成 [channel ingress](https://github.com/openclaw/openclaw/blob/f7257f2c66884611f4f4043367eada029b704918/docs/plugins/sdk-channel-ingress.md) 证据，不能将外部事件字段或序列化的旧证据直接当作业务授权。
+此前证据提取由 `im_adapter_evidence` 协助，主代理直接核读关键 SDK 契约和源码后承担设计判断。这些工作不是独立设计评审；未运行 SDK、真实账号或 Pause／Resume 验证。
 
-同一快照的飞书回复走消息 API；WhatsApp/Baileys 与 IRC 的现有回复路径依赖活动连接。统一方案需在设计中定义应用与外部会话持有方的回复/必要操作边界，不能假设仅转交原始事件后所有应用都可自行完成原回复路径。来源为 `extensions/feishu/src/message-send.ts`、`extensions/whatsapp/src/inbound/socket-session.ts` 与 `extensions/irc/src/monitor.ts`。本轮由子代理提取三类证据，主代理直接核读关键 SDK 契约及会话代码后综合；未运行 SDK、真实账号或 Pause/Resume 验证，不建立独立设计审查。
+## 后续边界
 
-当前完成协议研究、机制分析及上述部分设计决策，处于设计探索，无完整正式 spec、独立审查、实施代码或运行验证。后续在已有设计探索授权内细化 requirement.md 的待决事项；实施仓库仍未选定。设计版本仍为 0，不将部分决策登记为完整设计批准。
+设计已获用户批准并正式落位，独立评审尚未执行。A 公共接收／唤醒能力与 B 应用适配共同约束事件和回执，C 集成依赖 A、B 的实际交付；完整依赖和验收见正式设计。设计记录的后续分解方向为 `split`，应先完成父项独立评审，再在相应授权内分解，不在本次创建子项。
 
-知识入口：[链路与能力分析](../../evidence/im-wakeup-paths-and-capabilities.md)、[飞书协议原理](../../evidence/feishu-event-transports.md)、[OpenClaw 接入机制](../../evidence/openclaw-feishu-im-mechanism.md)。
+本项实施仓库、分支、匹配应用构建、镜像及编排位置尚未确定；无本项业务实现、源码合并、部署或真实集成验收结果。代码合并交付义务继续为 pending。项目记录推送不建立这些结果。
+
+知识入口：[链路与能力分析](../../evidence/im-wakeup-paths-and-capabilities.md)、[飞书协议原理](../../evidence/feishu-event-transports.md)、[OpenClaw 接入机制](../../evidence/openclaw-feishu-im-mechanism.md)、[跨平台休眠调查](../../evidence/im-platform-sandbox-sleep.md)。
