@@ -57,7 +57,9 @@ development:
   review:
     mode: multi-agent
     design_version: 1
-    open_findings: [2, 3, 4]
+    open_findings: [2]
+    fixed_pending_rereview: [3, 4]
+    fix_diff_sha256: ae6bfb279c1cadd8ba579d04a3794748d1c9e53cf591a8bd40b6cd7056f87ca0
     withdrawn_after_user_clarification: [1, 5]
     reviewed_at: '2026-11-18'
     lead: Codex /root

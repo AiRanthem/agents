@@ -75,3 +75,13 @@
 ## 审查后复核
 
 用户确认了 Envoy 接流和控制 API 在等待配置 Secret 时的拒绝语义。[当前合同](spec.md)为 v2。已同步源码 proposal、控制 API 准入注释和参数帮助。原审查第 1、5 项撤回。第 2 项保留凭据日志问题。第 3、4 项用临时 Go overlay 验证了真实启动仲裁与监听冲突。[复核记录](records/code-review.md)区分了运行证据与源码推导。
+
+## 2026-11-18 修复第 3、4 项
+
+用户要求“帮我修复3、4”。Codex 在 `feat/ready-before-config-261117` 的现有工作树修改 CLI 参数校验、启动仲裁及各自的既有测试。仲裁在启动成功与终止信号均已就绪时消费该信号，走优雅退出分支，控制 API 保持关闭。启动失败仍返回原错误。
+
+CLI 在等待初始配置前校验 memberlist 的有效端口与控制 API、metrics、路由刷新和已启用的 ext-proc 监听。沿用当前非正 memberlist 端口取默认值的规则。关闭 ext-proc 时其端口可用于 memberlist。成员加入仍在运行时初始化阶段。
+
+回归断言在修复前分别观察到信号漏消费和错误端口通过校验。修复后在源码工作树执行 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/servers/e2b -run 'Test(ValidateListenerPorts|AwaitStartup)$' -count=100`，两包均通过。实际执行 `go run ./cmd/sandbox-manager --peer-selector=app=test --ready-before-config --secret-config=test/config --memberlist-bind-port=7789` 时使用空 kubeconfig，程序在参数校验阶段以状态 255 退出，错误明确指向路由刷新监听冲突。两个受影响包的完整测试也通过了 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/servers/e2b -count=1`。变更 Go 文件格式检查及 `git diff --check HEAD` 通过。
+
+工作树 HEAD 为 `18096feb1d1089499b1227a3e60dc25476ae072d`，完整工作树 diff SHA-256 为 `ae6bfb279c1cadd8ba579d04a3794748d1c9e53cf591a8bd40b6cd7056f87ca0`。源码保持未提交，原 11 文件暂存差异指纹仍为 `b01ef90f9c9b8e9c4c1422fb93393f05bb1c67d84d63ed1fe354873de7520c8f`。第 3、4 项的当前证据为本地修复与回归，第 2 项仍待处理；独立复审及集群验证尚未执行。
