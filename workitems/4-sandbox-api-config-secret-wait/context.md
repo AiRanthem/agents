@@ -44,7 +44,7 @@
 
 ## 工作边界
 
-完整 Why/What 已由用户确认，设计 v1 独立审查通过。随后用户明确授权实施方案执行，已在隔离源码工作树实现并进行验证。源码保持未提交；独立代码审查、人工验收与源码交付尚未进行。当前源码身份与验证见下方实现记录。
+设计 v1 已由用户确认并通过独立设计审查，随后按用户授权在隔离工作树实现。用户在实现审查后澄清了设计 v2 的控制 API 和 Envoy 行为，并已确认当前补丁通过人工验收。[当前源码与交付状态](#2026-11-18-人工验收与-pr)
 
 项目未配置 Aone 后端，本次不进行外部系统同步。
 
@@ -85,3 +85,10 @@ CLI 在等待初始配置前校验 memberlist 的有效端口与控制 API、met
 回归断言在修复前分别观察到信号漏消费和错误端口通过校验。修复后在源码工作树执行 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/servers/e2b -run 'Test(ValidateListenerPorts|AwaitStartup)$' -count=100`，两包均通过。实际执行 `go run ./cmd/sandbox-manager --peer-selector=app=test --ready-before-config --secret-config=test/config --memberlist-bind-port=7789` 时使用空 kubeconfig，程序在参数校验阶段以状态 255 退出，错误明确指向路由刷新监听冲突。两个受影响包的完整测试也通过了 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/servers/e2b -count=1`。变更 Go 文件格式检查及 `git diff --check HEAD` 通过。
 
 工作树 HEAD 为 `18096feb1d1089499b1227a3e60dc25476ae072d`，完整工作树 diff SHA-256 为 `ae6bfb279c1cadd8ba579d04a3794748d1c9e53cf591a8bd40b6cd7056f87ca0`。源码保持未提交，原 11 文件暂存差异指纹仍为 `b01ef90f9c9b8e9c4c1422fb93393f05bb1c67d84d63ed1fe354873de7520c8f`。第 3、4 项的当前证据为本地修复与回归，第 2 项仍待处理；独立复审及集群验证尚未执行。
+
+## 2026-11-18 人工验收与 PR
+
+- 用户确认已完成人工验收，并确认发布普通 PR。[决定来源](decision.md#2026-11-18-人工验收与发布决定)
+- 验收的 12 文件补丁已提交并无冲突地对齐刷新后的 `upstream/master`（`b6cd98608a81cf93d4ef2c0a92313bf2a29d1ee2`）。完整补丁的 SHA-256 与采集时一致，12 个文件均属于社区范围。源码提交 `b37d3430ebeb7119d2c91e6c66499afa8049c7d5` 已推送至 `AiRanthem/agents:feat/ready-before-config-261117`，并回读核验远端分支与 PR 的 head 一致。
+- 在该提交执行 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/configreload ./pkg/servers/e2b/... ./pkg/sandbox-manager ./pkg/sandbox-manager/quota ./pkg/proxy -count=1`，9 个包全部通过。
+- [PR #1237](https://github.com/openkruise/agents/pull/1237) 已向 `openkruise/agents:master` 创建并核验为普通、开放的 PR。GitHub 检查已启动，合并待定。独立实现审查第 2 项请求头日志仍待处理，第 3、4 项仍待独立复审。部署和现场验证无新增证据。隔离工作树保留。
