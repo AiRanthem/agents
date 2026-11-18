@@ -1,0 +1,6 @@
+interface:
+  display_name: "Adapt Agent Routing"
+  short_description: "Evaluate multi-agent routing after model updates"
+  default_prompt: "Use $adapt-agent-routing to evaluate our Codex delegation rules against the latest model evidence and representative local work."
+policy:
+  allow_implicit_invocation: true

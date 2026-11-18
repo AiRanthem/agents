@@ -6,6 +6,7 @@ import sys
 
 
 SHARED = ("delegation-task.md", "delegation-evidence.md", "delegation-lifecycle.md")
+ROUTING = "delegation-routing.md"
 
 
 def prompt_names(event, expected):
@@ -16,11 +17,11 @@ def prompt_names(event, expected):
                 if isinstance(model, str) and model.startswith("gpt-") else set())
     family = next(iter(families)) if len(families) == 1 else None
     if expected == "SubagentStart":
-        return ("delegation-subagent.md", *SHARED, "delegation-astra.md") if family == "astra" else ()
+        return ("delegation-subagent.md", *SHARED, ROUTING) if family == "astra" else ()
     if family == "luna":
         return ()
     names = ("delegation.md", *SHARED)
-    return (*names, f"delegation-{family}.md") if family in {"astra", "sol"} else names
+    return (*names, ROUTING) if family in {"astra", "sol"} else names
 
 
 def run_hook(expected):

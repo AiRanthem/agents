@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import unittest
 HOOKS = Path(__file__).parent
 PROMPTS = HOOKS.parent / "prompts"
 SHARED = ("delegation-task.md", "delegation-evidence.md", "delegation-lifecycle.md")
+CARD = "delegation-routing.md"
 
 
 def invoke(event, hook=None):
@@ -29,10 +31,11 @@ class DelegationHookTests(unittest.TestCase):
     def test_model_and_event_matrix(self):
         for model, family in [
             ("gpt-6-astra", "astra"), ("gpt-6.1-sol", "sol"),
+            ("gpt-6.2-astra", "astra"), ("gpt-6.2-sol", "sol"),
             ("gpt-6-luna", "luna"), ("gpt-99-astra-preview", "astra"),
             ("gpt-99-sol-preview", "sol"), ("gpt-99-luna-preview", "luna"),
             ("gpt-7-astral", None), ("gpt-7-solstice", None),
-            ("gpt-7-lunatic", None), ("other-6-astra", None),
+            ("gpt-7-lunatic", None), ("other-6-astra", None), ("gpt-6.1-terra", None),
             ("gpt-7-astra-sol", None), (None, None), (7, None),
         ]:
             for event_name in ("SessionStart", "SubagentStart"):
@@ -51,9 +54,17 @@ class DelegationHookTests(unittest.TestCase):
                     boundary = "delegation.md" if event_name == "SessionStart" else "delegation-subagent.md"
                     names = [boundary, *SHARED]
                     if family in {"astra", "sol"}:
-                        names.append(f"delegation-{family}.md")
+                        names.append(CARD)
                     expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
                     self.assertEqual(output["additionalContext"], expected)
+
+    def test_routing_profiles(self):
+        profiles = set(re.findall(r"\b(gpt-[\w.-]+ / \w+)\b", (PROMPTS / CARD).read_text()))
+        self.assertEqual(profiles, {
+            "gpt-6-luna / high", "gpt-6-luna / max",
+            "gpt-6.2-sol / medium", "gpt-6.2-sol / xhigh",
+            "gpt-6.2-astra / high", "gpt-6.2-astra / xhigh", "gpt-6.1-sol / max",
+        })
 
     def test_event_and_role_isolation(self):
         for event, other in [("SessionStart", "SubagentStart"), ("SubagentStart", "SessionStart")]:
@@ -67,31 +78,15 @@ class DelegationHookTests(unittest.TestCase):
         self.assertNotIn("Retain ownership of the user's goal", policy)
         self.assertNotIn("During explicitly started `advance-project`", policy)
 
-    def test_routing_profiles(self):
-        for event, model, profiles in [
-            ("SessionStart", "gpt-6-astra", {"gpt-6-luna / high", "gpt-6-luna / max",
-                                           "gpt-6.1-sol / medium", "gpt-6.1-sol / high",
-                                           "gpt-6.1-sol / xhigh"}),
-            ("SubagentStart", "gpt-6-astra", {"gpt-6-luna / high", "gpt-6-luna / max",
-                                            "gpt-6.1-sol / medium", "gpt-6.1-sol / high",
-                                            "gpt-6.1-sol / xhigh"}),
-            ("SessionStart", "gpt-6.1-sol", {"gpt-6-luna / high", "gpt-6-luna / max"}),
-        ]:
-            result = invoke({"hook_event_name": event, "model": model})
-            self.assertEqual(result.returncode, 0, result.stderr)
-            policy = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-            listed = {line.split("**")[1] for line in policy.splitlines() if line.startswith("- **")}
-            self.assertEqual(listed, profiles)
-
     def test_selected_fragments_are_required_and_unselected_fragments_are_independent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copytree(HOOKS, root / "hooks")
             for event_name, model, boundary, card in [
                 ("SessionStart", "unknown", "delegation.md", None),
-                ("SessionStart", "gpt-6-astra", "delegation.md", "delegation-astra.md"),
-                ("SessionStart", "gpt-6.1-sol", "delegation.md", "delegation-sol.md"),
-                ("SubagentStart", "gpt-6-astra", "delegation-subagent.md", "delegation-astra.md"),
+                ("SessionStart", "gpt-6.2-astra", "delegation.md", CARD),
+                ("SessionStart", "gpt-6.2-sol", "delegation.md", CARD),
+                ("SubagentStart", "gpt-6.2-astra", "delegation-subagent.md", CARD),
             ]:
                 hook = root / "hooks" / ("session-start.py" if event_name == "SessionStart" else "subagent-start.py")
                 event = {"hook_event_name": event_name, "model": model}
@@ -135,7 +130,7 @@ class DelegationHookTests(unittest.TestCase):
                     self.assertIn("Unable to load", result.stderr)
 
     def test_persistent_astra_role_loader_uses_installed_entry_and_complete_policy(self):
-        names = ["delegation-subagent.md", *SHARED, "delegation-astra.md"]
+        names = ["delegation-subagent.md", *SHARED, CARD]
         expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
         for name in ("astra-delegate", "project-design-reviewer"):
             with self.subTest(role=name), tempfile.TemporaryDirectory() as directory:
