@@ -1,8 +1,16 @@
 # 工作项 4 实现审查 · 2026-11-18
 
-**Changes required。** 当前实现有四项高严重度发现、一项中严重度发现。批准的[设计 v1](../spec.md) 要求 Pod 提前 Ready 时，控制 API 与同 Pod Envoy 业务入口都持续返回 503，直到初始配置和运行时初始化完成。[用户决定](../decision.md)
+**Changes required。当前待处理原第 2、3、4 项。** 初次审查按当时的工作项设计 v1 和下文绑定的源码快照进行。审查后用户确认源码 proposal 中的 Envoy 接流决定，并明确控制 API 在等待配置 Secret 时可以返回任何 HTTP 错误码。[当前设计 v2](../spec.md) · [用户决定](../decision.md)
 
-## 需要修正的行为
+## 审查后的处置与验证
+
+- **第 1 项撤回。** Envoy 可接收流量并按已有路由向 Running Sandbox 转发。工作项原合同与源码 proposal 的差异已按用户决定同步。
+- **第 2 项保留凭据日志问题。** 接流符合决策，但 `pkg/proxy/ext_proc.go:107` 在相应日志级别记录完整请求头。按 `pkg/proxy/AGENTS.md:18` 须保护其中凭据。修正日志内容即可保留 Envoy 接流。未核验现场日志。
+- **第 3 项确认有实际调度路径。** 用临时 Go 测试先把 SIGTERM 放入缓冲区，再放入成功结果，调用工作树中的 `awaitStartup`。1,000 次中 507 次返回 `startupCompleted` 且信号仍待消费，493 次返回 `startupSignaled`。前一分支在 `Run` 中会先写 `active=true` 再由退出协程关闭。实验验证了仲裁结果，没有向窗口内发送业务请求，次数不代表现场发生率。
+- **第 4 项确认可复现。** `--metrics-port=0`、memberlist 端口 7789 通过现有参数校验。实际 `proxy.Server.Run` 绑定回环地址后，对 7789 的 TCP 连接成功。随后实际 `MemberlistPeers.Start` 在同一地址返回 `bind: address already in use`。生产启动顺序会在这两步之间等待 Secret。此实验验证了本机端口与绑定行为，未创建 Pod。
+- **第 5 项撤回。** 等待 Secret 时，准入返回 503 和 tracing 先返回 400 均可拒绝控制 API 业务。proposal、参数帮助和准入注释已同步，业务和启停逻辑未改动。
+
+## 初次审查发现（设计 v1 与当时快照）
 
 | 严重度 | 发现、归因与修复验收条件 |
 | --- | --- |

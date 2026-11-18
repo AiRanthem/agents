@@ -14,4 +14,4 @@
 
 已完成工作项：[3-sandboxset-test-latency（修复 SandboxSet 有限等待引入的单测耗时回归）](../workitems/3-sandboxset-test-latency/requirement.md)。`fixes` 关联工作项 2。独立 [PR #1208](https://github.com/openkruise/agents/pull/1208) 已于 2026-11-12 合入 master，合并提交为 `2a13009e64e44da79a2b5b4de3eb3262fd6e6294`；用户明确要求关闭工作项，据此登记 `done`。生产合同与实现保持不变，CI 单测步骤由 21分45秒降至 14分44秒，单测、lint 与覆盖率门禁通过，详见[验证与交付记录](../workitems/3-sandboxset-test-latency/context.md)。未执行部署或本地清理。
 
-工作项 [4-sandbox-api-config-secret-wait](../workitems/4-sandbox-api-config-secret-wait/requirement.md) 已完成独立实现审查，结论为 **Changes required**。当前 11 文件暂存快照通过两组定向 race 测试，仍有 Envoy 准入、等待期凭据日志、终止竞争、memberlist 静态端口冲突和 tracing 错误码五项待修正。源码位于隔离工作树，等待修正后复审。[审查报告](../workitems/4-sandbox-api-config-secret-wait/records/code-review.md)
+工作项 [4-sandbox-api-config-secret-wait](../workitems/4-sandbox-api-config-secret-wait/requirement.md) 实现审查结论为 **Changes required**。用户确认 Envoy 可按已有路由接流，控制 API 等待配置 Secret 时可以返回任何 HTTP 错误码。原第 1、5 项撤回。第 2 项仍涉及凭据日志，第 3、4 项已分别验证启动仲裁与端口冲突。[复核记录](../workitems/4-sandbox-api-config-secret-wait/records/code-review.md) · [设计 v2](../workitems/4-sandbox-api-config-secret-wait/spec.md)

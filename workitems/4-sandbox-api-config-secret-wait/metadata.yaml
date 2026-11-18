@@ -18,19 +18,22 @@ documents:
   code_review: records/code-review.md
 design:
   file: spec.md
-  version: 1
-  state: implementable
-  registered_sha256: cd20e6999ea8e7c89b5210a48493bd3f94bb79d07530f365b53fc01447e8af03
-  requirement_sha256: 2877329af629aa4ca10efbb5aaf635ed9c9111cad75b625babd4f40e82bc0c47
+  version: 2
+  state: review-pending
+  registered_sha256: f190caa6ab67f5a441ae5304d25534bb49bee5c03d2ea5de42762bdc5b306a04
+  requirement_sha256: 557bca34fc62aa791c3a261eec588af6fe083cda4c8b1a2ed4373331386193c6
   authors:
   - Codex（前序设计会话主 agent /root，设计作者）
   source_baseline: d764256be82aa790582b4ce4af98997a5958a30a
   user_approval:
     status: approved
     source: decision.md
-    recorded_at: '2026-11-17'
-    quote: 确认
+    recorded_at: '2026-11-18'
   review:
+    status: not-performed
+    version: 2
+  previous_review:
+    version: 1
     status: pass
     authorization: user-requested
     authorization_source: decision.md
@@ -53,6 +56,9 @@ development:
   independent_review: changes-required
   review:
     mode: multi-agent
+    design_version: 1
+    open_findings: [2, 3, 4]
+    withdrawn_after_user_clarification: [1, 5]
     reviewed_at: '2026-11-18'
     lead: Codex /root
     facets: [envoy_review, lifecycle_review, api_quality_review]
