@@ -67,3 +67,7 @@
 - 构建 `go build -o /tmp/oka-ready-before-config-sandbox-manager ./cmd/sandbox-manager` 成功；直接运行该二进制 `--help` 被本机以退出码 137 终止，无输出，提权重复结果一致。`codesign --verify --verbose` 验证有效，尚不能确认该输出路径的系统终止原因。
 - 随后在最终源码工作树运行 `go run ./cmd/sandbox-manager --help` 成功（启用 pipefail 并筛选帮助输出），确认 `--ready-before-config` 及其 Secret 适用范围已注册，默认关闭。Go 临时构建路径下的 CLI 启动验证有效；上述独立输出路径的异常没有被归因为代码缺陷，也没有执行普通业务启动或部署。
 - 独立代码审查未执行。没有执行真实 Envoy、双容器 Ready、滚动替换、具体发布系统、集群 E2E、部署或人工验收。本机无可用 Envoy/容器运行设施，协议单测不能代替这些现场结果。
+
+## 2026-11-18 独立实现审查
+
+主审及三名独立专项审查者审查了当前 11 个已暂存文件，结论为 **Changes required**。与上一节的 12 文件实现快照相比，本轮以不同的完整 diff 指纹重新验证。两批定向 race 测试均通过。Envoy 准入、等待期请求头日志、终止信号与首次开放的竞争、静态端口冲突和 tracing 错误码仍需修正。审查对象、源码行号、验收条件及运行命令见[审查报告](records/code-review.md)。
