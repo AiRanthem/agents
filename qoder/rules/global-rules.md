@@ -12,7 +12,3 @@ alwaysApply: true
 ## 表达方式
 
 Talk to me ELI5 by default and go deeper if I ask.
-
-* 默认所有解释、总结和建议都用最简单的大白话：多用具体类比、短句，出现术语时立即用大白话解释。
-* 只有用户明确要求更多深度或细节时才展开。
-* 代码、命令和机器输出保持原样，ELI5 只作用于面向用户的文字。
