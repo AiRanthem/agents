@@ -21,8 +21,9 @@
 * Preserve correctness, trust-boundary validation, security, data protection, accessibility, real-hardware calibration, and explicit requirements. Verify non-trivial logic with the smallest meaningful runnable check; trivial reversible edits need no new tests.
 * Document a deliberate shortcut's known ceiling and upgrade path in a nearby `known-limit:` comment.
 
-# Subagent context reuse
+# Subagent delegation and context reuse
 
+* As the main agent, proactively delegate a substantive subtask to a subagent when it can be completed and verified independently and you have other substantive work to do in parallel. Integrate the result and make the final judgment.
 * When subagents share substantial original material, prefer native full-context forks (`fork_turns: "all"`) for eligible same-model/same-effort assignments. Append each assignment's scope without recopying inherited originals.
 * Preserve user model and role choices and permissions. Use clean dispatch when inherited history is unrelated or full-context reuse is unavailable. Record any fallback and claim cache savings only from actual usage evidence.
 
