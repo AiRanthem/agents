@@ -1,31 +1,34 @@
 # Qoder 配置安装与更新
 
-本目录维护 Qoder 的自主阶段角色、会话身份 hook、CLI status line 和[自主推进适配](AUTONOMY.md)。
-共享 skills 按 [`skills/INSTALL.md`](../skills/INSTALL.md) 安装为 `~/.agents/skills/<name>`
-的独立软链接；Qoder 在用户级直接发现这些链接（`qoder skills list` 的 Location 可
-核实），本目录不在 `~/.qoder/skills` 重复安装。本目录不维护主代理规则或 subagent
-委派路由。
+本目录维护 Qoder 的用户级全局规则、自主阶段角色、会话身份 hook、CLI status line
+和[自主推进适配](AUTONOMY.md)。共享 skills 按 [`skills/INSTALL.md`](../skills/INSTALL.md)
+安装为 `~/.agents/skills/<name>` 的独立软链接；Qoder 在用户级直接发现这些链接
+（`qoder skills list` 的 Location 可核实），本目录不在 `~/.qoder/skills` 重复安装。
+本目录不维护 subagent 委派路由。
 
 ## 安装
 
 1. 读取仓库根目录的 `AGENTS.md`，并读取维护当日与 Qoder Subagents、Skills、Hooks、Status Bar 和模型选择相关的官方文档（[Subagent](https://docs.qoder.com/cli/subagent.md)、[Skills](https://docs.qoder.com/cli/Skills.md)、[Hooks](https://docs.qoder.com/cli/hooks.md)、[Settings](https://docs.qoder.com/cli/settings.md)、[Model](https://docs.qoder.com/cli/model.md)）。
-2. 解析本仓库的绝对路径，并确保 `~/.qoder/agents` 与 `~/.qoder/hooks` 存在。
-3. 使用 `find qoder/agents -maxdepth 1 -name '*.md'` 发现本目录收录的角色模板，并校验每个文件 frontmatter 的 `name` 与文件名一致、`model` 与 `effort` 非空、`maxTurns` 为正整数。将每个 `~/.qoder/agents/<name>.md` 安装为与仓库内容一致的普通文件：Qoder 的 agent 发现不跟随软链接（2026-10-19 本机实测），角色不得安装为链接。现存目标为指向本仓库对应源文件的软链接时，以同内容普通文件替换该链接；内容一致的普通文件不改。已有目标不同且包含仓库未收录内容时，先展示准确差异并取得用户决定。保留 `~/.qoder/agents` 中仓库未收录的其他条目（如个人 agents）。
-4. 清理时只移除可确认由本仓库管理且源文件已删除的目标；无法确认归属的普通文件保留并报告。移除指向本仓库 `qoder/agents/` 的遗留角色软链接。保留其余无关文件和软链接。
-5. 将 `statusline.sh` 与 `statusline-fmt-check.sh` 安装为 `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的绝对软链接，保留 `~/.qoder` 中的无关文件。目标已正确链接时不修改；目标是内容已由本目录完整收录的普通文件时替换为软链接；目标包含仓库尚未收录的内容时，先展示准确差异并取得用户决定。确认本目录两个脚本可执行。
-6. 读取 `~/.qoder/settings.json` 与本目录的 `settings-statusline.json`，将后者作为 `statusLine` 键写入目标并覆盖同名键。以 `statusLine.command` 引用 `~/.qoder/statusline.sh` 识别本仓库的 status line：不存在时写入 `statusLine`，存在时更新为 `settings-statusline.json` 的完整内容。保留目标中仓库未列出的其他键。写入前用 JSON 解析器验证完整结果。
-7. 读取 `~/.qoder/settings.json` 的 `agents.overrides`。收录角色的 `model`、`effort` 与现有显式 `maxTurns` 以角色 frontmatter 为唯一事实来源；override 优先级更高，因此本步只核对不写入。运行 `python3 <dev-kit-root>/qoder/host.py check` 核对其报告中的 override 缺口；`modelConfig.model`（与模板相同的裸模型 ID 也匹配）、`runConfig.maxTurns` 或其他已支持的模型配置覆盖与模板冲突时，展示准确差异并取得用户决定，不静默改写。`enabled: false` 或实际工具限制使所需角色不可用时报告能力缺口，保留这些设置；不因 override 列出 Agent 就额外拒绝配置。保留其他字段和未收录角色的整个条目。当前项目、local 与 `--settings` 可能覆盖用户设置，按实际运行来源另行核对；磁盘 helper 的覆盖范围以其报告为准。
-8. 清理 `~/.qoder` 顶层：删除解析目标位于本目录、但文件名不属于本目录当前收录 status line 文件的软链接；删除文件名匹配 `statusline*.sh`、不属于本目录当前收录名称、且内容已由本目录 `statusline.sh` 或 `statusline-fmt-check.sh` 完整收录的普通文件。无法确认内容归属时展示差异并取得用户决定。保留其余无关文件和软链接。
-9. 运行 `qoder --list-models`，确认固定模型 ID `qmodel_38max`（Qwen3.8-Max）与 `dfmodel`（DeepSeek-Flash）当前可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)和当前参数面板确认二者分别支持 `xhigh` 与 `max` effort。显示名变化不构成自行换型授权；不支持时报告具体缺口，不换用其他模型或档位。
+2. 解析本仓库的绝对路径，并确保 `~/.qoder/agents`、`~/.qoder/hooks` 与 `~/.qoder/rules` 存在。
+3. 使用 `find qoder/rules -maxdepth 1 -name '*.md'` 发现本目录收录的全局规则。将每个 `~/.qoder/rules/<name>` 创建或更新为指向仓库对应文件的绝对软链接；目标是内容已由仓库完整收录的普通文件时替换为该链接，目标包含仓库尚未收录的内容时先展示准确差异并取得用户决定。清理 `~/.qoder/rules`：删除解析目标位于本仓库 `qoder/rules/` 内、但文件名不属于当前收录规则的软链接；删除与已收录规则内容相同、但文件名不在收录列表中的普通文件，避免同一规则被加载两次。保留其余无关文件和软链接。
+4. 使用 `find qoder/agents -maxdepth 1 -name '*.md'` 发现本目录收录的角色模板，并校验每个文件 frontmatter 的 `name` 与文件名一致、`model` 与 `effort` 非空、`maxTurns` 为正整数。将每个 `~/.qoder/agents/<name>.md` 安装为与仓库内容一致的普通文件：Qoder 的 agent 发现不跟随软链接（2026-10-19 本机实测），角色不得安装为链接。现存目标为指向本仓库对应源文件的软链接时，以同内容普通文件替换该链接；内容一致的普通文件不改。已有目标不同且包含仓库未收录内容时，先展示准确差异并取得用户决定。保留 `~/.qoder/agents` 中仓库未收录的其他条目（如个人 agents）。
+5. 清理时只移除可确认由本仓库管理且源文件已删除的目标；无法确认归属的普通文件保留并报告。移除指向本仓库 `qoder/agents/` 的遗留角色软链接。保留其余无关文件和软链接。
+6. 将 `statusline.sh` 与 `statusline-fmt-check.sh` 安装为 `~/.qoder/statusline.sh` 与 `~/.qoder/statusline-fmt-check.sh` 的绝对软链接，保留 `~/.qoder` 中的无关文件。目标已正确链接时不修改；目标是内容已由本目录完整收录的普通文件时替换为软链接；目标包含仓库尚未收录的内容时，先展示准确差异并取得用户决定。确认本目录两个脚本可执行。
+7. 读取 `~/.qoder/settings.json` 与本目录的 `settings-statusline.json`，将后者作为 `statusLine` 键写入目标并覆盖同名键。以 `statusLine.command` 引用 `~/.qoder/statusline.sh` 识别本仓库的 status line：不存在时写入 `statusLine`，存在时更新为 `settings-statusline.json` 的完整内容。保留目标中仓库未列出的其他键。写入前用 JSON 解析器验证完整结果。
+8. 读取 `~/.qoder/settings.json` 的 `agents.overrides`。收录角色的 `model`、`effort` 与现有显式 `maxTurns` 以角色 frontmatter 为唯一事实来源；override 优先级更高，因此本步只核对不写入。运行 `python3 <dev-kit-root>/qoder/host.py check` 核对其报告中的 override 缺口；`modelConfig.model`（与模板相同的裸模型 ID 也匹配）、`runConfig.maxTurns` 或其他已支持的模型配置覆盖与模板冲突时，展示准确差异并取得用户决定，不静默改写。`enabled: false` 或实际工具限制使所需角色不可用时报告能力缺口，保留这些设置；不因 override 列出 Agent 就额外拒绝配置。保留其他字段和未收录角色的整个条目。当前项目、local 与 `--settings` 可能覆盖用户设置，按实际运行来源另行核对；磁盘 helper 的覆盖范围以其报告为准。
+9. 清理 `~/.qoder` 顶层：删除解析目标位于本目录、但文件名不属于本目录当前收录 status line 文件的软链接；删除文件名匹配 `statusline*.sh`、不属于本目录当前收录名称、且内容已由本目录 `statusline.sh` 或 `statusline-fmt-check.sh` 完整收录的普通文件。无法确认内容归属时展示差异并取得用户决定。保留其余无关文件和软链接。
+10. 运行 `qoder --list-models`，确认固定模型 ID `qmodel_38max`（Qwen3.8-Max）与 `dfmodel`（DeepSeek-Flash）当前可选择；对照[官方模型文档](https://docs.qoder.com/cli/model.md)和当前参数面板确认二者分别支持 `xhigh` 与 `max` effort。显示名变化不构成自行换型授权；不支持时报告具体缺口，不换用其他模型或档位。
 
 ## 更新
 
-仓库更新后重新执行安装流程。status line 软链接直接使用仓库版本；角色是普通文件，仓库更新后须按安装流程重新复制为与仓库一致的内容；settings.json 中的 `statusLine` 键在内容变化后重新合并，`agents.overrides` 只核对不写入。新增角色补装；移除角色只清理可确认由本仓库管理且源文件已删除的目标。`statusLine` 不需重启即生效；已打开的会话需要 `/agents reload` 或新会话才能加载角色变化，包含 frontmatter `maxTurns` 的变化。
+仓库更新后重新执行安装流程。全局规则与 status line 的软链接直接使用仓库版本；角色是普通文件，仓库更新后须按安装流程重新复制为与仓库一致的内容；settings.json 中的 `statusLine` 键在内容变化后重新合并，`agents.overrides` 只核对不写入。新增规则或角色补装；移除规则或角色只清理可确认由本仓库管理且源文件已删除的目标。全局规则在会话开始时加载，仓库更新后在新会话中生效；`statusLine` 不需重启即生效；已打开的会话需要 `/agents reload` 或新会话才能加载角色变化，包含 frontmatter `maxTurns` 的变化。
 
 ## 验证
 
 确认以下结果：
 
+* `~/.qoder/rules` 中每个本目录收录的 `.md` 都是指向本目录对应文件的绝对软链接，且可读取。
+* `~/.qoder/rules` 中没有解析目标位于本仓库 `qoder/rules/` 内、但文件名不属于当前收录规则的软链接，也没有与本目录已收录规则内容相同、但文件名不同的 `.md`。
 * `~/.qoder/agents` 中每个本目录收录的角色都是与仓库内容一致的普通文件，frontmatter 可解析且 `name` 与文件名一致。
 * `~/.qoder/agents` 中没有指向本仓库 `qoder/agents/` 的遗留软链接；无关条目未被改动。
 * `~/.qoder/settings.json` 可被 JSON 解析，保留全部无关配置，且角色配置与用户选择一致。
