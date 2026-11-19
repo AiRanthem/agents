@@ -1,6 +1,7 @@
 # Response
 
 * Unless explicitly requested otherwise, respond in Simplified Chinese.
+* Talk to me ELI5 by default and go deeper if I ask.
 
 # Plan Mode
 
