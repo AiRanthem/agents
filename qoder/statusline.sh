@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # Qoder status line: model + reasoning effort and ctx usage on the left,
-# credits (used/total + bar + refresh countdown) right-aligned to the terminal
+# credits (left/total + bar + refresh countdown) right-aligned to the terminal
 # edge. The countdown targets the next 23rd 00:00 GMT+8 (monthly quota reset).
 # Receives session JSON on stdin; prints a single line.
+#
+# The line is laid out against the real terminal width, measured by walking the
+# process ancestry to the tty the CLI runs on. The two progress bars are elastic:
+# they start at eight cells and shrink when the line does not fit, the context
+# bar giving way before the credits bar. If that is still not enough, the
+# countdown goes first, then the context percentage, then the context numbers,
+# and the right side is finally cut on a word boundary. The numbers are never
+# dropped, and the line never reaches past QODER_STATUSLINE_RIGHT_MARGIN
+# (default 2) columns from the right edge.
 #
 # Reasoning effort and the context window are session state, read from the last
 # runtime-config record qodercli appends to this session's transcript at startup
@@ -13,14 +22,20 @@
 # deliberately not consulted: it holds global defaults, so it reports whatever
 # session last ran /effort rather than what this session is actually using.
 #
-# Credits tab shows "used/total". Total = personal quota (plan + add-on), the
-# team/org resource package, and all dedicated resource packages. Prefer the
-# live `.credits` object supplied on stdin by qodercli; unlike total_remaining,
-# its component fields include dedicated packages and expose both used/total.
+# Credits tab shows the account balance: credits left out of the account total
+# (e.g. "credits left 12795/50000"). The account scope is the plan quota
+# (user_quota), the add-on quota (add_on_quota) and the team/org resource
+# package (org_resource_package); model-scoped dedicated resource packages are
+# excluded, matching the CLI's own total_remaining. The live `.credits` object
+# supplied on stdin by qodercli is authoritative; cost.total_credits is only
+# this session's spend and is labelled as such when no account data exists.
 # For older CLI versions or unavailable live quota data, fall back to
 # ~/.qoder/quota-cache.json (the API response shape of GET /api/v2/quota/usage),
-# refreshed at most every $QODER_QUOTA_TTL seconds (default 60). The refresh
-# runs in a detached background child, so renders never block on the network.
+# refreshed at most every $QODER_QUOTA_TTL seconds (default 60) and used only
+# while it is younger than $QODER_QUOTA_MAX_AGE seconds (default 86400), so a
+# stale snapshot never reports a quota total the account no longer has.
+# The refresh runs in a detached background child, so renders never block on
+# the network.
 # Refresh source, in order of preference:
 #   1. PAT available (env QODER_PAT or first line of ~/.qoder/.pat): exchange it
 #      for a short-lived token and call the API directly.
@@ -32,31 +47,62 @@ IFS= read -r -d '' input || true
 
 # ${#var} counts bytes under a C/empty locale; the bars and the ↻ below are
 # multibyte, so pin a UTF-8 ctype or the right-alignment math falls apart.
+# Probe it: a machine without en_US.UTF-8 silently falls back to the C locale,
+# where every width below would be counted in bytes.
 export LC_ALL=en_US.UTF-8
+_lcprobe='▓'
+if [ "${#_lcprobe}" -ne 1 ]; then
+  for _lc in zh_CN.UTF-8 C.UTF-8 en_US.utf8; do
+    LC_ALL=$_lc; export LC_ALL
+    [ "${#_lcprobe}" -eq 1 ] && break
+  done
+fi
 
 if ! command -v jq >/dev/null 2>&1; then
   printf 'qoder\n'
   exit 0
 fi
 
+# is_num: true when $1 is a non-empty run of digits
+is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+# --- account credits scope, shared by the live stdin payload and the on-disk
+# quota cache so both report the same balance.
+# Account scope = plan quota (user_quota) + add-on quota (add_on_quota) +
+# team/org resource package (org_resource_package). Model-scoped dedicated
+# resource packages are excluded on purpose: the CLI's total_remaining sums
+# exactly these three components.
+# Both naming styles are accepted: the live .credits object uses snake_case,
+# the cached API response uses camelCase.
+acct_fn='
+  def num: (. // 0) | tonumber? // 0;
+  def obj: if type == "object" then . else {} end;
+  def acct:
+    obj as $c
+    | ($c.user_quota // $c.userQuota // {}) as $p
+    | ($c.add_on_quota // $c.addOnQuota // {}) as $a
+    | ($c.org_resource_package // $c.orgResourcePackage
+        // $c.shared_quota // $c.sharedQuota // {}) as $g
+    | {
+        rem: (($p.remaining | num) + ($a.remaining | num) + ($g.remaining | num)),
+        tot: (($p.total | num) + ($a.total | num)
+              + (if ($g.cap | num) > 0 then ($g.cap | num)
+                 else (($g.used | num) + ($g.remaining | num)) end))
+      };
+  def credits_acct:
+    obj as $c
+    | ($c | acct) as $x
+    | (if ($c | has("total_remaining"))
+       then ($c.total_remaining | num) else $x.rem end) as $rem
+    | $x.tot as $tot
+    | { rem: $rem, tot: $tot };
+'
+
 # --- parse the session JSON in one jq fork (was ~10 field-level forks). \001
 # separator: IFS=tab would collapse empty fields and shift the rest.
-# transcript_path goes last: it may hold spaces, but read stops splitting at the
-# final field.
-parsed=$(printf '%s' "$input" | jq -r '
-    def num: (. // 0) | tonumber? // 0;
-    def quota_pair:
-      (.credits // {}) as $c
-      | ($c.user_quota // $c.userQuota // {}) as $p
-      | ($c.add_on_quota // $c.addOnQuota // {}) as $a
-      | ($c.org_resource_package // $c.orgResourcePackage // {}) as $o
-      | ($c.dedicated_resource_packages // $c.dedicatedResourcePackages // []) as $d
-      | (($p.used | num) + ($a.used | num) + ($o.used | num)
-          + ($d | map(.used | num) | add // 0)) as $used
-      | (($p.total | num) + ($a.total | num)
-          + (($o.used | num) + ($o.remaining | num))
-          + ($d | map((.total // ((.used | num) + (.remaining | num))) | num) | add // 0)) as $total
-      | if $total > 0 then "\($used) \($total)" else "" end;
+# The credits fields carry the account balance (remaining/total), not the
+# session spend; see acct_fn above.
+main_prog="${acct_fn}"'
     [ .model.display_name // .model.id // "qoder",
       (.context_window
         | if (.used_percentage != null) and ((.context_window_size // 0) > 0)
@@ -66,10 +112,32 @@ parsed=$(printf '%s' "$input" | jq -r '
       (.context_window.used_percentage // ""),
       (.cost.total_credits // ""),
       (.transcript_path // ""),
-      quota_pair ]
-    | map(tostring) | join("\u0001")' 2>/dev/null)
-IFS=$'\001' read -r model used_tokens ctx_size used_pct session_credits \
-  transcript_path live_quota_pair <<< "$parsed"
+      (.credits | credits_acct | "\(.rem) \(.tot)"),
+      ((.credits.is_quota_exceeded // false) | tostring)
+    ]
+    | map(tostring) | join("\u0001")'
+parsed=$(printf '%s' "$input" | jq -r "$main_prog" 2>/dev/null)
+# split_fields: split $1 on the \001 separator into the FLD array. bash 3.2's
+# read ignores a control character in IFS and hands back the whole record, and
+# its ${var%%$'\001'*} drops the glob after the control character, so the
+# split is done with parameter expansion over a pattern held in a variable.
+sep_char=$'\001'
+sep_tail=$'\001*'
+split_fields() {
+  local rest=$1
+  FLD=()
+  while :; do
+    case $rest in
+      *${sep_char}*) FLD+=("${rest%%$sep_tail}"); rest="${rest#*$sep_char}" ;;
+      *) FLD+=("$rest"); break ;;
+    esac
+    [ -z "$rest" ] && { FLD+=(""); break; }
+  done
+}
+split_fields "$parsed"
+model=${FLD[0]}; used_tokens=${FLD[1]}; ctx_size=${FLD[2]}; used_pct=${FLD[3]}
+session_credits=${FLD[4]}; transcript_path=${FLD[5]}
+live_credits_pair=${FLD[6]}; quota_exceeded=${FLD[7]}
 
 # --- reasoning effort and the context window for *this session*: qodercli
 # appends a runtime-config record to the transcript at startup and on every
@@ -78,7 +146,7 @@ IFS=$'\001' read -r model used_tokens ctx_size used_pct session_credits \
 # LC_ALL=C keeps awk on the byte path for a scan that never needs UTF-8 ctype.
 effort=""; rc_ctx=""; rc_enabled="true"
 if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
-  IFS=$'\001' read -r effort rc_enabled rc_ctx < <(LC_ALL=C awk '
+  rc_record=$(LC_ALL=C awk '
     function val(line, key) {
       if (match(line, "\"" key "\":\"[^\"]*\""))
         return substr(line, RSTART + length(key) + 4, RLENGTH - length(key) - 5)
@@ -92,6 +160,8 @@ if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
       printf "%s\001%s\001%s\n", val(line, "reasoningEffort"),
         (line ~ /"enabled":false/ ? "false" : "true"), val(line, "contextWindow")
     }' "$transcript_path" 2>/dev/null)
+  split_fields "$rc_record"
+  effort=${FLD[0]}; rc_enabled=${FLD[1]:-true}; rc_ctx=${FLD[2]}
   # reasoning explicitly turned off for this session means no effort is shown
   [ "$rc_enabled" = "false" ] && effort=""
 fi
@@ -101,12 +171,14 @@ if [ -z "$used_tokens" ] || [ -z "$ctx_size" ]; then
   if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
     last=$(grep '"usage"' "$transcript_path" 2>/dev/null | tail -n 1)
     if [ -n "$last" ]; then
-      IFS=$'\001' read -r t s < <(printf '%s' "$last" | jq -r '
+      usage_pair=$(printf '%s' "$last" | jq -r '
         (.message.usage // .usage // {}) as $u
         | [(($u.input_tokens // 0) + ($u.cache_read_input_tokens // 0)
             + ($u.cache_creation_input_tokens // 0)),
            ($u.context_window_size // "")]
         | map(tostring) | join("\u0001")' 2>/dev/null)
+      split_fields "$usage_pair"
+      t=${FLD[0]}; s=${FLD[1]}
       [ -n "$t" ] && [ "$t" != "0" ] && [ -z "$used_tokens" ] && used_tokens=$t
       [ -n "$s" ] && [ -z "$ctx_size" ] && ctx_size=$s
     fi
@@ -147,26 +219,86 @@ fmtc() {
   else printf '%d.%d' $((t / 10)) $((t % 10)); fi
 }
 
-# progress bar: "▓▓░░░░░░ 15%" from used/total; empty output when total is
-# missing or 0 (caller then shows numbers only). Decimal inputs work via _deci.
-bar() {
-  local u t p f s i
-  _deci "${1:-0}"; u=$_DECI
-  _deci "${2:-0}"; t=$_DECI
-  [ "$t" -le 0 ] && return 0
-  p=$(( (u * 100 + t / 2) / t )); [ "$p" -gt 100 ] && p=100
-  f=$(( (p * 8 + 50) / 100 )); [ "$f" -gt 8 ] && f=8
-  s=""
-  for i in 0 1 2 3 4 5 6 7; do
-    if [ "$i" -lt "$f" ]; then s="${s}▓"; else s="${s}░"; fi
+# dwidth: display width of $1 in terminal columns, left in DW. ${#s} counts
+# characters, which is what the TUI's string-width reports for the
+# ambiguous-width glyphs used below (▓ ░ · are one column there), but a CJK
+# character is one character and two columns. ASCII is one column, anything
+# else is charged two. printf '%d' "'c" is a builtin and yields the
+# character's value (the codepoint on bash 5, the leading byte on bash 3.2);
+# both compare the same way against the 128 ASCII boundary, so no fork and no
+# locale juggling is needed.
+dwidth() {
+  local s=$1 w=0 i n c b
+  n=${#s}; i=0
+  while [ "$i" -lt "$n" ]; do
+    c=${s:$i:1}
+    printf -v b '%d' "'$c"
+    [ "$b" -lt 0 ] && b=$(( b + 256 )) # bash 3.2 reports bytes as signed
+    if [ "$b" -lt 128 ]; then w=$(( w + 1 )); else w=$(( w + 2 )); fi
+    i=$(( i + 1 ))
   done
-  printf '%s %d%%' "$s" "$p"
+  DW=$w
 }
 
-# --- credits quota: used/total incl. team (org) resource package ---
+# dcut: the prefix of $1 that fits in $2 columns, left in DCUT. Same width
+# rule as dwidth, so a CJK model name is cut by columns and not by characters.
+dcut() {
+  local s=$1 lim=$2 w=0 i n c b cw
+  n=${#s}; i=0; DCUT=""
+  while [ "$i" -lt "$n" ]; do
+    c=${s:$i:1}
+    printf -v b '%d' "'$c"
+    [ "$b" -lt 0 ] && b=$(( b + 256 ))
+    if [ "$b" -lt 128 ]; then cw=1; else cw=2; fi
+    [ $(( w + cw )) -gt "$lim" ] && break
+    DCUT="${DCUT}${c}"; w=$(( w + cw )); i=$(( i + 1 ))
+  done
+}
+
+# progress bar: "▓▓░░░░░░ 15%" from used/total; empty output when total is
+# missing or 0 (caller then shows numbers only). Decimal inputs work via _deci.
+# bar_pct and bar_cells split the same numbers apart so the renderer can size
+# the bar to the space it has; both leave their result in a global instead of
+# printing, which keeps the per-render fork count down.
+bar_pct() { # sets BAR_PCT
+  local u t p
+  _deci "${1:-0}"; u=$_DECI
+  _deci "${2:-0}"; t=$_DECI
+  BAR_PCT=""
+  [ "$t" -le 0 ] && return 0
+  p=$(( (u * 100 + t / 2) / t )); [ "$p" -gt 100 ] && p=100
+  BAR_PCT="$p"
+}
+bar_cells() { # sets BAR_CELLS
+  local u t w p f s i
+  _deci "${1:-0}"; u=$_DECI
+  _deci "${2:-0}"; t=$_DECI
+  w=${3:-8}
+  BAR_CELLS=""
+  [ "$w" -le 0 ] && return 0
+  [ "$t" -le 0 ] && return 0
+  p=$(( (u * 100 + t / 2) / t )); [ "$p" -gt 100 ] && p=100
+  f=$(( (p * w + 50) / 100 )); [ "$f" -gt "$w" ] && f=$w
+  s=""; i=0
+  while [ "$i" -lt "$w" ]; do
+    if [ "$i" -lt "$f" ]; then s="${s}▓"; else s="${s}░"; fi
+    i=$(( i + 1 ))
+  done
+  BAR_CELLS="$s"
+}
+bar() { # combined "cells pct" form, the shape the format self-check compares
+  local u="${1:-0}" t="${2:-0}" w="${3:-8}"
+  bar_pct "$u" "$t"
+  [ -n "$BAR_PCT" ] || return 0
+  bar_cells "$u" "$t" "$w"
+  printf '%s %d%%' "$BAR_CELLS" "$BAR_PCT"
+}
+
+# --- credits quota: account balance (left/total) incl. team (org) package ---
 quota_cache="$HOME/.qoder/quota-cache.json"
 due_file="$HOME/.qoder/tmp/quota-refresh.due"
 quota_ttl="${QODER_QUOTA_TTL:-60}"
+quota_max_age="${QODER_QUOTA_MAX_AGE:-86400}"
 openapi_base="${QODER_OPENAPI_BASE:-https://openapi.qoder.sh}"
 
 pat="${QODER_PAT:-}"
@@ -228,24 +360,20 @@ refresh_quota_from_logs() {
   return 1
 }
 
-# used/total include plan, add-on, org, and every dedicated resource package.
-pair_prog='
-  def num: (. // 0) | tonumber? // 0;
-  (.user_quota // .userQuota // {}) as $p
-  | (.add_on_quota // .addOnQuota // {}) as $a
-  | (.org_resource_package // .orgResourcePackage // .shared_quota // .sharedQuota // {}) as $o
-  | (.dedicated_resource_packages // .dedicatedResourcePackages // []) as $d
-  | (($p.used | num) + ($a.used | num) + ($o.used | num)
-      + ($d | map(.used | num) | add // 0)) as $used
-  | (($p.total | num) + ($a.total | num) + ($o.used | num) + ($o.remaining | num)
-      + ($d | map((.total // ((.used | num) + (.remaining | num))) | num) | add // 0)) as $total
-  | if $total > 0 then "\($used) \($total)" else empty end
-'
+# Account pair "remaining total" from a quota payload (the live .credits
+# object or the cached API response): same account scope on both paths.
+pair_prog="${acct_fn}"'
+  credits_acct | "\(.rem) \(.tot)"'
 
+# Sidecar: "v2 <remaining> <total> <cache mtime>". The mtime carries the
+# freshness of the snapshot so a render can reject a stale cache without
+# stat-ing the cache file again.
 write_pair_sidecar() { # recompute the derived pair after a cache update
-  local pair
+  local pair mt
   pair=$(jq -r "$pair_prog" "$quota_cache" 2>/dev/null)
-  printf '%s\n' "${pair:--}" > "$quota_cache.pair.tmp" 2>/dev/null \
+  mt=$(file_mtime "$quota_cache")
+  case $mt in ''|*[!0-9]*) mt=0 ;; esac
+  printf 'v2 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
     && mv "$quota_cache.pair.tmp" "$quota_cache.pair" 2>/dev/null
 }
 
@@ -276,57 +404,67 @@ maybe_refresh_quota() {
 }
 maybe_refresh_quota
 
-# Prefer the live quota pair parsed from stdin. For older CLI versions, read
-# the derived cache pair (builtins only); the jq fallback also seeds it. "-"
-# means "computed, but no usable quota".
-quota_pair=$live_quota_pair
-if [ -z "$quota_pair" ] && [ -r "$quota_cache.pair" ]; then
-  IFS= read -r quota_pair < "$quota_cache.pair"
-  [ "$quota_pair" = "-" ] && quota_pair=""
-elif [ -z "$quota_pair" ] && [ -r "$quota_cache" ]; then
-  quota_pair=$(jq -r "$pair_prog" "$quota_cache" 2>/dev/null)
-  printf '%s\n' "${quota_pair:--}" > "$quota_cache.pair.tmp" 2>/dev/null \
-    && mv "$quota_cache.pair.tmp" "$quota_cache.pair" 2>/dev/null
+# Prefer the live account balance parsed from stdin. For older CLI versions
+# (or when the quota service did not answer), fall back to the cached API
+# response, but only while it is fresh: an old snapshot would report a quota
+# total the account no longer has.
+q_rem="${live_credits_pair%% *}"
+q_tot="${live_credits_pair##* }"
+if [ "$q_rem" = "0" ] && [ "$q_tot" = "0" ]; then q_rem=""; q_tot=""; fi
+if [ -z "$q_rem" ] && [ -z "$q_tot" ] && [ -r "$quota_cache" ]; then
+  now=${EPOCHSECONDS:-} # bash >= 5 builtin; avoids a date fork
+  [ -n "$now" ] || now=$(date +%s)
+  side_ok=0
+  if [ -r "$quota_cache.pair" ]; then
+    IFS=' ' read -r s_tag s_rem s_tot s_mt < "$quota_cache.pair"
+    if [ "$s_tag" = "v2" ] && is_num "$s_rem" && is_num "$s_tot" && is_num "$s_mt" \
+       && [ $(( now - s_mt )) -ge 0 ] && [ $(( now - s_mt )) -le "$quota_max_age" ]; then
+      q_rem="$s_rem"; q_tot="$s_tot"; side_ok=1
+    fi
+  fi
+  if [ "$side_ok" -eq 0 ]; then
+    # sidecar missing, outdated or stale: recompute from the cache and let
+    # the cache mtime decide whether the snapshot is still usable
+    pair=$(jq -r "$pair_prog" "$quota_cache" 2>/dev/null)
+    mt=$(file_mtime "$quota_cache")
+    case $mt in ''|*[!0-9]*) mt=0 ;; esac
+    if [ "$mt" -gt 0 ] && [ $(( now - mt )) -ge 0 ] \
+       && [ $(( now - mt )) -le "$quota_max_age" ]; then
+      q_rem="${pair%% *}"; q_tot="${pair##* }"
+      printf 'v2 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
+        && mv "$quota_cache.pair.tmp" "$quota_cache.pair" 2>/dev/null
+    fi
+  fi
 fi
 
 # --- right-alignment helpers ---
-is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 # Terminal width: stdin is the piped session JSON, and the CLI spawns us
 # without a controlling tty — /dev/tty fails to open and tput prints the
 # terminfo default 80, not the real width. So climb the parent chain to the
 # nearest ancestor still attached to a real tty and query that device.
-# ponytail: the found tty is cached (re-validated with a live stty before
-# each use), so the ps climb (up to 8 forks) happens once per session, not
-# per render; stty output is parsed with the read builtin, no awk fork.
-# Ceiling: two sessions in different terminals thrash the cache; harmlessly
-# falls back to walking every time.
+# ponytail: one targeted ps per level (~4ms, a full-table ps costs ~100ms);
+# the chain resolves at the first or second level in practice. The device size
+# is re-read on every render, so a resized window is picked up immediately.
+# Ceiling: the chain is walked per render; a session whose ancestors carry no
+# tty at all falls back to tput/COLUMNS.
 term_cols() {
-  local c rows line tty pid i cache
-  cache="$HOME/.qoder/tmp/statusline-tty"
-  if [ -r "$cache" ]; then
-    IFS= read -r tty < "$cache"
-    if [ -n "$tty" ] && [ -e "/dev/$tty" ]; then
-      read -r rows c < <(stty size <"/dev/$tty" 2>/dev/null)
-      is_num "$c" && { printf '%s' "$c"; return; }
-    fi
-  fi
-  read -r rows c < <(stty size </dev/tty 2>/dev/null)
-  is_num "$c" && { printf '%s' "$c"; return; }
+  local c rows line tty pid i
+  read -r rows c < <(stty size 2>/dev/null </dev/tty)
+  is_num "$c" && [ "$c" -gt 0 ] && { printf '%s' "$c"; return; }
   pid=$PPID
   for i in 1 2 3 4 5 6 7 8; do
     is_num "$pid" && [ "$pid" -gt 1 ] || break
     line=$(ps -o tty= -o ppid= -p "$pid" 2>/dev/null)
     [ -n "$line" ] || break
-    tty=${line%% *}; pid=${line##* }
-    # tty is "?"/"??" when the process has none; /dev/<tty> test skips those
-    [ -e "/dev/$tty" ] || continue
+    # read, not string splitting: ps pads its columns, so the ppid would keep
+    # trailing blanks and fail the is_num test, ending the climb too early.
+    read -r tty pid <<<"$line"
+    is_num "$pid" || pid=0
+    case "$tty" in ''|'?'|'??') continue ;; esac
+    [ -c "/dev/$tty" ] || continue
     read -r rows c < <(stty size <"/dev/$tty" 2>/dev/null)
-    if is_num "$c"; then
-      mkdir -p "$HOME/.qoder/tmp" 2>/dev/null
-      printf '%s\n' "$tty" > "$cache" 2>/dev/null
-      printf '%s' "$c"; return
-    fi
+    if is_num "$c" && [ "$c" -gt 0 ]; then printf '%s' "$c"; return; fi
   done
   c=$(tput cols 2>/dev/null)
   is_num "$c" && [ "$c" -gt 0 ] && { printf '%s' "$c"; return; }
@@ -377,19 +515,24 @@ refresh_countdown() {
 # ponytail: soft truecolor/256 palette (was bright 35/33/32) so the bar blends
 # with a dark terminal instead of glaring. Ceiling: fixed colors, no theme support.
 purple=$'\033[38;2;136;176;255m'; yellow=$'\033[38;5;107m'; orange=$'\033[38;2;254;175;96m'
+red=$'\033[38;5;203m'
 gray=$'\033[38;5;240m'; reset=$'\033[0m'
 sep="${reset}${gray} · ${reset}"
 
-out=""; olen=0
-add() { # $1 = colored segment, $2 = its plain display width; " · " is 3 cols
-  if [ -n "$out" ]; then out="${out}${sep}$1"; olen=$((olen + 3 + $2))
-  else out="$1"; olen=$2; fi
-}
+cols=$(term_cols)
+# The TUI draws the footer inside a box that can be narrower than the terminal
+# itself, so keep two columns of slack on the right; override when the layout
+# changes.
+margin="${QODER_STATUSLINE_RIGHT_MARGIN:-2}"
+is_num "$margin" || margin=2
+avail=$(( cols - margin ))
+[ "$avail" -lt 1 ] && avail=1
 
+# --- pieces, plain text; the colour is applied once at the very end ---
 seg1="${model:-qoder}"
 [ -n "$effort" ] && seg1="${seg1} ${effort}"
-add "${purple}${seg1}${reset}" "${#seg1}"
 
+ctx_text=""; ctx_pct=""; ctx_u=""; ctx_t=""
 if [ -n "$used_tokens" ]; then
   # used_tokens is the current occupancy (derived from used_percentage, or the
   # last transcript usage record), not the session-cumulative total_input_tokens;
@@ -399,41 +542,154 @@ if [ -n "$used_tokens" ]; then
   else
     disp_used=$used_tokens
   fi
-  ctx_label="ctx $(fmt "$disp_used")"
-  [ -n "$ctx_size" ] && ctx_label="${ctx_label}/$(fmt "$ctx_size")"
-  b=$(bar "$disp_used" "${ctx_size:-0}")
-  [ -n "$b" ] && ctx_label="${ctx_label} ${b}"
-  add "${yellow}${ctx_label}${reset}" "${#ctx_label}"
+  ctx_text="ctx $(fmt "$disp_used")"
+  [ -n "$ctx_size" ] && ctx_text="${ctx_text}/$(fmt "$ctx_size")"
+  ctx_u="$disp_used"; ctx_t="${ctx_size:-0}"
+  bar_pct "$ctx_u" "$ctx_t"
+  [ -n "$BAR_PCT" ] && ctx_pct="${BAR_PCT}%"
 elif [ -n "$used_pct" ]; then
   is_num "$used_pct" && [ "$used_pct" -gt 100 ] && used_pct=100
-  ctx_label="ctx ${used_pct}%"
-  add "${yellow}${ctx_label}${reset}" "${#ctx_label}"
+  ctx_text="ctx ${used_pct}%"
 fi
 
-cred_label=""
-if [ -n "$quota_pair" ]; then
-  q_used="${quota_pair%% *}"; q_total="${quota_pair##* }"
-  cred_label="credits $(fmtc "$q_used")/$(fmtc "$q_total")"
-  b=$(bar "$q_used" "$q_total")
-  [ -n "$b" ] && cred_label="${cred_label} ${b}"
+# Credits tab: the account balance (left of the account total). The bar
+# fills with the share that is still available; a red segment marks an
+# exhausted quota.
+cred_text=""; cred_pct=""; cred_u=""; cred_t=""
+if is_num "$q_tot" && [ "$q_tot" -gt 0 ]; then
+  cred_text="credits left $(fmtc "$q_rem")/$(fmtc "$q_tot")"
+  cred_u="$q_rem"; cred_t="$q_tot"
+  bar_pct "$cred_u" "$cred_t"
+  [ -n "$BAR_PCT" ] && cred_pct="${BAR_PCT}%"
+elif is_num "$q_rem" && [ "$q_rem" -gt 0 ]; then
+  cred_text="credits left $(fmtc "$q_rem")"
 elif [ -n "$session_credits" ]; then
-  cred_label="credits $(fmtc "$session_credits")"
+  # no account data: only this session's spend is known, so say so
+  cred_text="credits spent $(fmtc "$session_credits")"
 fi
-if [ -n "$cred_label" ]; then
-  cdt=$(refresh_countdown)
-  [ -n "$cdt" ] && cred_label="${cred_label} ↻ ${cdt}"
+cdt=""
+[ -n "$cred_text" ] && cdt=$(refresh_countdown)
+
+# --- width budget: the bars are elastic, the numbers are not ---
+# The model name is the only text that can be non-ASCII, so it is measured
+# with dwidth; every other piece is ASCII or an ambiguous-width glyph the TUI
+# also counts as one column, where ${#} is the display width.
+dwidth "$seg1"; L0=$DW
+if [ -n "$ctx_text" ]; then
+  L0=$(( L0 + 3 + ${#ctx_text} ))
+  [ -n "$ctx_pct" ] && L0=$(( L0 + 1 + ${#ctx_pct} ))
+fi
+R0=0
+[ -n "$cred_text" ] && R0=${#cred_text}
+[ -n "$cred_pct" ] && R0=$(( R0 + 1 + ${#cred_pct} ))
+[ -n "$cdt" ] && R0=$(( R0 + 3 + ${#cdt} )) # " ↻ 3d 4h"
+join=0; [ -n "$cred_text" ] && join=1
+budget=$(( avail - join - L0 - R0 ))
+
+# Bars start at eight cells and give way in a fixed order: the context bar
+# first, the credits bar second. A bar that runs out of room disappears and
+# only its percentage is left.
+ctx_cells=0; cred_cells=0
+[ -n "$ctx_pct" ] && ctx_cells=8
+[ -n "$cred_pct" ] && cred_cells=8
+need=$(( ctx_cells + cred_cells ))
+if [ "$need" -gt "$budget" ]; then
+  over=$(( need - budget ))
+  if [ "$over" -ge "$ctx_cells" ]; then ctx_cells=0; else ctx_cells=$(( ctx_cells - over )); fi
+  need=$(( ctx_cells + cred_cells ))
+  if [ "$need" -gt "$budget" ]; then
+    cred_cells=$(( budget - ctx_cells ))
+    [ "$cred_cells" -lt 0 ] && cred_cells=0
+  fi
 fi
 
-if [ -n "$cred_label" ]; then
-  right="${orange}${cred_label}${reset}"
-  cols=$(term_cols)
-  # Right-alignment confirmed in the real TUI, so the default margin is 0;
-  # override via env if the footer layout changes.
-  margin="${QODER_STATUSLINE_RIGHT_MARGIN:-0}"
-  is_num "$margin" || margin=0
-  pad=$(( cols - margin - olen - ${#cred_label} ))
+# --- assemble, then drop what does not fit ---
+build_labels() {
+  ctx_label=""
+  if [ -n "$ctx_text" ]; then
+    ctx_label="$ctx_text"
+    if [ "$ctx_cells" -gt 0 ]; then
+      bar_cells "$ctx_u" "$ctx_t" "$ctx_cells"
+      ctx_label="${ctx_label} ${BAR_CELLS}"
+    fi
+    [ -n "$ctx_pct" ] && ctx_label="${ctx_label} ${ctx_pct}"
+  fi
+  left_label="$seg1"
+  [ -n "$ctx_label" ] && left_label="${left_label} · ${ctx_label}"
+  right_label=""
+  if [ -n "$cred_text" ]; then
+    right_label="$cred_text"
+    if [ "$cred_cells" -gt 0 ]; then
+      bar_cells "$cred_u" "$cred_t" "$cred_cells"
+      right_label="${right_label} ${BAR_CELLS}"
+    fi
+    [ -n "$cred_pct" ] && right_label="${right_label} ${cred_pct}"
+    [ -n "$cdt" ] && right_label="${right_label} ↻ ${cdt}"
+  fi
+}
+measure() { # width of the assembled line, left in W
+  dwidth "$seg1"; W=$DW
+  [ -n "$ctx_label" ] && W=$(( W + 3 + ${#ctx_label} ))
+  [ -n "$right_label" ] && { W=$(( W + 1 + ${#right_label} )); }
+}
+
+build_labels; measure
+while [ "$W" -gt "$avail" ]; do
+  # the countdown goes first, then the context percentage, then the context
+  # numbers; the credits numbers are the last thing that may go
+  if [ -n "$cdt" ]; then
+    cdt=""
+  elif [ -n "$ctx_pct" ]; then
+    ctx_pct=""; ctx_cells=0
+  elif [ -n "$ctx_text" ]; then
+    ctx_text=""; ctx_cells=0
+  else
+    break
+  fi
+  build_labels; measure
+done
+
+# last resort: cut the right side on a word boundary so nothing spills over
+if [ -n "$right_label" ] && [ "$W" -gt "$avail" ]; then
+  dwidth "$seg1"; keep=$(( avail - DW - 1 ))
+  [ "$keep" -lt 0 ] && keep=0
+  right_label="${right_label:0:$keep}"
+  # a trailing "*" after the quoted space: bash otherwise folds the closing
+  # parenthesis of the case pattern into the quoted word and never matches
+  case "$right_label" in
+    *" "*) right_label="${right_label% *}" ;;
+  esac
+  measure
+fi
+# the model name alone can still overflow a very narrow terminal
+if [ "$W" -gt "$avail" ]; then
+  ctx_text=""; ctx_pct=""; ctx_cells=0
+  build_labels; measure
+  if [ "$W" -gt "$avail" ]; then
+    dwidth "$seg1"
+    if [ "$DW" -gt "$avail" ]; then dcut "$seg1" "$avail"; seg1="$DCUT"; fi
+    build_labels; measure
+  fi
+fi
+
+left_out="${purple}${seg1}${reset}"
+[ -n "$ctx_label" ] && left_out="${left_out}${sep}${yellow}${ctx_label}${reset}"
+right_out=""
+if [ -n "$right_label" ]; then
+  if [ "$quota_exceeded" = "true" ]; then
+    right_out="${red}${right_label}${reset}"
+  else
+    right_out="${orange}${right_label}${reset}"
+  fi
+fi
+
+if [ -n "$right_out" ]; then
+  dwidth "$seg1"; lw=$DW
+  [ -n "$ctx_label" ] && lw=$(( lw + 3 + ${#ctx_label} ))
+  rw=${#right_label}
+  pad=$(( avail - lw - rw ))
   [ "$pad" -lt 1 ] && pad=1
-  printf '%s%*s%s\n' "$out" "$pad" '' "$right"
+  printf '%s%*s%s\n' "$left_out" "$pad" '' "$right_out"
 else
-  printf '%s\n' "$out"
+  printf '%s\n' "$left_out"
 fi
