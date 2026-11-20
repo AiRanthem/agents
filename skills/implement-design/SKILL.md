@@ -29,15 +29,11 @@ If evidence requires a contract correction, retain the failing scenario, violate
 
 ## Implement and self-review
 
-Apply governing code-quality criteria to the complete resulting diff against the task's integration baseline, including accumulated changes. Reuse suitable mechanisms; remove superseded task changes when that produces a smaller coherent result without sacrificing correctness, readability, ownership or maintainability.
+Read and apply the shared [code quality criteria](references/code-quality.md) throughout implementation.
 
 - Immediately after writing or modifying each function, self-review it before continuing. Stop when it satisfies the contract, is clear to read and has no evident unnecessary complexity.
-- Respect repository placement, naming, ownership and dependency direction. Explain reasons, invariants and non-obvious failure or compatibility behavior in comments.
 - Handle relevant errors, cancellation, cleanup, uncertain outcomes, partial failure and concurrency according to the contract.
-- Enforce each invariant at the boundary that owns it. Omit a repeated guard when every supported path already guarantees the condition at that point. Keep checks that protect an independent entry point or trust boundary, or detect a relevant state change.
-- Production code must serve a supported runtime path or contract. Never add or retain a production branch, API or helper solely to make a test pass. Exercise production behavior through supported entry points and keep test-only helpers and fixtures in test code.
-- Whenever you encounter dead code, including pre-existing code, remove it as soon as you confirm it is unused or unreachable. Account for supported configurations, runtime registration and external callers before deletion. Remove tests that exercise only the deleted code and preserve coverage for supported behavior.
-- Keep other cleanup, formatting, renaming, dependencies and generated changes within the task's scope. Add compatibility logic only for an established need supported by the approved contract or relevant evidence.
+- Remove superseded task changes. Whenever you confirm code is dead, remove it, including pre-existing code. Remove tests that exercise only the deleted behavior and preserve coverage for supported behavior. Keep other cleanup within the task's scope.
 
 ## Verify the agreed behavior
 
@@ -59,7 +55,7 @@ Do not automatically invoke an explicit-only review skill unless the user or app
 
 ## Inspect and hand off
 
-Check the final diff against the complete contract already in context; refresh changed or missing original inputs and required instruction reloads. Confirm per-function self-review and the removal of redundant guards, test-only production paths and any dead code found. Check required behavior, non-goals, simplicity, stale comments, generated outputs, dependencies and final verification evidence. Report concisely in the user's language:
+Check the final diff against the approved contract and shared code quality criteria. Refresh changed or missing original inputs and required instruction reloads. Confirm per-function self-review, required behavior, non-goals, comments, generated outputs, dependencies and final verification evidence. Report concisely in the user's language:
 
 1. Outcome: ready for independent review, verification blocked, or decision needed; claim independent acceptance only from actual qualifying evidence covering this final state.
 2. Target identity: repository/worktree, comparison base and HEAD, contract path/version, in-scope changed and untracked files and excluded unrelated changes. Include a dirty diff/content fingerprint or reproducible snapshot; HEAD alone is insufficient.

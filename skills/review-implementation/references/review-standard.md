@@ -2,7 +2,7 @@
 
 ## Prepare shared context and a review plan
 
-Before assessing code or dispatching reviewers, read the applicable instructions, complete approved contract and original requirements, stable target/diff, and enough central code, callers and tests to map the affected boundaries. Apply [shared-context preparation](../../advance-project/references/delegation-context.md); read original content rather than just paths or summaries. Keep preparation factual: identify responsibilities, dependencies, requirements and available checks without forming candidate defects, quality judgments or a verdict.
+Before assessing code or dispatching reviewers, read the applicable instructions, [shared code-quality standard](../../implement-design/references/code-quality.md), complete approved contract and original requirements, stable target/diff, and enough central code, callers and tests to map the affected boundaries. Apply [shared-context preparation](../../advance-project/references/delegation-context.md); read original content rather than just paths or summaries. Keep preparation factual: identify responsibilities, dependencies, requirements and available checks without forming candidate defects, quality judgments or a verdict.
 
 Prepare an internal review plan covering scope and correctness, implementation quality, security, tests and relevant high-risk boundaries. Identify the questions, primary inputs and concrete checks for each aspect. This is execution preparation, not a request for user approval or a new design document. In `multi-agent`, assign coherent, independently reviewable aspects rather than splitting by file or tool call. Finish the shared preparation and dispatch the planned reviewers before evaluating the code or importing any reviewer's conclusions into another reviewer's context.
 
@@ -46,18 +46,9 @@ At least one actual review execution must be independent of implementation and f
 
 **Additional multi-agent review:** The qualified independent lead dispatches at least two read-only review subagents, with scopes and count determined by the prepared plan and actual change. Collectively assign every relevant review dimension; combine related aspects when coherent and expand for independent boundaries. Give implementation quality an explicit owner. Each named high-risk boundary needs a qualified targeted perspective distinct from general quality coverage. Add a specialist when the existing assignments cannot supply it. These targeted assignments supplement the lead's full review and must actually run.
 
-Give each reviewer the approved contract, stable target/base and diff, applicable conventions, original inputs or eligible shared context, assigned aspects, evidence requirements and stopping conditions. Ask for its own supported findings, covered rules, test-oracle assessment, actual checks and remaining gaps. A facet assignment is scoped review work, not an instruction to recursively orchestrate the whole review. Keep sibling conclusions out of the initial assignments. If a required reviewer cannot run, complete useful permitted checks and report the missing execution as Unable to conclude.
+Give each reviewer the approved contract, stable target/base and diff, applicable conventions, original inputs or eligible shared context, assigned aspects, evidence requirements and stopping conditions. Ensure reviewers assigned implementation quality have read the shared code-quality standard before assessment. Ask for each reviewer's own supported findings, covered rules, test-oracle assessment, actual checks and remaining gaps. A facet assignment is scoped review work, not an instruction to recursively orchestrate the whole review. Keep sibling conclusions out of the initial assignments. If a required reviewer cannot run, complete useful permitted checks and report the missing execution as Unable to conclude.
 
 Use the prepared original-material context as the reviewers' common starting point under the shared-context guidance and caller constraints. Preserve user model choices, required roles, permissions and independence. When the current history contains the target's authorship or prior review judgments, obtain a clean independent review lead that reads the originals and prepares its own plan before sharing context. Keep verdicts and author deliberations out of reviewer inputs. Report how review independence was established and any missing original inputs.
-
-In either mode, explicitly assess implementation quality:
-
-- whether the behavior has clear responsibilities, readable code, maintainable structure, and suitable reuse of repository or platform capabilities;
-- unnecessary lines, files, branches, abstractions, dependencies, indirection, duplication, and generated churn;
-- naming, control flow, locality, ownership, dependency direction, consistency, and ease of understanding and maintenance; and
-- concrete simplifications supported by the design, callers, or existing repository patterns.
-
-Use line count and changed surface area as evidence for avoidable changes, not numeric targets. Require evidence-backed findings rather than personal style preferences. The acceptance lead must validate each material candidate against the code and contract before reporting it.
 
 Set review depth by consequence and difficulty without changing the resolved mode:
 
@@ -83,10 +74,10 @@ The acceptance lead must itself perform the full assessment, including critical 
 
 Cover these dimensions at a depth set by the actual boundaries:
 
-- **Scope:** Match every required rule and non-goal to code and credible evidence. Identify missing, partial, different, or unnecessary behavior, dependencies, abstractions, compatibility promises, and generated churn.
+- **Scope:** Match every required rule and non-goal to code and credible evidence. Identify missing, partial, different, or unnecessary behavior, including compatibility promises.
 - **Behavior:** Trace relevant success, rejection, errors, missing data, limits, cancellation, partial failure, recovery, concurrency, security, compatibility, data safety, performance, and operations. Inspect effects on callers, shared state, feature gates, deployment assumptions, and developer workflows.
 - **Tests:** Treat tests as claims, not authority. For important rules, identify a plausible wrong implementation and determine whether a test would detect it. Check reachability, assertions, skipped cases, isolation, nondeterminism, mocks, and unjustified edits to expected behavior. Test success cannot validate an incorrect oracle shared with the implementation.
-- **Implementation quality:** Give simplicity, readability, and maintainability explicit weight after preserving correctness and required boundaries. Assess the complete final diff against its base: identify cumulative patches or artifacts that add no contract or quality value, while judging necessary refactoring by its result rather than its size. The lead assesses this dimension in both modes, supplemented by assigned quality coverage in `multi-agent`. Identify avoidable code, files, abstractions, indirection, duplication, or inconsistency, and report supported issues when a materially simpler, clearer repository-consistent implementation is available.
+- **Implementation quality:** Apply the shared code-quality standard to the complete final diff against its comparison base. Support quality findings with the affected code and concrete evidence from the contract, callers, or repository conventions.
 
 Assign each concrete check one execution owner and share its target, command/cwd, relevant environment, status and raw-output location. Wait for an existing running owner's result by default. Reuse credible completed results after inspecting scope, relevant code/dependency/configuration/environment inputs, exit status and meaningful output. Run fresh checks for uncovered risk, stale results or inaccessible evidence; independence requires your own code and test-oracle judgment, not repeating the same test command. Start narrow and expand only for a concrete gap. A prose assertion without accessible output or reliable execution provenance is not reusable verification.
 
@@ -99,6 +90,8 @@ Attribute every candidate issue, including subagent findings and test failures, 
 - **Introduced by this change:** Report as a finding only with evidence of new faulty behavior, an incremental regression caused by this change, or an unmet requirement assigned to this change by the confirmed contract. For an existing defect made worse or newly reachable by this change, report only the newly introduced impact and its causal link.
 - **Pre-existing:** An issue already present at the base with no demonstrated new impact may be reported separately as a warning. It does not affect acceptance, require a waiver, or become a mandatory fix for this change, regardless of severity.
 - **Attribution unresolved:** State the uncertainty without presenting it as an introduced finding. Continue focused checks when it could materially affect this change; only a concrete gap in essential verification of the change can justify Unable to conclude. An unrelated or established baseline issue alone cannot.
+
+When this change removes the last supported production caller and leaves dead code, or omits dead-code cleanup explicitly required by its confirmed contract, report an introduced finding and apply the severity criteria below. Dead code already present at the base with no causal link or new impact from this change may be reported only as a pre-existing warning.
 
 Include a finding only after the lead has:
 
