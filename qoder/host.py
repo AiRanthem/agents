@@ -17,6 +17,10 @@ SKILLS = ("advance-project", "review-design", "explore-design", "implement-desig
           "review-implementation", "receiving-code-review")
 
 
+def host_skills():
+    return sorted(path.parent.name for path in (ROOT / "qoder" / "skills").glob("*/SKILL.md"))
+
+
 def _markdown_config(content):
     # known-limit: JSON scalars cover these templates; richer frontmatter requires a YAML parser.
     header, body = content.removeprefix("---\n").split("\n---\n", 1)
@@ -63,6 +67,18 @@ def _check_files(home, role_config, *, profile_fields=()):
                 entry.read(1)
         except (OSError, RuntimeError, ValueError) as error:
             missing.append(f"unreadable skill entry: {skill_dir / 'SKILL.md'}: {error}")
+    host_skill_root = home / ".qoder" / "skills"
+    for name in host_skills():
+        skill_dir = host_skill_root / name
+        expected = ROOT / "qoder" / "skills" / name
+        try:
+            if not skill_dir.is_symlink() or skill_dir.resolve(strict=True) != expected.resolve():
+                missing.append(f"host skill must link to repository directory: {skill_dir} -> {expected}")
+                continue
+            with (skill_dir / "SKILL.md").open("rb") as entry:
+                entry.read(1)
+        except (OSError, RuntimeError, ValueError) as error:
+            missing.append(f"unreadable host skill entry: {skill_dir / 'SKILL.md'}: {error}")
     return {"host": host, "disk_ready": not missing, "roles": roles, "missing": missing,
             "runtime_verified": False}
 

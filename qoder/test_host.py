@@ -23,6 +23,10 @@ def install_fixture(home):
     skills.mkdir(parents=True)
     for name in host.SKILLS:
         (skills / name).symlink_to(host.ROOT / "skills" / name)
+    host_skills = home / ".qoder" / "skills"
+    host_skills.mkdir(parents=True)
+    for name in host.host_skills():
+        (host_skills / name).symlink_to(host.ROOT / "qoder" / "skills" / name)
     (home / '.qoder/settings.json').write_text('{}')
     return agents, skills
 
@@ -33,7 +37,7 @@ class NativeHostTest(unittest.TestCase):
             result = host.check(Path(temp))
             self.assertFalse(result["disk_ready"])
             self.assertFalse(result["runtime_verified"])
-            self.assertEqual(len(result["missing"]), 4 + len(host.SKILLS) + 1)
+            self.assertEqual(len(result["missing"]), 4 + len(host.SKILLS) + len(host.host_skills()) + 1)
             self.assertFalse(list(Path(temp).iterdir()))
 
     def test_local_role_edits_and_symlinks_are_rejected(self):
@@ -72,6 +76,25 @@ class NativeHostTest(unittest.TestCase):
                 self.assertFalse(result["disk_ready"])
                 self.assertEqual(len(result["missing"]), 1)
                 self.assertIn("skill must link", result["missing"][0])
+
+    def test_host_skill_links_require_current_repository(self):
+        for kind in ("wrong-link", "regular-copy"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                home = Path(temp)
+                install_fixture(home)
+                name = host.host_skills()[0]
+                target = home / ".qoder" / "skills" / name
+                content = (target / "SKILL.md").read_text()
+                target.unlink()
+                stale = home / "stale-host-skill" if kind == "wrong-link" else target
+                stale.mkdir()
+                (stale / "SKILL.md").write_text(content)
+                if kind == "wrong-link":
+                    target.symlink_to(stale)
+                result = host.check(home)
+                self.assertFalse(result["disk_ready"])
+                self.assertEqual(len(result["missing"]), 1)
+                self.assertIn("host skill must link", result["missing"][0])
 
     def test_role_output_keeps_complete_instructions_and_fixed_profiles(self):
         for name in host.ROLES:
