@@ -52,6 +52,7 @@ $install 安装或更新这个 dev-kit
 | `$create-worktree` | 根据简要任务创建符合仓库惯例的 Git 分支和 worktree，同步创建远程分支并设置追踪。 |
 | `$cleanup-worktree` | 核验非忽略文件已提交并推送、工作树干净且可从远程恢复，按授权清理本地 worktree 和分支，保留远程恢复引用。 |
 | `$rebase-worktree` | 将当前 Git worktree rebase 到指定分支；有冲突风险时启用恢复与独立验证流程。 |
+| `$maintain-prs` | 接收外部传入的 PR/MR 清单或筛选条件，处理冲突与人工意见，按授权推送、回复和清理工作树。 |
 | `$explore-design` | 探索或细化 Why/What；只读规划衔接实施计划，普通执行 将设计文档标记为 `review-pending`。 |
 | `$review-design` | 根据需求和仓库证据独立评审设计；通过后将获批文档标记为 `implementable`。 |
 | `$implement-design` | 将已确认设计落实实现，按实际规划/执行 与项目职责加载指令，保留验证和独立审查边界。 |
