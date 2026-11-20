@@ -91,4 +91,17 @@ CLI 在等待初始配置前校验 memberlist 的有效端口与控制 API、met
 - 用户确认已完成人工验收，并确认发布普通 PR。[决定来源](decision.md#2026-11-18-人工验收与发布决定)
 - 验收的 12 文件补丁已提交并无冲突地对齐刷新后的 `upstream/master`（`b6cd98608a81cf93d4ef2c0a92313bf2a29d1ee2`）。完整补丁的 SHA-256 与采集时一致，12 个文件均属于社区范围。源码提交 `b37d3430ebeb7119d2c91e6c66499afa8049c7d5` 已推送至 `AiRanthem/agents:feat/ready-before-config-261117`，并回读核验远端分支与 PR 的 head 一致。
 - 在该提交执行 `go test -race -p 1 ./cmd/sandbox-manager ./pkg/configreload ./pkg/servers/e2b/... ./pkg/sandbox-manager ./pkg/sandbox-manager/quota ./pkg/proxy -count=1`，9 个包全部通过。
-- [PR #1237](https://github.com/openkruise/agents/pull/1237) 已向 `openkruise/agents:master` 创建并核验为普通、开放的 PR。GitHub 检查已启动，合并待定。独立实现审查第 2 项请求头日志仍待处理，第 3、4 项仍待独立复审。部署和现场验证无新增证据。隔离工作树保留。
+- [PR #1237](https://github.com/openkruise/agents/pull/1237) 已向 `openkruise/agents:master` 创建并核验为普通、开放的 PR。GitHub 检查已启动，合并待定。当时独立实现审查第 2 项请求头日志仍待处理，第 3、4 项仍待独立复审。部署和现场验证无新增证据。
+
+## 2026-11-20 工作树清理
+
+按用户要求移除了 `/Users/sophon/Workspace/OKAWorkspace/projects/oka-daily-open-source/worktrees/4-sandbox-api-config-secret-wait`。移除前核验 Git 状态干净且没有进行中的 Git 操作或嵌套仓库，移除后核验目录和 Git 工作树登记均已消失。本地分支 `feat/ready-before-config-261117` 保留。查询时 PR #1237 仍开放，head 为 `e92212ffb849987b83c1989e1f5c38469970a49a`。[PR #1237](https://github.com/openkruise/agents/pull/1237)
+
+移除前后回读确认 `git@github.com:AiRanthem/agents.git` 的 `refs/heads/feat/ready-before-config-261117` 均指向 `e92212ffb849987b83c1989e1f5c38469970a49a`。从 OKAWorkspace 根目录执行以下命令可恢复原快照，即使远端分支随后前移。
+
+```sh
+git -C agents fetch git@github.com:AiRanthem/agents.git refs/heads/feat/ready-before-config-261117
+git -C agents worktree add --detach "$PWD/projects/oka-daily-open-source/worktrees/4-sandbox-api-config-secret-wait" e92212ffb849987b83c1989e1f5c38469970a49a
+```
+
+原工作树内被 Git 忽略的 `.vscode/` 与 `tags` 已移至本机 `local-storage/pr-worktree-cleanup-261120/4-sandbox-api-config-secret-wait/`，目录结构保留。

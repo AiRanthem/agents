@@ -85,4 +85,4 @@ delivery:
   pull_request: https://github.com/openkruise/agents/pull/1237
   draft: false
   merged: false
-cleanup: not-applicable
+cleanup: removed
