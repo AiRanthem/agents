@@ -8,9 +8,9 @@
 
 ## 当前源码与 PR 身份
 
-- 源码仓库 `openkruise/agents`；本地工作树 `worktrees/1-e2b-compatibility`，分支 `fix/e2b-1083-1085-261020`。
+- 源码仓库 `openkruise/agents`，本地分支 `fix/e2b-1083-1085-261020`。原工作树 `worktrees/1-e2b-compatibility` 已移除，见下方恢复记录。
 - 本轮开始时本地 HEAD 为 `0a80aa84992283deddf7bfb93e66fffe1d059e60`，工作树干净，其父基线与远端 PR head `e2dd13488` 不同（本地少 11 个上游提交）。2026-11-11 用户批准方案 B 后，本地分支以 `e2dd13488` 为起点重放本轮修正为单个提交 `dbe379eed`，旧提交备份在本地分支 `backup/e2b-1083-1085-261020-pre-rebase`。
-- 上游 [PR #1103](https://github.com/openkruise/agents/pull/1103) 当前检查为 OPEN、未合入；head `b7f572d270532a2b3f3b62894aa4a25c2af463cc`，比较基线 `0179aad20a43aad1fa6627c2a818372eb4e3f202`，正文关联三个 Issue。`merged` 交付义务仍为 pending。
+- 2026-11-20 查询时，上游 PR #1103 仍开放，head 为 `d5dbf6b200d9960de9ba8f7966e22b568b0a3f74`，合并交付义务仍待完成。[PR #1103](https://github.com/openkruise/agents/pull/1103)
 - 本轮修改 6 个源码/测试文件，+208/-192；`dbe379eed` 相对 `e2dd13488` 的完整 binary diff SHA256 为 `29144f4cdba9b562858ce15fc946ff6f0ec210fbe71cadd354aea02583212aa1`。
 - 早前用独立临时 index 将该补丁应用到当时的 PR head，得到组合 tree `5be6bb8a35694f90afd6847c0d33577cc4684d05`；该快照对应修正前的中间状态，已被提交 `dbe379eed`（tree `1ac5cb364566c9555dbdaee2a1e1792171ca0cbb`）取代。2026-11-11 本轮修正提交为 `dbe379eed` 并快进推送到 `airanthem/fix/e2b-1083-1085-261020`（`e2dd13488..dbe379eed`），PR #1103 前进一个提交。
 
@@ -47,7 +47,20 @@
 
 2026-10-22 用户明确确认「工作项1已经完成开发通过了全部人工验收」，并授权提交、推送和创建上游 PR。既有源码提交 `f448ab3d53573ddef69049011a51497bb8d3b310` 已按该授权提交至 fork `AiRanthem/agents` 并建立 PR #1103；这些是历史交付和人工结论，不自动覆盖当前 v6 修正。原始开发基线为 `fd2bea7193d98c1d456fa6c43a2ae3e7e4f4fd48`。
 
-SandboxSet `spec.templateRef` 模板身份问题已按独立授权提交 [Issue #1102](https://github.com/openkruise/agents/issues/1102)，本轮不修改该问题。PR 评论线程未回复、未 resolve；本轮修正已提交并推送（见上），但未部署、未关闭 Issue、未清理工作树，也未标记交付完成。
+SandboxSet `spec.templateRef` 模板身份问题已按独立授权提交 [Issue #1102](https://github.com/openkruise/agents/issues/1102)。该轮修正已提交并推送，当时的评论线程及交付状态仍待后续处理。该轮未执行部署或关闭 Issue。
+
+## 2026-11-20 工作树清理
+
+按用户要求移除了 `/Users/sophon/Workspace/OKAWorkspace/projects/e2b-compatibility/worktrees/1-e2b-compatibility`。移除前核验 Git 状态干净且没有进行中的 Git 操作或嵌套仓库，移除后核验目录和 Git 工作树登记均已消失。本地分支 `fix/e2b-1083-1085-261020` 和本地变基备份分支 `backup/e2b-1083-1085-261020-pre-rebase` 均保留。
+
+移除前后回读确认 `git@github.com:AiRanthem/agents.git` 的 `refs/heads/fix/e2b-1083-1085-261020` 均指向 `d5dbf6b200d9960de9ba8f7966e22b568b0a3f74`。从 OKAWorkspace 根目录执行以下命令可恢复原快照，即使远端分支随后前移。
+
+```sh
+git -C agents fetch git@github.com:AiRanthem/agents.git refs/heads/fix/e2b-1083-1085-261020
+git -C agents worktree add --detach "$PWD/projects/e2b-compatibility/worktrees/1-e2b-compatibility" d5dbf6b200d9960de9ba8f7966e22b568b0a3f74
+```
+
+原工作树内被 Git 忽略的 `.qoder/repowiki/`、`.vscode/`、`bin/` 与 `tags` 已移至本机 `local-storage/pr-worktree-cleanup-261120/1-e2b-compatibility/`，目录结构保留。
 
 ## 保留的边界与待核对事实
 

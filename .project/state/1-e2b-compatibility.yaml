@@ -986,3 +986,13 @@ ci_repair:
   independent_review: not_run
   human_acceptance: not_recorded
   merged: false
+cleanup:
+  status: removed
+  recorded_at: '2026-11-20'
+  worktree: worktrees/1-e2b-compatibility
+  retained_local_ref: refs/heads/fix/e2b-1083-1085-261020
+  retained_safety_ref: refs/heads/backup/e2b-1083-1085-261020-pre-rebase
+  recovery_url: git@github.com:AiRanthem/agents.git
+  recovery_ref: refs/heads/fix/e2b-1083-1085-261020
+  recovery_commit: d5dbf6b200d9960de9ba8f7966e22b568b0a3f74
+  evidence: workitems/1-e2b-compatibility/context.md

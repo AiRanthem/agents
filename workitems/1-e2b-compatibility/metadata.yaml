@@ -18,4 +18,4 @@ design:
   state: review-pending
   author_session: 01a1c4bb-498d-7843-8186-cebf503116cf
 repository: agents
-cleanup: pending
+cleanup: removed
