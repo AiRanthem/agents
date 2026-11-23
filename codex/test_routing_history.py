@@ -57,5 +57,59 @@ class RoutingHistoryTest(unittest.TestCase):
             self.read()
 
 
+class DelegationFeedbackTest(unittest.TestCase):
+    def setUp(self):
+        self.rows = [row("session_meta", id="parent")]
+        self.activity("started", "spawn")
+
+    def item(self, item_type, thread="parent", **fields):
+        self.rows.append(row("event_msg", type="item_completed", thread_id=thread, turn_id="p-turn",
+                             item=dict(type=item_type, **fields)))
+
+    def activity(self, kind, call):
+        self.item("SubAgentActivity", kind=kind, id=call, agent_thread_id="child", agent_path="/root/sample")
+
+    def message(self, text, thread="parent"):
+        self.item("AgentMessage", thread, content=[dict(type="Text", text=text)])
+
+    def deliver(self, message, tool="followup_task", delivered=True):
+        call = f"call_{len(self.rows)}"
+        self.rows.append(row("response_item", type="function_call", namespace="collaboration",
+                             name=tool, call_id=call, arguments=json.dumps(dict(message=message))))
+        if delivered:
+            self.activity("interacted", call)
+        self.rows.append(row("response_item", type="function_call_output", call_id=call))
+
+    def read(self):
+        rows, gaps = replay["parent_feedback"](iter(self.rows), "parent", {"child"})
+        return rows["child"], gaps
+
+    def test_correction_and_distinct_work_on_same_child(self):
+        self.deliver("Please include failures. [sample 补正]")
+        records, gaps = self.read()
+        self.assertFalse(gaps)
+        self.assertTrue(records[0]["correction_requested"])
+        self.assertEqual(records[0]["outcome"], "unknown")
+        self.message("Check another source. [sample#schema 新任务]")
+        self.deliver("opaque")
+        self.message("Used both results. [sample 直接采用] [sample#schema 直接采用]")
+        records, gaps = self.read()
+        self.assertFalse(gaps)
+        self.assertEqual([(r["key"], r["outcome"]) for r in records],
+                         [("sample", "used_after_correction"), ("sample#schema", "used")])
+
+    def test_no_disposition_from_completion_quotes_or_undelivered_work(self):
+        self.activity("completed", "done")
+        self.message("Child self-report. [sample 直接采用]", thread="child")
+        self.message("Example `[sample 直接采用]`\n> [sample 未采用]\n```\n[sample 直接采用]\n```")
+        self.deliver("See also. [sample#other 新任务]", delivered=False)
+        self.deliver("Unclassified historical follow-up.")
+        records, gaps = self.read()
+        self.assertEqual(gaps, {"unclassified follow-up": 1})
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["outcome"], "unknown")
+        self.assertNotIn("feedback_ordinal", records[0])
+
+
 if __name__ == "__main__":
     unittest.main()
