@@ -14,8 +14,8 @@ Before handoff, verify there were no design-file writes or new document tasks. C
 
 ## Ordinary execution
 
-Remain read-only during exploration until the user approves the reported contract; existing approval of the exact complete contract is sufficient. Before writing, read [design-document](design-document.md), resolve the document path and include any required path decision with the contract discussion. State that approval enables writing the formal design for independent review.
+Keep exploration in conversation unless the user explicitly requests a draft or approves the complete contract. Before writing either document, follow the [design document rules](design-document.md). A draft request authorizes writing the unapproved design at the path the user specified or already approved. Keep open decisions visible in the draft.
 
-Apply the shared approval handoff before leaving exploration. Reuse approval of the unchanged complete contract; a content-preserving write does not require another approval. After approval, write one authoritative Why/What document in one language at the approved path, following that reference. Validate the document and report the agreed contract, path, exact design identity, actual checks and pending review. Do not mark it `implementable`.
+For the formal design, present any outstanding path decision with the complete contract for approval. Reuse existing approval of both. After approval, write or finalize the authoritative Why/What document at that path for independent review. Validate it and report the agreed contract, path, exact design identity, actual checks and pending review.
 
 Invoke `$review-design` next only when the user explicitly requested it; otherwise report pending review. A finding that changes a user-owned contract returns to exploration and approval. Explicitly authorized project advancement uses its delegated stage routing instead of this ordinary invocation rule.
