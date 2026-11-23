@@ -1,2 +1,4 @@
+interface:
+  display_name: "Address Code Review Feedback"
 policy:
   allow_implicit_invocation: false

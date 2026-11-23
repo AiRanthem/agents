@@ -1,2 +1,4 @@
+interface:
+  display_name: "Systematic Debugging"
 policy:
   allow_implicit_invocation: false
