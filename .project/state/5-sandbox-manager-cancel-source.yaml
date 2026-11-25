@@ -34,7 +34,7 @@ design:
     source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
     report: workitems/5-sandbox-manager-cancel-source/context.md#2026-11-25-独立设计评审
     findings: []
-  next_action: independent-implementation-review
+  next_action: independent-implementation-rereview
 development:
   status: implemented
   repository: agents
@@ -42,10 +42,19 @@ development:
   worktree: worktrees/5-sandbox-manager-cancel-source
   baseline_commit: 37351888a0cf561a57d694f3fc6baf077f3c9db8
   implementation_commit: null
-  worktree_content_sha256: 046546f8f0ced83f02d8a40fd79f05aa4ab6460ec21d496925d739a5f5b7662e
+  worktree_content_sha256: 07156fec87607a639858f1195a7aad3bcbf71010d4dee8c081593e7e83118245
   evidence: workitems/5-sandbox-manager-cancel-source/context.md
   verification: passed-affected-packages-race-and-build
-  independent_review: not-performed
+  independent_review: changes-required
+  review:
+    mode: multi-agent
+    design_version: 2
+    reviewed_at: '2026-11-25'
+    lead: Codex /root
+    facets: [lifecycle, api, infra]
+    reviewed_worktree_content_sha256: 046546f8f0ced83f02d8a40fd79f05aa4ab6460ec21d496925d739a5f5b7662e
+    fixed_pending_rereview: [1, 2, 3, 4, 5, 6]
+    report: workitems/5-sandbox-manager-cancel-source/context.md
 acceptance:
   status: not-performed
 delivery:

@@ -74,3 +74,27 @@ git diff --check
 ```
 
 路由测试捕获实际输出的 JSON 和日志，覆盖已有状态码、消息、三种取消来源、中间件返回及字段省略。共享签发测试覆盖等待者断开后其他请求继续取得结果，以及 Manager 停机和签发期限。修复前已复现已结束的独立 context 因 Go 复用关闭通道而被错归为 HTTP 请求的情况，对应回归用例随上述命令通过。格式检查通过，未进行集群端到端验证。
+
+## 2026-11-25 多 agent 实现审查与修复
+
+用户要求多 agent 审查实现，随后要求直接修复问题。Codex 主评审者与三个只读专项评审者（lifecycle、api、infra）审查了设计 v2 和上文指纹 `046546f8…f5b7662e` 对应的 52 个文件。该版本结论为 `changes-required`。Codex 在原源码工作树中修复了六项发现。
+
+| 项 | 原审查发现 | 修复和回归覆盖 |
+| --- | --- | --- |
+| 1 | 鉴权和模板查询将取消错误折成“未找到” | MySQL 查 key、卷所有者、模板和 Checkpoint 查询将原因传给 API，保留原状态码与文案。测试覆盖 401、404、创建请求的 400、Claim 的二次查询及 Checkpoint 回退。卷路由当前未启用，测试使用临时路由调用实际鉴权中间件和 Manager。 |
+| 2 | 写冲突遮住下一轮终止重试的取消 | Pause/Resume 保留 client-go 返回的冲突类型和消息，同时从最后一次尝试取来源。回归用例验证只发起一次实际写入。 |
+| 3 | 等待后的二次读取在缓存未命中时将请求取消降为 unknown | 保留 informer 的读取结果。只有需要再发起 APIReader 请求时才检查其 context；已经开始的读取沿用自己的错误。覆盖已取消且缓存命中、缓存未命中、独立读取取消。 |
+| 4 | CSI 在 PV 和 Secret 查询失败时将错误转成字符串 | 原错误随消息传递到创建路由。以 POST /sandboxes 分别验证两种读取失败的 400、原文案及 unknown 字段。 |
+| 5 | 静态配置下 Manager 停止 Secret 观察轮询时被记为 unknown | 组件区分回调错误和轮询自身退出。覆盖停机、同时发生的独立取消及普通读取失败，校验脱敏消息。 |
+| 6 | 安全令牌签发、传播和 runtime 初始化的错误日志缺少来源 | 在原日志级别输出来源。runtime 重试保留最后一次尝试的取消归因。测试直接检查签发、传播、runtime 重试和最终失败日志。 |
+
+当前源码分支为 `feat/sandbox-manager-cancel-source-261125`，HEAD 与基线仍为 `37351888a0cf561a57d694f3fc6baf077f3c9db8`。按上文命令计算的 71 个变更文件内容指纹为 `07156fec87607a639858f1195a7aad3bcbf71010d4dee8c081593e7e83118245`。源码保留在本地未提交工作树，修复版待独立复审及人工验收。
+
+在该指纹上使用 Go 1.26.3 和 `GOCACHE=/private/tmp/agents-lifecycle-go-cache` 运行以下检查，全部退出 0。14 个受影响包的单元测试通过，6 个包中的 10 个定向回归用例在竞态检测下各通过三轮，sandbox-manager 构建成功。源码变更文件均通过 gofmt 检查。本轮未执行集群 E2E。
+
+```sh
+go test ./pkg/utils/logs ./pkg/cache ./pkg/cache/utils ./pkg/configreload ./pkg/identity ./pkg/sandbox-manager ./pkg/sandbox-manager/infra/sandboxcr ./pkg/sandbox-manager/quota ./pkg/servers/web ./pkg/servers/e2b ./pkg/servers/e2b/keys ./pkg/utils ./pkg/utils/runtime ./pkg/utils/csiutils -count=1
+go test -race ./pkg/cache ./pkg/sandbox-manager/infra/sandboxcr ./pkg/identity ./pkg/utils/runtime ./pkg/servers/e2b/keys ./pkg/servers/e2b -run '^Test(NewSandboxPauseTask_DoubleCheckCancellation|Sandbox_PauseResumeCancellationAfterWriteConflict|CreateSandbox_LookupCancellation|CreateSandboxCSILookupCanceled|AuthorizationLookupCancellation|VolumeOwnershipLookupCancellation|MySQLLookupCancellation|SecretReloadObservationCancellation|SecurityTokenCancellationLogs|InitRuntimeCancellationAfterRetry)$' -count=3
+go build -o /dev/null ./cmd/sandbox-manager
+git diff --check HEAD
+```
