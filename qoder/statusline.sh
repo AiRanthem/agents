@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Qoder status line: model + reasoning effort and ctx usage on the left,
-# credits (left/total + bar + refresh countdown) right-aligned to the terminal
+# credits (used/total + bar + refresh countdown) right-aligned to the terminal
 # edge. The countdown targets the next 23rd 00:00 GMT+8 (monthly quota reset).
 # Receives session JSON on stdin; prints a single line.
 #
@@ -22,13 +22,14 @@
 # deliberately not consulted: it holds global defaults, so it reports whatever
 # session last ran /effort rather than what this session is actually using.
 #
-# Credits tab shows the account balance: credits left out of the account total
-# (e.g. "credits left 12795/50000"). The account scope is the plan quota
-# (user_quota), the add-on quota (add_on_quota) and the team/org resource
-# package (org_resource_package); model-scoped dedicated resource packages are
-# excluded, matching the CLI's own total_remaining. The live `.credits` object
-# supplied on stdin by qodercli is authoritative; cost.total_credits is only
-# this session's spend and is labelled as such when no account data exists.
+# Credits tab shows account usage as used/total (e.g. "credits 7205/20000").
+# The account scope is the plan quota (user_quota), the add-on quota
+# (add_on_quota), the team/org resource package (org_resource_package) and
+# every model-scoped dedicated resource package; used/total sums the component
+# fields directly, so dedicated packages are included (unlike the CLI's
+# total_remaining balance). The live `.credits` object supplied on stdin by
+# qodercli is authoritative. cost.total_credits is only this session's spend,
+# not a balance, and is never shown here.
 # For older CLI versions or unavailable live quota data, fall back to
 # ~/.qoder/quota-cache.json (the API response shape of GET /api/v2/quota/usage),
 # refreshed at most every $QODER_QUOTA_TTL seconds (default 60) and used only
@@ -40,7 +41,7 @@
 #   1. PAT available (env QODER_PAT or first line of ~/.qoder/.pat): exchange it
 #      for a short-lived token and call the API directly.
 #   2. No PAT: harvest the newest full quota response logged by qodercli.
-# Without any account quota data the tab falls back to session credits only.
+# Without any fresh account quota data the credits segment is omitted.
 
 # read-to-EOF builtin instead of a cat fork
 IFS= read -r -d '' input || true
@@ -67,11 +68,11 @@ fi
 is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 # --- account credits scope, shared by the live stdin payload and the on-disk
-# quota cache so both report the same balance.
+# quota cache so both report the same usage.
 # Account scope = plan quota (user_quota) + add-on quota (add_on_quota) +
-# team/org resource package (org_resource_package). Model-scoped dedicated
-# resource packages are excluded on purpose: the CLI's total_remaining sums
-# exactly these three components.
+# team/org resource package (org_resource_package) + every model-scoped
+# dedicated resource package. used/total sums the component fields directly,
+# so dedicated packages are included (unlike the CLI's total_remaining balance).
 # Both naming styles are accepted: the live .credits object uses snake_case,
 # the cached API response uses camelCase.
 acct_fn='
@@ -83,24 +84,24 @@ acct_fn='
     | ($c.add_on_quota // $c.addOnQuota // {}) as $a
     | ($c.org_resource_package // $c.orgResourcePackage
         // $c.shared_quota // $c.sharedQuota // {}) as $g
+    | ($c.dedicated_resource_packages // $c.dedicatedResourcePackages // []) as $d
     | {
-        rem: (($p.remaining | num) + ($a.remaining | num) + ($g.remaining | num)),
+        used: (($p.used | num) + ($a.used | num) + ($g.used | num)
+               + ($d | map(.used | num) | add // 0)),
         tot: (($p.total | num) + ($a.total | num)
               + (if ($g.cap | num) > 0 then ($g.cap | num)
-                 else (($g.used | num) + ($g.remaining | num)) end))
+                 else (($g.used | num) + ($g.remaining | num)) end)
+              + ($d | map((.total // ((.used | num) + (.remaining | num))) | num) | add // 0))
       };
   def credits_acct:
     obj as $c
     | ($c | acct) as $x
-    | (if ($c | has("total_remaining"))
-       then ($c.total_remaining | num) else $x.rem end) as $rem
-    | $x.tot as $tot
-    | { rem: $rem, tot: $tot };
+    | { used: $x.used, tot: $x.tot };
 '
 
 # --- parse the session JSON in one jq fork (was ~10 field-level forks). \001
 # separator: IFS=tab would collapse empty fields and shift the rest.
-# The credits fields carry the account balance (remaining/total), not the
+# The credits fields carry the account usage (used/total), not the
 # session spend; see acct_fn above.
 main_prog="${acct_fn}"'
     [ .model.display_name // .model.id // "qoder",
@@ -112,7 +113,7 @@ main_prog="${acct_fn}"'
       (.context_window.used_percentage // ""),
       (.cost.total_credits // ""),
       (.transcript_path // ""),
-      (.credits | credits_acct | "\(.rem) \(.tot)"),
+      (.credits | credits_acct | "\(.used) \(.tot)"),
       ((.credits.is_quota_exceeded // false) | tostring)
     ]
     | map(tostring) | join("\u0001")'
@@ -294,7 +295,7 @@ bar() { # combined "cells pct" form, the shape the format self-check compares
   printf '%s %d%%' "$BAR_CELLS" "$BAR_PCT"
 }
 
-# --- credits quota: account balance (left/total) incl. team (org) package ---
+# --- credits quota: account usage (used/total) incl. team (org) + dedicated ---
 quota_cache="$HOME/.qoder/quota-cache.json"
 due_file="$HOME/.qoder/tmp/quota-refresh.due"
 quota_ttl="${QODER_QUOTA_TTL:-60}"
@@ -360,20 +361,21 @@ refresh_quota_from_logs() {
   return 1
 }
 
-# Account pair "remaining total" from a quota payload (the live .credits
+# Account pair "used total" from a quota payload (the live .credits
 # object or the cached API response): same account scope on both paths.
 pair_prog="${acct_fn}"'
-  credits_acct | "\(.rem) \(.tot)"'
+  credits_acct | "\(.used) \(.tot)"'
 
-# Sidecar: "v2 <remaining> <total> <cache mtime>". The mtime carries the
+# Sidecar: "v3 <used> <total> <cache mtime>". The mtime carries the
 # freshness of the snapshot so a render can reject a stale cache without
-# stat-ing the cache file again.
+# stat-ing the cache file again. The v3 tag marks the used/total derivation;
+# older v2 (remaining/total) sidecars are ignored and recomputed.
 write_pair_sidecar() { # recompute the derived pair after a cache update
   local pair mt
   pair=$(jq -r "$pair_prog" "$quota_cache" 2>/dev/null)
   mt=$(file_mtime "$quota_cache")
   case $mt in ''|*[!0-9]*) mt=0 ;; esac
-  printf 'v2 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
+  printf 'v3 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
     && mv "$quota_cache.pair.tmp" "$quota_cache.pair" 2>/dev/null
 }
 
@@ -404,22 +406,22 @@ maybe_refresh_quota() {
 }
 maybe_refresh_quota
 
-# Prefer the live account balance parsed from stdin. For older CLI versions
+# Prefer the live account usage parsed from stdin. For older CLI versions
 # (or when the quota service did not answer), fall back to the cached API
 # response, but only while it is fresh: an old snapshot would report a quota
 # total the account no longer has.
-q_rem="${live_credits_pair%% *}"
+q_used="${live_credits_pair%% *}"
 q_tot="${live_credits_pair##* }"
-if [ "$q_rem" = "0" ] && [ "$q_tot" = "0" ]; then q_rem=""; q_tot=""; fi
-if [ -z "$q_rem" ] && [ -z "$q_tot" ] && [ -r "$quota_cache" ]; then
+if [ "$q_used" = "0" ] && [ "$q_tot" = "0" ]; then q_used=""; q_tot=""; fi
+if [ -z "$q_used" ] && [ -z "$q_tot" ] && [ -r "$quota_cache" ]; then
   now=${EPOCHSECONDS:-} # bash >= 5 builtin; avoids a date fork
   [ -n "$now" ] || now=$(date +%s)
   side_ok=0
   if [ -r "$quota_cache.pair" ]; then
-    IFS=' ' read -r s_tag s_rem s_tot s_mt < "$quota_cache.pair"
-    if [ "$s_tag" = "v2" ] && is_num "$s_rem" && is_num "$s_tot" && is_num "$s_mt" \
+    IFS=' ' read -r s_tag s_used s_tot s_mt < "$quota_cache.pair"
+    if [ "$s_tag" = "v3" ] && is_num "$s_used" && is_num "$s_tot" && is_num "$s_mt" \
        && [ $(( now - s_mt )) -ge 0 ] && [ $(( now - s_mt )) -le "$quota_max_age" ]; then
-      q_rem="$s_rem"; q_tot="$s_tot"; side_ok=1
+      q_used="$s_used"; q_tot="$s_tot"; side_ok=1
     fi
   fi
   if [ "$side_ok" -eq 0 ]; then
@@ -430,8 +432,8 @@ if [ -z "$q_rem" ] && [ -z "$q_tot" ] && [ -r "$quota_cache" ]; then
     case $mt in ''|*[!0-9]*) mt=0 ;; esac
     if [ "$mt" -gt 0 ] && [ $(( now - mt )) -ge 0 ] \
        && [ $(( now - mt )) -le "$quota_max_age" ]; then
-      q_rem="${pair%% *}"; q_tot="${pair##* }"
-      printf 'v2 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
+      q_used="${pair%% *}"; q_tot="${pair##* }"
+      printf 'v3 %s %s\n' "${pair:-0 0}" "$mt" > "$quota_cache.pair.tmp" 2>/dev/null \
         && mv "$quota_cache.pair.tmp" "$quota_cache.pair" 2>/dev/null
     fi
   fi
@@ -552,20 +554,17 @@ elif [ -n "$used_pct" ]; then
   ctx_text="ctx ${used_pct}%"
 fi
 
-# Credits tab: the account balance (left of the account total). The bar
-# fills with the share that is still available; a red segment marks an
-# exhausted quota.
+# Credits tab: account usage as used/total (e.g. "credits 7205/20000"). The
+# bar fills with the share already used; a red segment marks an exhausted
+# quota. With no fresh account quota data (live .credits absent and no usable
+# cache) the segment is omitted: cost.total_credits is this session's spend,
+# not a balance, and is never shown here.
 cred_text=""; cred_pct=""; cred_u=""; cred_t=""
 if is_num "$q_tot" && [ "$q_tot" -gt 0 ]; then
-  cred_text="credits left $(fmtc "$q_rem")/$(fmtc "$q_tot")"
-  cred_u="$q_rem"; cred_t="$q_tot"
+  cred_text="credits $(fmtc "$q_used")/$(fmtc "$q_tot")"
+  cred_u="$q_used"; cred_t="$q_tot"
   bar_pct "$cred_u" "$cred_t"
   [ -n "$BAR_PCT" ] && cred_pct="${BAR_PCT}%"
-elif is_num "$q_rem" && [ "$q_rem" -gt 0 ]; then
-  cred_text="credits left $(fmtc "$q_rem")"
-elif [ -n "$session_credits" ]; then
-  # no account data: only this session's spend is known, so say so
-  cred_text="credits spent $(fmtc "$session_credits")"
 fi
 cdt=""
 [ -n "$cred_text" ] && cdt=$(refresh_countdown)
