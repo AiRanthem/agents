@@ -55,7 +55,14 @@ class DelegationHookTests(unittest.TestCase):
                     names = [boundary, *SHARED]
                     if family in {"astra", "sol"}:
                         names.append(CARD)
-                    expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
+                    if event_name == "SessionStart":
+                        paths = [PROMPTS.resolve() / name for name in names[1:]]
+                        for path in paths:
+                            self.assertTrue(path.read_text().strip())
+                        index = "\n".join(f"- {path}" for path in paths)
+                        expected = (PROMPTS / boundary).read_text().strip() + "\n\n" + index + "\n"
+                    else:
+                        expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
                     self.assertEqual(output["additionalContext"], expected)
 
     def test_routing_profiles(self):
@@ -77,19 +84,18 @@ class DelegationHookTests(unittest.TestCase):
         self.assertIn("Preserve the parent's scope", policy)
         self.assertNotIn("Retain ownership of the user's goal", policy)
 
-    def test_selected_fragments_are_required_and_unselected_fragments_are_independent(self):
+    def test_only_inline_fragments_are_required_at_startup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shutil.copytree(HOOKS, root / "hooks")
-            for event_name, model, boundary, card in [
-                ("SessionStart", "unknown", "delegation.md", None),
-                ("SessionStart", "gpt-6.2-astra", "delegation.md", CARD),
-                ("SessionStart", "gpt-6.2-sol", "delegation.md", CARD),
-                ("SubagentStart", "gpt-6.2-astra", "delegation-subagent.md", CARD),
+            for event_name, model, names in [
+                ("SessionStart", "unknown", ["delegation.md"]),
+                ("SessionStart", "gpt-6.2-astra", ["delegation.md"]),
+                ("SessionStart", "gpt-6.2-sol", ["delegation.md"]),
+                ("SubagentStart", "gpt-6.2-astra", ["delegation-subagent.md", *SHARED, CARD]),
             ]:
                 hook = root / "hooks" / ("session-start.py" if event_name == "SessionStart" else "subagent-start.py")
                 event = {"hook_event_name": event_name, "model": model}
-                names = [boundary, *SHARED, *([card] if card else [])]
                 for name in names:
                     for content in [None, " \n\t"]:
                         with self.subTest(event=event_name, model=model, prompt=name, content=content):

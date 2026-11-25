@@ -35,7 +35,7 @@ codex debug prompt-input
 * `hooks.json`：合并到 `~/.codex/hooks.json` 的 hook 定义。
 * `skills/`、`agents/astra-delegate.toml`：分别安装为独立 skill 软链接和原生角色普通文件。
 
-委派行为由 [prompts/](prompts/) 与 [astra-delegate.toml](agents/astra-delegate.toml) 维护。
+主代理启动 hook 按模型选择简短指引及文件路径，Luna 跳过此注入。决定委派或恢复已有委派时，再从所列路径读取分工、上下文、交接及适用的模型路由规则。Astra 子代理通过 [原生角色](agents/astra-delegate.toml) 加载和恢复完整的角色策略。规则正文位于 [prompts/](prompts/)。
 
 ## 安装
 

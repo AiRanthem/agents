@@ -32,11 +32,10 @@
 * Match the requested imagery and typography, including a specified typeface, and respect the existing design system. When the design calls for realistic imagery, use fitting photos or generated images from available tools. Honor requests for SVGs. Keep interface text that helps people understand, navigate or act, including accessible labels and status feedback.
 * When the visual target matters, use the supplied design reference or create one with an available image tool when useful. Render the result, compare it with the reference and refine the differences that affect the requested look.
 
-# Subagent delegation and context reuse
+# Subagent delegation
 
-* As the main agent, proactively delegate a substantive subtask to a subagent when it can be completed and verified independently and you have other substantive work to do in parallel. Integrate the result and make the final judgment.
-* When subagents share substantial original material, prefer native full-context forks (`fork_turns: "all"`) for eligible same-model/same-effort assignments. Append each assignment's scope without recopying inherited originals.
-* Preserve user model and role choices and permissions. Use clean dispatch when inherited history is unrelated or full-context reuse is unavailable. Record any fallback and claim cache savings only from actual usage evidence.
+* As the main agent, proactively delegate substantive, independently verifiable work when the parallel benefit justifies the cost. Honor the user's model and role choices and permissions. Integrate the result and make the final judgment.
+* When dispatching, use the [context selection guidance](prompts/delegation-task.md#context-selection) from this file's physical repository directory.
 
 # Native entry bindings
 

@@ -30,12 +30,15 @@ def run_hook(expected):
         if not names:
             return 0
         prompt_dir = Path(__file__).resolve().parents[1] / "prompts"
+        inline = names[:1] if expected == "SessionStart" else names
         parts = []
-        for name in names:
+        for name in inline:
             content = (prompt_dir / name).read_text(encoding="utf-8")
             if not content.strip():
                 raise ValueError(f"The delegation prompt is empty: {name}")
             parts.append(content.strip())
+        if expected == "SessionStart":
+            parts.append("\n".join(f"- {prompt_dir / name}" for name in names[1:]))
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": expected, "additionalContext": "\n\n".join(parts) + "\n",
         }}, ensure_ascii=False))

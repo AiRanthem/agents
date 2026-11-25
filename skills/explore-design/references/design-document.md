@@ -12,15 +12,15 @@ Inspect applicable instructions, design directories, templates, metadata, naming
 - In YAML frontmatter, set `design_status: draft` for an explicitly requested unapproved draft and `design_status: review-pending` for a complete approved design, including an approved revision. Only `$review-design` may set it to `implementable` after independent review passes. Preserve unrelated frontmatter fields.
 - Write only approved design paths. Delegate writing only within those paths with non-overlapping ownership, and verify the resulting text yourself.
 
-## Record the approved contract
+## Record the design
 
 Use these top-level sections, with headings in the document's language:
 
 1. **摘要** — first in the document, written last; explain the problem, direction, and end state in under one minute.
 2. **背景** — the problem, benefits, and significance: Why.
-3. **设计终态** — the complete intended system after the change: What.
+3. **设计终态** — the intended system after the change. A draft can focus on the part under discussion.
 
-Add Alternatives or Risks only for material content. An explicitly requested draft may include Open Questions and must be labeled unapproved and incomplete. A normal completed document records settled decisions, with observable behavior, ownership, boundaries, invariants, failure outcomes, rationale, and accepted limitations as applicable.
+Add Alternatives or Risks only for material content. Label an explicitly requested draft unapproved and incomplete, and show known assumptions and open decisions or evidence gaps. A completed document records settled decisions, with observable behavior, ownership, boundaries, invariants, failure outcomes, rationale, and accepted limitations as applicable.
 
 Stable facts about the existing system may explain the background. Keep transient snapshots, superseded designs, implementation history, and migration narratives out of the contract. Examples describe runtime outcomes, not test commands.
 
@@ -28,4 +28,6 @@ Implementation TODOs, file-by-file edits, pseudocode, migration procedures, roll
 
 ## Validate
 
-Confirm that the pre-write completeness reflection covered the current contract and re-read the written document against that contract, approved requirements and decisions. Reopen the reflection if writing introduced a substantive change. Confirm one document in the selected language, the three sections, observable target-state precision, the appropriate `design_status` (`review-pending` or `draft`), and absence of implementation-process content. Check that only the approved path was written and run relevant narrow documentation checks. Report draft status honestly; document completion does not establish independent review or implementation.
+For a draft, confirm `design_status: draft` and that assumptions, open decisions and material evidence gaps are visible. For a formal document, confirm `design_status: review-pending` and verify that the written target state is observable and reflects the contract checked and approved. Recheck affected criteria and interactions if writing introduced a substantive change.
+
+Confirm one document in the selected language, the three sections, and absence of implementation-process content. Check that only the approved path was written and run relevant narrow documentation checks. Report draft or pending-review status as applicable.

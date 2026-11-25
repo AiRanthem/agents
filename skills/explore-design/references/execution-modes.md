@@ -14,7 +14,7 @@ Before handoff, verify there were no design-file writes or new document tasks. C
 
 ## Ordinary execution
 
-Keep exploration in conversation unless the user explicitly requests a draft or approves the complete contract. Before writing either document, follow the [design document rules](design-document.md). A draft request authorizes writing the unapproved design at the path the user specified or already approved. Keep open decisions visible in the draft.
+Keep exploration and discussion drafts in conversation. An explicit draft file request authorizes writing the unapproved design at the path the user specified or approved. Follow the [design document rules](design-document.md) for draft and formal documents.
 
 For the formal design, present any outstanding path decision with the complete contract for approval. Reuse existing approval of both. After approval, write or finalize the authoritative Why/What document at that path for independent review. Validate it and report the agreed contract, path, exact design identity, actual checks and pending review.
 
