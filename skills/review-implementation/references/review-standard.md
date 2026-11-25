@@ -1,5 +1,13 @@
 # Implementation review standard
 
+## Start each review from original evidence
+
+Treat every review as a new independent assessment, including after fixes or when reviewing the same snapshot again. Use the original requirements, current approved contract, comparison base and complete stable target. Derive the review plan, findings, coverage and verdict from those inputs and independently verified evidence for the current round.
+
+Keep previous review reports, comments, findings, verdicts and coverage claims out of the lead's and facet reviewers' inputs, including from inherited conversation, project records and memory. If the active context has already seen those results, start the review in a clean, qualified reviewer context. Report the independence gap if such a context cannot run. Use approved decisions as part of the current contract, and reuse independently verifiable raw check results under the verification rules below.
+
+Review the complete current in-scope change against its comparison base after fixes. Reestablish all coverage required by the resolved mode for the new assessment.
+
 ## Prepare shared context and a review plan
 
 Before assessing code or dispatching reviewers, read the applicable instructions, [shared code-quality standard](../../implement-design/references/code-quality.md), complete approved contract and original requirements, stable target/diff, and enough central code, callers and tests to map the affected boundaries. Apply [shared-context preparation](../../../references/delegation-context.md); read original content rather than just paths or summaries. Keep preparation factual: identify responsibilities, dependencies, requirements and available checks without forming candidate defects, quality judgments or a verdict.
@@ -48,7 +56,7 @@ At least one actual review execution must be independent of implementation and f
 
 Give each reviewer the approved contract, stable target/base and diff, applicable conventions, original inputs or eligible shared context, assigned aspects, evidence requirements and stopping conditions. Ensure reviewers assigned implementation quality have read the shared code-quality standard before assessment. Ask for each reviewer's own supported findings, covered rules, test-oracle assessment, actual checks and remaining gaps. A facet assignment is scoped review work, not an instruction to recursively orchestrate the whole review. Keep sibling conclusions out of the initial assignments. If a required reviewer cannot run, complete useful permitted checks and report the missing execution as Unable to conclude.
 
-Start the first review from original material in a context free of author deliberations and prior judgments about the target. The independent lead reads the originals and prepares its own plan before sharing context. Preserve user model choices, required roles and permissions. Report how independence was established and any missing original inputs.
+Report how independence was established and any missing original inputs.
 
 Set review depth by consequence and difficulty without changing the resolved mode:
 
@@ -57,8 +65,6 @@ Set review depth by consequence and difficulty without changing the resolved mod
 - **High risk:** Material public or stored contracts, concurrency, lifecycle ownership, security, compatibility or release safety require a lead qualified for the critical boundary and explicit boundary and test-oracle assessment. In `single-agent`, that reviewer performs the full assessment; risk alone does not require descendants. In `multi-agent`, bind the independent targeted perspective to a qualified reviewer in the plan. Multiple reviewers do not prove correctness.
 
 Select the lead using existing user model choices, reviewer qualifications supplied by the caller and applicable model-routing instructions. For permitted evidence delegation, honor the caller's capability constraints and actual permissions; these do not add review gates. The current lead may continue when qualified and independent; high risk alone does not require a model switch or a new user designation. Escalate only a concrete capability gap or unresolved consequential uncertainty. If a qualified lead or mode-required perspective is unavailable, report Unable to conclude while completing useful permitted checks. Honor stricter repository review policies without silently changing the resolved mode.
-
-Use existing independent evidence when its provenance, contract, coverage and relevant target inputs remain valid. A changed target requires identifying affected coverage, not discarding every result because its whole-tree fingerprint changed. An inaccessible report or vague summary does not satisfy a gate. An already-requested final review is not evidence until it actually runs.
 
 ## Separate evidence collection from acceptance judgment
 
@@ -111,12 +117,6 @@ For each finding state severity, location, triggering situation, expected versus
 Do not report cosmetic preferences or speculative risks. Apply severity and acceptance consequences only to introduced findings; keep any pre-existing warnings outside that list and explain their baseline evidence.
 
 When reviewers disagree, adjudicate the exact claim against requirements, paths, and a distinguishing scenario. Do not choose by majority, stronger-model status, or a demand for consensus. Without decisive evidence, state the unresolved uncertainty and its acceptance impact. Do not add debate rounds without a new source or experiment.
-
-## Re-review only what changed, but invalidate honestly
-
-Prefer the original independent reviewer for re-review while available. A replacement reviewer starts from a clean context and may consult the previous report and its evidence. Identify the new target, the previously violated rule and the changes since review. Independently check the fix, affected callers, test oracles and shared assumptions. Retain earlier coverage that still applies to the current target in the resolved mode.
-
-Broaden the review when a fix changes architecture, ownership, public or stored contracts, shared behavior, dependencies, or test oracles, or when the previous snapshot cannot be reconstructed. Rerun checks whose evidence became stale. Do not repeatedly introduce unrelated low-value comments after blockers are resolved.
 
 ## Report acceptance and stop
 
