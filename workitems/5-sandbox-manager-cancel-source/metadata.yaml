@@ -54,7 +54,7 @@ development:
   worktree: worktrees/5-sandbox-manager-cancel-source
   baseline_commit: 37351888a0cf561a57d694f3fc6baf077f3c9db8
   implementation_commit: null
-  worktree_content_sha256: 07156fec87607a639858f1195a7aad3bcbf71010d4dee8c081593e7e83118245
+  worktree_content_sha256: 1e0785c77c5da60d7c461fc3b0a1f6f690d6916023588580ddb913e6af98d7f5
   evidence: context.md
   verification: passed-affected-packages-race-and-build
   independent_review: changes-required
@@ -63,9 +63,9 @@ development:
     design_version: 2
     reviewed_at: '2026-11-25'
     lead: Codex /root
-    facets: [lifecycle, api, infra]
-    reviewed_worktree_content_sha256: 046546f8f0ced83f02d8a40fd79f05aa4ab6460ec21d496925d739a5f5b7662e
-    fixed_pending_rereview: [1, 2, 3, 4, 5, 6]
+    facets: [lifecycle, api, quality]
+    reviewed_worktree_content_sha256: 07156fec87607a639858f1195a7aad3bcbf71010d4dee8c081593e7e83118245
+    fixed_pending_rereview: [1, 2, 3, 4]
     report: context.md
 acceptance:
   status: not-performed

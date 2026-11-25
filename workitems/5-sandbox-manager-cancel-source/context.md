@@ -98,3 +98,28 @@ go test -race ./pkg/cache ./pkg/sandbox-manager/infra/sandboxcr ./pkg/identity .
 go build -o /dev/null ./cmd/sandbox-manager
 git diff --check HEAD
 ```
+
+## 2026-11-25 第二次独立实现审查与修复
+
+用户要求忽略之前的审查结果，从设计 v2 和源码重新进行多 agent 审查。Codex 主审与 lifecycle、api、quality 三个只读专项审查了内容指纹 `07156fec87607a639858f1195a7aad3bcbf71010d4dee8c081593e7e83118245`，结论为 `changes-required`。用户随后要求直接修复。以下改动由 Codex 及 retry_fix、claim_logs_fix 在同一源码工作树完成。
+
+| 发现 | 修复及验证 |
+| --- | --- |
+| 重试返回前一次错误，丢失真正终止重试的取消来源 | MySQL 创建 API Key、Secret 写入及管理员密钥初始化、Checkpoint 查询与标签更新保留末次失败的来源，继续使用原有错误类型和消息。临时通过 Go overlay 恢复旧重试实现，六个取消场景均在来源断言处失败。 |
+| Claim 候选的 Node 读取普通失败，随后因请求取消而退出，却清空了来源 | 在实际终止筛选的分支取来源。测试覆盖普通读取失败后断连、读取自身返回取消，以及独立取消与请求取消同时可见的情况。 |
+| Runtime JSON 请求在真实 HTTP 传输中将请求取消降为 unknown | 在出站 context 传递可识别的断连原因，保留传输期限。测试服务收到 `/init` 后取消入站 context，修复前实际日志与返回错误为 `unknown`，修复后返回 `http_request`。另核对父期限、传输超时、先前已断开的请求与独立 context。 |
+| CSI 挂载与失败 Sandbox 清理日志漏掉同次错误来源 | 命令挂载、Storage API、单卷失败以及三条保留或删除决策日志已覆盖。只在描述原失败的记录添加该来源。Clone 从注解解析卷时的错误日志也已补齐，该条通过源码核查。 |
+
+源码 HEAD 和基线均为 `37351888a0cf561a57d694f3fc6baf077f3c9db8`。按上文命令计算的 74 个变更文件内容指纹为 `1e0785c77c5da60d7c461fc3b0a1f6f690d6916023588580ddb913e6af98d7f5`。复审状态为待独立复审，源码未提交。
+
+在源码工作树使用 Go 1.26.3 和 `GOCACHE=/private/tmp/agents-lifecycle-go-cache` 执行以下检查，全部退出 0。七个受影响包通过完整单测，以下三组定向用例分别在竞态检测下重复三轮。最终简化了一处等价的 context 状态判断，并重新执行 Runtime 与 logs 的竞态测试、构建和格式检查。尚未进行集群 E2E 或人工验收。
+
+```sh
+go test -count=1 ./pkg/utils/logs ./pkg/utils/runtime ./pkg/sandbox-manager/infra/sandboxcr ./pkg/servers/e2b/keys ./pkg/servers/e2b ./pkg/servers/web ./pkg/sandbox-manager
+go test -race -count=3 ./pkg/servers/e2b/keys ./pkg/sandbox-manager/infra/sandboxcr -run '^(TestMySQL_CreateKeyBranches|TestSecretKeyStorage_RetryPatchSecretKeyErrors|TestSecretKeyStorageCancellationAfterRetry|TestCheckpointLookupCancellationAfterRetry|TestPatchCheckpointIDLabel)$'
+go test -race -count=3 ./pkg/sandbox-manager/infra/sandboxcr ./pkg/utils/runtime -run '^(TestClearFailedSandboxLogsClaimCancellation|TestPickAnAvailableSandbox_ProbeUpdates|TestProcessCSIMounts_CancellationLogs)$'
+go test -race -count=3 ./pkg/utils/logs ./pkg/utils/runtime -run '^(TestTransportTimeout|TestInitRuntimeHTTPRequestCancellation|TestInitRuntimeCancellationAfterRetry)$'
+go build -o /dev/null ./cmd/sandbox-manager
+git diff --check HEAD
+git ls-files -m -o --exclude-standard | xargs gofmt -l
+```
