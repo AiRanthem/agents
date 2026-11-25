@@ -1,7 +1,7 @@
 id: 5-sandbox-manager-cancel-source
-title: 区分 sandbox-manager 日志中的内部取消与 HTTP 请求取消
+title: 在 sandbox-manager 日志和 API 错误响应中区分内部取消与 HTTP 请求取消
 kind: enhancement
-status: designing
+status: developing
 repository: agents
 created_at: '2026-11-25'
 recorded_by: Qoder
@@ -16,18 +16,22 @@ documents:
   decision: decision.md
 design:
   file: spec.md
-  version: 1
+  version: 2
   state: implementable
-  registered_sha256: be22c72533daa73179da2c679e666be93352d18c2119e823abed30cd7a0df68b
-  requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
+  registered_sha256: 3b1b064342725ec7e817dc33721a0f5fb566435b51c6cc14eb5033600555a5ad
+  requirement_sha256: 7844371fb15af2fb413860c197a41f3ec2bab94323c9369cf4554288ae070a78
   authors: [Codex]
-  source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
+  source_baseline: 37351888a0cf561a57d694f3fc6baf077f3c9db8
   user_approval:
     status: approved
     source: decision.md
     recorded_at: '2026-11-25'
-    quote: 记 unknown
+    quote: 需求要求补充：如果 context canceled 会通过 API response 返回，也需要在 response 中体现原因
   review:
+    version: 2
+    status: skipped_by_user
+    source: decision.md
+  previous_review:
     status: pass
     version: 1
     authorization: user-requested
@@ -42,14 +46,17 @@ design:
     source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
     report: context.md#2026-11-25-独立设计评审
     findings: []
-  next_action: implementation-awaiting-authorization
+  next_action: independent-implementation-review
 development:
-  status: not-started
+  status: implemented
   repository: agents
-  branch: null
-  worktree: null
-  baseline_commit: null
-  verification: not-performed
+  branch: feat/sandbox-manager-cancel-source-261125
+  worktree: worktrees/5-sandbox-manager-cancel-source
+  baseline_commit: 37351888a0cf561a57d694f3fc6baf077f3c9db8
+  implementation_commit: null
+  worktree_content_sha256: 046546f8f0ced83f02d8a40fd79f05aa4ab6460ec21d496925d739a5f5b7662e
+  evidence: context.md
+  verification: passed-affected-packages-race-and-build
   independent_review: not-performed
 acceptance:
   status: not-performed
@@ -57,4 +64,4 @@ delivery:
   status: not-started
   requirements_confirmed: false
   required: []
-cleanup: not-applicable
+cleanup: retained

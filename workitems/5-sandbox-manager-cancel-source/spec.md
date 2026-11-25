@@ -1,12 +1,12 @@
 ---
-title: sandbox-manager 取消日志的来源归因
+title: sandbox-manager 日志和 API 错误响应中的取消来源
 design_status: implementable
-version: 1
+version: 2
 ---
 
 # 摘要
 
-sandbox-manager 在现有的取消日志及对应的 `API Error` 上记录结构化字段 `cancelSource`。排障人员可以直接筛选请求取消、内部取消以及已确认取消但来源未知的操作。字段描述本次操作因何退出。
+sandbox-manager 在现有取消日志、对应的 `API Error` 日志以及返回给调用方的 JSON 错误响应中提供结构化字段 `cancelSource`。排障人员和 API 调用方由此可以判断本次操作因何退出。
 
 # 背景
 
@@ -14,7 +14,7 @@ sandbox-manager 在现有的取消日志及对应的 `API Error` 上记录结构
 
 # 设计终态
 
-| 本次操作的结果 | 日志中的 `cancelSource` |
+| 本次操作的结果 | 日志及对应 API 错误响应中的 `cancelSource` |
 | --- | --- |
 | 入站 HTTP 请求的取消传播到当前操作，并使它退出 | `http_request` |
 | sandbox-manager 主动取消其管理的操作，例如停机终止共享签发 | `internal` |
@@ -32,4 +32,6 @@ sandbox-manager 在现有的取消日志及对应的 `API Error` 上记录结构
 - 依赖只返回可识别的 `context.Canceled`，没有提供来源，日志显式记 `unknown`。排障人员可以把这一类与没有发生取消的日志分开检索。
 - Pause/Resume 等待返回冲突，随后请求也结束。日志描述实际冲突，省略字段；只有请求取消确实导致等待退出时才记 `http_request`。Claim 自身超时也省略字段，即使旧文案中含有 “context canceled”。
 
-本项只调整 sandbox-manager 自身已有日志的归因及与之矛盾的文案。日志级别、静默处理正常取消的路径、HTTP 状态码和响应内容沿用现有行为。归因信息只供日志使用，取消传播、超时、重试与后台工作的生命周期继续按原有规则运行。
+**API 错误响应。** 对于由取消导致的失败，JSON 顶层增加可选字符串字段 `cancelSource`。即使 API 将底层错误映射为通用消息，仍使用本次失败已经确定的来源。中间件提前返回错误时也适用。成功、普通超时及业务错误省略该字段。HTTP 状态码、既有响应字段和消息沿用原有约定。只传递表中的来源值，后端原始原因继续遵守原有脱敏规则。客户端已断开连接时，服务端生成的响应可能无法送达。
+
+现有日志继续使用原有级别，静默处理正常取消的路径维持静默。取消传播、超时、重试和后台工作的生命周期继续按原有规则运行。

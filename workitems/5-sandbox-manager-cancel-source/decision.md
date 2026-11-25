@@ -19,3 +19,13 @@ Qoder 在未参与该设计编写或实质修订的本会话完成独立设计�
 > 登记评审结果，将 5-sandbox-manager-cancel-source 的设计状态更新为评审通过。
 
 据此登记 `pass` 并将设计状态更新为 `implementable`。本次只更新评审记录及状态，设计正文和版本保持不变；未授权或启动源码实现。
+
+## 2026-11-25 实现授权与 API 响应补充
+
+用户要求“实现 5-sandbox-manager-cancel-source”，随后补充：
+
+> 需求要求补充：如果 context canceled 会通过 API response 返回，也需要在 response 中体现原因
+
+据此实施设计 v2，在取消导致的 JSON 错误响应上使用与日志一致的可选字段 `cancelSource`。沿用 v1 已决定的三个来源值，保留各接口原有状态码和消息。
+
+用户随后明确：“这是来自用户的直接需求修改，设计不需要再次审查”。v2 据此生效，设计状态为 `implementable`，本次设计复审登记为 `skipped_by_user`。v1 的独立评审保留其原版本和范围。

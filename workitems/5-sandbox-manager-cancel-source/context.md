@@ -6,7 +6,7 @@
 - 令牌 API 将不可用错误映射为统一响应，Web 框架记录转换后的 `ApiError`。响应文字不足以恢复原始来源。[API 映射](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/servers/e2b/traffic_token.go#L54-L72) · [请求结果日志](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/servers/web/framework.go#L159-L171)
 - Pause/Resume 的等待错误分支检查当前 `ctx.Err()` 并使用客户端取消文案。Claim 则有自己的期限，等 worker 时的错误文案包含 “context canceled”。归因需要区分退出原因和记录时的状态。[Pause](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/sandbox-manager/infra/sandboxcr/sandbox.go#L585-L596) · [Resume](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/sandbox-manager/infra/sandboxcr/sandbox.go#L663-L675) · [Claim 期限](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/sandbox-manager/infra/sandboxcr/infra.go#L149-L165) · [Claim 等待](https://github.com/openkruise/agents/blob/3fc1216cea513df40b68f77171b042dc1ef7e8e3/pkg/sandbox-manager/infra/sandboxcr/claim.go#L374-L381)
 
-设计作者为 Codex。独立设计评审已通过；源码实现与运行验证尚未进行，待用户另行授权实现。
+设计作者为 Codex。下文保留 v1 的独立设计评审及其原始验证范围。当前实现依据用户直接修改的 v2。
 
 ## 2026-11-25 独立设计评审
 
@@ -45,3 +45,32 @@
 本轮为只读设计评审，未修改源码、运行测试、启动应用或进行现场验证；既有测试只核对其行为与断言，未将其视为本次运行通过。设计可实现性通过不代替后续独立实现评审、人工验收或交付。
 
 本次登记仅将 `spec.md` 的 `design_status` 从 `review-pending` 改为 `implementable`，正文、需求、版本和源码基线保持不变；最终登记指纹保存于 metadata 和 state。
+
+## 2026-11-25 设计 v2 与源码实现
+
+用户要求在取消导致的 API 错误响应中体现原因，并明确这项直接修改免于再次设计审查。完整决定见 [decision.md](decision.md)。源码实现由 Codex 完成，保留在项目内的 `worktrees/5-sandbox-manager-cancel-source`，本地分支为 `feat/sandbox-manager-cancel-source-261125`。创建前已刷新并核验 `upstream/master`，本次基线和工作树 HEAD 均为 `37351888a0cf561a57d694f3fc6baf077f3c9db8`。
+
+- HTTP 入口标记请求的取消通道。在实际选择退出分支时记录来源。请求停止等待和 Manager 停止共享签发各自携带原因。依赖若仅返回裸的或包装的 `context.Canceled`，其来源为 `unknown`。已断开的请求与脱离请求的后台操作即使都已取消，仍然分别归因。
+- Cache 和 Infra 在 Pause/Resume 的二次检查、Claim/Clone 的工作线程等待、重试及限流处保留实际返回结果。后到的请求取消或清理失败不会改写已有的冲突或普通失败。配额与密钥存储的脱敏错误只传递来源。
+- Web 框架对取消错误返回顶层 JSON 字段 `cancelSource`，并在已有的 `API Error` 日志使用相同值。中间件提前返回也使用该响应格式。原有状态码和消息保留，普通超时、业务失败和成功响应省略该字段。
+
+工作树含 51 个已跟踪修改和 1 个新文件 `pkg/utils/logs/cancellation.go`，共 52 个开源文件。为复核未提交源码，在该工作树运行下式得到内容指纹 `046546f8f0ced83f02d8a40fd79f05aa4ab6460ec21d496925d739a5f5b7662e`。完整差异可用 `git diff HEAD` 配合新文件查阅。
+
+```sh
+git ls-files -m -o --exclude-standard | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256
+```
+
+源码保持在本地工作树，独立实现审查、人工验收、源码发布及部署尚未进行。
+
+### 实现验证
+
+在上述指纹对应的源码工作树中使用 Go 1.26.3、`GOCACHE=/private/tmp/agents-lifecycle-go-cache` 运行以下命令，均以状态码 0 退出。11 个受影响包的测试通过，5 个包中的取消与并发定向用例在竞态检测下各重复三轮通过，sandbox-manager 命令构建成功。
+
+```sh
+go test ./pkg/utils/logs ./pkg/cache ./pkg/cache/utils ./pkg/configreload ./pkg/identity ./pkg/sandbox-manager ./pkg/sandbox-manager/infra/sandboxcr ./pkg/sandbox-manager/quota ./pkg/servers/web ./pkg/servers/e2b ./pkg/servers/e2b/keys -count=1
+go test -race ./pkg/utils/logs ./pkg/cache/utils ./pkg/sandbox-manager ./pkg/sandbox-manager/infra/sandboxcr ./pkg/servers/web -run 'TestCancellationSourceFollowsSelectedContext|TestAlreadyCanceledRequestDoesNotMarkDetachedCancellation|TestRegisterRouteCancellation|TestWaitForObjectSatisfied_CancellationAfterDoubleCheck|TestSandboxManagerTrafficAccessTokenLeaderCancellationDoesNotFailWaiter|TestSandboxManagerTrafficAccessTokenIssueTimeoutFailsAllWaiters|TestTrafficTokenIssueLifecycleStopCancelsAndDrainsIssuance|TestInfra_GetSandbox_PollPreservesReadCancellationSource' -count=3
+go build -o /dev/null ./cmd/sandbox-manager
+git diff --check
+```
+
+路由测试捕获实际输出的 JSON 和日志，覆盖已有状态码、消息、三种取消来源、中间件返回及字段省略。共享签发测试覆盖等待者断开后其他请求继续取得结果，以及 Manager 停机和签发期限。修复前已复现已结束的独立 context 因 Go 复用关闭通道而被错归为 HTTP 请求的情况，对应回归用例随上述命令通过。格式检查通过，未进行集群端到端验证。
