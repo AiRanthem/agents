@@ -19,6 +19,6 @@ Use [develop-workitem](../develop-workitem/SKILL.md) for requested design or imp
 
 ## Progress report
 
-Read the current project and selected item files. Report each full ID and title, substantive status, design and implementation progress, dependencies, source branch/worktree, actual review and acceptance, delivery obligations and unresolved facts. Distinguish recorded evidence from facts verified live for the report. Reporting alone does not authorize changes or remote writes.
+Read the current project and selected item files. Write a self-contained report for the person tracking the work. Give each full ID and title, substantive status, design and implementation progress, dependencies, source branch/worktree, actual review and acceptance, delivery obligations and unresolved facts. Distinguish recorded evidence from facts verified live for the report. Reporting alone does not authorize changes or remote writes.
 
 Maintain useful findings in existing context or [evidence](references/evidence.md). Report what changed and the actual commit/push or external synchronization outcome. Read-only planning remains read-only.

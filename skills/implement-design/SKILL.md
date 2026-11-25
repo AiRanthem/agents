@@ -31,7 +31,7 @@ If evidence requires a contract correction, retain the failing scenario, violate
 
 Read and apply the shared [code quality criteria](references/code-quality.md) throughout implementation.
 
-- Immediately after writing or modifying each function, self-review it before continuing. Stop when it satisfies the contract, is clear to read and has no evident unnecessary complexity.
+- Self-review each function immediately after writing or editing it. Once it satisfies the contract, is clear to read and has no evident unnecessary complexity, continue with the remaining implementation or verification.
 - Handle relevant errors, cancellation, cleanup, uncertain outcomes, partial failure and concurrency according to the contract.
 - Remove superseded task changes. Whenever you confirm code is dead, remove it, including pre-existing code. Remove tests that exercise only the deleted behavior and preserve coverage for supported behavior. Keep other cleanup within the task's scope.
 
@@ -55,7 +55,7 @@ Do not automatically invoke an explicit-only review skill unless the user or app
 
 ## Inspect and hand off
 
-Check the final diff against the approved contract and shared code quality criteria. Refresh changed or missing original inputs and required instruction reloads. Confirm per-function self-review, required behavior, non-goals, comments, generated outputs, dependencies and final verification evidence. Report concisely in the user's language:
+Check the final diff against the approved contract and shared code quality criteria. Refresh changed or missing original inputs and required instruction reloads. Confirm per-function self-review, required behavior, non-goals, comments, generated outputs, dependencies and final verification evidence. Keep the handoff concise and self-contained. In the user's language, report the following.
 
 1. Outcome: ready for independent review, verification blocked, or decision needed; claim independent acceptance only from actual qualifying evidence covering this final state.
 2. Target identity: repository/worktree, comparison base and HEAD, contract path/version, in-scope changed and untracked files and excluded unrelated changes. Include a dirty diff/content fingerprint or reproducible snapshot; HEAD alone is insufficient.

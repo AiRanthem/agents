@@ -11,6 +11,6 @@ Preserve the user's final code and design. Record actual human acceptance with i
 
 The project controller or ordinary authorized project session updates the existing documents and metadata directly, then commits and pushes those project changes. A stage executor returns assigned evidence under [stage-executor](../advance-project/references/stage-executor.md). Read-only planning remains read-only.
 
-Inspect the actual evidence for each declared merge, release, deployment or other delivery obligation. Update status to reflect what occurred and state what remains unverified. Aggregate acceptance covers the full original outcome. Project metadata publication, AI review and tests do not establish source delivery or human acceptance.
+Inspect the actual evidence for each declared merge, release, deployment or other delivery obligation. Record each supported outcome even if another obligation is pending, and update status from those facts. Before reporting completion, compare the recorded outcomes against all declared obligations and state what remains or could not be verified. Aggregate acceptance covers the full original outcome. Project metadata publication, AI review and tests do not establish source delivery or human acceptance.
 
 Source publication, cleanup and project removal require authorization covering those actions. Preserve successful delivery facts when cleanup fails and keep remaining source edits and obligations visible.

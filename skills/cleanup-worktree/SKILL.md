@@ -44,11 +44,11 @@ Report the cleanliness evidence; exact worktree path; local branch refs/OIDs to 
 
 Apply explicit cleanup authorization already given in the conversation. Ask for confirmation only for deletions or file dispositions not covered by that authorization. Inspection alone does not authorize deletion, and authorization for ignored files alone does not authorize branch or worktree deletion. Keep unsafe or uncertain resources outside the manifest.
 
-Complete one initial audit and one refresh immediately before mutation. Reuse evidence while the relevant inputs are unchanged; repeat only affected checks. A change in local OIDs, contents, recovery availability, or deletion scope requires an updated report and any newly needed authorization. A remote advance that still preserves the recorded OIDs, or an unrelated background fetch, does not itself expand deletion scope.
+Complete one initial audit before reporting the manifest. Reuse its evidence while the relevant inputs are unchanged. A change in local OIDs, contents, recovery availability, or deletion scope requires repeating the affected checks, updating the report, and obtaining any newly needed authorization. A remote advance that still preserves the recorded OIDs, or an unrelated background fetch, does not itself expand deletion scope.
 
 ## Execute and verify
 
-Operate from a surviving worktree. Immediately before mutation, refresh exact recovery refs and repeat cleanliness, OID, repository-operation, protection, and worktree-use checks. Stop before deletion if recovery or an authorized item can no longer be verified.
+Operate from a surviving worktree. Immediately before mutation, refresh the exact recovery refs once and repeat the cleanliness, OID, repository-operation, protection, and worktree-use checks. Stop before deletion if recovery or an authorized item can no longer be verified.
 
 - Remove the registered worktree with `git worktree remove`; do not use `rm -rf`, `git clean`, or forced worktree removal for unresolved contents.
 - Delete only authorized local branches after the worktree is removed. Use `git branch -d` when it succeeds; `git branch -D` is allowed for an exact authorized ref/OID whose remote recovery was verified, even when Git's local deletion check refuses it. Recheck the branch OID before deletion.

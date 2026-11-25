@@ -48,7 +48,7 @@ Keep the trimmed design only in the conversation or host-managed plan. Never wri
 ## Produce the mode-specific result
 
 - **read-only planning mode:** Put the confirmed acceptance contract and trimmed implementation or repair design directly in the final plan. For a failed POC, include the log-supported failure point and code change. Include ordered implementation actions, the minimal happy-path integration check, required diagnostic logging, and the final diagnostic subagent audit. Tell the executor to load `$implement-poc` and execute this confirmed plan in execution mode. Then stop without repository writes or implementation claims.
-- **execution mode:** Implement the confirmed trimmed design immediately. If resuming a plan, load `$implement-poc`, verify that the acceptance environment and relevant code assumptions still hold, and proceed. Return to the user only when new evidence changes the acceptance contract or trimmed design.
+- **execution mode:** Implement the confirmed trimmed design immediately. When resuming a plan, load `$implement-poc`, verify that the acceptance environment and relevant code assumptions still hold, and proceed. Seek renewed confirmation only when new evidence changes the acceptance contract or trimmed design.
 
 ## Optimize only for time to acceptance
 
@@ -107,7 +107,7 @@ Fix every blind spot that could prevent diagnosis of the accepted scenario, reru
 
 ## Hand off the POC
 
-Report concisely:
+Keep the handoff concise and understandable without the earlier discussion. Include the following.
 
 1. the confirmed acceptance scenario and whether it passed;
 2. the implemented files and shortest runtime path;

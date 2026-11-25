@@ -16,4 +16,4 @@ For a project work item, read its recorded source location, main-workspace const
 - Refuse to overwrite a colliding path, local branch, or remote destination branch. Ask one concise question only when a material choice remains ambiguous.
 - Create the branch and worktree with `git worktree add`, then push only that new branch to the corresponding destination resolved from any configured remote namespace or push refspec, and set the resulting remote branch as upstream. Never force-push.
 - Completion requires verifying the selected branch, base commit, clean status, resolved absolute path, matching local and remote branch commits, and upstream configuration. If publishing or tracking fails, report the partial result and preserve the created local branch and worktree.
-- Report the branch, upstream base, and tracked remote branch briefly, ending with the absolute worktree directory. Do not commit unless separately requested.
+- Briefly report the branch, upstream base, and tracked remote branch, ending with the absolute worktree directory. Source commits require a separate request.

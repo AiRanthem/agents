@@ -61,7 +61,7 @@ Prefer the least test and support code among alternatives that preserve sufficie
 
 ## Report the review and request a scoped decision
 
-Lead with concrete cleanup opportunities and the coverage that remains after them. Clearly flag important coverage gaps that block a proposed reduction or require repair. For each recommendation, give the location, evidence, concrete keep/remove/merge/simplify/repair/add action, and its effect on total test code and behavioral protection. Separate demonstrated issues from uncertain suggestions; do not let gap hunting replace the cleanup review.
+Give the user enough context to decide on the proposed edits from this report alone. Lead with concrete cleanup opportunities and the coverage they retain. Flag important coverage gaps that block a reduction or require repair. For each recommendation, give the location, evidence, proposed action (keep, remove, merge, simplify, repair or add), and its effect on total test code and behavioral protection. Distinguish demonstrated issues from uncertain suggestions and keep the review focused on cleanup.
 
 Summarize:
 

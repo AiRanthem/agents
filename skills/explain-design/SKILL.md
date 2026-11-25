@@ -5,9 +5,7 @@ description: Write a self-contained design explanation for technical experts unf
 
 # Explain Design
 
-Write for a senior technical expert with limited time and no knowledge of this repository. The reader should understand why the change is needed, how the proposed system works, and why its consequential choices were made, with enough background to begin judging the change. The result is a lasting explanation of the design, not an abbreviated development specification.
-
-The document must stand alone even if its input design is never published or is deleted. Write it in English unless the user explicitly requests another document language; the source and conversation language do not change that default.
+Write a lasting design explanation for a senior technical expert with limited time and no knowledge of this repository. Give the reader enough background to assess the change by explaining why it is needed, how the proposed system works, and why its consequential choices were made. The article must stand alone even if the source design is never published or is deleted. Use English unless the user explicitly requests another document language.
 
 ## Authority and scope
 

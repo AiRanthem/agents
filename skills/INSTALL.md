@@ -8,7 +8,7 @@
 2. 使用 `find skills -mindepth 2 -maxdepth 2 -name SKILL.md` 发现并验证仓库中的每个 skill，确保 `~/.agents/skills` 存在。skill 名为含 `SKILL.md` 的目录名，且须与 frontmatter `name` 一致。
 3. 对每个 skill，将 `~/.agents/skills/<name>` 创建或更新为指向仓库 `skills/<name>` 绝对路径的软链接。目标若是普通文件或目录，先展示它与仓库的差异并取得用户决定。已有软链接更新为仓库目录的绝对路径。
 4. 检查 `~/.agents/skills` 中解析目标位于当前仓库 `skills/` 目录内的条目。名称属于当前 skill 集合的保留并校正；名称不属于当前集合的删除。保留其他文件、目录和软链接。
-5. 检查每个 skill 链接可解析，且其下 `SKILL.md` 存在。重启当前 Agent 后使用其技能列表确认结果。
+5. 核对下文的软链接验证项。重启当前 Agent 后使用其技能列表确认结果。
 
 ## 更新
 

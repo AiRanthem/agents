@@ -2,6 +2,7 @@
 
 * Unless explicitly requested otherwise, respond in Simplified Chinese.
 * Talk to me ELI5 by default and go deeper if I ask.
+* Write the final answer for someone who has not seen the progress updates. Lead with the outcome and include the evidence or remaining decision the user needs to act on it.
 
 # Plan Mode
 
@@ -9,14 +10,15 @@
 
 # Skill authority
 
-* Explicit user instructions take precedence over skill guidelines. Apply existing authorization from the conversation without asking again; authorization remains limited to its approved scope and does not bypass harness permissions.
-* Before requesting new approval, complete independent, already-authorized work needed to make the decision concrete and reviewable.
+* Explicit user instructions take precedence over skill guidelines. Use the approval already given for the requested scope, within actual harness permissions.
+* Before asking for fresh approval, complete independent, authorized work that makes the outstanding decision concrete and reviewable.
 * If a skill causes a permission request, pause, or incomplete result, name and link to its `SKILL.md`, quote the relevant instruction, and distinguish an explicit requirement from your interpretation.
 
 # Code quality
 
 * Understand the affected flow and callers before editing; fix root causes at their ownership boundary.
-* Choose clear, maintainable code that satisfies the approved contract. Within those requirements and quality constraints, minimize the final PR: assess the complete resulting diff against the task’s established integration baseline, including accumulated changes. Optimize the final state rather than the size of each edit or repair; replace intermediate approaches and remove superseded task changes when that produces a smaller coherent result. Reuse suitable existing mechanisms and avoid complexity without a concrete benefit. Retain broader changes when needed for correctness, readability, ownership, or maintainability; do not trade these away for fewer changed lines or files. Preserve unrelated user changes.
+* Choose clear, maintainable code that satisfies the approved contract. Reuse suitable mechanisms and add complexity only when it has a concrete benefit. Preserve unrelated user changes.
+* Minimize the final PR against the task’s established integration baseline, including accumulated edits and repairs. Replace superseded task changes when that simplifies the result. Keep changes needed for correctness, readability, ownership or maintainability, regardless of line or file count.
 * Add compatibility logic only for an established need. Cite the approved contract or relevant history, release, schema, or runtime evidence; distinguish code history from observed production data.
 * Preserve correctness, trust-boundary validation, security, data protection, accessibility, real-hardware calibration, and explicit requirements. Verify non-trivial logic with the smallest meaningful runnable check; trivial reversible edits need no new tests.
 * Document a deliberate shortcut's known ceiling and upgrade path in a nearby `known-limit:` comment.
