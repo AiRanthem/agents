@@ -9,7 +9,7 @@ For business/code work, locate the actual main workspace and source repository a
 | Progress, requirements, metadata or archive updates | [manage-workitems](../SKILL.md) |
 | A separate project workspace | [create-project](../../create-project/SKILL.md) |
 | Refresh project layout or instructions | [upgrade-project](../../upgrade-project/SKILL.md) |
-| Decompose an established design into child contracts and dependencies | [split-workitem](../../split-workitem/SKILL.md) |
+| Split a reviewed design into separately managed child items | [manage-workitems](../SKILL.md) |
 | Requested design or implementation | [develop-workitem](../../develop-workitem/SKILL.md) |
 | Acceptance, delivery or separately requested cleanup | [complete-workitem](../../complete-workitem/SKILL.md) |
 | Remove a selected local project | [delete-project](../../delete-project/SKILL.md) |
