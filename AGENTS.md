@@ -1,6 +1,6 @@
 # OKA 日常开源开发
 
-本目录保存项目 `oka-daily-open-source` 的管理记录。先阅读 `.project/project.yaml`、`.project/context.md`、`.project/project-instructions.md` 和相关工作项原文。业务操作须阅读原始主工作区和源码仓库指令。
+本目录保存项目 `oka-daily-open-source` 的管理记录。先阅读[项目配置](.project/project.yaml)、[项目背景](.project/context.md)、[项目指令](.project/project-instructions.md)和相关工作项原文。按[项目工作流](.project/workflow.md)维护和交付记录，按[恢复指引](.project/recovery.md)续接中断的工作。业务操作须阅读原始主工作区和源码仓库指令。
 
 直接在现有路径维护 Markdown、YAML 和配置。完成已授权的项目记录修改后，仅提交相关文件，并普通推送到配置的项目分支。保留无关改动；发布失败时保留本地成果并如实报告。外部系统同步另行记录实际结果。
 

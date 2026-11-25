@@ -1,3 +1,4 @@
+/repos/
 /worktrees/*
 !/worktrees/.gitkeep
 /.project-local/
