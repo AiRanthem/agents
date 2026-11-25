@@ -4,7 +4,7 @@ kind: enhancement
 status: designing
 repository: agents
 created_at: '2026-11-25'
-recorded_by: Codex
+recorded_by: Qoder
 depends_on: []
 split_from: null
 fixes: []
@@ -17,8 +17,8 @@ documents:
 design:
   file: spec.md
   version: 1
-  state: review-pending
-  registered_sha256: 144ba8829edacb9df65c87a1c2ed4da51d1000e9a83f6bb60d88ca6192a99a88
+  state: implementable
+  registered_sha256: be22c72533daa73179da2c679e666be93352d18c2119e823abed30cd7a0df68b
   requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
   authors: [Codex]
   source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
@@ -28,10 +28,21 @@ design:
     recorded_at: '2026-11-25'
     quote: 记 unknown
   review:
-    status: pending
-    authorization: not-requested
-    reviewer: null
-  next_action: design-review
+    status: pass
+    version: 1
+    authorization: user-requested
+    authorization_source: decision.md#2026-11-25-评审与登记授权
+    reviewer: Qoder（本会话，未参与设计编写或实质修订）
+    reviewed_at: '2026-11-25'
+    input_project_commit: c8c55f3cf99c259fdfcb83283223abdb1ed5693e
+    input_spec_sha256: 144ba8829edacb9df65c87a1c2ed4da51d1000e9a83f6bb60d88ca6192a99a88
+    input_requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
+    spec_sha256: be22c72533daa73179da2c679e666be93352d18c2119e823abed30cd7a0df68b
+    requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
+    source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
+    report: context.md#2026-11-25-独立设计评审
+    findings: []
+  next_action: implementation-awaiting-authorization
 development:
   status: not-started
   repository: agents

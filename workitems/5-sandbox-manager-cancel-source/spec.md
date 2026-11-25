@@ -1,6 +1,6 @@
 ---
 title: sandbox-manager 取消日志的来源归因
-design_status: review-pending
+design_status: implementable
 version: 1
 ---
 
