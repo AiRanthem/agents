@@ -123,3 +123,26 @@ go build -o /dev/null ./cmd/sandbox-manager
 git diff --check HEAD
 git ls-files -m -o --exclude-standard | xargs gofmt -l
 ```
+
+## 2026-11-25 第三次独立实现审查与修复
+
+用户要求多 agent 审查设计 v2 的实现。主审 `review_lead` 在新上下文审阅内容指纹 `1e0785c77c5da60d7c461fc3b0a1f6f690d6916023588580ddb913e6af98d7f5` 的完整源码，专项审查员为 `concurrency`、`api_security` 和 `quality`。该版结论为 `changes-required`。用户随后要求“优化”，Codex 与执行者 `claim_fix`、`reload_fix` 在原源码工作树完成以下修复。
+
+1. runtime 出站调用恢复直接继承请求取消和期限。使用 Go 1.26.3 和单个可运行线程，在父请求取消返回时立即检查子请求。1,000 次中子请求仍活动的次数从 1,000 降至 0，与标准 `context.WithTimeout` 对照一致。
+2. BrowserUse 与 runtime 在标准 HTTP 传输处保留请求断开的来源。本地 HTTP/1 服务收到 `/json/version` 后取消入站请求，通过实际代理和 API 错误映射验证结果从 `unknown` 改为 `http_request`。回归用例覆盖等待响应头、读取响应体、请求体独立失败及自定义传输层失败。建连期间若只取得裸取消且无法确认来源，仍记 `unknown`。
+3. 删除 Sandbox 前的追踪注解 Patch 和代理读取非 2xx 响应正文的已有错误日志携带来源。回归用例分别核对 Patch 失败后继续删除，以及读取失败不覆盖已收到的 HTTP 错误状态。
+4. 配置热重载把来源带到 controller-runtime 的 `Reconciler error`。单次或相同来源的取消保留该来源，多个取消来源不同时记 `unknown`，同时发生普通失败时聚合日志省略字段。各组件日志保留各自来源。真实 controller-runtime 队列配合本地 Kubernetes API 替身验证了脱敏、结构化字段与重试。新增断言在原实现上失败。
+5. Claim 和 Clone 共用重试结果处理。退避预算已经耗尽时，随后到达的请求取消不会清掉最后一次失败的来源。定向测试核对返回文案、错误链和来源，临时回退预算耗尽归因及 Patch 日志修复后，两项新增断言均失败。
+
+源码分支为 `feat/sandbox-manager-cancel-source-261125`，HEAD 与基线均为 `37351888a0cf561a57d694f3fc6baf077f3c9db8`。当前 77 个变更文件的内容指纹为 `7937a9202000f07a50ce32824fb22379d7f8ab37375ce6ebec3cebf2ef23ff9c`，源码未提交。此版本待独立复审与人工验收。
+
+以下检查均退出 0。未执行集群 E2E。
+
+```sh
+go test -count=1 ./pkg/utils/proxyutils ./pkg/utils/logs ./pkg/utils/runtime ./pkg/configreload ./pkg/sandbox-manager/infra/sandboxcr ./pkg/servers/e2b ./pkg/sandbox-manager
+go test -race -count=10 -run 'Test(ProxyRequestDisconnect|ProxyDependencyCancellation|ProxyUploadCanceledBeforeDisconnect|OperationTimeout|InitRuntimeHTTPRequestCancellation)$' ./pkg/utils/proxyutils ./pkg/utils/logs ./pkg/utils/runtime
+go test -race -count=3 -run '^TestWatcherReconcileLogs$' ./pkg/configreload
+go build -o /dev/null ./cmd/sandbox-manager
+git diff --check HEAD
+git ls-files -m -o --exclude-standard | xargs gofmt -l
+```
