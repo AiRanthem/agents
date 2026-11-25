@@ -1,0 +1,49 @@
+id: 5-sandbox-manager-cancel-source
+title: 区分 sandbox-manager 日志中的内部取消与 HTTP 请求取消
+kind: enhancement
+status: designing
+repository: agents
+created_at: '2026-11-25'
+recorded_by: Codex
+depends_on: []
+split_from: null
+fixes: []
+archived: false
+documents:
+  requirement: requirement.md
+  spec: spec.md
+  context: context.md
+  decision: decision.md
+design:
+  file: spec.md
+  version: 1
+  state: review-pending
+  registered_sha256: 144ba8829edacb9df65c87a1c2ed4da51d1000e9a83f6bb60d88ca6192a99a88
+  requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
+  authors: [Codex]
+  source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
+  user_approval:
+    status: approved
+    source: decision.md
+    recorded_at: '2026-11-25'
+    quote: 记 unknown
+  review:
+    status: pending
+    authorization: not-requested
+    reviewer: null
+  next_action: design-review
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  verification: not-performed
+  independent_review: not-performed
+acceptance:
+  status: not-performed
+delivery:
+  status: not-started
+  requirements_confirmed: false
+  required: []
+cleanup: not-applicable

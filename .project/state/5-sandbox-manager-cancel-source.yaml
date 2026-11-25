@@ -1,0 +1,41 @@
+id: 5-sandbox-manager-cancel-source
+status: designing
+recorded_at: '2026-11-25'
+recorded_by: Codex
+depends_on: []
+fixes: []
+design:
+  state: review-pending
+  version: 1
+  spec_sha256: 144ba8829edacb9df65c87a1c2ed4da51d1000e9a83f6bb60d88ca6192a99a88
+  requirement_sha256: 4b207b329c5286cbc0e2ce4f80250e9a725f1fb46d626f674e80d2551dd7a695
+  file: workitems/5-sandbox-manager-cancel-source/spec.md
+  contract: workitems/5-sandbox-manager-cancel-source/requirement.md
+  authors: [Codex]
+  source_baseline: 3fc1216cea513df40b68f77171b042dc1ef7e8e3
+  user_approved: true
+  approval_source: workitems/5-sandbox-manager-cancel-source/decision.md
+  independent_review:
+    status: pending
+    authorization: not-requested
+    reviewer: null
+  next_action: design-review
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  verification: not-performed
+  independent_review: not-performed
+acceptance:
+  status: not-performed
+delivery:
+  status: not-started
+  requirements_confirmed: false
+  required: []
+cleanup:
+  status: not-applicable
+external_sync:
+  status: not-configured
+  backend: null
