@@ -15,4 +15,4 @@ When children cover the original outcome, record the parent as an aggregate and 
 
 Children enter their own `review-design` with inherited contracts and actual prerequisite assumptions. Parent review is not child review. Supplement designs only for demonstrated omissions, contradictions or consequential choices, and reuse valid earlier coverage under the [shared standard](../review-design/references/implementable-gate.md). Changes to parent guarantees or shared contracts return to the responsible owner for the necessary decision and affected review.
 
-Commit and push the coherent parent/child documents and metadata. Report full IDs/titles, usable outcomes, dependencies, inherited design paths and actual publication status. Continue review or implementation only within the authorized scope.
+Publish the coherent parent/child documents and metadata under [project publication](../manage-workitems/references/persistence.md). Report full IDs/titles, usable outcomes, dependencies, inherited design paths and actual publication status. Continue review or implementation only within the authorized scope.

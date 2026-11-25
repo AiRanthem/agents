@@ -15,7 +15,7 @@ For an update, change the complete current document and corresponding metadata t
 
 Record actual authors, reviewers, user decisions, verification and delivery. A registrar is not automatically an author or reviewer. Human acceptance records the user's actual conclusion about the current work. Preserve user-finalized code and design and distinguish acceptance from independent review. Unperformed work remains unverified.
 
-Use [develop-workitem](../develop-workitem/SKILL.md) for requested design or implementation, [advance-project](../advance-project/SKILL.md) for explicitly requested autonomous advancement and [complete-workitem](../complete-workitem/SKILL.md) for acceptance, delivery and separately requested cleanup. An autonomous stage executor returns its work to the controller, which maintains the shared project records.
+Use [develop-workitem](../develop-workitem/SKILL.md) for requested design or implementation and [complete-workitem](../complete-workitem/SKILL.md) for acceptance, delivery and separately requested cleanup.
 
 ## Progress report
 

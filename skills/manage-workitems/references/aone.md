@@ -2,7 +2,7 @@
 
 Enable Aone only for the selected project configuration and authorized external scope. Project files contain complete requirements, design and evidence. The mirror contains configured title, status, body and fields; use `【项目名】` in titles when that is the project's naming convention. Keep credentials outside project records.
 
-Use available authenticated Aone service tools. Read the existing space, item type, required fields and status mapping before using them. Record actual external item IDs/URLs. Missing service access or an unknown required field is unresolved input, not successful synchronization.
+Use available authenticated Aone service tools. Read the existing space, item type, required fields and status mapping before using them. Create a mirror only after its project item ID is published in Git. Preserve an existing external ID and verify the item it identifies when reconciling records. Record actual external item IDs/URLs. Missing service access or an unknown required field is unresolved input, not successful synchronization.
 
 Update configured managed fields and preserve unrelated external content. Confirm the service's actual result before recording synchronization as complete. Status transitions and body edits can have separate outcomes; report what succeeded and what remains unresolved.
 

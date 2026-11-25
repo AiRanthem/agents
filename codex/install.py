@@ -8,11 +8,10 @@ from pathlib import Path
 import sys
 import tomllib
 
-import host
 import skill_entries
 
 DIRECTORY = Path(__file__).resolve().parent
-ROOT = DIRECTORY.parent
+ASTRA_ROLE = DIRECTORY / 'agents/astra-delegate.toml'
 
 
 def installation(home):
@@ -28,33 +27,24 @@ def installation(home):
     links = {codex / 'AGENTS.md': DIRECTORY / 'AGENTS.md'}
     for name in ('session-start.py', 'subagent-start.py'):
         links[codex / 'hooks' / name] = DIRECTORY / 'hooks' / name
-    shared = sorted((ROOT / 'skills').glob('*/SKILL.md'))
-    if not shared:
-        raise ValueError('no shared skills found')
-    for entry in shared:
-        links[home / '.agents/skills' / entry.parent.name] = entry.parent
-    native = skill_entries.entries(home)
-    if not native:
-        raise ValueError('no native skills found')
-    for entry in native:
+    # These aliases are created below after preflight rejects occupied targets.
+    skills = skill_entries.entries(home, bootstrap=True)
+    gaps = skill_entries.source_gaps()
+    if gaps:
+        raise ValueError('; '.join(gaps))
+    for entry in skills:
         links[Path(entry['target'])] = Path(entry['source'])
 
-    files = {}
-    for name in host.ROLES:
-        host.role_config(name)
-    for source in sorted((DIRECTORY / 'agents').glob('*.toml')):
-        config = tomllib.loads(source.read_text())
-        for key in ('name', 'description', 'developer_instructions'):
-            if not isinstance(config.get(key), str) or not config[key].strip():
-                raise ValueError(f'{source}: missing {key}')
-        if config['name'] != source.stem:
-            raise ValueError(f'{source}: name differs from filename')
-        files[codex / 'agents' / source.name] = source.read_bytes()
-    if not files:
-        raise ValueError('no native agents found')
+    astra = ASTRA_ROLE.read_bytes()
+    role = tomllib.loads(astra.decode('utf-8'))
+    for key in ('name', 'description', 'developer_instructions'):
+        if not isinstance(role.get(key), str) or not role[key].strip():
+            raise ValueError(f'{ASTRA_ROLE}: missing {key}')
+    if role['name'] != ASTRA_ROLE.stem:
+        raise ValueError(f'{ASTRA_ROLE}: name differs from filename')
     hooks = (DIRECTORY / 'hooks.json').read_bytes()
     json.loads(hooks)
-    files[codex / 'hooks.json'] = hooks
+    files = {codex / 'agents' / ASTRA_ROLE.name: astra, codex / 'hooks.json': hooks}
 
     # A cloud image may seed provider/model settings before the kit is installed.
     # Preserve those bytes; only append sections absent from that configuration.
@@ -64,7 +54,7 @@ def installation(home):
     if 'agents' in config or 'config' in config.get('skills', {}):
         raise ValueError(f'{config_path}: agents or skills.config already configured; use an Agent to integrate the kit')
     lines = [content, '', '[agents]', 'max_concurrent_threads_per_session = 20']
-    for entry in native:
+    for entry in skills:
         for setting in entry['config']:
             lines.extend(['', '[[skills.config]]',
                           'path = ' + json.dumps(setting['path'], ensure_ascii=False), 'enabled = false'])
@@ -109,7 +99,10 @@ def install(home):
             with target.open('xb') as output:
                 output.write(content)
             target.chmod(0o600)
-    errors = host.check(home)['missing'] + skill_entries.check(home)['missing']
+    errors = skill_entries.check(home)['missing']
+    installed_role = home / '.codex/agents' / ASTRA_ROLE.name
+    if installed_role.is_symlink() or installed_role.read_bytes() != files[installed_role]:
+        errors.append(f'native agent differs from repository: {installed_role}')
     if errors:
         raise ValueError('; '.join(errors))
     return {'status': 'disk_ready', 'links': len(links), 'files': len(files),

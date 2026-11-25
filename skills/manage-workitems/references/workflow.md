@@ -11,5 +11,3 @@ Implementation follows the approved scope and repository instructions. Record ac
 Human acceptance records the user's actual conclusion. Preserve their final code/design choices and align remaining descriptive text where requested. Acceptance, source publication and delivery remain separate facts.
 
 Record delivery for outcomes actually established: source push, merge, release, deployment or observed end-to-end behavior. Keep incomplete obligations visible. A passing test or review does not establish these outcomes. Cleanup records authorized removals and actual recovery locations.
-
-For explicitly requested autonomous advancement, the controller owns scope, delegation, integration and project records. Stage executors own assigned implementation or independent assessment and return original evidence. Use the same project files throughout.

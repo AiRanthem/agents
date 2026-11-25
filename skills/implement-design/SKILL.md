@@ -1,6 +1,6 @@
 ---
 name: implement-design
-description: Implement approved requirements and design decisions from documents or conversation, or produce the executable implementation plan in read-only planning mode. Use for a confirmed design, an approved explore-design handoff, or an assigned autonomous implementation stage. Exclude unconfirmed design exploration and review-only work.
+description: Implement approved requirements and design decisions from documents or conversation, or produce the executable implementation plan in read-only planning mode. Use for a confirmed design or an approved explore-design handoff. Exclude unconfirmed design exploration and review-only work.
 ---
 
 # Implement Design
@@ -9,13 +9,11 @@ Own **How** to realize the approved **Why** and **What**. Deliver the agreed beh
 
 ## Load the applicable context
 
-Always read [discussion and authorization](../advance-project/references/discussion-and-authorization.md). Reuse existing decisions and authorization; decide internal implementation and private type choices within the contract. Changes to requirements, public or stored contracts, compatibility, key constraints, approved safety or correctness guarantees, acceptance criteria, or explicit user tradeoffs require the relevant user decision.
+Read [discussion and authorization](../../references/discussion-and-authorization.md) and [implementation and planning modes](references/ordinary-modes.md). Reuse existing decisions and authorization. Choose internal implementation and private types within the contract. Changes to requirements, public or stored contracts, compatibility, key constraints, approved safety or correctness guarantees, acceptance criteria, or explicit user tradeoffs require the relevant user decision.
 
-- **Autonomous stage executor:** Read [stage executor](../advance-project/references/stage-executor.md) and [implementation stage](references/autonomous-stage.md). Follow the assigned single-stage scope; project-record writes remain with the controller and ordinary model-routing guidance does not apply.
-- **Ordinary managed-project development:** Read [project workflow](references/project-workflow.md) and [ordinary modes](references/ordinary-modes.md).
-- **Other implementation or read-only planning work:** Read [ordinary modes](references/ordinary-modes.md).
+For managed-project work, also read [project workflow](references/project-workflow.md).
 
-Read-only planning remains read-only in every organization mode, including delegation. Actual host permissions always apply. Keep implementation TODOs in host task tracking or conversational working state; do not create generic task files or unrelated documentation. Preserve unrelated work and leave source submission to the user's instructions.
+Read-only planning remains read-only, including delegated work. Actual host permissions always apply. Keep implementation TODOs in host task tracking or conversational working state. Keep repository documentation changes within the authorized task. Preserve unrelated work and leave source submission to the user's instructions.
 
 ## Establish the implementation contract
 
@@ -25,19 +23,21 @@ Keep a private mapping from requirements, invariants and non-goals to implementa
 
 Decompose the change into actionable implementation TODOs with dependencies, component and function boundaries where useful, ownership, failure behavior, required generated outputs, verification and handoff. Resolve incidental choices yourself. For a material decision, first investigate and combine related questions, show evidence, recommend viable options and explain their effects on callers, runtime behavior and maintenance. Pause only dependent work and continue independent authorized work. Never weaken the contract or acceptance criteria to make an implementation appear compliant.
 
-If evidence requires a contract correction, retain the failing scenario, violated requirement and proposed correction for the appropriate decision owner. After approval, reassess the implementation, TODOs and review evidence against the corrected contract; retain still-valid work. Apply document and stage boundaries from the selected reference.
+If evidence requires a contract correction, retain the failing scenario, violated requirement and proposed correction for the appropriate decision owner. After approval, reassess the implementation, TODOs and review evidence against the corrected contract. Retain still-valid work and follow the document rules for the active mode.
 
 ## Implement and self-review
 
 Read and apply the shared [code quality criteria](references/code-quality.md) throughout implementation.
 
-- Self-review each function immediately after writing or editing it. Once it satisfies the contract, is clear to read and has no evident unnecessary complexity, continue with the remaining implementation or verification.
+- Scale self-review to the change's risk. For straightforward, reversible changes, one focused review of the affected behavior or combined diff is sufficient. Check consequential changes at the affected contract or ownership boundary before building dependent changes on them. Verify generated changes through their source and the required generation checks.
 - Handle relevant errors, cancellation, cleanup, uncertain outcomes, partial failure and concurrency according to the contract.
 - Remove superseded task changes. Whenever you confirm code is dead, remove it, including pre-existing code. Remove tests that exercise only the deleted behavior and preserve coverage for supported behavior. Keep other cleanup within the task's scope.
 
+When implementing a user interface, follow the approved design and project conventions for imagery and typography, including a specified typeface. For new visuals, generally prefer realistic imagery suited to the product, using image generation or image search when available. Use SVGs when the user requests them. Keep text that informs users, helps them navigate or act, or fulfills a content requirement, including labels, instructions and status feedback. Remove filler badges, decorative numbering, redundant headings and copy that repeats what the interface already conveys. For visual work, use a supplied design reference or generate one within the approved direction when useful and feasible. Render the result where possible and refine it against the reference when available.
+
 ## Verify the agreed behavior
 
-Derive scenarios and expected outcomes from requirements and accepted review counterexamples rather than only from the new code. For each important invariant, identify a plausible wrong implementation and whether existing or new checks distinguish it. Meaningful existing tests can suffice; do not add redundant tests for trivial reversible edits.
+Derive scenarios and expected outcomes from requirements and accepted review counterexamples rather than only from the new code. For each important invariant, identify a plausible wrong implementation and whether existing checks distinguish it. Add tests only when the user requests them, the repository requires them, or the existing suite would miss a specific regression that needs coverage.
 
 Cover relevant success, rejection, boundaries, missing data, errors, recovery, compatibility, concurrency and cancellation without expanding the feature. Prefer owned behavior and assertions on results or state. Use mocks for unsafe, unavailable, slow or nondeterministic boundaries, not library internals or incidental call order.
 
@@ -51,16 +51,16 @@ When the workflow schedules a separate final review, return ready for that revie
 
 Honor applicable repository review gates through permitted tools; an unexecuted review is pending. For `review-implementation`, apply its [resolved mode-specific gates](../review-implementation/references/review-standard.md#require-independence-and-mode-specific-coverage): high-risk acceptance needs a lead qualified for the critical boundary in either mode; an additional independent targeted perspective is required only in `multi-agent`. Equivalent evidence from the scheduled final review suffices; do not duplicate it to increase reviewer count. Respect selected models and actual host capability rather than assuming a switch occurred. After material fixes, review the affected rule, callers and shared assumptions; broaden only when prior conclusions became invalid.
 
-Do not automatically invoke an explicit-only review skill unless the user or applicable project workflow authorizes it. Autonomous executors return their own stage result to the controller, which assigns the independent review stage.
+Invoke a review skill when the user's authorization covers that review.
 
 ## Inspect and hand off
 
-Check the final diff against the approved contract and shared code quality criteria. Refresh changed or missing original inputs and required instruction reloads. Confirm per-function self-review, required behavior, non-goals, comments, generated outputs, dependencies and final verification evidence. Keep the handoff concise and self-contained. In the user's language, report the following.
+Check the final diff against the approved contract and shared code quality criteria. Refresh changed or missing original inputs and required instruction reloads. Confirm required behavior, non-goals, generated outputs, dependencies and final verification evidence. Keep the handoff concise and self-contained. In the user's language, report the following.
 
-1. Outcome: ready for independent review, verification blocked, or decision needed; claim independent acceptance only from actual qualifying evidence covering this final state.
+1. Outcome: state whether the requested implementation and verification are complete or what blocks either one. Report independent acceptance only from qualifying evidence covering the final state.
 2. Target identity: repository/worktree, comparison base and HEAD, contract path/version, in-scope changed and untracked files and excluded unrelated changes. Include a dirty diff/content fingerprint or reproducible snapshot; HEAD alone is insufficient.
 3. Contract coverage: behavior and primary evidence, deviations, pending decisions and unverified boundaries.
 4. Verification: exact commands, working directory, relevant configuration, actual outcomes and accessible evidence; identify the final state checked without dumping logs or secrets.
-5. Review state: checks performed, known reviewer independence, findings and disposition, remaining gate and critical areas for review.
+5. Review state, when applicable: checks performed, known reviewer independence, findings and disposition, remaining gate and critical areas for review.
 
-Keep the handoff conversational unless the workflow or user specifies a report file. It indexes primary evidence; it does not replace the design or repository. Autonomous stage output also follows the supplied result identity and report contract.
+Keep the handoff conversational unless the workflow or user specifies a report file. Use it to index primary evidence.

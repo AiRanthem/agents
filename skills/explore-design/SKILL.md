@@ -1,6 +1,6 @@
 ---
 name: explore-design
-description: Establish or refine an approved Why/What contract from original requirements and repository evidence. Use when explicitly invoked, for requested collaborative pre-implementation design, or for a design correction delegated within an authorized advance-project stage. Route read-only planning, ordinary execution, project controller and stage executor work to their applicable references; do not implement code or approve your own design review.
+description: Establish or refine a design contract from original requirements and repository evidence. Use for requested pre-implementation design or substantive design revisions. Obtain user approval for consequential choices and prepare the design for independent review.
 ---
 
 # Explore Design
@@ -9,13 +9,12 @@ Establish why the change is needed and what the resulting system must do. Ground
 
 ## Load the active context
 
-Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) for every invocation. Apply existing authorization and complete independent investigation before escalating a consolidated decision batch.
+Read [discussion and authorization](../../references/discussion-and-authorization.md) for every invocation. Apply existing authorization and complete independent investigation before escalating a consolidated decision batch.
 
-- **Delegated project stage:** Read [stage executor](../advance-project/references/stage-executor.md). Work only on the assigned candidate design or report; do not load controller write instructions below. Read the original requirements, approved contract, applicable original instructions and primary evidence, rather than relying on a controller summary. Return candidate changes and actual evidence to the controller.
-- **Project controller or ordinary project design session:** Read [project mode](references/project-mode.md).
-- **Outside a project stage:** Read [host modes and handoff](references/execution-modes.md) for read-only planning and ordinary execution behavior.
+- For a managed work item, read [project mode](references/project-mode.md).
+- For standalone design or read-only planning, read [execution modes and handoff](references/execution-modes.md).
 
-Read-only planning remains read-only in every organization mode: no design-file or temporary-draft writes, including through delegation. A project role never enlarges host permissions.
+Read-only planning keeps design work in conversation, including delegated work.
 
 ## Establish the contract from evidence
 
@@ -74,6 +73,6 @@ Read the current design, original requirements, confirmed decisions and relevant
 
 State the complete Why/What, rationale, non-goals and accepted limitations in ordinary language. Remove repetition and superseded statements. Distinguish existing approvals from new decisions. If a decision batch explicitly presents all alternatives of a complete contract, the user's selected answers can approve the resulting contract without another confirmation round. A material gap beyond those alternatives requires approval of the changed contract.
 
-A substantive design revision is authored separately from the review stage; mechanical corrections follow the [shared authorship boundary](../review-design/references/implementable-gate.md#mechanical-corrections-and-authorship) and need no separate author or review round. Return the exact revised artifact, changed decisions, affected interactions and evidence for independent assessment under the [coverage-reuse rules](../review-design/references/implementable-gate.md#reuse-independent-coverage); keep review status pending. Prefer the original reviewer while it remains independent of the revision. A reviewer who substantively revises a candidate becomes an author and cannot independently approve it; permitted mechanical corrections do not constitute substantive authorship. In a delegated stage, the controller arranges assessment and owns all official writeback.
+A substantive revision makes its author ineligible to independently approve the design. Return the exact revised artifact, changed decisions, affected interactions and evidence for independent assessment under the [coverage-reuse rules](../review-design/references/implementable-gate.md#reuse-independent-coverage). Keep review pending and prefer the original reviewer while independent. Uniquely determined [mechanical corrections](../review-design/references/implementable-gate.md#mechanical-corrections-and-authorship) preserve independence.
 
 Apply the completeness loop to review-driven revisions as well as initial designs. Before handoff, confirm that the reflection covers the current contract and that mode-specific writes and checks stayed within scope. Use the loaded mode reference for the handoff. Do not claim independent review or implementation occurred.

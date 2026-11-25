@@ -260,38 +260,30 @@ def collect_feedback(home, cases):
             gaps.update(missing)
             for child, records in assignments.items():
                 children[child]["assignments"] = records
-    by_scope = {}
+    totals = dict(assignments=0, with_feedback=0, corrections_requested=0, outcomes=Counter(), gaps=gaps)
     for case in cases:
-        group = by_scope.setdefault(case["scope"], dict(assignments=0, with_feedback=0,
-                                                        corrections_requested=0, outcomes=Counter()))
         for record in case["assignments"]:
-            group["assignments"] += 1
-            group["with_feedback"] += "feedback_ordinal" in record
-            group["corrections_requested"] += bool(record.get("correction_requested"))
-            group["outcomes"][record["outcome"]] += 1
-    return dict(by_scope=by_scope, gaps=gaps)
+            totals["assignments"] += 1
+            totals["with_feedback"] += "feedback_ordinal" in record
+            totals["corrections_requested"] += bool(record.get("correction_requested"))
+            totals["outcomes"][record["outcome"]] += 1
+    return totals
 
 
-def collect(home, since, until):
-    # A fixed-stage delegate can itself spawn a child with an ordinary role name.
+def collect(home, since, until, selected_threads=()):
     query = """
-        WITH RECURSIVE lineage(id, scope) AS (
-          SELECT t.id, 'ordinary' FROM threads t
-          WHERE t.thread_source = 'user'
-          UNION
-          SELECT e.child_thread_id, CASE WHEN t.agent_role GLOB 'project-*' THEN 'fixed' ELSE l.scope END
-          FROM lineage l JOIN thread_spawn_edges e ON e.parent_thread_id = l.id
-          JOIN threads t ON t.id = e.child_thread_id
-        )
-        SELECT t.id, t.rollout_path, e.parent_thread_id, coalesce(l.scope, 'unknown')
+        SELECT t.id, t.rollout_path, e.parent_thread_id
         FROM threads t LEFT JOIN thread_spawn_edges e ON e.child_thread_id = t.id
-        LEFT JOIN lineage l ON l.id = t.id
         WHERE (t.thread_source = 'subagent' OR e.child_thread_id IS NOT NULL)
           AND t.created_at >= ? AND t.created_at < ? ORDER BY t.created_at, t.id
     """
+    remaining = set(selected_threads)
     with database(home / "state_5.sqlite") as state, database(home / "thread_history_1.sqlite") as history:
-        for thread, path, parent, scope in state.execute(query, (since, until)):
-            case = dict(thread=thread, parent=parent, scope=scope)
+        for thread, path, parent in state.execute(query, (since, until)):
+            if selected_threads and thread not in selected_threads:
+                continue
+            remaining.discard(thread)
+            case = dict(thread=thread, parent=parent)
             first = history.execute("""
                 SELECT turn_id, status, duration_ms, final_agent_item_id, rollout_ordinal, rollout_end_ordinal
                 FROM thread_turns
@@ -310,6 +302,8 @@ def collect(home, since, until):
             except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                 case["gap"] = type(error).__name__
             yield case
+    if remaining:
+        raise ValueError(f"selected child threads missing from window: {', '.join(sorted(remaining))}")
 
 
 def price(case, rates):
@@ -326,9 +320,9 @@ def summarize(cases, rates):
     groups = defaultdict(list)
     for case in cases:
         if "gap" not in case:
-            groups[case["scope"], case["model"], case["effort"]].append(case)
+            groups[case["model"], case["effort"]].append(case)
     rows = []
-    for (scope, model, effort), group in sorted(groups.items()):
+    for (model, effort), group in sorted(groups.items()):
         completed = [c for c in group if c["status"] == "completed"]
         times = [c["duration_ms"] / 60000 for c in completed if c["duration_ms"] is not None]
         estimates = {}
@@ -336,7 +330,7 @@ def summarize(cases, rates):
             costs = [p for c in group if (p := price(c, rate)) is not None]
             estimates[name] = dict(priced=len(costs), sum_usd=round(sum(costs), 8) if costs else None,
                                    median_usd=round(median(costs), 8) if costs else None)
-        rows.append(dict(scope=scope, model=model, effort=effort, threads=len(group),
+        rows.append(dict(model=model, effort=effort, threads=len(group),
                          statuses=dict(Counter(c["status"] for c in group)),
                          completed_with_final_item=sum(c["final_item"] for c in completed),
                          completed_with_duration=len(times),
@@ -344,7 +338,6 @@ def summarize(cases, rates):
                          tokens={key: sum(c["tokens"][key] for c in group) for key in FIELDS},
                          fixed_token_usd=estimates))
     return dict(indexed_children=len(cases), known_parents=len({c["parent"] for c in cases if c["parent"]}),
-                scope_counts=dict(Counter(c["scope"] for c in cases)),
                 gaps=dict(Counter(c["gap"] for c in cases if "gap" in c)), groups=rows)
 
 
@@ -358,6 +351,8 @@ def main():
                         help="USD per million tokens and inclusive request input ceiling, or 'any' for a flat rate")
     parser.add_argument("--cases", action="store_true", help="Include local join keys and first-turn measurements")
     parser.add_argument("--feedback", action="store_true", help="Read parent dispositions for the selected children")
+    parser.add_argument("--thread", action="append", default=[], metavar="ID",
+                        help="Limit the report to these child threads in the window (repeat for each ID)")
     args = parser.parse_args()
     try:
         since, until = (datetime.fromisoformat(v).astimezone() for v in (args.since, args.until))
@@ -371,13 +366,14 @@ def main():
                 raise ValueError("expected unique rate names, nonnegative finite prices and positive ceilings")
             rates[model] = (*amounts, ceiling)
         home = args.codex_home.expanduser()
-        cases = list(collect(home, since.timestamp(), until.timestamp()))
+        cases = list(collect(home, since.timestamp(), until.timestamp(), set(args.thread)))
         report = summarize(cases, rates)
         if args.feedback:
             report["feedback"] = collect_feedback(home, cases)
     except (ValueError, sqlite3.Error, OSError) as error:
         parser.exit(2, f"History replay unavailable: {error}\n")
     report.update(created_since=since.isoformat(), created_before=until.isoformat(), rate_arguments=args.rate)
+    report["population"] = "selected_children_in_window" if args.thread else "all_indexed_children_in_window"
     if args.cases:
         report["cases"] = cases
     print(json.dumps(report, indent=2))

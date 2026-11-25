@@ -17,5 +17,3 @@ Keep hierarchy, dependency and fix links consistent. Inspect a prerequisite's ac
 ## Publication
 
 After writing, commit the affected project files and push the configured branch. Exclude unrelated changes and separate source repositories. If Git rejects the push, preserve the commit and resolve the actual issue within the authorized scope. Optional external synchronization has its own result under [Aone](aone.md).
-
-During autonomous advancement, the controller reads the selected scope, delegates authorized stages and writes their actual results to the same records. Executors retain their real authorship and review attribution.

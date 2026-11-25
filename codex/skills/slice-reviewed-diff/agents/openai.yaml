@@ -1,3 +1,0 @@
-interface:
-  display_name: "Split a Large Diff"
-  short_description: "Extract one small PR at a time for review in its own worktree"

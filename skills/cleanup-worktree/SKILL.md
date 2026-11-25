@@ -9,7 +9,7 @@ Remove the selected local worktree and authorized local branches after proving t
 
 ## Project workitems
 
-For a project work item, read [project context](../manage-workitems/references/project-context.md) and identify the actual source location. Apply the same cleanliness and remote-recovery criteria below, independently of delivery status. After authorized cleanup, update the existing project documents and metadata with the actual result and retained recovery references, then commit and push the project update. Preserve requirement/design documents and truthful source history. An explicitly discarded unfinished implementation is recorded as discarded, not completed or delivered.
+For a project work item, read [project context](../manage-workitems/references/project-context.md) and identify the actual source location. Apply the same cleanliness and recovery criteria independently of delivery status. Report actual removals, retained resources and recovery references. If called by a project workflow, return these facts to its record owner. Otherwise record and publish the result under [resource lifecycle](../manage-workitems/references/resource-lifecycle.md). Preserve requirement and design records, source history and the actual disposition of any explicitly discarded implementation.
 
 Associated main-workspace worktrees may be outside the project root. Verify their actual paths and ownership. Preserve the main workspace, shared repositories and sibling projects; an uncertain source location prevents removal of that target.
 
@@ -25,7 +25,7 @@ Scope cleanup to local resources. Retain remote branches and tags as recovery so
 
 Cleanup is eligible when:
 
-- `git status --porcelain=v1 --untracked-files=all --ignore-submodules=none` in the target is empty: no staged, unstaged, or non-ignored untracked files remain;
+- `git --no-optional-locks status --porcelain=v1 --untracked-files=all --ignore-submodules=none` in the target is empty: no staged, unstaged, or non-ignored untracked files remain. Where index flags such as `assume-unchanged` can hide edits, verify the affected files separately before declaring the worktree clean;
 - no unfinished Git operation or nested repository/worktree with local-only work would be lost;
 - the target `HEAD` and every local branch OID proposed for deletion are available through a retained live remote ref, with a usable repository URL and full ref recorded for recovery; and
 - the exact local deletions are within repository rules and the user's authorization.
@@ -48,12 +48,12 @@ Complete one initial audit before reporting the manifest. Reuse its evidence whi
 
 ## Execute and verify
 
-Operate from a surviving worktree. Immediately before mutation, refresh the exact recovery refs once and repeat the cleanliness, OID, repository-operation, protection, and worktree-use checks. Stop before deletion if recovery or an authorized item can no longer be verified.
+Operate from a surviving worktree. Immediately before deletion, refresh the exact recovery refs and repeat the cleanliness, OID, repository-operation, protection, and worktree-use checks. Coordinate exclusive use of the target worktree while removing it. Retain any resource whose recovery, exact identity or authorized disposition cannot be verified.
 
 - Remove the registered worktree with `git worktree remove`; do not use `rm -rf`, `git clean`, or forced worktree removal for unresolved contents.
-- Delete only authorized local branches after the worktree is removed. Use `git branch -d` when it succeeds; `git branch -D` is allowed for an exact authorized ref/OID whose remote recovery was verified, even when Git's local deletion check refuses it. Recheck the branch OID before deletion.
+- Delete authorized local branches after worktree removal. Require the branch to still point to the recorded OID when it is deleted. With exclusive access to the branch, use `git branch -d` or, if only its merged-status check refuses deletion, `git branch -D` for the authorized, remotely recoverable OID. If another writer can update the ref, use an expected-old-OID deletion only while checkout and branch-protection checks remain enforced. Retain the branch if those conditions cannot be guaranteed.
 - Remove only administrative metadata made stale by these exact local deletions. Keep every remote recovery ref and unrelated resource intact.
-- If an operation fails or remaining cleanup safety changes, stop and report the partial result and recovery commands. Do not broaden deletion or recreate resources automatically.
+- If an operation fails or its outcome is uncertain, reconcile the path, registration and refs before retrying. Continue only with authorized remaining resources whose safety can still be verified. Report the partial result and recovery commands if blocked.
 
 Completion requires confirming that the target path and worktree registration are absent, authorized local refs were removed, retained recovery refs remain live and contain the recorded OIDs, and surviving worktrees and retained candidate refs remain intact. Report removed, retained, and failed items plus the concrete remote recovery instructions. Command exit codes alone do not prove completion.
 

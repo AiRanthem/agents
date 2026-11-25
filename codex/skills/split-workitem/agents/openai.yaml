@@ -1,3 +1,0 @@
-interface:
-  display_name: "Split Project Work Item"
-  short_description: "Split project requirements into a dependency DAG"

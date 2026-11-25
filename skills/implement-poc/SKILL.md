@@ -1,6 +1,6 @@
 ---
 name: implement-poc
-description: Build or repair the smallest verifiable proof of concept from a confirmed design by agreeing explicit acceptance criteria, trimming the design to the accepted happy path, implementing it quickly, diagnosing failures from runtime logs, and validating only that path. Use with $implement-poc or /implement-poc when the user wants fast feasibility evidence or needs a failed POC fixed from its logs. Exclude unconfirmed design exploration, production implementation, hardening, and review-only work.
+description: Build or repair the smallest verifiable proof of concept from a confirmed design. Use for fast feasibility evidence or to restore a failed POC. Confirm one acceptance scenario, trim the design to that path, diagnose failures from runtime evidence and validate that scenario. Exclude unconfirmed design exploration, production implementation, hardening and review-only work.
 ---
 
 # Implement POC
@@ -9,14 +9,14 @@ Produce the fastest runnable proof that the user's explicit acceptance scenario 
 
 ## Project workitems
 
-For a project work item, read its complete requirement/design and original project/source instructions and use the actual source location. Preserve the POC acceptance and trimmed-scope contract below. An ordinary project session or controller records the confirmed scope and actual result directly in the existing project context and metadata, then commits and pushes those project updates. A delegated POC executor returns evidence within its assigned write scope. POC success proves only its accepted scenario and does not establish production delivery.
+For a project work item, read its complete requirement and design and the original project and source instructions. Use the actual source location. In execution, record the confirmed POC scope and actual result in the existing project context and metadata. Commit and push authorized project-record changes under [project publication](../manage-workitems/references/persistence.md). POC success proves only its accepted scenario and does not establish production delivery.
 
 ## Respect authority and host mode
 
 - Follow user, harness, and higher-priority instructions, including permissions, security and data-protection boundaries, and safeguards for destructive or external actions. A POC does not expand authorization.
 - **read-only planning mode** applies only when active host instructions explicitly establish read-only planning mode. It is read-only: settle the acceptance contract and trimmed implementation or repair design, then return that design as the host's single final plan.
 - **execution mode** is normal operation outside read-only planning restrictions. After the user confirms the acceptance contract and trimmed design, implement it directly without another planning phase.
-- Preserve unrelated and pre-existing work. Do not create or modify design documents, ADRs, OpenSpec artifacts, task files, or review reports.
+- Preserve unrelated and pre-existing work. Keep POC design, task and review artifacts out of the repository. Use the existing project records described above when applicable.
 
 ## Require an explicit acceptance contract
 
@@ -33,9 +33,9 @@ When criteria are missing or ambiguous, inspect the design and relevant current 
 
 ## Trim the design with the user
 
-Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. Use the actual design and review evidence to explain the POC's assurance and remaining uncertainty. A repair of an existing POC may reuse its current confirmed contract; a material Why/What change must be approved before affected repair. Convert the design into a POC implementation design that explains how the current code will become the runnable POC.
+Read the complete confirmed design and trace the current code only far enough to understand the accepted scenario and its callers. Use the design and review evidence to explain what the POC can prove. For a new POC, define how the current code will become runnable for that scenario. When resuming or repairing an existing POC, reuse the confirmed acceptance criteria and trimmed design while they still apply.
 
-Present the user with three explicit groups and obtain confirmation before planning or implementation:
+For a new or materially changed trim, present three explicit groups and obtain confirmation before producing the final plan or editing affected code:
 
 - **Do:** only the design goals and behavior required for the acceptance happy path.
 - **Do not:** goals outside the confirmed acceptance scope, production rollout, and unrelated defensive, compatibility, recovery, cleanup, cancellation, concurrency or quality work. Preserve any behavior in these areas that the accepted scenario requires for correctness, security, readability or maintainability.
@@ -47,7 +47,7 @@ Keep the trimmed design only in the conversation or host-managed plan. Never wri
 
 ## Produce the mode-specific result
 
-- **read-only planning mode:** Put the confirmed acceptance contract and trimmed implementation or repair design directly in the final plan. For a failed POC, include the log-supported failure point and code change. Include ordered implementation actions, the minimal happy-path integration check, required diagnostic logging, and the final diagnostic subagent audit. Tell the executor to load `$implement-poc` and execute this confirmed plan in execution mode. Then stop without repository writes or implementation claims.
+- **read-only planning mode:** Put the confirmed acceptance contract and trimmed implementation or repair design directly in the final plan. For a failed POC, include the failure point supported by runtime evidence and the proposed repair. Include ordered implementation actions, the minimal happy-path integration check, required diagnostic logging, and the final diagnostic subagent audit. Tell the executor to load `$implement-poc` and execute this confirmed plan in execution mode. Then stop without repository writes or implementation claims.
 - **execution mode:** Implement the confirmed trimmed design immediately. When resuming a plan, load `$implement-poc`, verify that the acceptance environment and relevant code assumptions still hold, and proceed. Seek renewed confirmation only when new evidence changes the acceptance contract or trimmed design.
 
 ## Optimize only for time to acceptance
@@ -63,45 +63,41 @@ Keep POC-specific limits within the accepted scope while following governing cod
 
 ## Make the accepted path reconstructable from logs
 
-Instrument the POC for maximum diagnostic visibility. A reader with the source and logs must be able to reconstruct the accepted execution from entry to completion or failure without attaching a debugger.
+Instrument the POC so a reader with the source and logs can reconstruct the accepted execution from entry to completion or failure without attaching a debugger.
 
 For every step and failure boundary on the accepted path, log enough context to connect the full run:
 
 - a run or correlation identifier and the relevant resource identifiers;
 - startup assumptions and effective configuration needed to explain behavior;
 - entry and exit of each phase, branch decisions, state transitions, and elapsed time;
-- external calls or commands, their destination and non-secret inputs, returned status, non-secret output, and errors;
+- external calls or commands, their destination, safe diagnostic inputs and outputs, returned status, and errors;
 - intermediate values and state needed to explain the next decision;
-- complete error chains and stack traces when the runtime supports them;
+- error chains and stack traces when available, with sensitive detail removed;
 - a final success or failure marker tied to the acceptance criteria.
 
-Prefer existing structured logging; otherwise use a consistent, searchable format. High volume and duplication are acceptable. Never log credentials, tokens, private keys, secret values, or sensitive payloads; log safe identifiers, key names, lengths, hashes, or redacted representations instead.
+Prefer existing structured logging. Allowlist the diagnostic fields and values needed for this scenario. Keep credentials and sensitive payloads out of logs. Redact sensitive details from configuration, error messages, stack traces and external output before logging. Use safe identifiers and summaries to retain the diagnostic signal.
 
-## Repair a failed POC from its logs
+## Repair a failed POC from runtime evidence
 
-When the user reports a POC bug or a failed validation run, preserve the existing acceptance contract and trimmed scope. Read the complete logs for the failed run before changing code. Correlate them by run and resource identifiers, reconstruct the ordered execution, and compare each observed step with the accepted happy path.
+Read the available logs for the failed run before changing code. Correlate them by run and resource identifiers, reconstruct the execution and compare the observed steps with the accepted scenario. For startup failures or missing application logs, inspect available scheduling, launch, exit or log collection evidence. Locate the earliest observable divergence, trace it to the owning code or external boundary and distinguish the root fault from later symptoms.
 
-Apply every implementation rule in this skill to the repair itself. Restore the accepted scenario while keeping the code readable and maintainable and preserving correctness and security. Do not add behavior outside the happy path. Keep diagnostic logging, validate with only the same minimal integration or environment scenario, and run the independent diagnostic subagent audit after the final fix.
+- When runtime evidence identifies the fault, state that evidence and repair the owning path within the confirmed acceptance and trimmed scope.
+- When the cause is unclear, collect the evidence that distinguishes the remaining explanations. Add focused logging only if the unresolved interval is in a path the POC can instrument. Rerun the same scenario if authorized and possible. If the validation environment is unavailable, request the specific run or evidence needed.
+- If the failure requires a material change to the acceptance criteria or trimmed design, obtain the user's confirmation of the affected change before editing that behavior.
 
-Locate the earliest observable divergence between expected and actual execution. Trace that point into the responsible code and its direct callers or external boundary. Distinguish the root fault from later symptoms, and state the log evidence that supports the diagnosis before editing.
-
-- If the logs identify the fault, repair its owning code path while satisfying the accepted behavior and the quality requirements above.
-- If the logs stop before the fault can be located, add the smallest additional high-visibility logging around the unresolved interval, rerun or ask the user to rerun the same scenario in its validation environment, then diagnose from the new logs. Do not guess a code fix when the existing evidence cannot distinguish the cause.
-- If the failure reveals that the acceptance contract or trimmed design is wrong, stop the affected repair and obtain the user's explicit confirmation of the revised **Do**, **Do not**, or **Modify** entry before changing behavior.
-
-Do not broaden the repair into production hardening or handle a new corner case unless it occurs in the confirmed acceptance scenario. After every fix, rerun only the same minimal integration or environment validation and inspect the new logs through the final acceptance marker. The independent diagnostic audit must cover the final repaired code and logs.
+After repair, run the acceptance validation and diagnostic audit below on the repaired state. Keep the repair within the confirmed scenario.
 
 ## Validate only the acceptance happy path
 
-After implementation, add the smallest integration or end-to-end check that executes the user's exact acceptance scenario and asserts only its stated success evidence. Prefer the real validation environment and real owned components. Use the smallest substitute only when an external boundary is unavailable or unsafe, and disclose the substitution.
+Use the smallest integration or end-to-end check that runs the user's exact acceptance scenario and verifies its stated success evidence. Reuse an existing check or runnable validation steps when they cover that scenario. Add a check only when needed for coverage. Prefer the real validation environment and real owned components. Use the smallest substitute only when an external boundary is unavailable or unsafe, and disclose the substitution.
 
-Run that check and inspect its actual exit status, observable result, and logs. Do not broaden validation when it passes. When it fails, use the logs to locate the failing step, repair the accepted path within its confirmed scope and quality requirements, and rerun only the invalidated check.
+Run that check and inspect its actual exit status, observable result, and logs. Do not broaden validation when it passes. If it fails, apply the runtime-evidence repair process above and rerun the affected check after repair.
 
 ## Require one independent diagnostic audit
 
-Once implementation and its integration check are complete, dispatch one independent read-only subagent that did not implement the POC. Apply [shared-context preparation](../advance-project/references/delegation-context.md); the implementation session must use clean reviewer context. This is a targeted diagnosability audit, not a general code review.
+Once implementation and its integration check are complete, dispatch one independent read-only subagent that did not implement the POC. Apply [shared-context preparation](../../references/delegation-context.md) and use clean reviewer context. This is a targeted diagnosability audit, not a general code review.
 
-Give it the confirmed acceptance contract, trimmed design, final diff, integration command and result, and produced logs. Require it to trace every accepted-path step and every operation that can fail and determine whether the logs expose the inputs, decisions, state transitions, external results, errors, and final outcome needed to locate a failure. It must report concrete blind spots with code-path evidence and must not edit files.
+Give it the confirmed acceptance contract, trimmed design, final diff, integration command and result, and the relevant logs. Remove sensitive details before sharing this evidence. Require it to trace every accepted-path step and every operation that can fail and determine whether the logs expose the inputs, decisions, state transitions, external results, errors, and final outcome needed to locate a failure. It must report concrete blind spots with code-path evidence and must not edit files.
 
 Fix every blind spot that could prevent diagnosis of the accepted scenario, rerun the integration check, and ask the same subagent to re-check the affected path. If no independent subagent is available, report the diagnostic audit as blocked and do not claim the POC has completed this workflow.
 

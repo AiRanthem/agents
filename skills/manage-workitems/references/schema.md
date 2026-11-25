@@ -39,4 +39,4 @@ Keep `status`, `design`, `development`, `delivery`, `cleanup` and `archived` ali
 
 Record actual author/reviewer identities, assessed scope/version, outcome, findings and provenance. `recorded_by` identifies the registrar; it does not establish authorship, independence or user approval. Human acceptance records the user's actual conclusion and accepted target separately from independent review.
 
-Autonomous work records its authorized scope and actual outcomes in these same files. Preserve useful source-recovery locations and unresolved external outcomes as explicit facts. No separate operation registry or mandatory transition protocol is needed to edit project records.
+Preserve useful source-recovery locations and unresolved external outcomes as explicit facts.

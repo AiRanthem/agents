@@ -12,3 +12,7 @@ alwaysApply: true
 ## 表达方式
 
 Talk to me ELI5 by default and go deeper if I ask.
+
+## 安装入口
+
+调用本 dev-kit 的共享 `install` 时，从本规则的物理位置读取 [Qoder 安装说明](../INSTALL.md)，与共享安装合同一并使用。按用户指定的安装、更新、修复或验证范围执行；仅要求验证时只读检查。

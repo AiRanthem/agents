@@ -1,6 +1,0 @@
-interface:
-  display_name: "Review Implementation"
-  short_description: "Full implementation review with optional multi-agent support"
-  default_prompt: "Use $review-implementation: gather original context and prepare a review plan without findings, honor my established choice or ask once whether to add multi-agent review, dispatch targeted reviewers if enabled, personally complete the full review in either case, and synthesize my review report from the lead assessment and any reviewer reports."
-policy:
-  allow_implicit_invocation: false

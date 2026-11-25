@@ -5,11 +5,11 @@ description: Record user final code and design edits during human acceptance, ac
 
 # Complete Work Item
 
-Distinguish waiting for human acceptance, accepted but awaiting delivery, and actually delivered. Read [discussion and authorization](../advance-project/references/discussion-and-authorization.md) and [delivery and cleanup](references/delivery-and-cleanup.md).
+Distinguish waiting for human acceptance, accepted but awaiting delivery, and actually delivered. Read [discussion and authorization](../../references/discussion-and-authorization.md) and [delivery and cleanup](references/delivery-and-cleanup.md).
 
 Preserve the user's final code and design. Record actual human acceptance with its source and accepted target, separately from independent review. Align remaining outdated design text to the accepted implementation where the user has left it for reconciliation. Retain genuine earlier reviews at their original targets.
 
-The project controller or ordinary authorized project session updates the existing documents and metadata directly, then commits and pushes those project changes. A stage executor returns assigned evidence under [stage-executor](../advance-project/references/stage-executor.md). Read-only planning remains read-only.
+The authorized project session updates the existing documents and metadata directly, then commits and pushes those project changes. Read-only planning remains read-only.
 
 Inspect the actual evidence for each declared merge, release, deployment or other delivery obligation. Record each supported outcome even if another obligation is pending, and update status from those facts. Before reporting completion, compare the recorded outcomes against all declared obligations and state what remains or could not be verified. Aggregate acceptance covers the full original outcome. Project metadata publication, AI review and tests do not establish source delivery or human acceptance.
 

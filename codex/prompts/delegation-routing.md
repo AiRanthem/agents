@@ -1,6 +1,6 @@
 # Routing delegated work
 
-Choose an available profile for the whole assignment within the current role, permissions and budget. Weigh elapsed time and cost per accepted result, including context transfer, verification and rework. Handle work directly when the evidence is already in hand or the decision is tightly coupled to your own work.
+Choose an available profile for the whole assignment within the current role, permissions and budget. For a long or complex assignment, include the effort needed to finish its final checks when choosing among permitted profiles. Weigh elapsed time and cost per accepted result, including context transfer, verification and rework. Handle work directly when the evidence is already in hand or the decision is tightly coupled to your own work.
 
 - **gpt-6-luna / high** — dispatch this profile early by default for independent, verifiable evidence gathering that can usefully run in parallel. Also use it for routine, authorized work with directly checkable acceptance criteria.
 - **gpt-6-luna / max** — optionally trace a deep but bounded call chain when each finding can be checked against source and the extra latency is acceptable. In code review, both Luna profiles supply evidence for the reviewer.

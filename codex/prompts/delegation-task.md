@@ -4,8 +4,8 @@ Delegate substantive work when added coverage or parallel benefit outweighs star
 
 State the expected result and acceptance criteria, the scope and target version, and the authorization and constraints. Give the executor an evidence index and identify the gap to close. Before dispatch, read the smallest set of originals that the parent and descendants are likely to use repeatedly. Include the relevant instructions, contract, stable diff and central code. Reuse current reads and leave specialist-only exploration to the executor.
 
-- Prefer `fork_turns: "all"` for substantial shared context with the same model and effort and relevant history, when the host preserves the shared prefix, required roles and permissions. Read the shared originals before forking and append the child assignment without recopying them. Inherited main-agent or controller routing does not transfer those responsibilities.
-- Use `fork_turns: "none"` for model or effort changes, unrelated history, fixed project-stage dispatch or unavailable full-context reuse. Supply sufficient original inputs and an evidence index. Parent reads alone do not transfer to clean children.
+- Prefer `fork_turns: "all"` for substantial shared context with the same model and effort and relevant history, when the host preserves the shared prefix, required roles and permissions. Read the shared originals before forking and append the child assignment without recopying them. The parent retains ownership of the full task.
+- Use `fork_turns: "none"` for model or effort changes, unrelated history, independent review of a parent's work or unavailable full-context reuse. Supply sufficient original inputs and an evidence index. Parent reads alone do not transfer to clean children.
 
 Choose routing for the assignment regardless of potential cache hits and preload only relevant material. Cache reuse requires a matching rendered prefix and compatible request settings. Claim savings only from measured usage. Compare exposed cached and uncached input, cache writes where available, latency and total work. Identical file contents alone do not prove reuse.
 

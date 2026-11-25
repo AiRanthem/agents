@@ -1,3 +1,0 @@
-interface:
-  display_name: "Delete Local Project"
-  short_description: "Safely remove a selected local project workspace"

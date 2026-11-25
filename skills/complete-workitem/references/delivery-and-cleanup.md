@@ -18,6 +18,6 @@ A PR, tests or an AI pass do not establish human acceptance. For an aggregate, a
 
 Use [cleanup-worktree](../../cleanup-worktree/SKILL.md) for requested local source cleanup. Identify the actual item worktree and verify its exact authorization, cleanliness and remote recovery before removal. Preserve main-workspace roots, shared environments, repositories and sibling worktrees.
 
-Record the actual removal result and retained recovery references directly in the project. Preserve requirement/design documents and source history. If the user discards an unfinished implementation, record that decision and its actual source rather than claiming successful implementation or delivery. Failed cleanup leaves completed delivery intact. Project removal and remote deletion retain their own scope.
+The authorized project session records the cleanup outcome and retained recovery references with the item, using the delegated executor's evidence when applicable. Preserve requirement/design documents and source history. If the user discards an unfinished implementation, record that decision and its actual source. Failed cleanup leaves completed delivery intact. Project removal and remote deletion retain their own scope.
 
 Use [resource preservation](../../manage-workitems/references/resource-lifecycle.md) for snapshots, caches and replacement workspaces. Inventory actual resources and retain unique or unpublished work; acceptance does not itself authorize their removal.

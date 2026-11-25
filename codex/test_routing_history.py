@@ -3,7 +3,10 @@
 import json
 from pathlib import Path
 import runpy
+import sqlite3
+import tempfile
 import unittest
+from contextlib import closing
 
 
 replay = runpy.run_path(str(Path(__file__).parent / "skills/adapt-agent-routing/scripts/replay_history.py"))
@@ -55,6 +58,26 @@ class RoutingHistoryTest(unittest.TestCase):
         self.records[6] = usage("b", 40, 160)
         with self.assertRaisesRegex(replay["Gap"], "differs from turn snapshot"):
             self.read()
+
+    def test_can_limit_comparison_to_reviewed_child_threads(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            with closing(sqlite3.connect(home / "state_5.sqlite")) as state:
+                state.executescript("""
+                    CREATE TABLE threads(id, thread_source, rollout_path, created_at);
+                    CREATE TABLE thread_spawn_edges(parent_thread_id, child_thread_id);
+                    INSERT INTO threads VALUES ('root','user','',0), ('sample','subagent','',1),
+                                               ('other','subagent','',1), ('later','subagent','',2);
+                    INSERT INTO thread_spawn_edges VALUES ('root','sample'), ('sample','other');
+                """)
+            with closing(sqlite3.connect(home / "thread_history_1.sqlite")) as history:
+                history.execute("""CREATE TABLE thread_turns(thread_id, turn_id, status, duration_ms,
+                                   final_agent_item_id, rollout_ordinal, rollout_end_ordinal)""")
+            collect = replay["collect"]
+            self.assertEqual({c["thread"] for c in collect(home, 0, 2)}, {"sample", "other"})
+            self.assertEqual([c["thread"] for c in collect(home, 0, 2, {"sample"})], ["sample"])
+            with self.assertRaisesRegex(ValueError, "missing from window: later"):
+                list(collect(home, 0, 2, {"sample", "later"}))
 
 
 class DelegationFeedbackTest(unittest.TestCase):

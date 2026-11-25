@@ -1,8 +1,6 @@
 # Design document during execution
 
-Read this reference only for ordinary execution-mode document writing after identifying the active host mode. Read-only planning discussion and delegated project stage executors do not use this write workflow. Executors follow their assigned candidate paths and return them to the controller without official-document writes.
-
-For a project work item, use [project context](../../manage-workitems/references/project-context.md) and maintain `workitems/<id>/spec.md` as its sole current Why/What document. Keep project status and actual approval/review evidence in existing metadata and reports, updating those files directly and committing and pushing completed project changes. An oversized item needs a complete parent spec with delivery stages and dependencies and actual independent review before decomposition. Child specs inherit the approved contract; additional design addresses demonstrated gaps. Maintain the existing design path, and keep read-only planning read-only.
+Use this reference to write a standalone design document in ordinary execution.
 
 ## Confirm the path
 
@@ -26,7 +24,7 @@ Add Alternatives or Risks only for material content. An explicitly requested dra
 
 Stable facts about the existing system may explain the background. Keep transient snapshots, superseded designs, implementation history, and migration narratives out of the contract. Examples describe runtime outcomes, not test commands.
 
-For oversized project items, include usable delivery stages, their acceptance coverage and the dependency DAG as design decisions; future child refinement does not reduce parent completeness. Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes**, titled in the document's language, only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
+Implementation TODOs, file-by-file edits, pseudocode, migration procedures, rollout steps, and verification plans belong to `$implement-design`. A later implementation agent may add approved **Implementation Notes**, titled in the document's language, only for essential release, compatibility, or design-boundary constraints; this section must not become a task list or work log.
 
 ## Validate
 

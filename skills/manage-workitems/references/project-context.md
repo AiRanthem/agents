@@ -11,12 +11,9 @@ For business/code work, locate the actual main workspace and source repository a
 | Refresh project layout or instructions | [upgrade-project](../../upgrade-project/SKILL.md) |
 | Decompose an established design into child contracts and dependencies | [split-workitem](../../split-workitem/SKILL.md) |
 | Requested design or implementation | [develop-workitem](../../develop-workitem/SKILL.md) |
-| Explicit autonomous advancement | [advance-project](../../advance-project/SKILL.md) |
 | Acceptance, delivery or separately requested cleanup | [complete-workitem](../../complete-workitem/SKILL.md) |
 | Remove a selected local project | [delete-project](../../delete-project/SKILL.md) |
 
 Resolve selectors from actual records and report full IDs/titles, such as `123-quota-lock（统一配额锁）`. Ask only when the intended target remains ambiguous. Hierarchy describes decomposition; dependencies describe prerequisites.
 
 Use [schema](schema.md) for locations, [workflow](workflow.md) for progress, [main-workspace association](main-workspace.md) for external context and [persistence](persistence.md) for commit/push behavior. Project knowledge can remain useful independently of an item.
-
-For autonomous advancement, the controller supplies selected scope, complete original contract, applicable instructions, real code location and assigned output to each executor. It integrates actual work and attribution into these same records.

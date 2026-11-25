@@ -13,7 +13,7 @@ Identify expected versus observed behavior, the affected version and environment
 
 Trace invalid data or state backward to its producer and forward through affected consumers. Across components, find the first boundary where the observed result differs from the contract. Prefer existing logs and read-only inspection. Add narrowly scoped diagnostics only within authorized repair or instrumentation work; collect allowlisted, redacted state rather than credentials, full environments, or sensitive payloads.
 
-State the leading explanation and what observation would distinguish it from plausible alternatives. Use the smallest safe experiment that resolves that uncertainty. After a failed experiment, update the explanation using new evidence rather than accumulating speculative changes. Repeated attempts without new evidence call for a different observation or a precise missing-input question, not an automatic architecture rewrite.
+State the leading explanation and what observation would distinguish it from plausible alternatives. Use the smallest safe experiment that resolves that uncertainty. For diagnosis-only work, keep checks on the affected system read-only. Use an authorized disposable environment or obtain authorization for experiments that change state, including replay or integration tests with side effects. After a failed experiment, update the explanation using new evidence. If repeated attempts yield no new evidence, choose a different observation or identify the specific missing input.
 
 ## Repair and verification
 

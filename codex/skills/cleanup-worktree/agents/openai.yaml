@@ -1,3 +1,0 @@
-interface:
-  display_name: "Clean Up Recoverable Worktree"
-  short_description: "Verify remote recovery and safely remove a clean local worktree"

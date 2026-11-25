@@ -1,6 +1,6 @@
 # Handoff and task lifecycle
 
-Return one compact, self-contained handoff the recipient can use without reading progress updates. Include the identities of the inputs and outputs, key findings with original locations, check status and output locations, unresolved gaps and the next action. Keep large logs, source extracts and intermediate state in accessible disposable artifacts outside formal source documentation, respecting the project controller's ownership of persistent records.
+Return one compact, self-contained handoff the recipient can use without reading progress updates. Include the identities of the inputs and outputs, key findings with original locations, check status and output locations, unresolved gaps and the next action. Keep large logs, source extracts and intermediate state in accessible disposable artifacts outside formal source documentation.
 
 Consolidate settled updates to the same executor, communicate material changes promptly and request interim updates only for a decision or blocker. Use a new turn to resume a completed agent.
 
