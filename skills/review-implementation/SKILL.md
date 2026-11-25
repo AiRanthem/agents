@@ -1,11 +1,15 @@
 ---
 name: review-implementation
-description: Independently review an implementation against its approved contract and final code when the user requests or authorizes that review. Keep source read-only. The lead covers correctness, quality, security and tests in either review mode.
+description: Independently review an implementation against its approved contract and final code when the user requests or authorizes that review and no other review skill or workflow has been selected for it. Keep source read-only. The lead covers correctness, quality, security and tests in either review mode.
 ---
 
 # Review Implementation
 
 Assess complete, correct and maintainable behavior against the confirmed design and original requirements. Code and tests are evidence; an unsafe design does not excuse unsafe implementation.
+
+## Use a single review workflow
+
+If another review skill or workflow has been selected to conduct this implementation review, use that workflow alone. When using `review-implementation`, use it as the sole review skill and workflow for the lead assessment and all delegated aspects. Include this constraint in each reviewer assignment.
 
 ## Prepare, review, then synthesize
 
