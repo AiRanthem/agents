@@ -17,7 +17,7 @@ documents:
 design:
   file: spec.md
   version: 3
-  state: proposed
+  state: awaiting-review
   authors: [Codex]
-  user_approval: {status: pending, confirmed_decisions: decision.md}
+  user_approval: {status: approved, source: decision.md}
   review: {status: not-performed}
