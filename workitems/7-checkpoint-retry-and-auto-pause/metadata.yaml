@@ -16,7 +16,7 @@ documents:
   decision: decision.md
 design:
   file: spec.md
-  version: 2
+  version: 3
   state: proposed
   authors: [Codex]
   user_approval: {status: pending, confirmed_decisions: decision.md}
