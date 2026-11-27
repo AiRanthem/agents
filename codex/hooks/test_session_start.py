@@ -1,26 +1,23 @@
 """Exercise real hook output without starting model sessions."""
 
 import json
-import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 
 
 HOOKS = Path(__file__).parent
+SESSION_START = HOOKS / "session-start.py"
 PROMPTS = HOOKS.parent / "prompts"
 SHARED = ("delegation-task.md", "delegation-evidence.md", "delegation-lifecycle.md")
 CARD = "delegation-routing.md"
 
 
-def invoke(event, hook=None):
-    if hook is None:
-        hook = HOOKS / ("subagent-start.py" if event["hook_event_name"] == "SubagentStart" else "session-start.py")
+def invoke(event, hook=SESSION_START):
     return subprocess.run(
         [sys.executable, str(hook)], input=json.dumps(event),
         text=True, capture_output=True, check=False,
@@ -28,7 +25,7 @@ def invoke(event, hook=None):
 
 
 class DelegationHookTests(unittest.TestCase):
-    def test_model_and_event_matrix(self):
+    def test_model_matrix(self):
         for model, family in [
             ("gpt-6-astra", "astra"), ("gpt-6.1-sol", "sol"),
             ("gpt-6.2-astra", "astra"), ("gpt-6.2-sol", "sol"),
@@ -38,32 +35,25 @@ class DelegationHookTests(unittest.TestCase):
             ("gpt-7-lunatic", None), ("other-6-astra", None), ("gpt-6.1-terra", None),
             ("gpt-7-astra-sol", None), (None, None), (7, None),
         ]:
-            for event_name in ("SessionStart", "SubagentStart"):
-                with self.subTest(model=model, event=event_name):
-                    event = {"hook_event_name": event_name}
-                    if model is not None:
-                        event["model"] = model
-                    result = invoke(event)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    if (event_name == "SessionStart" and family == "luna" or
-                            event_name == "SubagentStart" and family != "astra"):
-                        self.assertEqual(result.stdout, "")
-                        continue
-                    output = json.loads(result.stdout)["hookSpecificOutput"]
-                    self.assertEqual(output["hookEventName"], event_name)
-                    boundary = "delegation.md" if event_name == "SessionStart" else "delegation-subagent.md"
-                    names = [boundary, *SHARED]
-                    if family in {"astra", "sol"}:
-                        names.append(CARD)
-                    if event_name == "SessionStart":
-                        paths = [PROMPTS.resolve() / name for name in names[1:]]
-                        for path in paths:
-                            self.assertTrue(path.read_text().strip())
-                        index = "\n".join(f"- {path}" for path in paths)
-                        expected = (PROMPTS / boundary).read_text().strip() + "\n\n" + index + "\n"
-                    else:
-                        expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
-                    self.assertEqual(output["additionalContext"], expected)
+            with self.subTest(model=model):
+                event = {"hook_event_name": "SessionStart"}
+                if model is not None:
+                    event["model"] = model
+                result = invoke(event)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if family == "luna":
+                    self.assertEqual(result.stdout, "")
+                    continue
+                output = json.loads(result.stdout)["hookSpecificOutput"]
+                self.assertEqual(output["hookEventName"], "SessionStart")
+                paths = [PROMPTS.resolve() / name for name in SHARED]
+                if family in {"astra", "sol"}:
+                    paths.append(PROMPTS.resolve() / CARD)
+                for path in paths:
+                    self.assertTrue(path.read_text().strip())
+                index = "\n".join(f"- {path}" for path in paths)
+                expected = (PROMPTS / "delegation.md").read_text().strip() + "\n\n" + index + "\n"
+                self.assertEqual(output["additionalContext"], expected)
 
     def test_routing_profiles(self):
         profiles = set(re.findall(r"\b(gpt-[\w.-]+ / \w+)\b", (PROMPTS / CARD).read_text()))
@@ -73,84 +63,58 @@ class DelegationHookTests(unittest.TestCase):
             "gpt-6.2-astra / high", "gpt-6.2-astra / xhigh", "gpt-6.1-sol / max",
         })
 
-    def test_event_and_role_isolation(self):
-        for event, other in [("SessionStart", "SubagentStart"), ("SubagentStart", "SessionStart")]:
-            hook = HOOKS / ("session-start.py" if event == "SessionStart" else "subagent-start.py")
-            result = invoke({"hook_event_name": other, "model": "gpt-6-astra"}, hook)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout, "")
+    def test_unrelated_event_produces_no_output(self):
         result = invoke({"hook_event_name": "SubagentStart", "model": "gpt-6-astra"})
-        policy = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("Preserve the parent's scope", policy)
-        self.assertNotIn("Retain ownership of the user's goal", policy)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
 
-    def test_only_inline_fragments_are_required_at_startup(self):
+    def test_only_the_entry_prompt_is_required_at_startup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            shutil.copytree(HOOKS, root / "hooks")
-            for event_name, model, names in [
-                ("SessionStart", "unknown", ["delegation.md"]),
-                ("SessionStart", "gpt-6.2-astra", ["delegation.md"]),
-                ("SessionStart", "gpt-6.2-sol", ["delegation.md"]),
-                ("SubagentStart", "gpt-6.2-astra", ["delegation-subagent.md", *SHARED, CARD]),
-            ]:
-                hook = root / "hooks" / ("session-start.py" if event_name == "SessionStart" else "subagent-start.py")
-                event = {"hook_event_name": event_name, "model": model}
-                for name in names:
-                    for content in [None, " \n\t"]:
-                        with self.subTest(event=event_name, model=model, prompt=name, content=content):
-                            shutil.copytree(PROMPTS, root / "prompts", dirs_exist_ok=True)
-                            target = root / "prompts" / name
-                            if content is None:
-                                target.unlink()
-                            else:
-                                target.write_text(content)
-                            result = invoke(event, hook)
-                            self.assertNotEqual(result.returncode, 0)
-                            self.assertEqual(result.stdout, "")
-                            self.assertIn(name, result.stderr)
-                shutil.rmtree(root / "prompts")
-                (root / "prompts").mkdir()
-                for name in names:
-                    shutil.copyfile(PROMPTS / name, root / "prompts" / name)
+            hook = root / "hooks" / SESSION_START.name
+            hook.parent.mkdir()
+            shutil.copyfile(SESSION_START, hook)
+            entry = root / "prompts" / "delegation.md"
+            entry.parent.mkdir()
+            for model in ["unknown", "gpt-6.2-astra", "gpt-6.2-sol"]:
+                event = {"hook_event_name": "SessionStart", "model": model}
+                for content in [None, " \n\t"]:
+                    with self.subTest(model=model, content=content):
+                        if content is not None:
+                            entry.write_text(content)
+                        result = invoke(event, hook)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn(entry.name, result.stderr)
+                shutil.copyfile(PROMPTS / entry.name, entry)
                 result = invoke(event, hook)
                 self.assertEqual(result.returncode, 0, result.stderr)
-            shutil.rmtree(root / "prompts")
-            for event_name, model in [("SessionStart", "gpt-6-luna"),
-                                      ("SubagentStart", "gpt-6.1-sol"),
-                                      ("SubagentStart", "unknown")]:
-                hook = root / "hooks" / ("session-start.py" if event_name == "SessionStart" else "subagent-start.py")
-                result = invoke({"hook_event_name": event_name, "model": model}, hook)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout, "")
+                entry.unlink()
+
+            result = invoke({"hook_event_name": "SessionStart", "model": "gpt-6-luna"}, hook)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
 
     def test_invalid_input_reports_failure(self):
-        for hook in (HOOKS / "session-start.py", HOOKS / "subagent-start.py"):
-            for payload in ["{", "{}", "[]", "null"]:
-                with self.subTest(hook=hook.name, payload=payload):
-                    result = subprocess.run([sys.executable, str(hook)], input=payload,
-                                            text=True, capture_output=True, check=False)
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertEqual(result.stdout, "")
-                    self.assertIn("Unable to load", result.stderr)
+        for payload in ["{", "{}", "[]", "null"]:
+            with self.subTest(payload=payload):
+                result = subprocess.run([sys.executable, str(SESSION_START)], input=payload,
+                                        text=True, capture_output=True, check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("Unable to load", result.stderr)
 
-    def test_persistent_astra_role_loader_uses_installed_entry_and_complete_policy(self):
-        names = ["delegation-subagent.md", *SHARED, CARD]
-        expected = "\n\n".join((PROMPTS / name).read_text().strip() for name in names) + "\n"
+    def test_installed_entry_resolves_prompts_from_its_source(self):
+        event = {"hook_event_name": "SessionStart", "model": "gpt-6.2-astra"}
+        startup = invoke(event)
+        self.assertEqual(startup.returncode, 0, startup.stderr)
         with tempfile.TemporaryDirectory() as directory:
-            role = tomllib.loads((HOOKS.parent / "agents/astra-delegate.toml").read_text())
-            command = next(line for line in role["developer_instructions"].splitlines()
-                           if line.startswith("printf "))
-            home = Path(directory)
-            installed = home / ".codex" / "hooks" / "subagent-start.py"
+            installed = Path(directory) / ".codex" / "hooks" / SESSION_START.name
             installed.parent.mkdir(parents=True)
-            installed.symlink_to(HOOKS / "subagent-start.py")
-            result = subprocess.run(["sh", "-c", command], env={**os.environ, "HOME": str(home),
-                                    "CODEX_HOME": str(home / ".codex")},
-                                    text=True, capture_output=True, check=False)
+            installed.symlink_to(SESSION_START.resolve())
+            result = invoke(event, installed)
             self.assertEqual(result.returncode, 0, result.stderr)
-            policy = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-            self.assertEqual(policy, expected)
+            self.assertEqual(json.loads(result.stdout), json.loads(startup.stdout))
 
 
 if __name__ == "__main__":

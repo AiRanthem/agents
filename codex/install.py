@@ -11,7 +11,6 @@ import tomllib
 import skill_entries
 
 DIRECTORY = Path(__file__).resolve().parent
-ASTRA_ROLE = DIRECTORY / 'agents/astra-delegate.toml'
 
 
 def installation(home):
@@ -24,9 +23,10 @@ def installation(home):
     if override.exists() and override.read_text().strip():
         raise ValueError(f'{override} overrides kit instructions; resolve it before initialization')
 
-    links = {codex / 'AGENTS.md': DIRECTORY / 'AGENTS.md'}
-    for name in ('session-start.py', 'subagent-start.py'):
-        links[codex / 'hooks' / name] = DIRECTORY / 'hooks' / name
+    links = {
+        codex / 'AGENTS.md': DIRECTORY / 'AGENTS.md',
+        codex / 'hooks/session-start.py': DIRECTORY / 'hooks/session-start.py',
+    }
     # These aliases are created below after preflight rejects occupied targets.
     skills = skill_entries.entries(home, bootstrap=True)
     gaps = skill_entries.source_gaps()
@@ -35,16 +35,9 @@ def installation(home):
     for entry in skills:
         links[Path(entry['target'])] = Path(entry['source'])
 
-    astra = ASTRA_ROLE.read_bytes()
-    role = tomllib.loads(astra.decode('utf-8'))
-    for key in ('name', 'description', 'developer_instructions'):
-        if not isinstance(role.get(key), str) or not role[key].strip():
-            raise ValueError(f'{ASTRA_ROLE}: missing {key}')
-    if role['name'] != ASTRA_ROLE.stem:
-        raise ValueError(f'{ASTRA_ROLE}: name differs from filename')
     hooks = (DIRECTORY / 'hooks.json').read_bytes()
     json.loads(hooks)
-    files = {codex / 'agents' / ASTRA_ROLE.name: astra, codex / 'hooks.json': hooks}
+    files = {codex / 'hooks.json': hooks}
 
     # A cloud image may seed provider/model settings before the kit is installed.
     # Preserve those bytes; only append sections absent from that configuration.
@@ -100,9 +93,6 @@ def install(home):
                 output.write(content)
             target.chmod(0o600)
     errors = skill_entries.check(home)['missing']
-    installed_role = home / '.codex/agents' / ASTRA_ROLE.name
-    if installed_role.is_symlink() or installed_role.read_bytes() != files[installed_role]:
-        errors.append(f'native agent differs from repository: {installed_role}')
     if errors:
         raise ValueError('; '.join(errors))
     return {'status': 'disk_ready', 'links': len(links), 'files': len(files),

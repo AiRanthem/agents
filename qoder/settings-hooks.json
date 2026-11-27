@@ -1,0 +1,14 @@
+{
+  "SessionStart": [
+    {
+      "matcher": "compact",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "printf '%s\\n' 'Context was compacted. Re-read the global AGENTS.md at ~/.qoder/AGENTS.md, every active rule in ~/.qoder/rules/, and every applicable repository AGENTS.md from the repository root to the current working directory before continuing. Follow the refreshed instruction chain for the remainder of the task.'",
+          "statusMessage": "Reloading Agent instructions"
+        }
+      ]
+    }
+  ]
+}

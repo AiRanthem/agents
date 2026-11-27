@@ -42,20 +42,19 @@ class BootstrapTest(unittest.TestCase):
         disabled = config['skills']['config']
         self.assertTrue(all(item['enabled'] is False for item in disabled))
         self.assertEqual({item['path'] for item in disabled}, expected)
-        agents = self.home / '.codex/agents'
-        self.assertEqual({path.name for path in agents.iterdir()}, {'astra-delegate.toml'})
-        target = agents / 'astra-delegate.toml'
-        self.assertFalse(target.is_symlink())
-        self.assertEqual(target.read_bytes(), (install.DIRECTORY / 'agents/astra-delegate.toml').read_bytes())
+        self.assertFalse((self.home / '.codex/agents').exists())
         hooks = self.home / '.codex/hooks.json'
-        self.assertEqual(json.loads(hooks.read_text()), json.loads((install.DIRECTORY / 'hooks.json').read_text()))
-        for name, event in [('session-start.py', 'SessionStart'), ('subagent-start.py', 'SubagentStart')]:
-            result = subprocess.run([sys.executable, str(self.home / '.codex/hooks' / name)],
-                                    input=json.dumps({'hook_event_name': event, 'model': 'gpt-6-astra'}),
-                                    text=True, capture_output=True, check=True)
-            context = json.loads(result.stdout)['hookSpecificOutput']
-            self.assertEqual(context['hookEventName'], event)
-            self.assertTrue(context['additionalContext'].strip())
+        definitions = json.loads(hooks.read_text())
+        self.assertEqual(definitions, json.loads((install.DIRECTORY / 'hooks.json').read_text()))
+        self.assertEqual(set(definitions['hooks']), {'SessionStart'})
+        hook_directory = self.home / '.codex/hooks'
+        self.assertEqual({path.name for path in hook_directory.iterdir()}, {'session-start.py'})
+        result = subprocess.run([sys.executable, str(hook_directory / 'session-start.py')],
+                                input=json.dumps({'hook_event_name': 'SessionStart', 'model': 'gpt-6-astra'}),
+                                text=True, capture_output=True, check=True)
+        context = json.loads(result.stdout)['hookSpecificOutput']
+        self.assertEqual(context['hookEventName'], 'SessionStart')
+        self.assertTrue(context['additionalContext'].strip())
 
     def test_seeded_provider_config_and_unrelated_entries_are_preserved(self):
         codex = self.home / '.codex'
@@ -81,6 +80,7 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(auth.read_text(), 'local-auth-fixture')
         self.assertEqual((system / 'preserve').read_text(), 'system')
         self.assertEqual(local_role.read_text(), 'name = "personal"\n')
+        self.assertEqual(list(local_role.parent.iterdir()), [local_role])
 
     def test_conflicts_fail_before_creating_links(self):
         for name, content in [('hooks.json', '{}'), ('config.toml', '[agents]\nmax_threads=2\n'),

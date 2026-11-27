@@ -1,6 +1,6 @@
 # 全局 Skills 安装与更新
 
-本目录保存所有公共技能，包括维护本 dev-kit 的 `install` 和 `absorb-skill`。每个技能的完整目录以独立绝对软链接安装到 `~/.agents/skills/<name>`，入口、引用、脚本与模板通过同一目录访问。宿主专属技能由调用方提供的相应安装契约处理。
+本目录保存所有公共技能，包括维护本 dev-kit 的 `install` 和 `absorb-skill`。每个技能的完整目录以独立绝对软链接安装到 `~/.agents/skills/<name>`，入口、引用、脚本与模板通过同一目录访问。宿主专属技能按 [install 选定的宿主契约](install/SKILL.md#source-and-selection)处理。
 
 ## 安装
 
