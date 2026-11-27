@@ -1,6 +1,6 @@
 id: 6-e2b-metadata-filter
 status: designing
-design: {state: proposed, version: 1}
+design: {state: awaiting-review, version: 2}
 development: {status: not-started}
 acceptance: {status: not-performed}
 delivery: {status: not-started}

@@ -13,10 +13,11 @@ documents:
   requirement: requirement.md
   spec: spec.md
   context: context.md
+  decision: decision.md
 design:
   file: spec.md
-  version: 1
-  state: proposed
+  version: 2
+  state: awaiting-review
   authors: [Codex]
-  user_approval: {status: pending}
+  user_approval: {status: approved, source: decision.md}
   review: {status: not-performed}

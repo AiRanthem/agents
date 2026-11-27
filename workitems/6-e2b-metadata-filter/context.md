@@ -6,4 +6,4 @@
 - `pkg/servers/e2b/sandbox.go` 的 `convertToE2BSandbox` 先读标签，再读注解。现有校验按前缀过滤，两个指纹均在已覆盖的前缀之外。
 - `pkg/servers/e2b/{create,list,pause_resume,services}.go` 共用该转换函数。`pkg/utils/annotations/blacklist.go` 定义的前缀还影响输入或透传，直接扩展它会改变响应以外的行为。
 
-需求来自用户本次对话。首批精确键范围见设计候选；尚待确认和独立评审。
+用户已选定在响应侧按域名前缀过滤，见[用户决定](decision.md)。设计 v2 已据此更新，独立评审与源码实现待开展。
