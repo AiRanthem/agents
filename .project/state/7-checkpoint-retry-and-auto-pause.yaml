@@ -1,6 +1,6 @@
 id: 7-checkpoint-retry-and-auto-pause
-status: pending
-design: {state: not-started}
+status: designing
+design: {state: proposed, version: 1}
 development:
   status: not-started
   repository: agents
