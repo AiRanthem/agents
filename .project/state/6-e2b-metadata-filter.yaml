@@ -1,15 +1,22 @@
 id: 6-e2b-metadata-filter
-status: developing
-design: {state: awaiting-review, version: 2}
+status: awaiting_delivery
+design: {state: awaiting-review, version: 3}
 development:
   status: implemented
   repository: agents
   branch: fix/e2b-metadata-filter-261127
   worktree: worktrees/6-e2b-metadata-filter
   baseline_commit: 986ae83e1f3737e745255db6d6ae8d558167560a
-  implementation_commit: null
-  verification: passed-focused-tests
+  implementation_commit: 6f8a548b0c294381f69c93ab624b14e1ef0fea02
+  verification: passed-affected-package-tests
   independent_review: not-performed
   evidence: workitems/6-e2b-metadata-filter/context.md
 acceptance: {status: not-performed}
-delivery: {status: not-started}
+delivery:
+  status: pr-open
+  source_pushed: true
+  source_remote: airanthem
+  source_commit: 3141a6afdcb03b08fd88c025fa1c8d9a3f42c83a
+  pull_request: https://github.com/openkruise/agents/pull/1291
+  draft: false
+  merged: false
