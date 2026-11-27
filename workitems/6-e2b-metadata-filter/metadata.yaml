@@ -1,7 +1,7 @@
 id: 6-e2b-metadata-filter
 title: E2B Sandbox metadata 过滤内部注解
 kind: enhancement
-status: designing
+status: developing
 repository: agents
 created_at: '2026-11-27'
 recorded_by: Codex
@@ -21,3 +21,13 @@ design:
   authors: [Codex]
   user_approval: {status: approved, source: decision.md}
   review: {status: not-performed}
+development:
+  status: implemented
+  repository: agents
+  branch: fix/e2b-metadata-filter-261127
+  worktree: worktrees/6-e2b-metadata-filter
+  baseline_commit: 986ae83e1f3737e745255db6d6ae8d558167560a
+  implementation_commit: null
+  verification: passed-focused-tests
+  independent_review: not-performed
+  evidence: context.md
