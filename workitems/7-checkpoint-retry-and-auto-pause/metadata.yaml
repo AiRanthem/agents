@@ -1,0 +1,15 @@
+id: 7-checkpoint-retry-and-auto-pause
+title: 修复 Checkpoint 终态反复重试并处理快照与自动休眠的竞态
+kind: bug
+status: pending
+repository: agents
+created_at: '2026-11-27'
+recorded_by: Codex
+depends_on: []
+split_from: null
+fixes: []
+archived: false
+documents:
+  requirement: requirement.md
+  context: context.md
+design: {state: not-started, file: null}

@@ -1,0 +1,14 @@
+id: 7-checkpoint-retry-and-auto-pause
+status: pending
+design: {state: not-started}
+development:
+  status: not-started
+  repository: agents
+  branch: null
+  worktree: null
+  baseline_commit: null
+  independent_review: not-performed
+  evidence: workitems/7-checkpoint-retry-and-auto-pause/context.md
+acceptance: {status: not-performed}
+delivery: {status: not-started}
+cleanup: {status: not-applicable}
